@@ -38,6 +38,8 @@ export function testConfig(
     stateDir,
     checkpointsPath: join(stateDir, "checkpoints.json"),
     failuresPath: join(stateDir, "failures.json"),
+    outboxDir: join(stateDir, "outbox"),
+    pendingDir: join(stateDir, "outbox", "pending"),
     debounceMs: 0,
     requestTimeoutMs: 5_000,
     maxArtifactBytes: DEFAULT_MAX_ARTIFACT_BYTES,

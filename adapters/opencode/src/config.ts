@@ -73,6 +73,15 @@ export interface AdapterConfig {
   checkpointsPath: string;
   /** Absolute path of `failures.json`. */
   failuresPath: string;
+  /**
+   * Root of the outbox (`outbox/`), sibling of `state/`.
+   *
+   * The adapter only writes `pending/`; the app owns the other transitions
+   * (`sending/`, `accepted/`, `rejected/`) during import.
+   */
+  outboxDir: string;
+  /** Absolute path of the adapter's `outbox/pending` directory. */
+  pendingDir: string;
   /** Idle debounce, in milliseconds. */
   debounceMs: number;
   /** HTTP timeout per capture POST, in milliseconds. */
@@ -156,6 +165,8 @@ export function resolveConfig(
     join(dataDir, "state", "discovery.json");
   const stateDir =
     envValue(env, "XEMNAS_ADAPTER_STATE_DIR") ?? join(dataDir, "adapter");
+  const outboxDir =
+    envValue(env, "XEMNAS_OUTBOX_DIR") ?? join(dataDir, "outbox");
   return {
     opencodeUrl: stripTrailingSlash(
       envValue(env, "OPENCODE_URL") ?? DEFAULT_OPENCODE_URL,
@@ -165,6 +176,8 @@ export function resolveConfig(
     stateDir,
     checkpointsPath: join(stateDir, "checkpoints.json"),
     failuresPath: join(stateDir, "failures.json"),
+    outboxDir,
+    pendingDir: join(outboxDir, "pending"),
     debounceMs: envInt(env, "XEMNAS_ADAPTER_DEBOUNCE_MS", DEFAULT_DEBOUNCE_MS),
     requestTimeoutMs: envInt(
       env,
