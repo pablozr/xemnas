@@ -1,0 +1,2 @@
+# Container entry points must remain executable shell text on Windows checkouts.
+tools/windows-cross.sh text eol=lf
