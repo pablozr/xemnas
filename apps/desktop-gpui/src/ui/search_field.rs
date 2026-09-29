@@ -67,6 +67,7 @@ pub struct SearchField {
     selecting: bool,
     width: f32,
     show_shortcut: bool,
+    fill_width: bool,
 }
 
 impl EventEmitter<SearchChanged> for SearchField {}
@@ -85,6 +86,7 @@ impl SearchField {
             selecting: false,
             width: 280.0,
             show_shortcut: true,
+            fill_width: false,
         }
     }
 
@@ -92,6 +94,24 @@ impl SearchField {
     pub fn set_width(&mut self, width: f32) {
         self.width = width;
         self.show_shortcut = false;
+    }
+
+    /// Uses the parent's width when composing a labelled editing form.
+    pub fn stretch(&mut self) {
+        self.fill_width = true;
+        self.show_shortcut = false;
+    }
+
+    /// Seeds a single-line value while preserving all normal editing mechanics.
+    pub fn set_value(&mut self, value: &str, cx: &mut Context<Self>) {
+        self.edit = SearchEdit::default();
+        self.edit.replace(None, value);
+        self.changed(cx);
+    }
+
+    /// Current edited text, for a form submission.
+    pub fn value(&self) -> &str {
+        &self.edit.text
     }
 
     /// Changes the search destination and clears the previous destination's query.
@@ -509,6 +529,7 @@ impl Render for SearchField {
         div()
             .id("title-search")
             .w(px(self.width))
+            .when(self.fill_width, |field| field.w_full())
             .h(px(32.0))
             .px(px(SpacingScale::S3))
             .flex()

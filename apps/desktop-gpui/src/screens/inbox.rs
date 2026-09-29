@@ -2,15 +2,17 @@
 //! Storage runs in the background; technical failures never reach the view.
 
 use application::inbox::{
-    CandidateDetail, CandidateSummary, Inbox, InboxError, InboxFilter, InboxPage, InboxStore,
+    CandidateDetail, CandidateEdits, CandidateStatus, CandidateSummary, Inbox, InboxError,
+    InboxFilter, InboxPage, InboxStore,
 };
 use gpui::prelude::*;
 use gpui::{
     div, px, AnyElement, Context, Div, ElementId, Entity, FocusHandle, Render, Role, Stateful,
-    Window,
+    Subscription, Window,
 };
 
 use super::evidence;
+use super::review_editor::{EditorEvent, ReviewEditor};
 use crate::ui::glass::focus_ring;
 use crate::ui::search_field::SearchField;
 use crate::ui::theme::{text_style, Theme};
@@ -19,6 +21,15 @@ use crate::ui::tokens::{SpacingScale, TypeScale};
 enum Outcome {
     Page(Result<(InboxPage, usize), InboxError>, bool),
     Detail(Result<CandidateDetail, InboxError>),
+    Action(Result<(), InboxError>, &'static str),
+}
+
+#[derive(Clone, Copy)]
+enum ReviewAction {
+    Reject,
+    Snooze,
+    Edit,
+    Confirm,
 }
 
 /// A paginated candidate list and its source-reading pane.
@@ -41,6 +52,10 @@ pub struct InboxScreen<S: InboxStore + Send + 'static> {
     generation: u64,
     search: Option<Entity<SearchField>>,
     total: Option<usize>,
+    editor: Option<Entity<ReviewEditor>>,
+    editor_subscription: Option<Subscription>,
+    action_focus: [FocusHandle; 4],
+    notice: Option<&'static str>,
 }
 
 impl<S: InboxStore + Send + 'static> InboxScreen<S> {
@@ -65,6 +80,10 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             generation: 0,
             search: None,
             total: None,
+            editor: None,
+            editor_subscription: None,
+            action_focus: std::array::from_fn(|_| cx.focus_handle().tab_stop(true)),
+            notice: None,
         }
     }
 
@@ -98,6 +117,9 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
         self.error = None;
         self.loaded = false;
         self.total = None;
+        self.editor = None;
+        self.editor_subscription = None;
+        self.notice = None;
         self.row_focus.clear();
         self.source_focus.clear();
         self.source_index = 0;
@@ -112,7 +134,11 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
     }
 
     fn page(&mut self, append: bool, cx: &mut Context<Self>) {
-        if self.busy || self.project_id.is_none() || (append && self.cursor.is_none()) {
+        if self.busy
+            || self.editor.is_some()
+            || self.project_id.is_none()
+            || (append && self.cursor.is_none())
+        {
             return;
         }
         let filter = InboxFilter {
@@ -138,6 +164,8 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
         self.detail = None;
         self.source_index = 0;
         self.source_focus.clear();
+        self.editor = None;
+        self.editor_subscription = None;
         self.run(cx, move |inbox| Outcome::Detail(inbox.detail(&id)));
     }
 
@@ -150,6 +178,9 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             return;
         };
         self.busy = true;
+        if let Some(editor) = &self.editor {
+            editor.update(cx, |editor, cx| editor.set_busy(true, cx));
+        }
         self.error = None;
         let generation = self.generation;
         cx.notify();
@@ -164,6 +195,9 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             let _ = this.update(cx, |this, cx| {
                 this.inbox = Some(inbox);
                 this.busy = false;
+                if let Some(editor) = &this.editor {
+                    editor.update(cx, |editor, cx| editor.set_busy(false, cx));
+                }
                 if generation != this.generation {
                     this.page(false, cx);
                     cx.notify();
@@ -216,7 +250,15 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                             .collect();
                         this.detail = Some(detail);
                     }
-                    Outcome::Page(Err(error), _) | Outcome::Detail(Err(error)) => {
+                    Outcome::Action(Ok(()), notice) => {
+                        this.editor = None;
+                        this.editor_subscription = None;
+                        this.notice = Some(notice);
+                        this.page(false, cx);
+                    }
+                    Outcome::Page(Err(error), _)
+                    | Outcome::Detail(Err(error))
+                    | Outcome::Action(Err(error), _) => {
                         tracing::warn!(code = error.code(), "inbox view operation failed");
                         this.error = Some(failure_copy(&error));
                     }
@@ -225,6 +267,189 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             });
         })
         .detach();
+    }
+
+    fn review(&mut self, action: ReviewAction, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        let Some(detail) = self
+            .detail
+            .as_ref()
+            .filter(|detail| matches_query(&detail.summary, &self.query))
+        else {
+            return;
+        };
+        if let ReviewAction::Edit = action {
+            let original = CandidateEdits {
+                question: detail.summary.question.clone(),
+                choice: detail.summary.choice.clone(),
+                rationale: detail.rationale.clone(),
+            };
+            let id = detail.summary.id.clone();
+            let editor = cx.new(|cx| ReviewEditor::new(original, cx));
+            window.focus(&editor.read(cx).initial_focus(cx), cx);
+            self.editor_subscription = Some(cx.subscribe(
+                &editor,
+                move |this, _, event: &EditorEvent, cx| {
+                    match event {
+                        EditorEvent::Cancel if !this.busy => {
+                            this.editor = None;
+                            this.editor_subscription = None;
+                        }
+                        EditorEvent::Save(edits, confirm) if !this.busy => {
+                            if let Err(error) = edits.validate() {
+                                this.error = Some(failure_copy(&error));
+                                cx.notify();
+                                return;
+                            }
+                            let id = id.clone();
+                            let edits = edits.clone();
+                            let confirm = *confirm;
+                            this.run(cx, move |inbox| {
+                                Outcome::Action(
+                                    if confirm {
+                                        inbox.confirm(&id, Some(edits)).map(|_| ())
+                                    } else {
+                                        inbox.adjust(&id, edits)
+                                    },
+                                    if confirm {
+                                        "Ajustes confirmados. Decisão criada."
+                                    } else {
+                                        "Ajustes salvos. O candidato continua na revisão."
+                                    },
+                                )
+                            });
+                        }
+                        _ => {}
+                    }
+                    cx.notify();
+                },
+            ));
+            self.editor = Some(editor);
+            self.error = None;
+            self.notice = None;
+            cx.notify();
+            return;
+        }
+        let id = detail.summary.id.clone();
+        let snoozed = detail.summary.status == CandidateStatus::Snoozed;
+        self.notice = None;
+        window.focus(&self.refresh_focus, cx);
+        self.run(cx, move |inbox| {
+            let (result, notice) = match action {
+                ReviewAction::Confirm => (
+                    inbox.confirm(&id, None).map(|_| ()),
+                    "Candidato confirmado. Decisão criada.",
+                ),
+                ReviewAction::Reject => (inbox.reject(&id), "Candidato rejeitado."),
+                ReviewAction::Snooze if snoozed => {
+                    (inbox.unsnooze(&id), "Candidato retomado para revisão.")
+                }
+                ReviewAction::Snooze => (
+                    inbox.snooze(&id),
+                    "Candidato adiado. Você pode retomá-lo depois.",
+                ),
+                ReviewAction::Edit => unreachable!(),
+            };
+            Outcome::Action(result, notice)
+        });
+    }
+
+    fn review_actions(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::quiet_glass();
+        let Some(detail) = self
+            .detail
+            .as_ref()
+            .filter(|detail| matches_query(&detail.summary, &self.query))
+        else {
+            return div().into_any_element();
+        };
+        let labels = [
+            "Rejeitar",
+            if detail.summary.status == CandidateStatus::Snoozed {
+                "Retomar"
+            } else {
+                "Adiar"
+            },
+            "Ajustar",
+            "Confirmar",
+        ];
+        div()
+            .flex_none()
+            .border_t_1()
+            .border_color(theme.colors.hairline_divider())
+            .px(px(SpacingScale::S8))
+            .py(px(SpacingScale::S4))
+            .bg(theme.colors.layer_fill())
+            .flex()
+            .flex_wrap()
+            .justify_end()
+            .gap(px(SpacingScale::S2))
+            .children(
+                [
+                    ReviewAction::Reject,
+                    ReviewAction::Snooze,
+                    ReviewAction::Edit,
+                    ReviewAction::Confirm,
+                ]
+                .into_iter()
+                .enumerate()
+                .map(|(index, action)| {
+                    let primary = index == 3;
+                    text_style(div(), TypeScale::BODY_SMALL)
+                        .id(("review-action", index))
+                        .h(px(40.0))
+                        .px(px(SpacingScale::S5))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(theme.radius.control())
+                        .border_1()
+                        .border_color(if primary {
+                            theme.colors.accent_emphasis()
+                        } else {
+                            theme.colors.glass_border()
+                        })
+                        .bg(if primary {
+                            theme.colors.accent_emphasis()
+                        } else {
+                            theme.colors.rail()
+                        })
+                        .text_color(if self.busy {
+                            theme.colors.text_disabled()
+                        } else if primary {
+                            theme.colors.accent_on_emphasis()
+                        } else {
+                            theme.colors.text_primary()
+                        })
+                        .hover(move |style| {
+                            style.bg(if primary {
+                                theme.colors.glass_fill_emphasis()
+                            } else {
+                                theme.colors.hover_veil()
+                            })
+                        })
+                        .role(Role::Button)
+                        .aria_label(labels[index])
+                        .track_focus(&self.action_focus[index])
+                        .focus_visible(focus_ring(&theme))
+                        .cursor_pointer()
+                        .on_click(
+                            cx.listener(move |this, _, window, cx| this.review(action, window, cx)),
+                        )
+                        .on_key_down(cx.listener(
+                            move |this, event: &gpui::KeyDownEvent, window, cx| {
+                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                    this.review(action, window, cx);
+                                    cx.stop_propagation();
+                                }
+                            },
+                        ))
+                        .child(labels[index])
+                }),
+            )
+            .into_any_element()
     }
 
     fn row(&self, row: &CandidateSummary, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -490,6 +715,8 @@ impl<S: InboxStore + Send + 'static> Render for InboxScreen<S> {
             .filter(|row| matches_query(row, &self.query))
             .collect();
         div().size_full().flex().flex_col()
+            .children(self.notice.map(|message| text_style(div(), TypeScale::BODY_SMALL).id("review-notice").p(px(SpacingScale::S3))
+                .role(Role::Status).text_color(theme.colors.text_secondary()).child(message)))
             .children(self.error.map(|message| text_style(div(), TypeScale::BODY_SMALL).id("inbox-error").p(px(SpacingScale::S3))
                 .role(Role::Status).text_color(theme.colors.status_danger()).child(message)))
             .child(div().flex_1().min_h(px(0.0)).flex()
@@ -509,7 +736,9 @@ impl<S: InboxStore + Send + 'static> Render for InboxScreen<S> {
                             else if self.rows.is_empty() { "Nenhum candidato aguardando revisão. Novas capturas aparecerão aqui após a extração." }
                             else { "Nenhum candidato carregado corresponde à busca." }))))
                     .when(self.cursor.is_some(), |rail| rail.child(self.button("inbox-more", "Carregar mais", true, cx))))
-                .child(div().flex_1().min_w(px(0.0)).h_full().child(self.reading_pane(cx))))
+                .child(div().flex_1().min_w(px(0.0)).h_full().flex().flex_col()
+                    .child(div().flex_1().min_h(px(0.0)).child(if let Some(editor) = self.editor.as_ref().filter(|_| self.detail.as_ref().is_some_and(|detail| matches_query(&detail.summary, &self.query))) { editor.clone().into_any_element() } else { self.reading_pane(cx) }))
+                    .when(self.editor.is_none(), |pane| pane.child(self.review_actions(cx)))))
     }
 }
 
@@ -573,6 +802,7 @@ fn matches_query(row: &CandidateSummary, query: &str) -> bool {
 
 fn failure_copy(error: &InboxError) -> &'static str {
     match error {
+        InboxError::InvalidEdits(_) => "Preencha pergunta, escolha e motivo. Limites: 500, 1.000 e 4.000 caracteres, respectivamente.",
         InboxError::NotFound | InboxError::InvalidState => {
             "Este candidato mudou. Atualize a Inbox para continuar."
         }

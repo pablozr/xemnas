@@ -7,3 +7,4 @@
 mod evidence;
 pub mod inbox;
 pub mod projects;
+mod review_editor;
