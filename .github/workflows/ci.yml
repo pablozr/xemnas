@@ -40,6 +40,30 @@ jobs:
       - name: Deny
         run: cargo deny check
 
+  package:
+    name: package (Windows)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust builds
+        uses: Swatinem/rust-cache@v2
+
+      - name: Package
+        shell: pwsh
+        run: ./tools/package.ps1
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xemnas-windows-x86_64
+          path: dist/*.zip
+          if-no-files-found: error
+
   contract:
     name: capture contract (TypeScript)
     runs-on: ubuntu-latest
