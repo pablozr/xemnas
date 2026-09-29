@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "capture_id": "018f2d3c-4b5a-7c6d-8e9f-000000000007",
+  "idempotency_key": "opencode:synthetic-fingerprint:synthetic-message:fingerprint",
+  "source": {
+    "adapter": "opencode",
+    "adapter_version": "0.0.0-synthetic",
+    "session_id": "session-synthetic-fingerprint",
+    "message_id": "message-synthetic-fingerprint"
+  },
+  "project": {
+    "canonical_path": "C:/synthetic/projects/fingerprint"
+  },
+  "observed_at": "2026-09-28T15:00:00Z",
+  "artifacts": [
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000000801",
+      "kind": "user_text",
+      "content": "synthetic text",
+      "metadata": {},
+      "fingerprint": "abc123"
+    }
+  ]
+}

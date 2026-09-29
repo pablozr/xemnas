@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "capture_id": "018f2d3c-4b5a-7c6d-8e9f-000000000003",
+  "idempotency_key": "opencode:synthetic-extra:synthetic-message:extra",
+  "source": {
+    "adapter": "opencode",
+    "adapter_version": "0.0.0-synthetic",
+    "session_id": "session-synthetic-extra",
+    "message_id": "message-synthetic-extra"
+  },
+  "project": {
+    "canonical_path": "C:/synthetic/projects/extra"
+  },
+  "observed_at": "2026-09-28T13:00:00Z",
+  "unexpected": true,
+  "artifacts": [
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000000301",
+      "kind": "user_text",
+      "content": "synthetic text",
+      "metadata": {},
+      "fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+[package]
+name = "architecture"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dev-dependencies]
+toml = "0.8"

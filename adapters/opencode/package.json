@@ -1,0 +1,19 @@
+{
+  "name": "xemnas-adapter-opencode",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Contract tests for the versioned Capture Envelope consumed by the OpenCode adapter.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/tests/*.test.js"
+  },
+  "dependencies": {
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.3",
+    "typescript": "7.0.2"
+  }
+}

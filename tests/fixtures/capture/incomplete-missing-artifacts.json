@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "capture_id": "018f2d3c-4b5a-7c6d-8e9f-000000000008",
+  "idempotency_key": "opencode:synthetic-missing-artifacts:synthetic-message:missing",
+  "source": {
+    "adapter": "opencode",
+    "adapter_version": "0.0.0-synthetic",
+    "session_id": "session-synthetic-missing-artifacts",
+    "message_id": "message-synthetic-missing-artifacts"
+  },
+  "project": {
+    "canonical_path": "C:/synthetic/projects/missing-artifacts"
+  },
+  "observed_at": "2026-09-28T15:30:00Z"
+}

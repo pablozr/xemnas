@@ -1,0 +1,29 @@
+[package]
+name = "local-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+application = { version = "0.1.0", path = "../application" }
+domain = { version = "0.1.0", path = "../domain" }
+integration-contracts = { version = "0.1.0", path = "../integration-contracts" }
+axum = "0.8"
+getrandom = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros", "sync"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["v7"] }
+
+[dev-dependencies]
+# Composition for the integration tests only: they mount the real use case on a
+# real `SqliteStore`, exactly like `main.rs` does at runtime. `local-api` itself
+# stays storage-agnostic.
+storage-sqlite = { version = "0.1.0", path = "../storage-sqlite" }
+# Direct SQL assertions on the store the use case wrote to.
+rusqlite = { version = "0.40", features = ["bundled"] }
+# Captures the subscriber output to prove the token never reaches a log.
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Recomputes artifact fingerprints in the ingest assertions.
+sha2 = "0.10"

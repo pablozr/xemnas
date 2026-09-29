@@ -1,0 +1,13 @@
+[package]
+name = "application"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+domain = { version = "0.1.0", path = "../domain" }
+# The ingest use case consumes the versioned Capture Envelope contract directly;
+# it is the language of the ingest boundary (ticket 09 decision 1).
+integration-contracts = { version = "0.1.0", path = "../integration-contracts" }
+serde_json = "1"
+uuid = { version = "1", features = ["v7"] }

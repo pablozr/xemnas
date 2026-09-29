@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "capture_id": "018f2d3c-4b5a-7c6d-8e9f-000000000001",
+  "idempotency_key": "opencode:synthetic-minimal:synthetic-message:minimal",
+  "source": {
+    "adapter": "opencode",
+    "adapter_version": "0.0.0-synthetic",
+    "session_id": "session-synthetic-minimal",
+    "message_id": "message-synthetic-minimal"
+  },
+  "project": {
+    "canonical_path": "C:/synthetic/projects/minimal"
+  },
+  "observed_at": "2026-09-28T12:00:00Z",
+  "artifacts": [
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000000101",
+      "kind": "user_text",
+      "content": "synthetic user text",
+      "metadata": {},
+      "fingerprint": "bbc0cac3953d7b85c0c3d194d26c3e4596ec0789e407c1f7bd86a36b0b290c6c"
+    }
+  ]
+}

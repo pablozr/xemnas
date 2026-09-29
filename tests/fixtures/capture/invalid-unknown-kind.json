@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "capture_id": "018f2d3c-4b5a-7c6d-8e9f-000000000005",
+  "idempotency_key": "opencode:synthetic-kind:synthetic-message:kind",
+  "source": {
+    "adapter": "opencode",
+    "adapter_version": "0.0.0-synthetic",
+    "session_id": "session-synthetic-kind",
+    "message_id": "message-synthetic-kind"
+  },
+  "project": {
+    "canonical_path": "C:/synthetic/projects/kind"
+  },
+  "observed_at": "2026-09-28T14:00:00Z",
+  "artifacts": [
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000000501",
+      "kind": "reasoning",
+      "content": "synthetic text",
+      "metadata": {},
+      "fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}

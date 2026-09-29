@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "capture_id": "018f2d3c-4b5a-7c6d-8e9f-000000000002",
+  "idempotency_key": "opencode:synthetic-complete:synthetic-message:complete",
+  "source": {
+    "adapter": "opencode",
+    "adapter_version": "0.0.0-synthetic",
+    "session_id": "session-synthetic-complete",
+    "message_id": "message-synthetic-complete"
+  },
+  "project": {
+    "canonical_path": "C:/synthetic/projects/complete"
+  },
+  "observed_at": "2026-09-28T12:30:00Z",
+  "artifacts": [
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000000201",
+      "kind": "user_text",
+      "content": "synthetic user request",
+      "metadata": {
+        "turn": 1
+      },
+      "fingerprint": "0585cc6d6311dbfc9e4381cfa0e9cd8900a972e09901db454d7ed0f0d7e6c50f"
+    },
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000000202",
+      "kind": "assistant_text",
+      "content": "synthetic assistant answer",
+      "metadata": {
+        "turn": 1
+      },
+      "fingerprint": "3083514cf67df9564d5c6f45fb301dc51cad660b1e7ed46a03936ac5833ea8c3"
+    },
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000000203",
+      "kind": "diff_hunk",
+      "content": "-synthetic old line\n+synthetic new line\n",
+      "metadata": {
+        "path": "src/synthetic.rs"
+      },
+      "fingerprint": "9da6bc541881feafbb222946983dfe50d94607909dea16cba28c6ff4383e69a2"
+    },
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000000204",
+      "kind": "tool_summary",
+      "content": "synthetic tool ran with exit code 0",
+      "metadata": {
+        "tool": "synthetic-tool"
+      },
+      "fingerprint": "d9cfae3dae535580bd5ef3c8de234e9c5b4ddca06e2850aaba869013d835c4e5"
+    }
+  ]
+}

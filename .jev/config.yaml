@@ -1,0 +1,14 @@
+version: 1
+
+thresholds:
+  error:
+    warn: 0.40
+    fail: 0.70
+  warning:
+    warn: 0.60
+
+remediation:
+  auto_propose: true
+  propose_on:
+    - FAIL
+  model: openai/gpt-5.6-luna

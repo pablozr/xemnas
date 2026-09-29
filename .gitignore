@@ -1,0 +1,14 @@
+# Local product direction, specifications, research, and execution tickets.
+# These artifacts are intentionally kept only in this MVP planning workspace.
+/docs/
+
+# Rust build output and editor backups.
+/target/
+**/*.rs.bk
+
+# Cargo.lock is intentionally versioned (RUST-004); do not ignore it.
+
+# Node tooling for the OpenCode adapter contract package (ticket 08).
+node_modules/
+adapters/opencode/dist/
+*.tsbuildinfo

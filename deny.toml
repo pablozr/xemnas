@@ -1,0 +1,65 @@
+# cargo-deny configuration for the xemnas desktop app.
+#
+# Policy restored from the Gate 0 spike now that GPUI enters the graph (ticket
+# 05). Real vulnerabilities, non-crates.io sources outside the pinned GPUI
+# revision and licenses outside the allow-list fail the build. Advisory
+# *hygiene* notes (unmaintained transitive dependencies pulled in by GPUI) are
+# surfaced as warnings with a recorded reason instead of being silently
+# ignored. Entries that no longer match the dependency graph are removed so the
+# run stays warning-free.
+
+[graph]
+targets = [
+    { triple = "x86_64-pc-windows-msvc" },
+]
+all-features = false
+
+[output]
+feature-depth = 1
+
+[advisories]
+yanked = "deny"
+ignore = [
+    # --- unmaintained, no vulnerability (all GPUI transitives) ----------------
+    { id = "RUSTSEC-2024-0436", reason = "paste: proc-macro only, no runtime code; upstream replacement not yet adopted by dependents." },
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser/rustybuzz: font shaping inside GPUI, no memory-safety advisory; tracked for upstream skrifa migration." },
+    { id = "RUSTSEC-2026-0206", reason = "transitive GPUI dependency; unmaintained note only, no vulnerability." },
+]
+
+[licenses]
+confidence-threshold = 0.8
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "0BSD",
+    "BSL-1.0",
+    "CC0-1.0",
+    "bzip2-1.0.6",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+
+[bans]
+# Duplicate versions are surfaced as warnings (spike policy). The known
+# duplicates all come from GPUI's transitive tree (thiserror 1/2, bitflags,
+# windows-sys, syn, png, ...); they are reported in the run, not silenced, so a
+# new duplication elsewhere stays visible. Wildcards remain denied.
+multiple-versions = "warn"
+wildcards = "deny"
+deny = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# GPUI ships as a git dependency (see apps/desktop-gpui/Cargo.toml). The other
+# zed-industries forks (font-kit, scap, wasm_thread) are not part of the
+# Windows target graph, so listing them here would only produce unmatched-source
+# warnings; only the source that is actually in the graph is allowed.
+allow-git = [
+    "https://github.com/zed-industries/zed",
+]

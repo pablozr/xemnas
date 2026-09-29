@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "capture_id": "018f2d3c-4b5a-7c6d-8e9f-000000000006",
+  "idempotency_key": "opencode:synthetic-timestamp:synthetic-message:timestamp",
+  "source": {
+    "adapter": "opencode",
+    "adapter_version": "0.0.0-synthetic",
+    "session_id": "session-synthetic-timestamp",
+    "message_id": "message-synthetic-timestamp"
+  },
+  "project": {
+    "canonical_path": "C:/synthetic/projects/timestamp"
+  },
+  "observed_at": "not-a-timestamp",
+  "artifacts": [
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000000701",
+      "kind": "user_text",
+      "content": "synthetic text",
+      "metadata": {},
+      "fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}

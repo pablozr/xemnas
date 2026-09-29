@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "capture_id": "018f2d3c-4b5a-7c6d-8e9f-00000000000c",
+  "idempotency_key": "opencode:synthetic-empty:synthetic-message:empty",
+  "source": {
+    "adapter": "opencode",
+    "adapter_version": "0.0.0-synthetic",
+    "session_id": "session-synthetic-empty",
+    "message_id": "message-synthetic-empty"
+  },
+  "project": {
+    "canonical_path": "C:/synthetic/projects/empty"
+  },
+  "observed_at": "2026-09-28T18:00:00Z",
+  "artifacts": []
+}

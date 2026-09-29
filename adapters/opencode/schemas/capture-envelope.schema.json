@@ -1,0 +1,164 @@
+{
+  "$defs": {
+    "ArtifactKind": {
+      "description": "The kinds of Source Artifact the contract recognises.\n\nSerialized in `snake_case`, matching the conceptual contract in MVP-SPEC §10.",
+      "oneOf": [
+        {
+          "const": "user_text",
+          "description": "Text authored by the user.",
+          "type": "string"
+        },
+        {
+          "const": "assistant_text",
+          "description": "Text authored by the assistant.",
+          "type": "string"
+        },
+        {
+          "const": "diff_hunk",
+          "description": "A diff hunk from the turn.",
+          "type": "string"
+        },
+        {
+          "const": "tool_summary",
+          "description": "A summary of a tool call.",
+          "type": "string"
+        }
+      ]
+    },
+    "CaptureSource": {
+      "additionalProperties": false,
+      "description": "Adapter and session coordinates of a capture.",
+      "properties": {
+        "adapter": {
+          "description": "Adapter name, for example `opencode`.",
+          "type": "string"
+        },
+        "adapter_version": {
+          "description": "Adapter version that produced the envelope.",
+          "type": "string"
+        },
+        "message_id": {
+          "description": "Adapter message identifier within the session.",
+          "type": "string"
+        },
+        "session_id": {
+          "description": "Adapter session identifier.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "adapter",
+        "adapter_version",
+        "session_id",
+        "message_id"
+      ],
+      "type": "object"
+    },
+    "ProjectRef": {
+      "additionalProperties": false,
+      "description": "Reference to the Project a capture belongs to.",
+      "properties": {
+        "canonical_path": {
+          "description": "Canonicalized project path; never empty. Canonicalization and the\nallow-list check are the ingest API's job (MVP-SPEC §7.3).",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "canonical_path"
+      ],
+      "type": "object"
+    },
+    "SourceArtifact": {
+      "additionalProperties": false,
+      "description": "A single immutable artifact within a capture.",
+      "properties": {
+        "artifact_id": {
+          "description": "Stable identifier of this artifact (UUID v7).",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+          "type": "string"
+        },
+        "content": {
+          "description": "Opaque content string; never empty. No size bound is imposed here.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "fingerprint": {
+          "description": "Lowercase SHA-256 of the artifact content.",
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ArtifactKind",
+          "description": "What kind of content the artifact carries."
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "description": "Open metadata object; extra keys are allowed inside it.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "kind",
+        "content",
+        "metadata",
+        "fingerprint"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A versioned package of Source Artifacts produced by one adapter.\n\nConsumers written in Rust **must validate the value against the generated\nJSON Schema before deserializing**. Typed deserialization alone does not\nenforce the `const: 1` on `schema_version`, because the field is a plain\n`u32`; version enforcement is the ingest API's responsibility (MVP-SPEC\n§7.3) and lands with ticket 09.",
+  "properties": {
+    "artifacts": {
+      "description": "The captured artifacts, at least one per turn.",
+      "items": {
+        "$ref": "#/$defs/SourceArtifact"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "capture_id": {
+      "description": "Stable identifier of this capture (UUID v7).",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+      "type": "string"
+    },
+    "idempotency_key": {
+      "description": "Adapter-provided idempotency key; never empty.",
+      "minLength": 1,
+      "type": "string"
+    },
+    "observed_at": {
+      "description": "RFC 3339 timestamp of when the adapter observed the turn.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "project": {
+      "$ref": "#/$defs/ProjectRef",
+      "description": "Which Project the capture belongs to."
+    },
+    "schema_version": {
+      "const": 1,
+      "description": "Contract version; the schema pins this to\n[`CAPTURE_ENVELOPE_SCHEMA_VERSION`].\n\nDeserialization accepts any `u32`; only schema validation applies the\n`const: 1`. Validate against the schema before trusting this value.",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "source": {
+      "$ref": "#/$defs/CaptureSource",
+      "description": "Where the capture came from."
+    }
+  },
+  "required": [
+    "schema_version",
+    "capture_id",
+    "idempotency_key",
+    "source",
+    "project",
+    "observed_at",
+    "artifacts"
+  ],
+  "title": "CaptureEnvelope",
+  "type": "object"
+}
