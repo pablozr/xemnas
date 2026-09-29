@@ -19,8 +19,16 @@ pub enum GlassVariant {
     Low,
     /// Selected item and proposal surface.
     Selected,
-    /// Primary action; never large panels.
+    /// Primary action; a small control, never a large panel.
     Emphasis,
+    /// A large quiet surface: a card, a panel, a row.
+    ///
+    /// Added in this pass. The stack had no recipe for "a big rectangle", so
+    /// every large surface reached for `Emphasis` and rendered as a saturated
+    /// lilac slab — the single biggest reason the app looked unfinished. A card
+    /// is 3% white with a 9% outline and a warm glow; saturation is left to the
+    /// one small button that is the primary action.
+    Card,
 }
 
 /// A glass surface built from approved tokens.
@@ -57,7 +65,9 @@ impl GlassSurface {
     pub fn foreground(&self, theme: &Theme) -> Rgba {
         match self.variant {
             GlassVariant::Emphasis => theme.colors.accent_on_emphasis(),
-            GlassVariant::Low | GlassVariant::Selected => theme.colors.text_primary(),
+            GlassVariant::Low | GlassVariant::Selected | GlassVariant::Card => {
+                theme.colors.text_primary()
+            }
         }
     }
 
@@ -88,12 +98,21 @@ impl GlassSurface {
                 colors.shadow_emphasis(),
                 22.0,
             ),
+            GlassVariant::Card => (
+                colors.glass_fill_card(),
+                colors.glass_border_card(),
+                colors.inset_highlight(),
+                colors.shadow_low(),
+                40.0,
+            ),
         };
 
         let fill = if self.solid {
             match self.variant {
                 GlassVariant::Emphasis => colors.accent_emphasis(),
-                GlassVariant::Low | GlassVariant::Selected => colors.glass_fallback(),
+                GlassVariant::Low | GlassVariant::Selected | GlassVariant::Card => {
+                    colors.glass_fallback()
+                }
             }
         } else {
             fill
@@ -106,18 +125,34 @@ impl GlassSurface {
         // shader inside its rounded bounds, so the highlight now follows the
         // curve on all four sides — which is what makes a surface read as lit
         // glass rather than as a bordered rectangle. The absolute div is gone.
+        // The depth stack. On a dark canvas a plain drop shadow is nearly
+        // invisible, so the references make elevation out of a wide ambient
+        // shadow plus an inset top highlight (the "lit rim") — shadows always
+        // travel in pairs, one outside and one inside. `Card` additionally gets
+        // a wide warm glow: a faint light of its own, which is what stops a
+        // dark rectangle from reading as a hole cut in the canvas.
+        let mut shadows = vec![
+            BoxShadow::new(px(0.0), px(8.0), shadow_color.into()).blur_radius(px(shadow_blur)),
+            BoxShadow::new(px(0.0), px(-1.0), highlight.into())
+                .blur_radius(px(0.5))
+                .inset(),
+        ];
+        if self.variant == GlassVariant::Card {
+            shadows.insert(
+                0,
+                BoxShadow::new(px(0.0), px(0.0), colors.glow_warm().into())
+                    .blur_radius(px(20.0))
+                    .spread_radius(px(5.0)),
+            );
+        }
+
         let surface = gpui::div()
             .relative()
             .rounded(radius)
             .border_1()
             .border_color(border)
             .bg(fill)
-            .shadow(vec![
-                BoxShadow::new(px(0.0), px(8.0), shadow_color.into()).blur_radius(px(shadow_blur)),
-                BoxShadow::new(px(0.0), px(-1.0), highlight.into())
-                    .blur_radius(px(0.5))
-                    .inset(),
-            ]);
+            .shadow(shadows);
 
         match self.variant {
             GlassVariant::Selected => surface.child(
@@ -142,8 +177,22 @@ impl GlassSurface {
                     .h(px(1.0))
                     .bg(colors.emphasis_bottom()),
             ),
-            GlassVariant::Low => surface,
+            GlassVariant::Low | GlassVariant::Card => surface,
         }
+    }
+
+    /// The surface with a hover treatment, for rows and cards.
+    ///
+    /// The references change a card's border opacity on hover, never its fill
+    /// colour: a colour swap on a 400 px surface is visible as a flash, while a
+    /// border going from 9% to 16% reads as the edge catching light.
+    pub fn render_hoverable(&self, theme: &Theme) -> Div {
+        let surface = self.render(theme);
+        if self.variant != GlassVariant::Card {
+            return surface;
+        }
+        let hover = theme.colors.glass_border_card_hover();
+        surface.hover(move |style| style.border_2().border_color(hover))
     }
 }
 

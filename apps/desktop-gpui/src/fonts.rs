@@ -89,6 +89,13 @@ pub fn app_icon(size: f32) -> impl IntoElement {
 /// The wordmark font family, registered from the embedded Bricolage file.
 pub const FONT_WORDMARK: &str = "Bricolage Grotesque";
 
+/// The monospace family, for paths, IDs and other technical content.
+///
+/// Named rather than inlined at the call sites because a path rendered in the
+/// interface face is a path a person has to squint at: the separators stop
+/// lining up and the tail stops being scannable.
+pub const FONT_CODE: &str = "JetBrains Mono";
+
 /// The product name as the wordmark spells it.
 const WORDMARK: &str = "xemnas";
 

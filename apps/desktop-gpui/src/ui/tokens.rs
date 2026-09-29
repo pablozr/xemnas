@@ -60,14 +60,51 @@ impl ColorTokens {
         rgba(0xA69EBBFF).alpha(0.16)
     }
 
-    /// `glass.fill-emphasis` — near-opaque lavender fill for `Glass Emphasis`.
+    /// `glass.fill-emphasis` — the saturated fill of a small primary control.
     ///
-    /// The high alpha is a contrast requirement, not taste: composed over
-    /// `color.canvas` it is ≈ `rgb(158, 151, 188)`, which keeps
-    /// `accent.on-emphasis` above WCAG AA (the contrast test below locks this
-    /// in). `glass.fill-strong` is only the translucent highlight layer.
+    /// This is a **button** fill, not a surface. It used to be a near-opaque
+    /// lilac, and using it as a 440 px card is what made the Home screen read
+    /// as a lilac slab: a large area of high-alpha lavender dominates every
+    /// other surface and flattens the hierarchy. Reference systems keep large
+    /// surfaces at `rgba(255, 255, 255, 0.02)`-`0.05` and reserve saturation
+    /// for the one small element that is the primary action.
+    ///
+    /// Kept at 0.64: still the brightest thing on the canvas, still carrying
+    /// `accent.on-emphasis` above WCAG AA (the contrast test locks this in),
+    /// but a 40 px control rather than a full card.
     pub fn glass_fill_emphasis(&self) -> Rgba {
-        rgba(0xA69EBBFF).alpha(0.95)
+        rgba(0xC3BADDFF).alpha(0.64)
+    }
+
+    /// `glass.fill-card` — the fill of a large surface: a card, a panel.
+    ///
+    /// New in this pass. The old stack had no token for "a big quiet
+    /// rectangle", so the only available recipe was Emphasis, and every large
+    /// surface inherited a saturated fill. This is the Linear/Notion value:
+    /// white at 3% over the canvas, which lifts the surface without tinting it.
+    pub fn glass_fill_card(&self) -> Rgba {
+        rgba(0xFFFFFF).alpha(0.030)
+    }
+
+    /// `glass.fill-card-hover` — the same surface under the pointer.
+    pub fn glass_fill_card_hover(&self) -> Rgba {
+        rgba(0xFFFFFF).alpha(0.055)
+    }
+
+    /// `glass.surface-raised` — a card sitting above another card.
+    pub fn glass_surface_raised(&self) -> Rgba {
+        rgba(0xFFFFFF).alpha(0.045)
+    }
+
+    /// `glass.surface-lavender` — controlled opaque base for featured panes.
+    /// Avoids the teal cast observed on the previous translucent controls.
+    pub fn glass_surface_lavender(&self) -> Rgba {
+        rgb(0x1C1A28)
+    }
+
+    /// `glass.edge-lavender` — mineral-lavender edge over the dark base.
+    pub fn glass_edge_lavender(&self) -> Rgba {
+        rgb(0x514A63)
     }
 
     /// `glass.border` — general outline.
@@ -198,6 +235,26 @@ impl ColorTokens {
         rgba(0xCDC7DCFF).alpha(0.10)
     }
 
+    /// `glass.border-card` — the outline of a large surface.
+    ///
+    /// `glass.border` (13%) was doing two jobs: a full-length divider and a
+    /// card outline. At 13% a 1400 px rule reads as a hard line, while a card
+    /// needs a visible edge to exist at all. These are now separate tokens —
+    /// 8% for rules, 9% for card outlines — so each can be tuned on its own.
+    pub fn glass_border_card(&self) -> Rgba {
+        rgba(0xFFFFFF).alpha(0.09)
+    }
+
+    /// `glass.border-card-hover` — a card outline under the pointer.
+    pub fn glass_border_card_hover(&self) -> Rgba {
+        rgba(0xFFFFFF).alpha(0.16)
+    }
+
+    /// `glass.border-control` — the outline of a control at rest.
+    pub fn glass_border_control(&self) -> Rgba {
+        rgba(0xFFFFFF).alpha(0.10)
+    }
+
     /// `color.hover-veil` — hover for rows and rail items.
     ///
     /// Lighter than `color.surface-hover` (#202634, an opaque solid) because it
@@ -217,6 +274,21 @@ impl ColorTokens {
     /// `scrollbar.thumb` — the scroll indicator, visible only while scrolling.
     pub fn scrollbar_thumb(&self) -> Rgba {
         rgba(0x9790ACFF).alpha(0.22)
+    }
+
+    /// `glow.warm` — a wide, very low-alpha aura behind a featured surface.
+    ///
+    /// Borrowed from the reference systems' "warm glow" (`rgba(215, 201, 175,
+    /// 0.05)`, 20 px blur). It is what stops a dark card from reading as a hole
+    /// cut in the canvas: the surface has a faint light of its own instead of
+    /// only a border. Deliberately almost invisible — it is felt, not seen.
+    pub fn glow_warm(&self) -> Rgba {
+        rgba(0xD7C9AF).alpha(0.05)
+    }
+
+    /// `glow.lavender` — diffuse edge light, never a saturated fill.
+    pub fn glow_lavender(&self) -> Rgba {
+        rgba(0xA89EBAFF).alpha(0.08)
     }
 
     /// The inner top highlight, as an inset shadow colour.

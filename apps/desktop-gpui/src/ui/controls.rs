@@ -10,9 +10,19 @@
 use gpui::prelude::*;
 use gpui::{div, px, Div, ElementId, Rgba, Role, Stateful};
 
-use crate::ui::glass::{focus_ring, GlassSurface, GlassVariant};
+use crate::ui::glass::{focus_ring as glass_focus_ring, GlassSurface, GlassVariant};
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{RadiusScale, SpacingScale, TypeScale};
+
+/// The keyboard focus ring, re-exported so views can apply it to a control they
+/// build themselves.
+///
+/// Home builds its own register button because it needs an icon inside the
+/// emphasis fill, which `primary_button` does not offer; the ring is not
+/// re-declared there, it is the same recipe.
+pub fn focus_ring(theme: &Theme) -> impl FnOnce(gpui::StyleRefinement) -> gpui::StyleRefinement {
+    glass_focus_ring(theme)
+}
 
 /// The interaction states every control implements.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
