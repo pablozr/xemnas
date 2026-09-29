@@ -9,5 +9,7 @@ domain = { version = "0.1.0", path = "../domain" }
 # The ingest use case consumes the versioned Capture Envelope contract directly;
 # it is the language of the ingest boundary (ticket 09 decision 1).
 integration-contracts = { version = "0.1.0", path = "../integration-contracts" }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+url = "2"
 uuid = { version = "1", features = ["v7"] }
