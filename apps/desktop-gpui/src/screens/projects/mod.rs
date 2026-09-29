@@ -15,13 +15,13 @@ use application::projects::{ProjectError, ProjectRepository, Projects};
 use domain::projects::ProjectSummary;
 use gpui::prelude::*;
 use gpui::{
-    div, px, AnyElement, Context, Div, ElementId, FocusHandle, KeyDownEvent, Render, Role,
-    Stateful, Window,
+    div, px, AnyElement, BoxShadow, Context, Div, ElementId, FocusHandle, PathPromptOptions,
+    Render, Role, Stateful, Window,
 };
 
-use crate::ui::controls::{primary_button, quiet_button, ControlState};
 use crate::ui::feedback::{error_state, status_dot, StatusKind};
-use crate::ui::glass::{focus_ring, GlassSurface, GlassVariant};
+use crate::ui::glass::focus_ring;
+use crate::ui::icons::Icon;
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{SpacingScale, TypeScale};
 
@@ -42,7 +42,7 @@ enum InFlight {
     None,
     /// Listing the tracked projects.
     Listing,
-    /// Registering the path in the field.
+    /// Registering the selected folder.
     Registering,
     /// Removing a tracking row.
     Removing,
@@ -116,17 +116,22 @@ pub struct ProjectsScreen<R: ProjectRepository + Send + 'static> {
     projects: Option<Projects<R>>,
     list: ListState,
     in_flight: InFlight,
-    path_input: String,
+    selected_id: Option<String>,
     /// Product-language error for `InvalidLocation`/`AlreadyRegistered`.
     inline_error: Option<String>,
     /// Identifier of the row awaiting an inline removal confirmation.
     pending_removal: Option<String>,
-    field_focus: FocusHandle,
     register_focus: FocusHandle,
+    empty_focus: FocusHandle,
+    remove_focus: FocusHandle,
     confirm_focus: FocusHandle,
     cancel_focus: FocusHandle,
     /// One focus handle per listed row, kept stable across frames for Tab order.
     row_focus: Vec<(String, FocusHandle)>,
+    /// What the title-bar search is filtering on, mirrored from the shell.
+    ///
+    /// The shell owns the field in the title bar; this screen filters its rows.
+    query: String,
 }
 
 impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
@@ -137,34 +142,61 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             projects: Some(projects),
             list: ListState::Loading,
             in_flight: InFlight::None,
-            path_input: String::new(),
+            selected_id: None,
             inline_error: None,
             pending_removal: None,
-            field_focus: cx.focus_handle().tab_stop(true),
             register_focus: cx.focus_handle().tab_stop(true),
+            empty_focus: cx.focus_handle().tab_stop(true),
+            remove_focus: cx.focus_handle().tab_stop(true),
             confirm_focus: cx.focus_handle().tab_stop(true),
             cancel_focus: cx.focus_handle().tab_stop(true),
             row_focus: Vec::new(),
+            query: String::new(),
         }
     }
 
-    /// The focus handle the shell should focus when the window opens.
-    pub fn field_focus(&self) -> FocusHandle {
-        self.field_focus.clone()
+    /// The primary action receives focus when the window opens.
+    pub fn initial_focus(&self) -> FocusHandle {
+        self.register_focus.clone()
     }
 
     /// Schedules the first list load, painting the loading state first.
-    pub(crate) fn start(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn start(&mut self, cx: &mut Context<Self>, query: &str) {
+        self.set_query(query, cx);
         self.reload(cx);
     }
 
-    /// Hands the use case back to the shell so it can mount another screen.
+    /// Sets the search filter and re-renders.
     ///
-    /// Returns `None` while a background task owns the use case. The shell
-    /// must then leave the screen mounted: the connection is `Send` but not
-    /// `Sync`, so it cannot be read while a task is writing (ASYNC-001).
-    pub(crate) fn take_use_case(&mut self) -> Option<Projects<R>> {
-        self.projects.take()
+    /// The full list is always held; the filter narrows what is painted, so
+    /// clearing the field restores the list without a second read.
+    pub(crate) fn set_query(&mut self, query: &str, cx: &mut Context<Self>) {
+        if self.query == query {
+            return;
+        }
+        self.query = query.to_string();
+        cx.notify();
+    }
+
+    /// The rows that match the current search, newest first.
+    fn visible_rows(&self) -> Vec<ProjectSummary> {
+        let ListState::Ready(list) = &self.list else {
+            return Vec::new();
+        };
+        let needle = self.query.trim().to_lowercase();
+        list.iter()
+            .rev()
+            .filter(|summary| {
+                needle.is_empty()
+                    || summary.name().to_lowercase().contains(&needle)
+                    || summary
+                        .location()
+                        .to_string()
+                        .to_lowercase()
+                        .contains(&needle)
+            })
+            .cloned()
+            .collect()
     }
 
     /// Paints the loading state and schedules a background list read.
@@ -224,13 +256,18 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
         match outcome {
             IoOutcome::Listed(Ok(list)) => {
                 self.sync_row_focus(&list, cx);
+                if !list
+                    .iter()
+                    .any(|item| Some(item.id().as_str()) == self.selected_id.as_deref())
+                {
+                    self.selected_id = list.last().map(|item| item.id().as_str().to_string());
+                }
                 self.list = ListState::Ready(list);
             }
             IoOutcome::Listed(Err(error)) => {
                 self.list = ListState::Error(storage_failure(StorageContext::Load, &error));
             }
             IoOutcome::Registered(Ok(())) => {
-                self.path_input.clear();
                 self.inline_error = None;
                 self.reload(cx);
             }
@@ -271,267 +308,338 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
         self.row_focus = handles;
     }
 
-    /// Registers the path currently typed in the field.
-    pub(crate) fn register_from_field(&mut self, cx: &mut Context<Self>) {
+    /// Opens the system's directory picker. Cancellation changes nothing.
+    fn open_folder(&mut self, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Abrir pasta".into()),
+        });
+        cx.spawn(async move |this, cx| match receiver.await {
+            Ok(Ok(Some(paths))) => {
+                if let Some(path) = paths.into_iter().next() {
+                    let _ = this.update(cx, |screen, cx| screen.register_path(path, cx));
+                }
+            }
+            Ok(Ok(None)) => {}
+            error => {
+                tracing::error!(
+                    ?error,
+                    operation = "folder_picker",
+                    "could not select a folder"
+                );
+                let _ = this.update(cx, |screen, cx| {
+                    screen.inline_error =
+                        Some("Não foi possível abrir o seletor de pastas.".into());
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Registers only the selected path; no directory contents are copied.
+    fn register_path(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
         if self.projects.is_none() {
-            return;
-        }
-        let input = self.path_input.trim().to_string();
-        if input.is_empty() {
-            self.inline_error = Some("Informe o caminho de um diretório.".to_string());
-            cx.notify();
             return;
         }
         self.inline_error = None;
         self.in_flight = InFlight::Registering;
         cx.notify();
         self.spawn_io(cx, move |projects| {
-            IoOutcome::Registered(projects.register(&input).map(|_| ()))
+            IoOutcome::Registered(projects.register(&path).map(|_| ()))
         });
     }
 
     /// Opens the inline confirmation for a row.
-    fn request_remove(&mut self, id: String, cx: &mut Context<Self>) {
+    fn request_remove(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
         self.pending_removal = Some(id);
         self.inline_error = None;
+        window.focus(&self.cancel_focus, cx);
         cx.notify();
     }
 
     /// Dismisses the inline confirmation.
-    fn cancel_remove(&mut self, cx: &mut Context<Self>) {
+    fn cancel_remove(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.pending_removal = None;
+        window.focus(&self.remove_focus, cx);
         cx.notify();
     }
 
     /// Removes the tracking row; the directory on disk is left untouched.
-    fn confirm_remove(&mut self, id: String, cx: &mut Context<Self>) {
+    fn confirm_remove(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
         if self.projects.is_none() {
             return;
         }
         self.pending_removal = None;
         self.in_flight = InFlight::Removing;
+        window.focus(&self.register_focus, cx);
         cx.notify();
         self.spawn_io(cx, move |projects| IoOutcome::Removed(projects.remove(&id)));
     }
 
-    /// Handles typing, backspace and Enter in the path field.
-    fn on_field_key_down(
-        &mut self,
-        event: &KeyDownEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let keystroke = &event.keystroke;
-        if keystroke.modifiers.control || keystroke.modifiers.alt || keystroke.modifiers.platform {
-            return;
+    fn select(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selected_id.as_deref() != Some(id.as_str()) {
+            self.pending_removal = None;
         }
-        match keystroke.key.as_str() {
-            "backspace" => {
-                self.path_input.pop();
-            }
-            "enter" => {
-                self.register_from_field(cx);
-                return;
-            }
-            "escape" => {
-                self.path_input.clear();
-                self.inline_error = None;
-            }
-            "space" => {
-                self.path_input.push(' ');
-            }
-            _ => {
-                if let Some(character) = &keystroke.key_char {
-                    self.path_input.push_str(character);
-                }
-            }
+        if let Some((_, focus)) = self.row_focus.iter().find(|(key, _)| key == &id) {
+            window.focus(focus, cx);
         }
+        self.selected_id = Some(id);
         cx.notify();
     }
 
-    /// Builds one list row, including the inline removal confirmation.
-    fn render_row(&self, theme: &Theme, summary: &ProjectSummary, cx: &mut Context<Self>) -> Div {
-        let id = summary.id().as_str().to_string();
-        let pending = self.pending_removal.as_deref() == Some(id.as_str());
-        let full_location = summary.location().to_string();
-
-        let details = div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_w(px(0.0))
-            .gap(px(SpacingScale::S1))
-            .child(
-                text_style(div(), TypeScale::HEADING_3)
-                    .text_color(theme.colors.text_primary())
-                    .child(summary.name().to_string()),
-            )
-            .child(
-                // The path is the disambiguating value; it is truncated for
-                // layout but the accessible name keeps the whole string.
-                div()
-                    .id((ElementId::from("projects-location"), id.clone()))
-                    .aria_label(full_location.clone())
-                    .w_full()
-                    .overflow_hidden()
-                    .child(
-                        text_style(div(), TypeScale::BODY_SMALL)
-                            .text_color(theme.colors.text_secondary())
-                            .truncate()
-                            .child(full_location),
-                    ),
-            )
-            .child(
-                text_style(div(), TypeScale::META)
-                    .text_color(theme.colors.text_muted())
-                    .child(format!(
-                        "Registrado em {}",
-                        format_registered_at(summary.registered_at())
-                    )),
-            );
-
-        let surface = GlassSurface::new(GlassVariant::Low)
-            .render(theme)
-            .p(px(SpacingScale::S4))
+    /// First-run composition: one real action, framed without invented data.
+    fn render_empty(&self, theme: &Theme, cx: &mut Context<Self>) -> Stateful<Div> {
+        let button = div()
+            .id("projects-empty-open")
+            .h(px(44.0))
+            .px(px(SpacingScale::S4))
             .flex()
             .items_center()
-            .gap(px(SpacingScale::S4))
-            .child(details);
+            .gap(px(SpacingScale::S2))
+            .rounded(px(8.0))
+            .border_1()
+            .border_color(theme.colors.glass_edge_lavender())
+            .bg(theme.colors.glass_surface_lavender())
+            .hover(move |style| style.border_color(theme.colors.accent_subtle()))
+            .role(Role::Button)
+            .aria_label("Abrir pasta no seletor do sistema")
+            .cursor_pointer()
+            .track_focus(&self.empty_focus)
+            .focus_visible(focus_ring(theme))
+            .on_click(cx.listener(|this, _, _, cx| this.open_folder(cx)))
+            .child(Icon::folder_plus(theme, 18.0))
+            .child(
+                text_style(div(), TypeScale::LABEL)
+                    .text_color(theme.colors.text_primary())
+                    .child("Abrir pasta…"),
+            );
 
-        if pending {
-            let confirm_id = id.clone();
-            surface
-                .child(
-                    text_style(div(), TypeScale::BODY_SMALL)
+        let light = BoxShadow::new(px(0.0), px(0.0), theme.colors.glow_lavender().into())
+            .blur_radius(px(48.0))
+            .spread_radius(px(8.0));
+        div()
+            .id("projects-empty")
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .role(Role::Status)
+            .aria_label("Nenhum projeto acompanhado")
+            .child(
+                div()
+                    .w_full()
+                    .max_w(px(560.0))
+                    .p(px(SpacingScale::S8))
+                    .rounded(px(12.0))
+                    .border_1()
+                    .border_color(theme.colors.glass_edge_lavender())
+                    .bg(theme.colors.glass_surface_lavender())
+                    .shadow(vec![light])
+                    .flex()
+                    .flex_col()
+                    .items_start()
+                    .gap(px(SpacingScale::S4))
+                    .child(div().size(px(64.0)).rounded(px(10.0))
+                        .border_1().border_color(theme.colors.glass_edge_lavender())
+                        .bg(theme.colors.glass_fill_medium())
+                        .flex().items_center().justify_center()
+                        .child(Icon::folder(theme, 28.0, false)))
+                    .child(text_style(div(), TypeScale::META)
+                        .text_color(theme.colors.accent_default())
+                        .child("PRIMEIRO PROJETO"))
+                    .child(text_style(div(), TypeScale::HEADING_1)
+                        .text_color(theme.colors.text_primary())
+                        .child("Comece por uma pasta"))
+                    .child(text_style(div(), TypeScale::BODY)
                         .text_color(theme.colors.text_secondary())
-                        .child("Remover acompanhamento?"),
-                )
-                .child(
-                    quiet_button(
-                        theme,
-                        (ElementId::from("projects-confirm"), confirm_id.clone()),
-                        ControlState::Rest,
-                        "Confirmar",
-                        true,
-                    )
-                    .track_focus(&self.confirm_focus)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.confirm_remove(confirm_id.clone(), cx);
-                    })),
-                )
-                .child(
-                    quiet_button(
-                        theme,
-                        (ElementId::from("projects-cancel"), id.clone()),
-                        ControlState::Rest,
-                        "Cancelar",
-                        false,
-                    )
-                    .track_focus(&self.cancel_focus)
-                    .on_click(cx.listener(|this, _, _, cx| this.cancel_remove(cx))),
-                )
-        } else {
-            let handle = self
-                .row_focus
-                .iter()
-                .find(|(existing, _)| existing == &id)
-                .map(|(_, handle)| handle.clone())
-                .unwrap_or_else(|| self.confirm_focus.clone());
-            surface.child(
-                quiet_button(
-                    theme,
-                    (ElementId::from("projects-remove"), id.clone()),
-                    ControlState::Rest,
-                    "Remover",
-                    true,
-                )
-                .track_focus(&handle)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.request_remove(id.clone(), cx);
-                })),
+                        .child("Escolha uma pasta existente para acompanhar. Seus arquivos permanecem no lugar."))
+                    .child(div().mt(px(SpacingScale::S2)).child(button)),
             )
-        }
+    }
+
+    /// A compact selectable entry in the project sidebar.
+    fn render_row(
+        &self,
+        theme: &Theme,
+        summary: &ProjectSummary,
+        selected_id: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let id = summary.id().as_str().to_string();
+        let selected = selected_id == Some(id.as_str());
+        let focus = self
+            .row_focus
+            .iter()
+            .find(|(key, _)| key == &id)
+            .map(|(_, handle)| handle.clone())
+            .unwrap_or_else(|| self.confirm_focus.clone());
+        // Hover must not erase the persistent selection state.
+        let hover = if selected {
+            theme.colors.glass_fill_medium()
+        } else {
+            theme.colors.hover_veil()
+        };
+        div()
+            .id((ElementId::from("project-entry"), id.clone()))
+            .h(px(68.0))
+            .px(px(SpacingScale::S4))
+            .flex()
+            .items_center()
+            .gap(px(SpacingScale::S3))
+            .bg(if selected {
+                theme.colors.glass_fill_medium()
+            } else {
+                theme.colors.rail()
+            })
+            .border_l_2()
+            .border_color(if selected {
+                theme.colors.accent_subtle()
+            } else {
+                theme.colors.rail()
+            })
+            .hover(move |style| style.bg(hover))
+            .role(Role::Button)
+            .aria_label(format!("Selecionar {}", summary.name()))
+            .aria_selected(selected)
+            .track_focus(&focus)
+            .focus_visible(focus_ring(theme))
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, _, window, cx| this.select(id.clone(), window, cx)))
+            .child(Icon::folder(theme, 18.0, !selected))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S1))
+                    .child(
+                        text_style(div(), TypeScale::HEADING_3)
+                            .text_color(theme.colors.text_primary())
+                            .truncate()
+                            .child(summary.name().to_string()),
+                    )
+                    .child(
+                        text_style(div(), TypeScale::META)
+                            .text_color(theme.colors.text_muted())
+                            .truncate()
+                            .child(summary.location().to_string()),
+                    ),
+            )
     }
 }
 
 impl<R: ProjectRepository + Send + 'static> Render for ProjectsScreen<R> {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let field_focused = self.field_focus.is_focused(window);
-        let input_text = self.path_input.clone();
-
-        let header = div()
-            .flex()
-            .flex_col()
-            .gap(px(SpacingScale::S1))
-            .child(
-                text_style(div(), TypeScale::HEADING_1)
-                    .text_color(theme.colors.text_primary())
-                    .child("Projects"),
-            )
-            .child(
-                text_style(div(), TypeScale::BODY)
-                    .text_color(theme.colors.text_secondary())
-                    .child("Acompanhe diretórios locais sem alterar o conteúdo deles."),
-            );
-
-        let field = GlassSurface::new(GlassVariant::Low)
-            .render(&theme)
-            .id(ElementId::from("projects-path"))
+        let visible = self.visible_rows();
+        let total = match &self.list {
+            ListState::Ready(list) => list.len(),
+            _ => 0,
+        };
+        let selected = if self.query.is_empty() {
+            match &self.list {
+                ListState::Ready(list) => list
+                    .iter()
+                    .find(|item| Some(item.id().as_str()) == self.selected_id.as_deref())
+                    .cloned(),
+                _ => None,
+            }
+        } else {
+            // A search must not show details for a project outside its results.
+            // Keep the underlying selection so clearing the query restores it.
+            visible
+                .iter()
+                .find(|item| Some(item.id().as_str()) == self.selected_id.as_deref())
+                .or_else(|| visible.first())
+                .cloned()
+        };
+        let selected_id = selected.as_ref().map(|item| item.id().as_str());
+        let rows: Vec<AnyElement> = visible
+            .iter()
+            .map(|item| {
+                self.render_row(&theme, item, selected_id, cx)
+                    .into_any_element()
+            })
+            .collect();
+        let open = div()
+            .id("projects-open-folder")
             .h(px(44.0))
-            .px(px(SpacingScale::S3))
+            .px(px(SpacingScale::S4))
             .flex()
             .items_center()
-            .gap(px(SpacingScale::S1))
-            .track_focus(&self.field_focus)
-            .role(Role::TextInput)
-            .aria_label("Caminho do diretório")
-            .focus_visible(focus_ring(&theme))
-            .on_click(cx.listener(|this, _, window, cx| {
-                window.focus(&this.field_focus, cx);
-            }))
-            .on_key_down(cx.listener(Self::on_field_key_down))
-            .child(if input_text.is_empty() {
-                text_style(div(), TypeScale::BODY_SMALL)
-                    .text_color(theme.colors.text_muted())
-                    .child("C:\\caminho\\do\\diretório")
-            } else {
-                text_style(div(), TypeScale::BODY_SMALL)
-                    .text_color(theme.colors.text_primary())
-                    .child(input_text)
-            })
-            .child(if field_focused {
-                div()
-                    .w(px(1.0))
-                    .h(px(16.0))
-                    .bg(theme.colors.accent_default())
-            } else {
-                div()
-            });
-
-        let register_state = match self.in_flight {
-            InFlight::Registering => ControlState::Loading,
-            InFlight::None => ControlState::Rest,
-            InFlight::Listing | InFlight::Removing => ControlState::Disabled,
-        };
-
-        let register_row = div()
-            .flex()
-            .items_start()
             .gap(px(SpacingScale::S3))
-            .child(div().flex_1().min_w(px(0.0)).child(field))
+            .rounded(px(8.0))
+            .bg(theme.colors.glass_surface_lavender())
+            .border_1()
+            .border_color(theme.colors.glass_edge_lavender())
+            .hover(move |style| style.border_color(theme.colors.accent_subtle()))
+            .role(Role::Button)
+            .aria_label("Abrir pasta no seletor do sistema")
+            .cursor_pointer()
+            .track_focus(&self.register_focus)
+            .focus_visible(focus_ring(&theme))
+            .on_click(cx.listener(|this, _, _, cx| this.open_folder(cx)))
+            .child(Icon::folder_plus(&theme, 18.0))
             .child(
-                primary_button(&theme, "projects-register", register_state, "Registrar")
-                    .track_focus(&self.register_focus)
-                    .on_click(cx.listener(|this, _, _, cx| this.register_from_field(cx))),
+                text_style(div(), TypeScale::LABEL)
+                    .text_color(theme.colors.text_primary())
+                    .child("Abrir pasta…"),
             );
 
-        let inline = self
-            .inline_error
-            .clone()
-            .map(|message| inline_alert(&theme, "projects-inline-error", &message));
+        let sidebar = div()
+            .id("projects-sidebar")
+            .w(px(322.0))
+            .flex_none()
+            .h_full()
+            .flex()
+            .flex_col()
+            .bg(theme.colors.rail())
+            .border_r_1()
+            .border_color(theme.colors.hairline_divider())
+            .child(
+                div()
+                    .p(px(SpacingScale::S5))
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S4))
+                    .child(
+                        text_style(div(), TypeScale::HEADING_2)
+                            .text_color(theme.colors.text_primary())
+                            .child("Projetos"),
+                    )
+                    .child(open)
+                    .children(
+                        self.inline_error
+                            .as_ref()
+                            .map(|message| inline_alert(&theme, "projects-inline-error", message)),
+                    )
+                    .child(
+                        text_style(div(), TypeScale::META)
+                            .text_color(theme.colors.text_muted())
+                            .child(if self.query.is_empty() {
+                                match total {
+                                    1 => "1 projeto acompanhado".to_string(),
+                                    n => format!("{n} projetos acompanhados"),
+                                }
+                            } else {
+                                format!("{} de {total} projetos", visible.len())
+                            }),
+                    ),
+            )
+            .child(
+                div()
+                    .id("projects-list-scroll")
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .overflow_y_scroll()
+                    .children(rows),
+            );
 
-        let list_area: AnyElement = match &self.list {
+        let content: AnyElement = match &self.list {
             ListState::Loading => loading_state(&theme).into_any_element(),
             ListState::Error(failure) => error_state(
                 &theme,
@@ -542,108 +650,254 @@ impl<R: ProjectRepository + Send + 'static> Render for ProjectsScreen<R> {
             )
             .into_any_element(),
             ListState::Ready(list) if list.is_empty() => {
-                projects_empty_state(&theme).into_any_element()
+                self.render_empty(&theme, cx).into_any_element()
             }
-            ListState::Ready(list) => {
-                let rows: Vec<AnyElement> = list
-                    .iter()
-                    .map(|summary| self.render_row(&theme, summary, cx).into_any_element())
-                    .collect();
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(SpacingScale::S3))
-                    .children(rows)
-                    .into_any_element()
+            ListState::Ready(_) if !self.query.is_empty() && visible.is_empty() => {
+                no_matches_state(&theme, &self.query).into_any_element()
             }
+            ListState::Ready(_) => match selected {
+                Some(summary) => {
+                    let id = summary.id().as_str().to_string();
+                    let pending = self.pending_removal.as_deref() == Some(id.as_str());
+                    let actions: AnyElement = if pending {
+                        div()
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .gap(px(SpacingScale::S2))
+                            .child(
+                                text_style(div(), TypeScale::BODY_SMALL)
+                                    .flex_1()
+                                    .text_color(theme.colors.text_secondary())
+                                    .child("Remover da lista? A pasta permanece no disco."),
+                            )
+                            .child(
+                                detail_action(&theme, "projects-cancel", "Cancelar", false)
+                                    .track_focus(&self.cancel_focus)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.cancel_remove(window, cx)
+                                    })),
+                            )
+                            .child(
+                                detail_action(&theme, "projects-confirm", "Remover", true)
+                                    .track_focus(&self.confirm_focus)
+                                    .on_click({
+                                        let id = id.clone();
+                                        cx.listener(move |this, _, window, cx| {
+                                            this.confirm_remove(id.clone(), window, cx)
+                                        })
+                                    }),
+                            )
+                            .into_any_element()
+                    } else {
+                        detail_action(&theme, "projects-remove", "Remover da lista", false)
+                            .track_focus(&self.remove_focus)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.request_remove(id.clone(), window, cx)
+                            }))
+                            .into_any_element()
+                    };
+                    div()
+                        .id("project-detail")
+                        .w_full()
+                        .h_full()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .w_full()
+                                .px(px(SpacingScale::S8))
+                                .py(px(SpacingScale::S6))
+                                .flex()
+                                .items_center()
+                                .gap(px(SpacingScale::S4))
+                                .bg(theme.colors.glass_surface_lavender())
+                                .border_b_1()
+                                .border_color(theme.colors.glass_edge_lavender())
+                                .child(
+                                    div()
+                                        .size(px(52.0))
+                                        .flex_none()
+                                        .rounded(px(10.0))
+                                        .border_1()
+                                        .border_color(theme.colors.glass_edge_lavender())
+                                        .bg(theme.colors.glass_fill_medium())
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(Icon::folder(&theme, 24.0, false)),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w(px(0.0))
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(SpacingScale::S1))
+                                        .child(
+                                            text_style(div(), TypeScale::META)
+                                                .text_color(theme.colors.accent_default())
+                                                .child("PROJETO LOCAL"),
+                                        )
+                                        .child(
+                                            text_style(div(), TypeScale::HEADING_1)
+                                                .text_color(theme.colors.text_primary())
+                                                .truncate()
+                                                .child(summary.name().to_string()),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .w_full()
+                                .px(px(SpacingScale::S8))
+                                .py(px(SpacingScale::S6))
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    text_style(div(), TypeScale::HEADING_3)
+                                        .text_color(theme.colors.text_secondary())
+                                        .child("Detalhes"),
+                                )
+                                .child(detail_line(
+                                    &theme,
+                                    "Localização",
+                                    summary.location().to_string(),
+                                ))
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .border_t_1()
+                                        .border_color(theme.colors.hairline_divider()),
+                                )
+                                .child(detail_line(
+                                    &theme,
+                                    "Adicionado",
+                                    format_registered_at(summary.registered_at()),
+                                ))
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .mt(px(SpacingScale::S4))
+                                        .border_t_1()
+                                        .border_color(theme.colors.hairline_divider()),
+                                )
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .py(px(SpacingScale::S3))
+                                        .flex()
+                                        .items_center()
+                                        .child(actions),
+                                ),
+                        )
+                        .into_any_element()
+                }
+                None => div().into_any_element(),
+            },
         };
 
         div()
             .id("projects-screen")
             .size_full()
             .flex()
-            .flex_col()
-            .gap(px(SpacingScale::S5))
-            .child(header)
+            .overflow_hidden()
+            .child(sidebar)
             .child(
                 div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(SpacingScale::S3))
-                    .child(register_row)
-                    .children(inline),
-            )
-            // A long tracked-project list scrolls instead of overflowing the
-            // window; dozens of rows stay reachable.
-            .child(
-                div()
-                    .id("projects-list-scroll")
+                    .id("projects-detail-scroll")
                     .flex_1()
-                    .min_h(px(0.0))
+                    .min_w(px(0.0))
+                    .h_full()
                     .overflow_y_scroll()
-                    .child(list_area),
+                    .child(content),
             )
     }
 }
 
-/// The Projects empty state.
-///
-/// The old version was a title, a sentence and a reassurance inside one glass
-/// well, which left the register field above it doing the real work with no
-/// pointer between them. This version names the next step and repeats the
-/// commit the user is about to make ("só o acompanhamento é registrado"), so
-/// the empty state explains the action instead of describing the absence.
-///
-/// It is still the same `Glass Low` recipe and the same tokens as every other
-/// surface: an empty state is not a special visual mode.
-fn projects_empty_state(theme: &Theme) -> Stateful<Div> {
+fn detail_line(theme: &Theme, label: &'static str, value: String) -> Div {
     div()
-        .id("projects-empty")
-        .flex_1()
-        .min_h(px(0.0))
+        .w_full()
+        .py(px(SpacingScale::S3))
         .flex()
-        .items_center()
-        .justify_center()
-        .p(px(SpacingScale::S6))
+        .items_start()
+        .gap(px(SpacingScale::S4))
         .child(
-            GlassSurface::new(GlassVariant::Low)
-                .render(theme)
-                .id("projects-empty-card")
-                .w(px(440.0))
-                .p(px(SpacingScale::S8))
-                .flex()
-                .flex_col()
-                .gap(px(SpacingScale::S3))
-                .role(Role::Status)
-                .aria_label("Nenhum projeto acompanhado")
-                .child(
-                    text_style(div(), TypeScale::HEADING_2)
-                        .text_color(theme.colors.text_primary())
-                        .child("Nenhum projeto acompanhado"),
-                )
-                .child(
-                    text_style(div(), TypeScale::BODY)
-                        .text_color(theme.colors.text_secondary())
-                        .child("Informe o caminho de um diretório acima e clique em Registrar. O xemnas passa a observar o que muda nele."),
-                )
-                .child(
-                    div()
-                        .mt(px(SpacingScale::S2))
-                        .flex()
-                        .items_center()
-                        .gap(px(SpacingScale::S2))
-                        .child(
-                            div()
-                                .size(px(6.0))
-                                .rounded_full()
-                                .bg(theme.colors.status_success()),
-                        )
-                        .child(
-                            text_style(div(), TypeScale::META)
-                                .text_color(theme.colors.text_muted())
-                                .child("Só o acompanhamento é registrado; o conteúdo permanece no disco."),
-                        ),
-                ),
+            text_style(div(), TypeScale::LABEL)
+                .w(px(112.0))
+                .flex_none()
+                .text_color(theme.colors.text_muted())
+                .child(label),
+        )
+        .child(
+            text_style(div(), TypeScale::BODY)
+                .flex_1()
+                .min_w(px(0.0))
+                .text_color(theme.colors.text_primary())
+                .child(value),
+        )
+}
+
+/// Text-only secondary actions avoid the generic square placeholder icon.
+fn detail_action(
+    theme: &Theme,
+    id: &'static str,
+    label: &'static str,
+    destructive: bool,
+) -> Stateful<Div> {
+    let hover = theme.colors.glass_fill_medium();
+    div()
+        .id(id)
+        .h(px(40.0))
+        .px(px(SpacingScale::S3))
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(theme.colors.glass_edge_lavender())
+        .flex()
+        .flex_none()
+        .items_center()
+        .role(Role::Button)
+        .aria_label(label)
+        .cursor_pointer()
+        .focus_visible(focus_ring(theme))
+        .hover(move |style| style.bg(hover))
+        .child(
+            text_style(div(), TypeScale::LABEL)
+                .text_color(if destructive {
+                    theme.colors.status_danger()
+                } else {
+                    theme.colors.text_secondary()
+                })
+                .child(label),
+        )
+}
+
+/// The "your search matched nothing" state.
+///
+/// A separate primitive from the first-run state, on purpose. The empty
+/// state tells you what to do next; this one tells you the filter is the reason
+/// the list is empty, and that clearing it brings the list back. Reusing the
+/// empty state here would make a person think their data was gone.
+fn no_matches_state(theme: &Theme, query: &str) -> Stateful<Div> {
+    div()
+        .id("projects-no-matches")
+        .pt(px(SpacingScale::S10))
+        .flex()
+        .flex_col()
+        .gap(px(SpacingScale::S2))
+        .role(Role::Status)
+        .aria_label(format!("Nenhum projeto corresponde a {query}"))
+        .child(
+            text_style(div(), TypeScale::HEADING_2)
+                .text_color(theme.colors.text_primary())
+                .child("Nada corresponde"),
+        )
+        .child(
+            text_style(div(), TypeScale::BODY_SMALL)
+                .text_color(theme.colors.text_secondary())
+                .child(format!(
+                    "Nenhum projeto corresponde a “{query}”. Esc limpa a busca."
+                )),
         )
 }
 
