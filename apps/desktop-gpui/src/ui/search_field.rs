@@ -1,0 +1,547 @@
+//! Compact, editable GPUI search field with OS text input, selection and IME.
+//!
+//! The outer shell owns the search destination; this reusable view owns the
+//! editing mechanics. `Role::TextInput` alone does not make a `div` editable.
+
+use std::ops::Range;
+
+use gpui::prelude::*;
+use gpui::{
+    actions, div, fill, point, px, relative, size, App, Bounds, ClipboardItem, Context, Element,
+    ElementId, ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle,
+    Focusable, GlobalElementId, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, PaintQuad, Pixels, Point, Render, Role, ShapedLine, Style, TextAlign, TextRun,
+    UTF16Selection, UnderlineStyle, Window,
+};
+
+use crate::ui::glass::focus_ring;
+use crate::ui::icons::Icon;
+use crate::ui::search_edit::SearchEdit;
+use crate::ui::theme::{text_style, Theme};
+use crate::ui::tokens::{SpacingScale, TypeScale};
+
+actions!(
+    search_field,
+    [
+        /// Deletes the grapheme before the caret or the selection.
+        Backspace,
+        /// Deletes the grapheme after the caret or the selection.
+        Delete,
+        /// Moves the caret left.
+        Left,
+        /// Moves the caret right.
+        Right,
+        /// Extends the selection left.
+        SelectLeft,
+        /// Extends the selection right.
+        SelectRight,
+        /// Selects all search text.
+        SelectAll,
+        /// Moves the caret to the start.
+        Home,
+        /// Moves the caret to the end.
+        End,
+        /// Pastes clipboard text into the search field.
+        Paste,
+        /// Copies the selected text.
+        Copy,
+        /// Cuts the selected text.
+        Cut,
+        /// Clears the search text.
+        Clear
+    ]
+);
+
+/// Broadcast when editing changes the filter text.
+pub struct SearchChanged(pub String);
+
+/// Single-line input for filtering projects; GPUI forwards its IME to Windows.
+pub struct SearchField {
+    theme: Theme,
+    focus: FocusHandle,
+    edit: SearchEdit,
+    layout: Option<ShapedLine>,
+    bounds: Option<Bounds<Pixels>>,
+    scroll_x: Pixels,
+    selecting: bool,
+}
+
+impl EventEmitter<SearchChanged> for SearchField {}
+
+impl SearchField {
+    /// Creates an unfocused, empty search field.
+    pub fn new(cx: &mut Context<Self>) -> Self {
+        Self {
+            theme: Theme::quiet_glass(),
+            focus: cx.focus_handle().tab_stop(true),
+            edit: SearchEdit::default(),
+            layout: None,
+            bounds: None,
+            scroll_x: px(0.0),
+            selecting: false,
+        }
+    }
+
+    fn changed(&mut self, cx: &mut Context<Self>) {
+        cx.emit(SearchChanged(self.edit.text.clone()));
+        cx.notify();
+    }
+
+    fn index_at(&self, position: Point<Pixels>) -> usize {
+        match (self.layout.as_ref(), self.bounds.as_ref()) {
+            (Some(line), Some(bounds)) => {
+                line.closest_index_for_x(position.x - bounds.left() + self.scroll_x)
+            }
+            _ => 0,
+        }
+    }
+
+    fn on_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        window.focus(&self.focus, cx);
+        self.selecting = true;
+        let index = self.index_at(event.position);
+        if event.modifiers.shift {
+            self.edit.select_to(index);
+        } else {
+            self.edit.move_to(index);
+        }
+        cx.notify();
+    }
+
+    fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.selecting {
+            let index = self.index_at(event.position);
+            self.edit.select_to(index);
+            cx.notify();
+        }
+    }
+
+    fn on_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
+        self.selecting = false;
+    }
+
+    fn backspace(&mut self, _: &Backspace, _: &mut Window, cx: &mut Context<Self>) {
+        self.edit.backspace();
+        self.changed(cx);
+    }
+    fn delete(&mut self, _: &Delete, _: &mut Window, cx: &mut Context<Self>) {
+        self.edit.delete();
+        self.changed(cx);
+    }
+    fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
+        let offset = if self.edit.selection.is_empty() {
+            self.edit.previous_boundary(self.edit.caret())
+        } else {
+            self.edit.selection.start
+        };
+        self.edit.move_to(offset);
+        cx.notify();
+    }
+    fn right(&mut self, _: &Right, _: &mut Window, cx: &mut Context<Self>) {
+        let offset = if self.edit.selection.is_empty() {
+            self.edit.next_boundary(self.edit.caret())
+        } else {
+            self.edit.selection.end
+        };
+        self.edit.move_to(offset);
+        cx.notify();
+    }
+    fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
+        let offset = self.edit.previous_boundary(self.edit.caret());
+        self.edit.select_to(offset);
+        cx.notify();
+    }
+    fn select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
+        let offset = self.edit.next_boundary(self.edit.caret());
+        self.edit.select_to(offset);
+        cx.notify();
+    }
+    fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
+        self.edit.move_to(0);
+        self.edit.select_to(self.edit.text.len());
+        cx.notify();
+    }
+    fn home(&mut self, _: &Home, _: &mut Window, cx: &mut Context<Self>) {
+        self.edit.move_to(0);
+        cx.notify();
+    }
+    fn end(&mut self, _: &End, _: &mut Window, cx: &mut Context<Self>) {
+        self.edit.move_to(self.edit.text.len());
+        cx.notify();
+    }
+    fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+            self.edit.replace(None, &text);
+            self.changed(cx);
+        }
+    }
+    fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.edit.selection.is_empty() {
+            cx.write_to_clipboard(ClipboardItem::new_string(
+                self.edit.text[self.edit.selection.clone()].to_string(),
+            ));
+        }
+    }
+    fn cut(&mut self, _: &Cut, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.edit.selection.is_empty() {
+            cx.write_to_clipboard(ClipboardItem::new_string(
+                self.edit.text[self.edit.selection.clone()].to_string(),
+            ));
+            self.edit.replace(None, "");
+            self.changed(cx);
+        }
+    }
+    fn clear(&mut self, _: &Clear, _: &mut Window, cx: &mut Context<Self>) {
+        self.edit = SearchEdit::default();
+        self.changed(cx);
+    }
+}
+
+impl Focusable for SearchField {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
+    }
+}
+
+impl EntityInputHandler for SearchField {
+    fn text_for_range(
+        &mut self,
+        range: Range<usize>,
+        actual: &mut Option<Range<usize>>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<String> {
+        let start = self.edit.from_utf16(range.start);
+        let end = self.edit.from_utf16(range.end);
+        *actual = Some(self.edit.to_utf16(start)..self.edit.to_utf16(end));
+        Some(self.edit.text.get(start..end)?.to_string())
+    }
+    fn selected_text_range(
+        &mut self,
+        _: bool,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<UTF16Selection> {
+        Some(UTF16Selection {
+            range: self.edit.to_utf16(self.edit.selection.start)
+                ..self.edit.to_utf16(self.edit.selection.end),
+            reversed: self.edit.reversed,
+        })
+    }
+    fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<Range<usize>> {
+        self.edit
+            .marked
+            .as_ref()
+            .map(|range| self.edit.to_utf16(range.start)..self.edit.to_utf16(range.end))
+    }
+    fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.edit.marked = None;
+        cx.notify();
+    }
+    fn replace_text_in_range(
+        &mut self,
+        range: Option<Range<usize>>,
+        text: &str,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let range =
+            range.map(|range| self.edit.from_utf16(range.start)..self.edit.from_utf16(range.end));
+        self.edit.replace(range, text);
+        self.changed(cx);
+    }
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        range: Option<Range<usize>>,
+        text: &str,
+        selected: Option<Range<usize>>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let range =
+            range.map(|range| self.edit.from_utf16(range.start)..self.edit.from_utf16(range.end));
+        self.edit.replace_and_mark(range, text, selected);
+        self.changed(cx);
+    }
+    fn bounds_for_range(
+        &mut self,
+        range: Range<usize>,
+        bounds: Bounds<Pixels>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<Bounds<Pixels>> {
+        let line = self.layout.as_ref()?;
+        let start = self.edit.from_utf16(range.start);
+        let end = self.edit.from_utf16(range.end);
+        Some(Bounds::from_corners(
+            point(
+                bounds.left() + line.x_for_index(start) - self.scroll_x,
+                bounds.top(),
+            ),
+            point(
+                bounds.left() + line.x_for_index(end) - self.scroll_x,
+                bounds.bottom(),
+            ),
+        ))
+    }
+    fn character_index_for_point(
+        &mut self,
+        position: Point<Pixels>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<usize> {
+        Some(self.edit.to_utf16(self.index_at(position)))
+    }
+    fn set_selected_text_range(
+        &mut self,
+        range: Range<usize>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit.selection = self.edit.from_utf16(range.start)..self.edit.from_utf16(range.end);
+        self.edit.reversed = false;
+        cx.notify();
+    }
+}
+
+struct SearchTextElement {
+    input: Entity<SearchField>,
+}
+struct TextPaint {
+    line: ShapedLine,
+    selection: Option<PaintQuad>,
+    cursor: Option<PaintQuad>,
+    scroll_x: Pixels,
+}
+
+impl IntoElement for SearchTextElement {
+    type Element = Self;
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl Element for SearchTextElement {
+    type RequestLayoutState = ();
+    type PrepaintState = TextPaint;
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+    fn request_layout(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, ()) {
+        let mut style = Style::default();
+        style.size.width = relative(1.).into();
+        style.size.height = window.line_height().into();
+        (window.request_layout(style, [], cx), ())
+    }
+    fn prepaint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) -> TextPaint {
+        let input = self.input.read(cx);
+        let focused = input.focus.is_focused(window);
+        let content = if input.edit.text.is_empty() && !focused {
+            "Buscar projetos"
+        } else {
+            &input.edit.text
+        };
+        let style = window.text_style();
+        let text_color = if input.edit.text.is_empty() {
+            input.theme.colors.text_muted()
+        } else {
+            input.theme.colors.text_primary()
+        };
+        let run = TextRun {
+            len: content.len(),
+            font: style.font(),
+            color: text_color.into(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let runs = if let Some(marked) = &input.edit.marked {
+            vec![
+                TextRun {
+                    len: marked.start,
+                    ..run.clone()
+                },
+                TextRun {
+                    len: marked.end - marked.start,
+                    underline: Some(UnderlineStyle {
+                        color: Some(run.color),
+                        thickness: px(1.0),
+                        wavy: false,
+                    }),
+                    ..run.clone()
+                },
+                TextRun {
+                    len: content.len() - marked.end,
+                    ..run
+                },
+            ]
+            .into_iter()
+            .filter(|run| run.len > 0)
+            .collect()
+        } else {
+            vec![run]
+        };
+        let font_size = style.font_size.to_pixels(window.rem_size());
+        let line =
+            window
+                .text_system()
+                .shape_line(content.to_string().into(), font_size, &runs, None);
+        let caret_x = line.x_for_index(input.edit.caret());
+        let scroll_x = (caret_x - bounds.size.width + px(4.0)).max(px(0.0));
+        let origin_x = bounds.left() - scroll_x;
+        let selection = (!input.edit.selection.is_empty()).then(|| {
+            fill(
+                Bounds::from_corners(
+                    point(
+                        origin_x + line.x_for_index(input.edit.selection.start),
+                        bounds.top(),
+                    ),
+                    point(
+                        origin_x + line.x_for_index(input.edit.selection.end),
+                        bounds.bottom(),
+                    ),
+                ),
+                input.theme.colors.glass_fill_strong(),
+            )
+        });
+        let cursor = (focused && input.edit.selection.is_empty()).then(|| {
+            fill(
+                Bounds::new(
+                    point(origin_x + caret_x, bounds.top()),
+                    size(px(1.0), bounds.size.height),
+                ),
+                input.theme.colors.accent_default(),
+            )
+        });
+        TextPaint {
+            line,
+            selection,
+            cursor,
+            scroll_x,
+        }
+    }
+    fn paint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut (),
+        paint: &mut TextPaint,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let focus = self.input.read(cx).focus.clone();
+        window.handle_input(
+            &focus,
+            ElementInputHandler::new(bounds, self.input.clone()),
+            cx,
+        );
+        if let Some(selection) = paint.selection.take() {
+            window.paint_quad(selection);
+        }
+        paint
+            .line
+            .paint(
+                point(bounds.left() - paint.scroll_x, bounds.top()),
+                window.line_height(),
+                TextAlign::Left,
+                None,
+                window,
+                cx,
+            )
+            .unwrap();
+        if let Some(cursor) = paint.cursor.take() {
+            window.paint_quad(cursor);
+        }
+        self.input.update(cx, |input, _| {
+            input.layout = Some(paint.line.clone());
+            input.bounds = Some(bounds);
+            input.scroll_x = paint.scroll_x;
+        });
+    }
+}
+
+impl Render for SearchField {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let focused = self.focus.is_focused(window);
+        div()
+            .id("title-search")
+            .w(px(280.0))
+            .h(px(32.0))
+            .px(px(SpacingScale::S3))
+            .flex()
+            .items_center()
+            .gap(px(SpacingScale::S2))
+            .rounded(px(8.0))
+            .border_1()
+            .border_color(if focused {
+                theme.colors.accent_subtle()
+            } else {
+                theme.colors.glass_edge_lavender()
+            })
+            .bg(if focused {
+                theme.colors.glass_fill_medium()
+            } else {
+                theme.colors.glass_surface_lavender()
+            })
+            .track_focus(&self.focus)
+            .focus_visible(focus_ring(&theme))
+            .key_context("SearchField")
+            .role(Role::TextInput)
+            .aria_label("Buscar projetos")
+            .cursor_text()
+            .on_action(cx.listener(Self::backspace))
+            .on_action(cx.listener(Self::delete))
+            .on_action(cx.listener(Self::left))
+            .on_action(cx.listener(Self::right))
+            .on_action(cx.listener(Self::select_left))
+            .on_action(cx.listener(Self::select_right))
+            .on_action(cx.listener(Self::select_all))
+            .on_action(cx.listener(Self::home))
+            .on_action(cx.listener(Self::end))
+            .on_action(cx.listener(Self::paste))
+            .on_action(cx.listener(Self::copy))
+            .on_action(cx.listener(Self::cut))
+            .on_action(cx.listener(Self::clear))
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
+            .on_mouse_move(cx.listener(Self::on_mouse_move))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
+            .child(Icon::search(&theme, 14.0, !focused))
+            .child(
+                text_style(div(), TypeScale::BODY_SMALL)
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .child(SearchTextElement { input: cx.entity() }),
+            )
+            .child(
+                text_style(div(), TypeScale::META)
+                    .text_color(theme.colors.text_muted())
+                    .child(if focused { "Esc · limpar" } else { "Ctrl K" }),
+            )
+    }
+}

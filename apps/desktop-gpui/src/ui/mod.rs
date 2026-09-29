@@ -7,6 +7,10 @@
 
 pub mod controls;
 pub mod feedback;
+pub mod folder_picker;
 pub mod glass;
+pub mod icons;
+pub mod search_edit;
+pub mod search_field;
 pub mod theme;
 pub mod tokens;
