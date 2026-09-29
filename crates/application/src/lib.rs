@@ -9,6 +9,7 @@
 pub mod captures;
 mod clock;
 pub mod extract;
+pub mod inbox;
 pub mod jobs;
 pub mod profile;
 pub mod projects;
@@ -33,6 +34,11 @@ pub use extract::{
 
 // Re-exported so integration tests in other crates can build a Capture Envelope
 // (and its metadata map) without adding a new dependency to those crates.
+pub use inbox::{
+    ArtifactView, CandidateDetail, CandidateEdits, CandidateStatus, CandidateSummary,
+    ConfirmOutcome, DiffSummary, Inbox, InboxError, InboxFilter, InboxPage, DEFAULT_PAGE_LIMIT,
+    MAX_BATCH_IDS, MAX_CHOICE_CHARS, MAX_PAGE_LIMIT, MAX_QUESTION_CHARS, MAX_RATIONALE_CHARS,
+};
 pub use integration_contracts::capture::{
     artifact_fingerprint, ArtifactKind, CaptureEnvelope, CaptureSource, ProjectRef, SourceArtifact,
 };
