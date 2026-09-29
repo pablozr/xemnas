@@ -8,6 +8,7 @@
 
 pub mod captures;
 mod clock;
+pub mod decisions;
 pub mod extract;
 pub mod inbox;
 pub mod jobs;
@@ -31,6 +32,11 @@ pub use extract::{
 // `StoredCandidate`, `ValidatedEdits`) stays in `application::inbox` for the
 // storage implementation and test fakes; only the front-facing surface is
 // re-exported at the crate root.
+pub use decisions::{
+    sanitize_match_query, DecisionDetail, DecisionEdits, DecisionFilter, DecisionPage,
+    DecisionRevision, DecisionSearchHit, DecisionStatus, DecisionSummary, Decisions,
+    DecisionsError, SearchQuery, MAX_ARRAY_ITEMS, MAX_ARRAY_ITEM_CHARS,
+};
 
 // Re-exported so integration tests in other crates can build a Capture Envelope
 // (and its metadata map) without adding a new dependency to those crates.
