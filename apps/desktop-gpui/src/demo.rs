@@ -50,7 +50,14 @@ pub(crate) fn store() -> Result<SqliteStore, Box<dyn std::error::Error>> {
                 artifact_id: id.into(),
                 kind: kind.into(),
                 content,
-                metadata: "{}".into(),
+                metadata: if id == "source" {
+                    format!(
+                        r#"{{"file":"src/inbox.rs","language":"rust","start_line":{}}}"#,
+                        24 + index * 10
+                    )
+                } else {
+                    r#"{"file":"captura.txt"}"#.into()
+                },
                 fingerprint: format!("{:064x}", index * 2 + position + 1),
             })
             .collect();

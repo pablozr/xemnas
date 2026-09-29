@@ -1366,6 +1366,7 @@ dependencies = [
  "gpui_platform",
  "local-api",
  "rfd",
+ "serde_json",
  "storage-sqlite",
  "telemetry",
  "tracing",

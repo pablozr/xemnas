@@ -36,6 +36,7 @@ pub struct Shell<R: ProjectRepository + InboxStore + Send + 'static> {
     search: Entity<SearchField>,
     _search_subscription: Subscription,
     _project_subscription: Option<Subscription>,
+    _inbox_subscription: Option<Subscription>,
     projects: Option<Entity<ProjectsScreen<R>>>,
     inbox: Option<Entity<InboxScreen<R>>>,
     in_inbox: bool,
@@ -93,20 +94,25 @@ impl<R: ProjectRepository + InboxStore + Send + 'static> Shell<R> {
                 cx.notify();
             })
         });
+        let inbox = inbox.map(|inbox| {
+            cx.new(|cx| {
+                let mut screen = InboxScreen::new(cx, inbox);
+                screen.attach_search(search.clone());
+                screen
+            })
+        });
+        let inbox_subscription = inbox
+            .as_ref()
+            .map(|screen| cx.observe(screen, |_, _, cx| cx.notify()));
         Self {
             theme: Theme::quiet_glass(),
             focus: cx.focus_handle(),
             search: search.clone(),
             _search_subscription: search_subscription,
             _project_subscription: project_subscription,
+            _inbox_subscription: inbox_subscription,
             projects: screen,
-            inbox: inbox.map(|inbox| {
-                cx.new(|cx| {
-                    let mut screen = InboxScreen::new(cx, inbox);
-                    screen.attach_search(search.clone());
-                    screen
-                })
-            }),
+            inbox,
             in_inbox: true,
             destination_focus: [
                 cx.focus_handle().tab_stop(true),
@@ -183,6 +189,7 @@ impl<R: ProjectRepository + InboxStore + Send + 'static> Shell<R> {
             .px(px(SpacingScale::S3))
             .flex()
             .items_center()
+            .gap(px(SpacingScale::S2))
             .border_b_2()
             .border_color(if selected {
                 theme.colors.accent_subtle()
@@ -224,6 +231,21 @@ impl<R: ProjectRepository + InboxStore + Send + 'static> Shell<R> {
                 }),
             )
             .child(if inbox { "Revisão" } else { "Detalhes" })
+            .when(inbox, |tab| {
+                tab.child(
+                    text_style(div(), TypeScale::META)
+                        .px(px(6.0))
+                        .rounded(px(4.0))
+                        .bg(theme.colors.glass_fill_medium())
+                        .child(
+                            self.inbox
+                                .as_ref()
+                                .and_then(|screen| screen.read(cx).total_count())
+                                .map(|count| count.to_string())
+                                .unwrap_or_else(|| "…".into()),
+                        ),
+                )
+            })
     }
 }
 

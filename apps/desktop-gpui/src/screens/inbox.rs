@@ -10,13 +10,14 @@ use gpui::{
     Window,
 };
 
+use super::evidence;
 use crate::ui::glass::focus_ring;
 use crate::ui::search_field::SearchField;
-use crate::ui::theme::{code_style, text_style, Theme};
+use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{SpacingScale, TypeScale};
 
 enum Outcome {
-    Page(Result<InboxPage, InboxError>, bool),
+    Page(Result<(InboxPage, usize), InboxError>, bool),
     Detail(Result<CandidateDetail, InboxError>),
 }
 
@@ -39,6 +40,7 @@ pub struct InboxScreen<S: InboxStore + Send + 'static> {
     project_id: Option<String>,
     generation: u64,
     search: Option<Entity<SearchField>>,
+    total: Option<usize>,
 }
 
 impl<S: InboxStore + Send + 'static> InboxScreen<S> {
@@ -62,12 +64,18 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             project_id: None,
             generation: 0,
             search: None,
+            total: None,
         }
     }
 
     /// Mounts the workspace search inside the candidate list.
     pub fn attach_search(&mut self, search: Entity<SearchField>) {
         self.search = Some(search);
+    }
+
+    /// Entire project queue, independent of the loaded page and local search.
+    pub fn total_count(&self) -> Option<usize> {
+        self.total
     }
 
     /// Refreshes the first page when the destination opens.
@@ -89,6 +97,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
         self.query.clear();
         self.error = None;
         self.loaded = false;
+        self.total = None;
         self.row_focus.clear();
         self.source_focus.clear();
         self.source_index = 0;
@@ -111,7 +120,14 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             cursor: if append { self.cursor.clone() } else { None },
             ..InboxFilter::default()
         };
-        self.run(cx, move |inbox| Outcome::Page(inbox.list(&filter), append));
+        self.run(cx, move |inbox| {
+            Outcome::Page(
+                inbox
+                    .list(&filter)
+                    .and_then(|page| inbox.count(&filter).map(|count| (page, count))),
+                append,
+            )
+        });
     }
 
     fn select(&mut self, id: String, cx: &mut Context<Self>) {
@@ -154,7 +170,8 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                     return;
                 }
                 match outcome {
-                    Outcome::Page(Ok(page), append) => {
+                    Outcome::Page(Ok((page, total)), append) => {
+                        this.total = Some(total);
                         this.loaded = true;
                         if !append {
                             this.rows.clear();
@@ -221,12 +238,31 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             .flex()
             .flex_col()
             .gap(px(SpacingScale::S2))
+            .relative()
             .border_b_1()
             .border_color(theme.colors.hairline_divider())
             .bg(if selected {
                 theme.colors.glass_surface_lavender()
             } else {
                 theme.colors.rail()
+            })
+            .hover(move |style| {
+                style.bg(if selected {
+                    theme.colors.glass_surface_lavender()
+                } else {
+                    theme.colors.hover_veil()
+                })
+            })
+            .when(selected, |row| {
+                row.child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .bottom_0()
+                        .w(px(2.0))
+                        .bg(theme.colors.accent_subtle()),
+                )
             })
             .role(Role::Button)
             .aria_label(row.question.clone())
@@ -351,6 +387,9 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             .child(section("Motivo", &detail.rationale))
             .child(
                 text_style(div(), TypeScale::HEADING_2)
+                    .border_t_1()
+                    .border_color(theme.colors.hairline_divider())
+                    .pt(px(SpacingScale::S4))
                     .child(format!("Evidências · {} fontes", detail.artifacts.len())),
             )
             .child(
@@ -365,8 +404,18 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                                 .id(("source", index))
                                 .p(px(SpacingScale::S2))
                                 .rounded(theme.radius.control())
+                                .border_1()
+                                .border_color(if selected {
+                                    theme.colors.accent_subtle()
+                                } else {
+                                    theme.colors.hairline_divider()
+                                })
                                 .role(Role::Button)
-                                .aria_label(format!("Fonte {}: {}", index + 1, artifact.kind))
+                                .aria_label(format!(
+                                    "Fonte {}: {}",
+                                    index + 1,
+                                    evidence::label(artifact)
+                                ))
                                 .aria_selected(selected)
                                 .track_focus(&self.source_focus[index])
                                 .focus_visible(focus_ring(&theme))
@@ -391,7 +440,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                                         }
                                     },
                                 ))
-                                .child(format!("{} · {}", index + 1, artifact.kind))
+                                .child(evidence::label(artifact))
                         }),
                 ),
             )
@@ -401,25 +450,12 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                     "Nenhuma fonte disponível para este candidato.",
                 ))
             })
-            .children(detail.artifacts.get(self.source_index).map(|artifact| {
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(SpacingScale::S3))
-                    .border_t_1()
-                    .border_color(theme.colors.hairline_divider())
-                    .pt(px(SpacingScale::S4))
-                    .child(
-                        text_style(div(), TypeScale::META)
-                            .text_color(theme.colors.text_muted())
-                            .child(format!("{} · {}", artifact.kind, artifact.artifact_id)),
-                    )
-                    .child(
-                        code_style(div(), TypeScale::CODE)
-                            .whitespace_normal()
-                            .child(artifact.content.clone()),
-                    )
-            }))
+            .children(
+                detail
+                    .artifacts
+                    .get(self.source_index)
+                    .map(|artifact| evidence::snippet(artifact, self.source_index)),
+            )
             .child(section(
                 "Confiança da extração",
                 &format!(
@@ -464,7 +500,7 @@ impl<S: InboxStore + Send + 'static> Render for InboxScreen<S> {
                         .child(self.button("inbox-refresh", "Atualizar", false, cx)))
                     .child(div().px(px(SpacingScale::S4)).pb(px(SpacingScale::S3)).children(self.search.clone()))
                     .child(text_style(div(), TypeScale::META).px(px(SpacingScale::S4)).pb(px(SpacingScale::S3)).text_color(theme.colors.text_muted())
-                        .child(format!("{} candidatos carregados · {} visíveis", self.rows.len(), visible.len())))
+                        .child(format!("{} carregados · {} visíveis", self.rows.len(), visible.len())))
                     .child(div().id("inbox-list").flex_1().min_h(px(0.0)).overflow_y_scroll()
                         .children(visible.iter().map(|row| self.row(row, cx)))
                         .when(visible.is_empty(), |list| list.child(text_style(div(), TypeScale::BODY_SMALL).p(px(SpacingScale::S6))
@@ -482,6 +518,9 @@ fn section(label: &'static str, content: &str) -> Div {
         .flex()
         .flex_col()
         .gap(px(SpacingScale::S2))
+        .border_t_1()
+        .border_color(Theme::quiet_glass().colors.hairline_divider())
+        .pt(px(SpacingScale::S4))
         .child(text_style(div(), TypeScale::HEADING_3).child(label))
         .child(
             text_style(div(), TypeScale::BODY)
