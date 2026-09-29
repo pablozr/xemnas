@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "capture_id": "018f2d3c-4b5a-7c6d-8e9f-000000000104",
+  "idempotency_key": "opencode:e2e-trivial-test:msg-trivial-2:hash4",
+  "source": {
+    "adapter": "opencode",
+    "adapter_version": "0.0.0",
+    "session_id": "session-trivial-2",
+    "message_id": "msg-trivial-2"
+  },
+  "project": {
+    "canonical_path": "C:/synthetic/projects/extraction"
+  },
+  "observed_at": "2026-02-01T13:00:00Z",
+  "artifacts": [
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000000207",
+      "kind": "user_text",
+      "content": "The new test covers the helper; the production code is unchanged.",
+      "metadata": {},
+      "fingerprint": "040db35725fd50fd25a148ffedb2390c56259f358e5a48323d362089d242934d"
+    },
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000000208",
+      "kind": "diff_hunk",
+      "content": "diff --git a/tests/helper.rs b/tests/helper.rs\n+++ b/tests/helper.rs\n+ assert_eq!(helper(), 2);\n",
+      "metadata": {
+        "path": "tests/helper.rs"
+      },
+      "fingerprint": "bd52f4b00553cdfd145945980cd10e7cdc34dbe87e8e05fbe49a4c7da928f4ef"
+    }
+  ]
+}

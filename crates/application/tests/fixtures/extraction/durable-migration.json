@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "capture_id": "018f2d3c-4b5a-7c6d-8e9f-000000000101",
+  "idempotency_key": "opencode:e2e-durable-migration:msg-durable-1:hash1",
+  "source": {
+    "adapter": "opencode",
+    "adapter_version": "0.0.0",
+    "session_id": "session-durable-1",
+    "message_id": "msg-durable-1"
+  },
+  "project": {
+    "canonical_path": "C:/synthetic/projects/extraction"
+  },
+  "observed_at": "2026-02-01T10:00:00Z",
+  "artifacts": [
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000000201",
+      "kind": "user_text",
+      "content": "We decided to add a migration that creates the decision_candidates table. This schema change is hard to reverse once deployed and conditions future inbox work.",
+      "metadata": {},
+      "fingerprint": "7e26b1b8ad46d53580f84847674e6a4aa19f09ec36ba2b7f466dec34069fb65b"
+    },
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000000202",
+      "kind": "diff_hunk",
+      "content": "diff --git a/crates/storage-sqlite/src/migrations/0005.sql b/crates/storage-sqlite/src/migrations/0005.sql\n+++ b/crates/storage-sqlite/src/migrations/0005.sql\n+CREATE TABLE decision_candidates (id TEXT PRIMARY KEY);\n",
+      "metadata": {
+        "path": "crates/storage-sqlite/src/migrations/0005.sql"
+      },
+      "fingerprint": "c17e2714ebf64fd438e16e549483e3aa0d60c406bf75bba7a108f695cbad033e"
+    }
+  ]
+}

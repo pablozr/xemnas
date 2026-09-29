@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "capture_id": "018f2d3c-4b5a-7c6d-8e9f-000000000106",
+  "idempotency_key": "opencode:e2e-trivial-test-token:msg:hash6",
+  "source": {
+    "adapter": "opencode",
+    "adapter_version": "0.0.0",
+    "session_id": "session-trivial-4",
+    "message_id": "msg-trivial-4"
+  },
+  "project": {
+    "canonical_path": "C:/synthetic/projects/extraction"
+  },
+  "observed_at": "2026-02-01T15:00:00Z",
+  "artifacts": [
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-00000000020c",
+      "kind": "user_text",
+      "content": "Added a unit test for the auth token helper; production code is unchanged.",
+      "metadata": {},
+      "fingerprint": "9c378b534abd547336038df564536dc27274494c395dd64af52239e71046e85d"
+    },
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-00000000020d",
+      "kind": "diff_hunk",
+      "content": "diff --git a/tests/auth_test.rs b/tests/auth_test.rs\n+++ b/tests/auth_test.rs\n+ assert!(check_token());\n",
+      "metadata": {
+        "path": "tests/auth_test.rs"
+      },
+      "fingerprint": "c3d4b83c554ef801913151627990076eed5e825e7107a6d9bd9d7bb0d0357eec"
+    }
+  ]
+}

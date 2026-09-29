@@ -1,0 +1,35 @@
+{
+    "schema_version":  1,
+    "capture_id":  "018f2d3c-4b5a-7c6d-8e9f-000000000110",
+    "idempotency_key":  "opencode:e2e-trivial-manifest-comment:msg:hash10",
+    "source":  {
+                   "adapter":  "opencode",
+                   "adapter_version":  "0.0.0",
+                   "session_id":  "session-trivial-7",
+                   "message_id":  "msg-trivial-7"
+               },
+    "project":  {
+                    "canonical_path":  "C:/synthetic/projects/extraction"
+                },
+    "observed_at":  "2026-02-01T19:00:00Z",
+    "artifacts":  [
+                      {
+                          "artifact_id":  "018f2d3c-4b5a-7c6d-8e9f-000000000217",
+                          "kind":  "user_text",
+                          "content":  "Optional dependency note for the manifest.",
+                          "metadata":  {
+
+                                       },
+                          "fingerprint":  "95558ff2b426ea4ad5eacabc75eb96e4d3dbf327d61d3f276f89dc5504dbc567"
+                      },
+                      {
+                          "artifact_id":  "018f2d3c-4b5a-7c6d-8e9f-000000000218",
+                          "kind":  "diff_hunk",
+                          "content":  "diff --git a/crates/storage-sqlite/Cargo.toml b/crates/storage-sqlite/Cargo.toml\n+++ b/crates/storage-sqlite/Cargo.toml\n+# optional = \"1\"\n+[dependencies]\n",
+                          "metadata":  {
+                                           "path":  "crates/storage-sqlite/Cargo.toml"
+                                       },
+                          "fingerprint":  "ba56830d439f3fe99fb926db6e072be9ed74c7ea3b5891d2d6f15a3b88f4f06e"
+                      }
+                  ]
+}

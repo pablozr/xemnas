@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "capture_id": "018f2d3c-4b5a-7c6d-8e9f-000000000109",
+  "idempotency_key": "opencode:e2e-trivial-sql-comment:msg:hash9",
+  "source": {
+    "adapter": "opencode",
+    "adapter_version": "0.0.0",
+    "session_id": "session-trivial-6",
+    "message_id": "msg-trivial-6"
+  },
+  "project": {
+    "canonical_path": "C:/synthetic/projects/extraction"
+  },
+  "observed_at": "2026-02-01T18:00:00Z",
+  "artifacts": [
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000000213",
+      "kind": "user_text",
+      "content": "Formatting only: comment-only change in the migration note.",
+      "metadata": {},
+      "fingerprint": "3174053c3d0339e4c17a442c25440bc29844b09ef521359a0de2a4bf34649992"
+    },
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000000214",
+      "kind": "diff_hunk",
+      "content": "diff --git a/crates/storage-sqlite/src/migrations/0007.sql b/crates/storage-sqlite/src/migrations/0007.sql\n+++ b/crates/storage-sqlite/src/migrations/0007.sql\n+-- migration note\n+// token migration\n",
+      "metadata": {
+        "path": "crates/storage-sqlite/src/migrations/0007.sql"
+      },
+      "fingerprint": "37af6dfb40f156326d5bcf6ea2e1000b9b5b5d89ecdd7569d061c2009adbed53"
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "capture_id": "018f2d3c-4b5a-7c6d-8e9f-000000000103",
+  "idempotency_key": "opencode:e2e-trivial-formatting:msg-trivial-1:hash3",
+  "source": {
+    "adapter": "opencode",
+    "adapter_version": "0.0.0",
+    "session_id": "session-trivial-1",
+    "message_id": "msg-trivial-1"
+  },
+  "project": {
+    "canonical_path": "C:/synthetic/projects/extraction"
+  },
+  "observed_at": "2026-02-01T12:00:00Z",
+  "artifacts": [
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000000205",
+      "kind": "user_text",
+      "content": "Formatting only: renamed a local variable and adjusted whitespace; no behavior change.",
+      "metadata": {},
+      "fingerprint": "947717043e19faee9684708e74bccaa58bc02116ed2ecd5c3394d9dd45468a75"
+    },
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000000206",
+      "kind": "diff_hunk",
+      "content": "diff --git a/src/main.rs b/src/main.rs\n+++ b/src/main.rs\n+ let formatted = value;\n",
+      "metadata": {
+        "path": "src/main.rs"
+      },
+      "fingerprint": "801c9f300d020eca65e6dad7e0c91debaa217f38cef577932532709193d3d165"
+    }
+  ]
+}

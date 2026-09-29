@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "capture_id": "018f2d3c-4b5a-7c6d-8e9f-000000000102",
+  "idempotency_key": "opencode:e2e-durable-dependency:msg-durable-2:hash2",
+  "source": {
+    "adapter": "opencode",
+    "adapter_version": "0.0.0",
+    "session_id": "session-durable-2",
+    "message_id": "msg-durable-2"
+  },
+  "project": {
+    "canonical_path": "C:/synthetic/projects/extraction"
+  },
+  "observed_at": "2026-02-01T11:00:00Z",
+  "artifacts": [
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000000203",
+      "kind": "user_text",
+      "content": "We added an external dependency (uuid) rather than hand-rolling identifiers. The trade-off is an extra crate, but it will condition future persistence work.",
+      "metadata": {},
+      "fingerprint": "b2618eb19c7cfe13ea62e16c9657339ba73498feb0113895e909c4a32895184f"
+    },
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000000204",
+      "kind": "diff_hunk",
+      "content": "diff --git a/Cargo.toml b/Cargo.toml\n+++ b/Cargo.toml\n+uuid = { version = \"1\", features = [\"v7\"] }\n",
+      "metadata": {
+        "path": "Cargo.toml"
+      },
+      "fingerprint": "14107e9c0fcc778b0943db1fdb3e35738ff0def0a040f220a84e4802318a4b8a"
+    }
+  ]
+}

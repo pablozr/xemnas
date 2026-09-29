@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "capture_id": "018f2d3c-4b5a-7c6d-8e9f-000000000111",
+  "idempotency_key": "opencode:e2e-trivial-prose:msg:hash11",
+  "source": {
+    "adapter": "opencode",
+    "adapter_version": "0.0.0",
+    "session_id": "session-trivial-8",
+    "message_id": "msg-trivial-8"
+  },
+  "project": {
+    "canonical_path": "C:/synthetic/projects/extraction"
+  },
+  "observed_at": "2026-02-01T20:00:00Z",
+  "artifacts": [
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000000217",
+      "kind": "assistant_text",
+      "content": "CREATE TABLE migration endpoint token just an example sentence.",
+      "metadata": {},
+      "fingerprint": "84cef1bcfa18ef1af292df86d970f7bb731ebc27334e47b443c32e627a609e07"
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "capture_id": "018f2d3c-4b5a-7c6d-8e9f-000000000105",
+  "idempotency_key": "opencode:e2e-trivial-incidental:msg:hash5",
+  "source": {
+    "adapter": "opencode",
+    "adapter_version": "0.0.0",
+    "session_id": "session-trivial-3",
+    "message_id": "msg-trivial-3"
+  },
+  "project": {
+    "canonical_path": "C:/synthetic/projects/extraction"
+  },
+  "observed_at": "2026-02-01T14:00:00Z",
+  "artifacts": [
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000000209",
+      "kind": "user_text",
+      "content": "Formatting only: adjusted whitespace around the schema and API names; no behavior change.",
+      "metadata": {},
+      "fingerprint": "a911063a85852de7d4a5877e34a872ce4098ea5bf625f872e67dfc87fd16d9ae"
+    },
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-00000000020a",
+      "kind": "diff_hunk",
+      "content": "diff --git a/src/lib.rs b/src/lib.rs\n+++ b/src/lib.rs\n+ \n+ let api = 1;\n",
+      "metadata": {
+        "path": "src/lib.rs"
+      },
+      "fingerprint": "cab0f66a4690b10e7e0ce1f7e136583f3b2fff873807002db8f917a3b58e7fa0"
+    },
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-00000000020b",
+      "kind": "diff_hunk",
+      "content": "diff --git a/docs/notes.md b/docs/notes.md\n+++ b/docs/notes.md\n+ \n",
+      "metadata": {
+        "path": "docs/notes.md"
+      },
+      "fingerprint": "a44071815c20c80ae7023b92cd0b499d1ea4050e99c5bd327cc8c802db2e0ac7"
+    }
+  ]
+}

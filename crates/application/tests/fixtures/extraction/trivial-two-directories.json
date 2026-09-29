@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "capture_id": "018f2d3c-4b5a-7c6d-8e9f-000000000107",
+  "idempotency_key": "opencode:e2e-trivial-two-dirs:msg:hash7",
+  "source": {
+    "adapter": "opencode",
+    "adapter_version": "0.0.0",
+    "session_id": "session-trivial-5",
+    "message_id": "msg-trivial-5"
+  },
+  "project": {
+    "canonical_path": "C:/synthetic/projects/extraction"
+  },
+  "observed_at": "2026-02-01T16:00:00Z",
+  "artifacts": [
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-00000000020e",
+      "kind": "user_text",
+      "content": "Renamed a local helper in src and tools; no behavior change.",
+      "metadata": {},
+      "fingerprint": "8d9c6e25254d8e0e7690a1d70b23502f543501bac3713e514316a52f14bad49e"
+    },
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-00000000020f",
+      "kind": "diff_hunk",
+      "content": "diff --git a/src/a.rs b/src/a.rs\n+++ b/src/a.rs\n+ let helper = 1;\n",
+      "metadata": {
+        "path": "src/a.rs"
+      },
+      "fingerprint": "cd22deac07581aea0b496f1840d467bc09bf094db9d64cf69aeb82b9d0ad9047"
+    },
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000000210",
+      "kind": "diff_hunk",
+      "content": "diff --git a/tools/b.sh b/tools/b.sh\n+++ b/tools/b.sh\n+ echo helper\n",
+      "metadata": {
+        "path": "tools/b.sh"
+      },
+      "fingerprint": "5d09d8faf5605b8b5455fb9c0f468762ee78332e1589437eddd34024f62eb651"
+    }
+  ]
+}

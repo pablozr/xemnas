@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "capture_id": "018f2d3c-4b5a-7c6d-8e9f-000000000110",
+  "idempotency_key": "opencode:e2e-trivial-sql-whitespace:msg:hash10",
+  "source": {
+    "adapter": "opencode",
+    "adapter_version": "0.0.0",
+    "session_id": "session-trivial-7",
+    "message_id": "msg-trivial-7"
+  },
+  "project": {
+    "canonical_path": "C:/synthetic/projects/extraction"
+  },
+  "observed_at": "2026-02-01T19:00:00Z",
+  "artifacts": [
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000000215",
+      "kind": "user_text",
+      "content": "Formatting only: adjusted indentation in the query file.",
+      "metadata": {},
+      "fingerprint": "1ab4ce216de0b856c83ef4dbf3e4d767534432436f83aa73cb4d564db1a6813b"
+    },
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000000216",
+      "kind": "diff_hunk",
+      "content": "diff --git a/queries/report.sql b/queries/report.sql\n+++ b/queries/report.sql\n+    \n+  SELECT 1;\n",
+      "metadata": {
+        "path": "queries/report.sql"
+      },
+      "fingerprint": "7de82f04d8ec977cc6c64e81208fac9bc31a46de82615e4120ab3469ddae360d"
+    }
+  ]
+}
