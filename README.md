@@ -13,6 +13,19 @@ cargo build --release --locked -p desktop-gpui --bin xemnas
 .\target\release\xemnas.exe
 ```
 
+Para explorar o layout com candidatos fictícios:
+
+```powershell
+cargo run --locked -p desktop-gpui --bin xemnas -- --demo
+# Prévia na menor janela suportada:
+cargo run --locked -p desktop-gpui --bin xemnas -- --demo --compact
+```
+
+A demonstração usa um banco em memória e não inicia workers, API ou provedores.
+Os dados desaparecem ao fechar a janela. Na tela atual, Revisão permite ler
+candidatos e evidências do projeto selecionado; Detalhes mantém as propriedades
+e a remoção do acompanhamento. As ações de revisão do mock ainda serão integradas.
+
 Pacote distribuível (ZIP versionado em `dist\`):
 
 ```powershell
