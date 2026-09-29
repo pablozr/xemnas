@@ -1,0 +1,22 @@
+[package]
+name = "ai-provider"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+application = { version = "0.1.0", path = "../application" }
+# `blocking` is fine: the extractor runs on the jobs worker's dedicated std
+# thread, never on the GPUI thread. `default-tls` uses schannel on Windows and
+# avoids the MPL-2.0 webpki-roots license (not in deny.toml's allow-list).
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "default-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+# OS-protected secret storage: Credential Manager on Windows. keyring 3 has no
+# `default` backend feature, so the platform backend must be selected explicitly
+# (`windows-native`); without it the crate falls back to a per-entry mock.
+# Pinned to 3.6.2: 3.6.3 pulls `windows-sys 0.60` whose `windows_x86_64_msvc`
+# build script the host's Application Control policy refuses to execute, while
+# 3.6.2 uses `windows-sys 0.59` which is already built in this workspace.
+keyring = { version = "=3.6.2", features = ["windows-native"] }

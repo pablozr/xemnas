@@ -26,6 +26,9 @@ storage-sqlite = { version = "0.1.0", path = "../../crates/storage-sqlite" }
 # Composition root wiring: `main.rs` starts the loopback-only local API beside
 # the database and hands it the ingest use case; the UI never talks to HTTP.
 local-api = { version = "0.1.0", path = "../../crates/local-api" }
+# External AI provider adapter; `main.rs` chooses between it and the offline
+# fake from the stored profile (ticket 13).
+ai-provider = { version = "0.1.0", path = "../../crates/ai-provider" }
 telemetry = { version = "0.1.0", path = "../../crates/telemetry" }
 # Technical diagnostics are emitted through the `telemetry` subscriber; the UI
 # only ever renders product-language copy.
@@ -35,3 +38,5 @@ tracing = "0.1"
 # architecture guard in tests/architecture enforces that.
 gpui = { version = "0.2.2", git = "https://github.com/zed-industries/zed", rev = "244023605536a412ab6b8d5b658466b89fb15401" }
 gpui_platform = { version = "0.1.0", git = "https://github.com/zed-industries/zed", rev = "244023605536a412ab6b8d5b658466b89fb15401" }
+rfd = { version = "0.17.2", default-features = false, features = ["pollster"] }
+unicode-segmentation = "1.13"

@@ -217,6 +217,10 @@ fn allowed_dependencies(name: &str) -> BTreeSet<&'static str> {
             "integration-contracts",
             "storage-sqlite",
         ],
+        // External AI provider adapter (ticket 13): HTTP lives at the edge, so
+        // the provider crate implements the application's `CandidateExtractor`
+        // port and keeps `application`/`domain` free of HTTP (ARCH-001).
+        "ai-provider" => &["application"],
         "telemetry" => &[],
         // The desktop app is the composition root: `main.rs` opens the SQLite
         // store and mounts it into the application use case before handing the
@@ -225,12 +229,15 @@ fn allowed_dependencies(name: &str) -> BTreeSet<&'static str> {
         // interfaces" wiring from the stack doc (Regra de dependência).
         // `local-api` is started from `main.rs` on its own runtime thread so the
         // API lives and dies with the desktop process (MVP-SPEC §9).
+        // `ai-provider` is wired here so the extractor choice is made at the
+        // composition root, never in the UI.
         "desktop-gpui" => &[
             "application",
             "domain",
             "telemetry",
             "storage-sqlite",
             "local-api",
+            "ai-provider",
         ],
         "architecture" => &[],
         other => {
