@@ -20,6 +20,10 @@ import {
 } from "./config.js";
 import { buildEnvelope, validateEnvelope } from "./envelope.js";
 import {
+  createOutboxWriter,
+  type OutboxWriter,
+} from "./outbox.js";
+import {
   createHttpMessageSource,
   type MessageSource,
   type OpenCodeFileDiff,
@@ -101,6 +105,11 @@ export interface AdapterDeps {
   source: MessageSource;
   client: CaptureClient;
   checkpoints: CheckpointStore;
+  /**
+   * Persists envelopes when the local API is unavailable. Defaults to the real
+   * filesystem writer rooted at `config.pendingDir`.
+   */
+  outbox?: OutboxWriter;
   /** Project directory from the plugin input; canonicalization is the server's. */
   directory: string;
   log?: AdapterLog;
@@ -192,6 +201,7 @@ function buildTurns(messages: OpenCodeMessage[]): Turn[] {
 export function createAdapter(deps: AdapterDeps): Adapter {
   const log = deps.log ?? createStderrLog();
   const now = deps.now ?? (() => new Date());
+  const outbox = deps.outbox ?? createOutboxWriter(deps.config);
   const schedule =
     deps.schedule ??
     ((task: () => void, delayMs: number): (() => void) => {
@@ -277,6 +287,7 @@ export function createAdapter(deps: AdapterDeps): Adapter {
           at: now().toISOString(),
           message_id: turn.user.id,
           status: result.status,
+          reason: `http-${result.status}`,
         });
         log.warn("capture-rejected", {
           session_id: sessionId,
@@ -286,10 +297,31 @@ export function createAdapter(deps: AdapterDeps): Adapter {
         return { session_id: sessionId, sent, skipped, stopped: true };
       }
 
+      // Local API unavailable: persist the envelope in the outbox. The
+      // checkpoint stays put, so a later idle re-sends the same key and the app
+      // deduplicates whichever copy arrives first (MVP-SPEC §7.2).
       log.warn("app-unavailable", {
         session_id: sessionId,
         reason: result.reason,
       });
+      const written = outbox.writePending(envelope);
+      if (written.ok) {
+        log.info("outbox-pending", {
+          session_id: sessionId,
+          message_id: turn.user.id,
+        });
+      } else {
+        deps.checkpoints.recordFailure(sessionId, {
+          at: now().toISOString(),
+          message_id: turn.user.id,
+          status: null,
+          reason: "outbox-write",
+        });
+        log.error("outbox-write-failed", {
+          session_id: sessionId,
+          message_id: turn.user.id,
+        });
+      }
       return { session_id: sessionId, sent, skipped, stopped: true };
     }
 

@@ -26,14 +26,16 @@ export interface SessionCheckpoint {
   last_capture_id: string | null;
 }
 
-/** Sanitized record of a rejected capture; carries no content. */
+/** Sanitized record of a failed capture; carries no content. */
 export interface CaptureFailure {
   /** ISO-8601 timestamp of the failure. */
   at: string;
-  /** User message id whose envelope was rejected. */
+  /** User message id whose envelope failed. */
   message_id: string;
-  /** HTTP status returned by the local API. */
-  status: number;
+  /** HTTP status when the server rejected the capture; `null` for local failures. */
+  status: number | null;
+  /** Short, sanitized reason code (for example `http-422`, `outbox-write`). */
+  reason: string;
 }
 
 /** Persistence port for checkpoints and failures. */
@@ -139,17 +141,14 @@ export function createCheckpointStore(paths: CheckpointPaths): CheckpointStore {
         return null;
       }
       const record = value as Record<string, unknown>;
-      if (
-        typeof record.at !== "string" ||
-        typeof record.message_id !== "string" ||
-        typeof record.status !== "number"
-      ) {
+      if (typeof record.at !== "string" || typeof record.message_id !== "string") {
         return null;
       }
       return {
         at: record.at,
         message_id: record.message_id,
-        status: record.status,
+        status: typeof record.status === "number" ? record.status : null,
+        reason: typeof record.reason === "string" ? record.reason : "",
       };
     },
   };
