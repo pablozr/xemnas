@@ -409,7 +409,7 @@ impl<S: InboxStore + Send + 'static> Render for InboxScreen<S> {
             .filter(|row| matches_query(row, &self.query))
             .collect();
         div().size_full().flex().flex_col()
-            .children(self.error.map(|message| text_style(div(), TypeScale::BODY_SMALL).p(px(SpacingScale::S3))
+            .children(self.error.map(|message| text_style(div(), TypeScale::BODY_SMALL).id("inbox-error").p(px(SpacingScale::S3))
                 .role(Role::Status).text_color(theme.colors.status_danger()).child(message)))
             .child(div().flex_1().min_h(px(0.0)).flex()
                 .child(div().w(px(340.0)).flex_none().h_full().flex().flex_col().bg(theme.colors.rail())
