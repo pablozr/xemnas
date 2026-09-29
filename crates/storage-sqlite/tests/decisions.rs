@@ -168,6 +168,32 @@ fn confirm_promotes_transactionally() {
         .expect("confirm");
     assert_eq!(outcome.status, CandidateStatus::Accepted);
 
+    let decisions = Decisions::new(store.clone());
+    let mut detail = decisions.detail(&outcome.decision_id).expect("detail");
+    detail
+        .evidence
+        .push(application::decisions::EvidenceLinkView {
+            artifact_id: "unavailable".into(),
+            kind: None,
+            position: 2,
+        });
+    let sources = decisions.sources(&detail).expect("redacted sources");
+    assert_eq!(
+        sources
+            .iter()
+            .map(|source| source.link.artifact_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["art-2", "art-1", "unavailable"]
+    );
+    assert_eq!(
+        sources[0].artifact.as_ref().unwrap().content,
+        "content-art-2"
+    );
+    assert!(
+        sources[2].artifact.is_none(),
+        "missing evidence retains its link"
+    );
+
     let connection = Connection::open(root.join("app.db")).expect("raw");
     let (status, version, candidate_id): (String, i64, String) = connection
         .query_row(

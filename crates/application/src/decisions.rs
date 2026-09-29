@@ -522,6 +522,44 @@ pub struct Decisions<S> {
     store: S,
 }
 
+/// A recorded evidence link and its redacted source, when still available.
+#[derive(Debug, Clone)]
+pub struct DecisionSource {
+    /// Ordered provenance link; retained even if the source is unavailable.
+    pub link: EvidenceLinkView,
+    /// Redacted capture content, never read from the working tree.
+    pub artifact: Option<crate::inbox::ArtifactView>,
+}
+
+impl<S: DecisionStore + crate::inbox::InboxStore> Decisions<S> {
+    /// Resolves only the decision's linked artifacts within its original capture.
+    pub fn sources(&self, detail: &DecisionDetail) -> Result<Vec<DecisionSource>, DecisionsError> {
+        let refs = detail
+            .evidence
+            .iter()
+            .map(|link| link.artifact_id.clone())
+            .collect::<Vec<_>>();
+        let artifacts = match detail.provenance.capture_id.as_deref() {
+            Some(capture) => self
+                .store
+                .artifacts(capture, &refs)
+                .map_err(|_| DecisionsError::Storage("fonte indisponível".into()))?,
+            None => Vec::new(),
+        };
+        Ok(detail
+            .evidence
+            .iter()
+            .map(|link| DecisionSource {
+                link: link.clone(),
+                artifact: artifacts
+                    .iter()
+                    .find(|artifact| artifact.artifact_id == link.artifact_id)
+                    .cloned(),
+            })
+            .collect())
+    }
+}
+
 impl<S: DecisionStore> Decisions<S> {
     /// Wraps a store with the Decisions use case.
     pub fn new(store: S) -> Self {
