@@ -15,6 +15,46 @@ use storage_sqlite::SqliteStore;
 
 const LOCATION: &str = "C:/synthetic/inbox";
 
+#[test]
+fn queue_count_ignores_page_size_and_cursor_and_tracks_review_actions() {
+    let store = SqliteStore::open(":memory:").expect("store");
+    seed_project(&store);
+    seed_capture(&store, "capture-count", "message-count");
+    let rows: Vec<_> = (0..57)
+        .map(|index| {
+            candidate(
+                &format!("count-{index:03}"),
+                "capture-count",
+                "2026-09-29T15:00:00Z",
+                "pending",
+            )
+        })
+        .collect();
+    store.insert_candidates(&rows).expect("candidates");
+    let inbox = Inbox::new(store);
+    let mut filter = InboxFilter {
+        project_id: Some("project-1".into()),
+        limit: 2,
+        ..InboxFilter::default()
+    };
+    let first = inbox.list(&filter).expect("page");
+    assert_eq!(first.candidates.len(), 2);
+    filter.cursor = first.next_cursor;
+    assert_eq!(inbox.count(&filter).expect("count"), 57);
+    inbox.snooze("count-000").expect("snooze");
+    assert_eq!(
+        inbox
+            .count(&filter)
+            .expect("deferred still awaiting review"),
+        57
+    );
+    inbox.reject("count-001").expect("reject");
+    inbox.confirm("count-002", None).expect("confirm");
+    assert_eq!(inbox.count(&filter).expect("remaining"), 55);
+    filter.project_id = Some("another-project".into());
+    assert_eq!(inbox.count(&filter).expect("other project"), 0);
+}
+
 fn temporary_directory(tag: &str) -> std::path::PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};
 

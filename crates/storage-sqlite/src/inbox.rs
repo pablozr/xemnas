@@ -152,6 +152,32 @@ fn cas_batch(
 }
 
 impl InboxStore for SqliteStore {
+    fn count(
+        &self,
+        project_id: Option<&str>,
+        statuses: &[CandidateStatus],
+    ) -> Result<usize, InboxError> {
+        if statuses.is_empty() {
+            return Ok(0);
+        }
+        let mut sql = format!("SELECT COUNT(*) {CANDIDATE_FROM} WHERE dc.status IN (");
+        push_placeholders(&mut sql, statuses.len());
+        sql.push(')');
+        let mut binds: Vec<Value> = statuses
+            .iter()
+            .map(|status| Value::Text(status.as_str().into()))
+            .collect();
+        if let Some(project_id) = project_id {
+            sql.push_str(" AND dc.project_id = ?");
+            binds.push(Value::Text(project_id.into()));
+        }
+        let count: i64 = self
+            .lock()
+            .query_row(&sql, params_from_iter(binds), |row| row.get(0))
+            .map_err(storage_error)?;
+        usize::try_from(count).map_err(|_| InboxError::InvalidData("contagem inválida".into()))
+    }
+
     fn list(&self, query: &InboxQuery) -> Result<Vec<StoredCandidate>, InboxError> {
         if query.statuses.is_empty() {
             return Ok(Vec::new());

@@ -444,6 +444,34 @@ pub struct ConfirmOutcome {
 /// `accepted`/`edited_and_accepted`. Edits arrive as [`ValidatedEdits`], so an
 /// unvalidated edit cannot reach storage either.
 pub trait InboxStore {
+    /// Counts the whole filtered queue, independent of pagination. Stores can
+    /// override this paginated fallback with an aggregate query.
+    fn count(
+        &self,
+        project_id: Option<&str>,
+        statuses: &[CandidateStatus],
+    ) -> Result<usize, InboxError> {
+        let mut query = InboxQuery {
+            project_id: project_id.map(str::to_owned),
+            statuses: statuses.to_vec(),
+            limit: MAX_PAGE_LIMIT,
+            before: None,
+        };
+        let mut total = 0;
+        loop {
+            let rows = self.list(&query)?;
+            total += rows.len();
+            if rows.len() < query.limit {
+                return Ok(total);
+            }
+            let last = &rows[rows.len() - 1];
+            query.before = Some(Cursor {
+                created_at: last.created_at.clone(),
+                id: last.id.clone(),
+            });
+        }
+    }
+
     /// Returns candidates matching `query`, ordered `created_at DESC, id DESC`.
     fn list(&self, query: &InboxQuery) -> Result<Vec<StoredCandidate>, InboxError>;
 
@@ -503,6 +531,14 @@ pub struct Inbox<S> {
 }
 
 impl<S: InboxStore> Inbox<S> {
+    /// Counts every matching candidate; page size and cursor do not limit it.
+    pub fn count(&self, filter: &InboxFilter) -> Result<usize, InboxError> {
+        if filter.statuses.is_empty() {
+            return Err(InboxError::InvalidFilter("nenhum estado informado".into()));
+        }
+        self.store
+            .count(filter.project_id.as_deref(), &filter.statuses)
+    }
     /// Wraps a store with the Inbox use case.
     pub fn new(store: S) -> Self {
         Self { store }
