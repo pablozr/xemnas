@@ -4,6 +4,7 @@
 
 # Rust build output and editor backups.
 /target/
+/dist/
 **/*.rs.bk
 
 # Cargo.lock is intentionally versioned (RUST-004); do not ignore it.
