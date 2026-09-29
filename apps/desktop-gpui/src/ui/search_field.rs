@@ -58,6 +58,7 @@ pub struct SearchChanged(pub String);
 /// Single-line input for filtering projects; GPUI forwards its IME to Windows.
 pub struct SearchField {
     theme: Theme,
+    placeholder: &'static str,
     focus: FocusHandle,
     edit: SearchEdit,
     layout: Option<ShapedLine>,
@@ -73,6 +74,7 @@ impl SearchField {
     pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
             theme: Theme::quiet_glass(),
+            placeholder: "Buscar projetos",
             focus: cx.focus_handle().tab_stop(true),
             edit: SearchEdit::default(),
             layout: None,
@@ -80,6 +82,13 @@ impl SearchField {
             scroll_x: px(0.0),
             selecting: false,
         }
+    }
+
+    /// Changes the search destination and clears the previous destination's query.
+    pub fn set_context(&mut self, placeholder: &'static str, cx: &mut Context<Self>) {
+        self.placeholder = placeholder;
+        self.edit = SearchEdit::default();
+        self.changed(cx);
     }
 
     fn changed(&mut self, cx: &mut Context<Self>) {
@@ -359,7 +368,7 @@ impl Element for SearchTextElement {
         let input = self.input.read(cx);
         let focused = input.focus.is_focused(window);
         let content = if input.edit.text.is_empty() && !focused {
-            "Buscar projetos"
+            input.placeholder
         } else {
             &input.edit.text
         };
@@ -511,7 +520,7 @@ impl Render for SearchField {
             .focus_visible(focus_ring(&theme))
             .key_context("SearchField")
             .role(Role::TextInput)
-            .aria_label("Buscar projetos")
+            .aria_label(self.placeholder)
             .cursor_text()
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete))
