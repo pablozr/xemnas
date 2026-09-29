@@ -439,6 +439,33 @@ impl<R: JobRepository> Jobs<R> {
         Ok(())
     }
 
+    /// Requeues a failed job so a worker can claim it again.
+    ///
+    /// Only `failed -> queued` is allowed; the compare-and-set also clears
+    /// `last_error`. `attempts` keeps incrementing on the next claim, so a manual
+    /// reprocessing stays visible and unbounded — the only bounded retry is the
+    /// provider's own transient retry policy.
+    pub fn reprocess(&self, id: &str) -> Result<(), JobError> {
+        let record = self.repository.get(id)?.ok_or(JobError::NotFound)?;
+        if record.state != JobState::Failed {
+            return Err(JobError::InvalidTransition {
+                from: record.state,
+                to: JobState::Queued,
+            });
+        }
+        let changed = self
+            .repository
+            .transition(id, JobState::Failed, JobState::Queued, None)?;
+        if !changed {
+            return Err(JobError::InvalidTransition {
+                from: JobState::Failed,
+                to: JobState::Queued,
+            });
+        }
+        self.wake();
+        Ok(())
+    }
+
     /// Recovers jobs left `running` by a restart.
     ///
     /// Idempotent jobs return to `queued`; non-idempotent ones become `failed`
@@ -671,6 +698,126 @@ mod tests {
     };
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
+
+    /// In-memory repository that actually models state, for `reprocess` tests.
+    #[derive(Clone, Default)]
+    struct StateRepository {
+        records: Arc<Mutex<Vec<JobRecord>>>,
+    }
+
+    impl JobRepository for StateRepository {
+        fn insert(&self, record: &JobRecord) -> Result<(), JobError> {
+            self.records
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(record.clone());
+            Ok(())
+        }
+
+        fn get(&self, id: &str) -> Result<Option<JobRecord>, JobError> {
+            Ok(self
+                .records
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .iter()
+                .find(|record| record.id == id)
+                .cloned())
+        }
+
+        fn list(&self) -> Result<Vec<JobRecord>, JobError> {
+            Ok(self
+                .records
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone())
+        }
+
+        fn claim_next(&self, registered_kinds: &[String]) -> Result<Option<JobRecord>, JobError> {
+            let mut records = self
+                .records
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(record) = records.iter_mut().find(|record| {
+                record.state == JobState::Queued && registered_kinds.contains(&record.kind)
+            }) {
+                record.state = JobState::Running;
+                record.attempts += 1;
+                return Ok(Some(record.clone()));
+            }
+            Ok(None)
+        }
+
+        fn transition(
+            &self,
+            id: &str,
+            from: JobState,
+            to: JobState,
+            last_error: Option<&str>,
+        ) -> Result<bool, JobError> {
+            let mut records = self
+                .records
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(record) = records
+                .iter_mut()
+                .find(|record| record.id == id && record.state == from)
+            {
+                record.state = to;
+                record.last_error = last_error.map(str::to_string);
+                return Ok(true);
+            }
+            Ok(false)
+        }
+
+        fn recover_interrupted(&self) -> Result<RecoveryReport, JobError> {
+            Ok(RecoveryReport::default())
+        }
+    }
+
+    #[test]
+    fn reprocess_requeues_failed_and_clears_the_diagnostic() {
+        let repository = StateRepository::default();
+        let mut jobs = Jobs::new(repository.clone());
+        jobs.register(
+            "analysis",
+            Arc::new(|_: &JobRecord| -> Result<(), JobFailure> { Err(JobFailure::Failed) }),
+        );
+
+        let record = jobs.enqueue("analysis", "{}", true).expect("enqueue");
+        let outcome = jobs.run_next().expect("run").expect("the job ran");
+        assert_eq!(outcome.state, JobState::Failed);
+        assert_eq!(
+            repository
+                .get(&record.id)
+                .expect("get")
+                .expect("row")
+                .last_error
+                .as_deref(),
+            Some(JobFailure::Failed.as_str())
+        );
+
+        jobs.reprocess(&record.id).expect("reprocess a failed job");
+        let queued = repository.get(&record.id).expect("get").expect("row");
+        assert_eq!(queued.state, JobState::Queued);
+        assert_eq!(queued.last_error, None, "reprocess must clear last_error");
+
+        // The worker was woken: the next claim picks the job up and increments
+        // attempts, so manual reprocessing stays visible.
+        let claimed = repository
+            .claim_next(&["analysis".to_string()])
+            .expect("claim")
+            .expect("a claimable job");
+        assert_eq!(claimed.attempts, 2);
+
+        assert_eq!(
+            jobs.reprocess(&record.id),
+            Err(JobError::InvalidTransition {
+                from: JobState::Running,
+                to: JobState::Queued,
+            })
+        );
+        assert_eq!(jobs.reprocess("missing"), Err(JobError::NotFound));
+    }
 
     /// In-memory repository with controllable claim and transition outcomes.
     #[derive(Clone, Default)]

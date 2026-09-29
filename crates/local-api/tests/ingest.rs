@@ -646,6 +646,78 @@ fn unregistered_or_uncanonicalizable_project_is_forbidden() {
 }
 
 #[test]
+fn a_symlink_that_escapes_the_registered_project_is_forbidden() {
+    let root = temporary_directory("symlink");
+    let store = SqliteStore::open(root.join("app.db")).expect("open store");
+    let server = start(
+        &store,
+        local_api::DEFAULT_MAX_BODY_BYTES,
+        Duration::from_secs(5),
+        root.clone(),
+    );
+
+    let registered = register_project(&store, &root);
+    let registered_dir = PathBuf::from(&registered);
+
+    // A directory outside the registered project, plus a link inside the
+    // registered project that resolves to it.
+    let outside = root.join("outside");
+    std::fs::create_dir_all(&outside).expect("create outside directory");
+    let link = registered_dir.join("escape");
+    create_directory_link(&outside, &link);
+
+    let mut envelope = fixture("valid-complete.json");
+    envelope["project"]["canonical_path"] = json!(link.to_string_lossy());
+    let key = envelope_key(&envelope);
+    assert_eq!(
+        post(
+            &server,
+            "/v1/captures",
+            Some(server.token()),
+            Some(&key),
+            None,
+            &body_of(&envelope),
+        )
+        .0,
+        403,
+        "a link resolving outside the registered project must be forbidden"
+    );
+
+    let connection = rusqlite::Connection::open(root.join("app.db")).expect("open raw connection");
+    assert_eq!(table_count(&connection, "capture_receipts"), 0);
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Creates a directory link, falling back to a junction when the host refuses
+/// the symlink privilege. If neither works the test must fail loudly.
+fn create_directory_link(target: &Path, link: &Path) {
+    #[cfg(windows)]
+    {
+        if std::os::windows::fs::symlink_dir(target, link).is_ok() {
+            return;
+        }
+        let output = std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .expect("run mklink");
+        if !output.status.success() {
+            panic!(
+                "symlink creation unavailable: symlink_dir failed and mklink /J failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        std::os::unix::fs::symlink(target, link)
+            .unwrap_or_else(|error| panic!("symlink creation unavailable: {error}"));
+    }
+}
+
+#[test]
 fn oversized_body_is_rejected() {
     let root = temporary_directory("oversized");
     let store = SqliteStore::open(root.join("app.db")).expect("open store");
@@ -1120,6 +1192,51 @@ fn same_declared_fingerprint_for_different_contents_is_unprocessable() {
     assert_eq!(table_count(&connection, "capture_receipts"), 0);
     assert_eq!(table_count(&connection, "capture_artifacts"), 0);
     assert_eq!(table_count(&connection, "jobs"), 0);
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn outbox_drain_imports_without_duplicating() {
+    let root = temporary_directory("outbox");
+    let database = root.join("app.db");
+    let store = SqliteStore::open(&database).expect("open store");
+    let location = register_project(&store, &root);
+    let envelope = envelope_for(&location);
+    let key = envelope_key(&envelope);
+    let filename = format!("{}.json", sha256_hex(&key));
+
+    let outbox = root.join("outbox");
+    let pending = outbox.join("pending");
+    std::fs::create_dir_all(&pending).expect("create pending");
+    std::fs::write(pending.join(&filename), body_of(&envelope)).expect("write pending envelope");
+
+    let retention = Duration::from_secs(7 * 24 * 60 * 60);
+    let ingest = CaptureIngest::new(store.clone());
+    let report = application::outbox::drain(&outbox, &ingest, retention).expect("drain the outbox");
+    assert_eq!(report.accepted, 1);
+    assert_eq!(report.pending_remaining, 0);
+    assert!(outbox.join("accepted").join(&filename).exists());
+
+    let connection = rusqlite::Connection::open(&database).expect("open raw connection");
+    assert_eq!(table_count(&connection, "capture_receipts"), 1);
+    assert_eq!(table_count(&connection, "capture_artifacts"), 4);
+    assert_eq!(table_count(&connection, "jobs"), 1);
+    assert_eq!(table_count(&connection, "adapter_checkpoints"), 1);
+
+    // Re-import the accepted envelope: deduplication keeps a single receipt and
+    // a single analysis job.
+    std::fs::copy(
+        outbox.join("accepted").join(&filename),
+        pending.join(&filename),
+    )
+    .expect("copy accepted back to pending");
+    let replay = application::outbox::drain(&outbox, &ingest, retention).expect("drain the replay");
+    assert_eq!(replay.accepted, 1);
+    assert_eq!(table_count(&connection, "capture_receipts"), 1);
+    assert_eq!(table_count(&connection, "capture_artifacts"), 4);
+    assert_eq!(table_count(&connection, "jobs"), 1);
+    assert_eq!(table_count(&connection, "adapter_checkpoints"), 1);
 
     let _ = std::fs::remove_dir_all(&root);
 }

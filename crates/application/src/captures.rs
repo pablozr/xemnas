@@ -7,8 +7,8 @@
 //! another job. Artifacts inside one payload are deduplicated by
 //! `(kind, fingerprint)`; the same fingerprint in a different capture is
 //! legitimate, because those are different events. Analysis is scheduled as an
-//! [`ANALYZE_CAPTURE_KIND`] job with no handler yet (ticket 12): it stays
-//! `queued` by design, and the response never waits for it.
+//! [`ANALYZE_CAPTURE_KIND`] job; the composition root registers its handler
+//! (ticket 12), so the job runs the deterministic extraction pass.
 
 use std::collections::HashSet;
 

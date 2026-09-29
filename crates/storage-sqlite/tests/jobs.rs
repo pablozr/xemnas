@@ -392,3 +392,49 @@ fn worker_processes_enqueued_job_and_stops_cleanly() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn reprocess_requeues_a_failed_job_and_clears_the_diagnostic() {
+    let (store, root) = store_in("reprocess");
+    let mut jobs = Jobs::new(store.clone());
+    jobs.register(
+        "analysis",
+        Arc::new(|_: &JobRecord| Err(JobFailure::Failed)),
+    );
+
+    let job = jobs.enqueue("analysis", "{}", true).expect("enqueue");
+    let outcome = jobs.run_next().expect("run").expect("a job ran");
+    assert_eq!(outcome.state, JobState::Failed);
+    assert_eq!(outcome.attempts, 1);
+    let failed = store.get(&job.id).expect("get").expect("row");
+    assert_eq!(
+        failed.last_error.as_deref(),
+        Some(JobFailure::Failed.as_str())
+    );
+
+    jobs.reprocess(&job.id).expect("reprocess a failed job");
+    let queued = store.get(&job.id).expect("get").expect("row");
+    assert_eq!(queued.state, JobState::Queued);
+    assert_eq!(
+        queued.last_error, None,
+        "reprocess must clear the diagnostic"
+    );
+
+    let claimed = store
+        .claim_next(&["analysis".to_string()])
+        .expect("claim")
+        .expect("a claimable job");
+    assert_eq!(claimed.attempts, 2, "attempts keep growing on the re-claim");
+    assert!(matches!(
+        jobs.reprocess(&job.id),
+        Err(JobError::InvalidTransition {
+            from: JobState::Running,
+            to: JobState::Queued,
+        })
+    ));
+    assert!(matches!(jobs.reprocess("missing"), Err(JobError::NotFound)));
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// Covers persisted job state transitions and worker lifecycle.
