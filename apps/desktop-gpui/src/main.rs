@@ -190,7 +190,13 @@ fn run_shell_mode(store: Result<SqliteStore, String>, demo: bool) {
             KeyBinding::new("escape", Clear, Some("SearchField")),
         ]);
 
-        let bounds = Bounds::centered(None, size(px(1440.0), px(1024.0)), cx);
+        let compact = demo && std::env::args().any(|argument| argument == "--compact");
+        let dimensions = if compact {
+            size(px(1180.0), px(760.0))
+        } else {
+            size(px(1440.0), px(1024.0))
+        };
+        let bounds = Bounds::centered(None, dimensions, cx);
         let (projects, inbox) = match store {
             Ok(store) => (
                 Ok(application::projects::Projects::new(store.clone())),

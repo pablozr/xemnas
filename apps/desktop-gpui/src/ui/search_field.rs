@@ -65,6 +65,8 @@ pub struct SearchField {
     bounds: Option<Bounds<Pixels>>,
     scroll_x: Pixels,
     selecting: bool,
+    width: f32,
+    show_shortcut: bool,
 }
 
 impl EventEmitter<SearchChanged> for SearchField {}
@@ -81,7 +83,15 @@ impl SearchField {
             bounds: None,
             scroll_x: px(0.0),
             selecting: false,
+            width: 280.0,
+            show_shortcut: true,
         }
+    }
+
+    /// Fits the same text editor into a narrower navigation rail.
+    pub fn set_width(&mut self, width: f32) {
+        self.width = width;
+        self.show_shortcut = false;
     }
 
     /// Changes the search destination and clears the previous destination's query.
@@ -498,7 +508,7 @@ impl Render for SearchField {
         let focused = self.focus.is_focused(window);
         div()
             .id("title-search")
-            .w(px(280.0))
+            .w(px(self.width))
             .h(px(32.0))
             .px(px(SpacingScale::S3))
             .flex()
@@ -547,10 +557,12 @@ impl Render for SearchField {
                     .overflow_hidden()
                     .child(SearchTextElement { input: cx.entity() }),
             )
-            .child(
-                text_style(div(), TypeScale::META)
-                    .text_color(theme.colors.text_muted())
-                    .child(if focused { "Esc · limpar" } else { "Ctrl K" }),
-            )
+            .when(self.show_shortcut || focused, |field| {
+                field.child(
+                    text_style(div(), TypeScale::META)
+                        .text_color(theme.colors.text_muted())
+                        .child(if focused { "Esc · limpar" } else { "Ctrl K" }),
+                )
+            })
     }
 }

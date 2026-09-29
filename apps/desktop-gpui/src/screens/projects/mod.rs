@@ -15,13 +15,14 @@ use application::projects::{ProjectError, ProjectRepository, Projects};
 use domain::projects::ProjectSummary;
 use gpui::prelude::*;
 use gpui::{
-    div, px, AnyElement, BoxShadow, Context, Div, ElementId, EventEmitter, FocusHandle,
-    PathPromptOptions, Render, Role, Stateful, Window,
+    div, px, AnyElement, BoxShadow, Context, Div, ElementId, Entity, EventEmitter, FocusHandle,
+    PathPromptOptions, Render, Role, Stateful, Subscription, Window,
 };
 
 use crate::ui::feedback::{error_state, status_dot, StatusKind};
 use crate::ui::glass::focus_ring;
 use crate::ui::icons::Icon;
+use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{SpacingScale, TypeScale};
 
@@ -131,10 +132,10 @@ pub struct ProjectsScreen<R: ProjectRepository + Send + 'static> {
     cancel_focus: FocusHandle,
     /// One focus handle per listed row, kept stable across frames for Tab order.
     row_focus: Vec<(String, FocusHandle)>,
-    /// What the title-bar search is filtering on, mirrored from the shell.
-    ///
-    /// The shell owns the field in the title bar; this screen filters its rows.
+    /// Filter owned by the persistent project sidebar.
     query: String,
+    search: Entity<SearchField>,
+    _search_subscription: Subscription,
 }
 
 impl<R: ProjectRepository + Send + 'static> EventEmitter<ProjectChanged> for ProjectsScreen<R> {}
@@ -142,6 +143,11 @@ impl<R: ProjectRepository + Send + 'static> EventEmitter<ProjectChanged> for Pro
 impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
     /// Builds the screen around an already composed `Projects` use case.
     pub fn new(cx: &mut Context<Self>, projects: Projects<R>) -> Self {
+        let search = cx.new(SearchField::new);
+        search.update(cx, |search, _| search.set_width(208.0));
+        let subscription = cx.subscribe(&search, |screen, _, event: &SearchChanged, cx| {
+            screen.set_query(&event.0, cx);
+        });
         Self {
             theme: Theme::quiet_glass(),
             projects: Some(projects),
@@ -157,6 +163,8 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             cancel_focus: cx.focus_handle().tab_stop(true),
             row_focus: Vec::new(),
             query: String::new(),
+            search,
+            _search_subscription: subscription,
         }
     }
 
@@ -428,6 +436,12 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             .track_focus(&self.empty_focus)
             .focus_visible(focus_ring(theme))
             .on_click(cx.listener(|this, _, _, cx| this.open_folder(cx)))
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    this.open_folder(cx);
+                    cx.stop_propagation();
+                }
+            }))
             .child(Icon::folder_plus(theme, 18.0))
             .child(
                 text_style(div(), TypeScale::LABEL)
@@ -487,6 +501,7 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let id = summary.id().as_str().to_string();
+        let key_id = id.clone();
         let selected = selected_id == Some(id.as_str());
         let focus = self
             .row_focus
@@ -526,6 +541,14 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             .focus_visible(focus_ring(theme))
             .cursor_pointer()
             .on_click(cx.listener(move |this, _, window, cx| this.select(id.clone(), window, cx)))
+            .on_key_down(
+                cx.listener(move |this, event: &gpui::KeyDownEvent, window, cx| {
+                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                        this.select(key_id.clone(), window, cx);
+                        cx.stop_propagation();
+                    }
+                }),
+            )
             .child(Icon::folder(theme, 18.0, !selected))
             .child(
                 div()
@@ -570,8 +593,8 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             .collect();
         let open = div()
             .id("projects-open-folder")
-            .h(px(44.0))
-            .px(px(SpacingScale::S4))
+            .size(px(36.0))
+            .justify_center()
             .flex()
             .items_center()
             .gap(px(SpacingScale::S3))
@@ -586,12 +609,13 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             .track_focus(&self.register_focus)
             .focus_visible(focus_ring(&theme))
             .on_click(cx.listener(|this, _, _, cx| this.open_folder(cx)))
-            .child(Icon::folder_plus(&theme, 18.0))
-            .child(
-                text_style(div(), TypeScale::LABEL)
-                    .text_color(theme.colors.text_primary())
-                    .child("Abrir pasta…"),
-            );
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    this.open_folder(cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .child(Icon::folder_plus(&theme, 18.0));
 
         let sidebar = div()
             .id("projects-sidebar")
@@ -610,11 +634,18 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                     .flex_col()
                     .gap(px(SpacingScale::S4))
                     .child(
-                        text_style(div(), TypeScale::HEADING_2)
-                            .text_color(theme.colors.text_primary())
-                            .child("Projetos"),
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                text_style(div(), TypeScale::HEADING_2)
+                                    .text_color(theme.colors.text_primary())
+                                    .child("Projetos"),
+                            )
+                            .child(open),
                     )
-                    .child(open)
+                    .child(self.search.clone())
                     .children(
                         self.inline_error
                             .as_ref()
@@ -714,50 +745,6 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                         .h_full()
                         .flex()
                         .flex_col()
-                        .child(
-                            div()
-                                .w_full()
-                                .px(px(SpacingScale::S8))
-                                .py(px(SpacingScale::S6))
-                                .flex()
-                                .items_center()
-                                .gap(px(SpacingScale::S4))
-                                .bg(theme.colors.glass_surface_lavender())
-                                .border_b_1()
-                                .border_color(theme.colors.glass_edge_lavender())
-                                .child(
-                                    div()
-                                        .size(px(52.0))
-                                        .flex_none()
-                                        .rounded(px(10.0))
-                                        .border_1()
-                                        .border_color(theme.colors.glass_edge_lavender())
-                                        .bg(theme.colors.glass_fill_medium())
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .child(Icon::folder(&theme, 24.0, false)),
-                                )
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w(px(0.0))
-                                        .flex()
-                                        .flex_col()
-                                        .gap(px(SpacingScale::S1))
-                                        .child(
-                                            text_style(div(), TypeScale::META)
-                                                .text_color(theme.colors.accent_default())
-                                                .child("PROJETO LOCAL"),
-                                        )
-                                        .child(
-                                            text_style(div(), TypeScale::HEADING_1)
-                                                .text_color(theme.colors.text_primary())
-                                                .truncate()
-                                                .child(summary.name().to_string()),
-                                        ),
-                                ),
-                        )
                         .child(
                             div()
                                 .w_full()

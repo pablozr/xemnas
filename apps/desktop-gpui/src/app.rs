@@ -138,6 +138,15 @@ impl<R: ProjectRepository + InboxStore + Send + 'static> Shell<R> {
     }
 
     fn on_focus_search(&mut self, _: &FocusSearch, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .projects
+            .as_ref()
+            .and_then(|screen| screen.read(cx).selected_project())
+            .is_none()
+        {
+            window.focus(&self.initial_focus(cx), cx);
+            return;
+        }
         if !self.in_inbox {
             self.switch_destination(true, window, cx);
         }
@@ -222,7 +231,7 @@ impl<R: ProjectRepository + InboxStore + Send + 'static> Render for Shell<R> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         window.set_window_title(if self.in_inbox {
-            "xemnas — Inbox"
+            "xemnas — Revisão"
         } else {
             "xemnas — Projetos"
         });
