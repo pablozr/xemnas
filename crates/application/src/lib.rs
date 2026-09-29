@@ -9,6 +9,7 @@
 pub mod captures;
 mod clock;
 pub mod decisions;
+pub mod diagnostics;
 pub mod export;
 pub mod extract;
 pub mod inbox;
@@ -38,6 +39,11 @@ pub use decisions::{
     sanitize_match_query, DecisionDetail, DecisionEdits, DecisionFilter, DecisionPage,
     DecisionRevision, DecisionSearchHit, DecisionStatus, DecisionSummary, Decisions,
     DecisionsError, SearchQuery, MAX_ARRAY_ITEMS, MAX_ARRAY_ITEM_CHARS,
+};
+pub use diagnostics::{
+    AiProfileDiagnostic, AssessmentDiagnostic, Diagnostics, DiagnosticsCounts, DiagnosticsDocument,
+    DiagnosticsError, DiagnosticsMetrics, Distribution, JobDiagnostic, LossMetrics, NoiseMetrics,
+    OutboxCounts, ReceiptDiagnostic, RuntimeDiagnostic, SchemaInfo,
 };
 pub use export::{Export, ExportDocument, ExportError, ExportFormat, ExportResult};
 

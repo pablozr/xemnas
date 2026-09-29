@@ -14,6 +14,7 @@
 mod assessments;
 mod captures;
 mod decisions;
+mod diagnostics;
 mod extraction;
 mod inbox;
 mod jobs;
