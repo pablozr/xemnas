@@ -44,6 +44,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 6,
         sql: include_str!("migrations/0006_create_assessments.sql"),
     },
+    Migration {
+        version: 8,
+        sql: include_str!("migrations/0008_create_decisions.sql"),
+    },
 ];
 
 /// A single embedded schema migration.
@@ -169,6 +173,14 @@ pub fn default_db_path() -> PathBuf {
 
 /// Applies every migration that is not recorded yet, in order and transactionally.
 fn migrate(connection: &Connection) -> rusqlite::Result<()> {
+    apply_migrations(connection, MIGRATIONS)
+}
+
+/// Applies `migrations` forward-only, each in its own transaction.
+///
+/// A migration that fails rolls back entirely: neither its DDL nor its
+/// `schema_migrations` row is recorded, and the connection stays usable.
+fn apply_migrations(connection: &Connection, migrations: &[Migration]) -> rusqlite::Result<()> {
     connection.execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_migrations (
             version INTEGER PRIMARY KEY,
@@ -176,7 +188,7 @@ fn migrate(connection: &Connection) -> rusqlite::Result<()> {
         );",
     )?;
 
-    for migration in MIGRATIONS {
+    for migration in migrations {
         let applied: i64 = connection.query_row(
             "SELECT COUNT(*) FROM schema_migrations WHERE version = ?1",
             [migration.version],
@@ -201,7 +213,11 @@ fn migrate(connection: &Connection) -> rusqlite::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{default_data_dir, default_db_path, SqliteStore, MIGRATIONS};
+    use super::{
+        apply_migrations, configure, default_data_dir, default_db_path, Migration, SqliteStore,
+        MIGRATIONS,
+    };
+    use rusqlite::Connection;
 
     fn temporary_directory(tag: &str) -> std::path::PathBuf {
         use std::sync::atomic::{AtomicU64, Ordering};
@@ -288,6 +304,82 @@ mod tests {
             )
             .expect("count distinct migrations");
         assert_eq!(distinct, MIGRATIONS.len() as i64);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn table_exists(connection: &Connection, name: &str) -> bool {
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                [name],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("query sqlite_master")
+            > 0
+    }
+
+    #[test]
+    fn a_failing_migration_rolls_back_and_the_connection_stays_usable() {
+        let root = temporary_directory("rollback");
+        let database = root.join("app.db");
+        let connection = Connection::open(&database).expect("open raw connection");
+        configure(&connection).expect("configure");
+
+        let migrations = [
+            Migration {
+                version: 1,
+                sql: "CREATE TABLE good (id TEXT PRIMARY KEY);",
+            },
+            Migration {
+                version: 2,
+                sql: "CREATE TABLE bad (id TEXT PRIMARY KEY); CREATE TABLE bad (id TEXT);",
+            },
+        ];
+        assert!(apply_migrations(&connection, &migrations).is_err());
+
+        let version_one: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM schema_migrations WHERE version = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count v1");
+        assert_eq!(version_one, 1, "the good migration stays applied");
+        let version_two: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM schema_migrations WHERE version = 2",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count v2");
+        assert_eq!(version_two, 0, "the failed version must not be recorded");
+        assert!(
+            !table_exists(&connection, "bad"),
+            "the failed migration's table must be rolled back"
+        );
+
+        // The connection is still usable and a corrected v2 applies cleanly.
+        let corrected = [
+            Migration {
+                version: 1,
+                sql: "CREATE TABLE good (id TEXT PRIMARY KEY);",
+            },
+            Migration {
+                version: 2,
+                sql: "CREATE TABLE fixed (id TEXT PRIMARY KEY);",
+            },
+        ];
+        apply_migrations(&connection, &corrected).expect("corrected migration applies");
+        assert!(table_exists(&connection, "fixed"));
+        let version_two: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM schema_migrations WHERE version = 2",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count v2 after fix");
+        assert_eq!(version_two, 1);
 
         let _ = std::fs::remove_dir_all(&root);
     }

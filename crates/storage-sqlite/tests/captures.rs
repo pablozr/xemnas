@@ -160,26 +160,33 @@ fn fresh_database_applies_capture_migration() {
 }
 
 #[test]
-fn upgrade_from_version_3_applies_only_the_checkpoint_migration() {
+fn upgrade_reapplies_the_missing_migrations() {
     let root = temporary_directory("upgrade");
     let database = root.join("app.db");
 
-    // Build a database at the latest version, then roll it back to version 3 by
-    // removing the checkpoint table and its migration row.
+    // Build a database at the latest version, then roll it back by removing the
+    // tables and rows added from version 4 on.
     {
         let _ = SqliteStore::open(&database).expect("open store");
         let connection = Connection::open(&database).expect("open raw connection");
         connection
             .execute_batch(
-                "DROP TABLE adapter_checkpoints; \
-                 DELETE FROM schema_migrations WHERE version = 4;",
+                "DROP TABLE decisions_fts; \
+                 DROP TABLE evidence_links; \
+                 DROP TABLE decision_revisions; \
+                 DROP TABLE engineering_decisions; \
+                 DROP TABLE decision_candidates; \
+                 DROP TABLE assessments; \
+                 DROP TABLE adapter_checkpoints; \
+                 DELETE FROM schema_migrations WHERE version >= 4;",
             )
-            .expect("simulate version 3");
+            .expect("simulate an older version");
     }
 
     SqliteStore::open(&database).expect("open store and migrate");
     let connection = Connection::open(&database).expect("open raw connection");
     assert!(table_exists(&connection, "adapter_checkpoints"));
+    assert!(table_exists(&connection, "decision_candidates"));
     let versions: i64 = connection
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
             row.get(0)
@@ -192,8 +199,11 @@ fn upgrade_from_version_3_applies_only_the_checkpoint_migration() {
             |row| row.get(0),
         )
         .expect("count distinct migrations");
-    assert_eq!(versions, 4, "only 0004 should be added on upgrade");
-    assert_eq!(distinct, 4);
+    assert_eq!(
+        versions, 7,
+        "0004, 0005, 0006 and 0008 must be re-applied on upgrade"
+    );
+    assert_eq!(distinct, 7);
 
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -403,3 +413,5 @@ fn replay_keeps_checkpoint_idempotent() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+// Keep the capture persistence tests aligned with migrations 0001..0004.
