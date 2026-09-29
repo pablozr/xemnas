@@ -1,0 +1,436 @@
+//! Native review surface backed by the Inbox application port.
+//! Storage runs in the background; technical failures never reach the view.
+
+use application::inbox::{
+    CandidateDetail, CandidateSummary, Inbox, InboxError, InboxFilter, InboxPage, InboxStore,
+};
+use gpui::prelude::*;
+use gpui::{div, px, AnyElement, Context, Div, FocusHandle, Render, Role, Stateful, Window};
+
+use crate::ui::glass::focus_ring;
+use crate::ui::theme::{code_style, text_style, Theme};
+use crate::ui::tokens::TypeScale;
+
+enum Outcome {
+    Page(Result<InboxPage, InboxError>, bool),
+    Detail(Result<CandidateDetail, InboxError>),
+}
+
+/// A paginated candidate list and its source-reading pane.
+pub struct InboxScreen<S: InboxStore + Send + 'static> {
+    inbox: Option<Inbox<S>>,
+    rows: Vec<CandidateSummary>,
+    cursor: Option<String>,
+    selected: Option<String>,
+    detail: Option<CandidateDetail>,
+    query: String,
+    busy: bool,
+    loaded: bool,
+    error: Option<&'static str>,
+    row_focus: Vec<(String, FocusHandle)>,
+    refresh_focus: FocusHandle,
+    more_focus: FocusHandle,
+}
+
+impl<S: InboxStore + Send + 'static> InboxScreen<S> {
+    /// Composes the application use case without opening storage in the view.
+    pub fn new(cx: &mut Context<Self>, inbox: Inbox<S>) -> Self {
+        Self {
+            inbox: Some(inbox),
+            rows: Vec::new(),
+            cursor: None,
+            selected: None,
+            detail: None,
+            query: String::new(),
+            busy: false,
+            loaded: false,
+            error: None,
+            row_focus: Vec::new(),
+            refresh_focus: cx.focus_handle().tab_stop(true),
+            more_focus: cx.focus_handle().tab_stop(true),
+        }
+    }
+
+    /// Refreshes the first page when the destination opens.
+    pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.page(false, cx);
+    }
+
+    /// Filters loaded rows, explicitly distinct from a database-wide search.
+    pub fn set_query(&mut self, query: &str, cx: &mut Context<Self>) {
+        self.query = query.trim().to_lowercase();
+        cx.notify();
+    }
+
+    fn page(&mut self, append: bool, cx: &mut Context<Self>) {
+        if self.busy || (append && self.cursor.is_none()) {
+            return;
+        }
+        let filter = InboxFilter {
+            cursor: if append { self.cursor.clone() } else { None },
+            ..InboxFilter::default()
+        };
+        self.run(cx, move |inbox| Outcome::Page(inbox.list(&filter), append));
+    }
+
+    fn select(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        self.selected = Some(id.clone());
+        self.detail = None;
+        self.run(cx, move |inbox| Outcome::Detail(inbox.detail(&id)));
+    }
+
+    fn run(
+        &mut self,
+        cx: &mut Context<Self>,
+        operation: impl FnOnce(&Inbox<S>) -> Outcome + Send + 'static,
+    ) {
+        let Some(inbox) = self.inbox.take() else {
+            return;
+        };
+        self.busy = true;
+        self.error = None;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let (inbox, outcome) = cx
+                .background_executor()
+                .spawn(async move {
+                    let outcome = operation(&inbox);
+                    (inbox, outcome)
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.inbox = Some(inbox);
+                this.busy = false;
+                match outcome {
+                    Outcome::Page(Ok(page), append) => {
+                        this.loaded = true;
+                        if !append {
+                            this.rows.clear();
+                            this.detail = None;
+                        }
+                        for row in page.candidates {
+                            if let Some(existing) =
+                                this.rows.iter_mut().find(|existing| existing.id == row.id)
+                            {
+                                *existing = row;
+                            } else {
+                                this.rows.push(row);
+                            }
+                        }
+                        this.cursor = page.next_cursor;
+                        this.row_focus
+                            .retain(|(id, _)| this.rows.iter().any(|row| row.id == *id));
+                        for row in &this.rows {
+                            if !this.row_focus.iter().any(|(id, _)| *id == row.id) {
+                                this.row_focus
+                                    .push((row.id.clone(), cx.focus_handle().tab_stop(true)));
+                            }
+                        }
+                        if !append {
+                            let next = this
+                                .selected
+                                .as_ref()
+                                .filter(|id| this.rows.iter().any(|row| row.id == **id))
+                                .cloned()
+                                .or_else(|| this.rows.first().map(|row| row.id.clone()));
+                            this.selected = None;
+                            if let Some(id) = next {
+                                this.select(id, cx);
+                            }
+                        }
+                    }
+                    Outcome::Detail(Ok(detail)) => this.detail = Some(detail),
+                    Outcome::Page(Err(error), _) | Outcome::Detail(Err(error)) => {
+                        tracing::warn!(code = error.code(), "inbox view operation failed");
+                        this.error = Some(failure_copy(&error));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn row(&self, row: &CandidateSummary, cx: &mut Context<Self>) -> Stateful<Div> {
+        let theme = Theme::quiet_glass();
+        let selected = self.selected.as_deref() == Some(&row.id);
+        let id = row.id.clone();
+        let key_id = id.clone();
+        let mut element = div()
+            .id(("candidate", row.id.clone()))
+            .p(px(16.0))
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .border_b_1()
+            .border_color(theme.colors.hairline_divider())
+            .bg(if selected {
+                theme.colors.glass_surface_lavender()
+            } else {
+                theme.colors.rail()
+            })
+            .role(Role::Button)
+            .aria_label(row.question.clone())
+            .aria_selected(selected)
+            .cursor_pointer()
+            .focus_visible(focus_ring(&theme))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                if let Some((_, focus)) = this.row_focus.iter().find(|(key, _)| *key == id) {
+                    window.focus(focus, cx);
+                }
+                this.select(id.clone(), cx);
+            }))
+            .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    this.select(key_id.clone(), cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .child(
+                text_style(div(), TypeScale::META)
+                    .text_color(theme.colors.text_muted())
+                    .child(format!(
+                        "{} · {}",
+                        project_label(&row.project_location),
+                        status_label(row.status)
+                    )),
+            )
+            .child(text_style(div(), TypeScale::HEADING_3).child(row.question.clone()))
+            .child(
+                text_style(div(), TypeScale::BODY_SMALL)
+                    .text_color(theme.colors.text_secondary())
+                    .child(row.choice.clone()),
+            );
+        if let Some((_, focus)) = self.row_focus.iter().find(|(id, _)| *id == row.id) {
+            element = element.track_focus(focus);
+        }
+        element
+    }
+
+    fn button(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        more: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let theme = Theme::quiet_glass();
+        text_style(div(), TypeScale::BODY_SMALL)
+            .id(id)
+            .px(px(12.0))
+            .h(px(36.0))
+            .flex()
+            .items_center()
+            .rounded(px(6.0))
+            .role(Role::Button)
+            .aria_label(label)
+            .track_focus(if more {
+                &self.more_focus
+            } else {
+                &self.refresh_focus
+            })
+            .focus_visible(focus_ring(&theme))
+            .cursor_pointer()
+            .text_color(if self.busy {
+                theme.colors.text_disabled()
+            } else {
+                theme.colors.text_secondary()
+            })
+            .hover(move |style| style.bg(theme.colors.hover_veil()))
+            .on_click(cx.listener(move |this, _, _, cx| this.page(more, cx)))
+            .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    this.page(more, cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .child(label)
+    }
+
+    fn reading_pane(&self) -> AnyElement {
+        let theme = Theme::quiet_glass();
+        let visible_detail = self
+            .detail
+            .as_ref()
+            .filter(|detail| matches_query(&detail.summary, &self.query));
+        let Some(detail) = visible_detail else {
+            return div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    text_style(div(), TypeScale::BODY)
+                        .text_color(theme.colors.text_muted())
+                        .child(if self.busy {
+                            "Carregando…"
+                        } else {
+                            "Selecione um candidato para ler as evidências."
+                        }),
+                )
+                .into_any_element();
+        };
+        div()
+            .id("inbox-reading")
+            .size_full()
+            .overflow_y_scroll()
+            .p(px(32.0))
+            .flex()
+            .flex_col()
+            .gap(px(24.0))
+            .child(
+                text_style(div(), TypeScale::META)
+                    .text_color(theme.colors.text_muted())
+                    .child("CANDIDATO A DECISÃO"),
+            )
+            .child(text_style(div(), TypeScale::HEADING_1).child(detail.summary.question.clone()))
+            .child(section("Escolha proposta", &detail.summary.choice))
+            .child(section("Motivação", &detail.rationale))
+            .child(section(
+                "Confiança da extração",
+                &format!(
+                    "{:.0}% · {}",
+                    detail.summary.confidence * 100.0,
+                    detail.summary.confidence_reason
+                ),
+            ))
+            .child(section(
+                "Origem",
+                &format!(
+                    "{}\nSessão: {}\nRecebido: {}",
+                    detail.summary.project_location,
+                    detail
+                        .summary
+                        .session_id
+                        .as_deref()
+                        .unwrap_or("não informada"),
+                    detail.summary.received_at
+                ),
+            ))
+            .child(
+                text_style(div(), TypeScale::HEADING_2)
+                    .child(format!("Evidências · {} fontes", detail.artifacts.len())),
+            )
+            .children(detail.artifacts.iter().map(|artifact| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(12.0))
+                    .border_t_1()
+                    .border_color(theme.colors.hairline_divider())
+                    .pt(px(16.0))
+                    .child(
+                        text_style(div(), TypeScale::META)
+                            .text_color(theme.colors.text_muted())
+                            .child(format!("{} · {}", artifact.kind, artifact.artifact_id)),
+                    )
+                    .child(
+                        code_style(div(), TypeScale::CODE)
+                            .whitespace_normal()
+                            .child(artifact.content.clone()),
+                    )
+            }))
+            .into_any_element()
+    }
+}
+
+impl<S: InboxStore + Send + 'static> Render for InboxScreen<S> {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::quiet_glass();
+        let visible: Vec<_> = self
+            .rows
+            .iter()
+            .filter(|row| matches_query(row, &self.query))
+            .collect();
+        div().size_full().flex().flex_col()
+            .children(self.error.map(|message| text_style(div(), TypeScale::BODY_SMALL).p(px(12.0))
+                .role(Role::Status).text_color(theme.colors.status_danger()).child(message)))
+            .child(div().flex_1().min_h(px(0.0)).flex()
+                .child(div().w(px(340.0)).flex_none().h_full().flex().flex_col().bg(theme.colors.rail())
+                    .border_r_1().border_color(theme.colors.hairline_divider())
+                    .child(div().p(px(16.0)).flex().items_center().justify_between()
+                        .child(text_style(div(), TypeScale::HEADING_2).child("Inbox"))
+                        .child(self.button("inbox-refresh", "Atualizar", false, cx)))
+                    .child(text_style(div(), TypeScale::META).px(px(16.0)).pb(px(12.0)).text_color(theme.colors.text_muted())
+                        .child(format!("{} candidatos carregados · {} visíveis", self.rows.len(), visible.len())))
+                    .child(div().id("inbox-list").flex_1().min_h(px(0.0)).overflow_y_scroll()
+                        .children(visible.iter().map(|row| self.row(row, cx)))
+                        .when(visible.is_empty(), |list| list.child(text_style(div(), TypeScale::BODY_SMALL).p(px(24.0))
+                            .text_color(theme.colors.text_muted()).child(if self.busy { "Carregando candidatos…" }
+                            else if !self.loaded { "Atualize para carregar os candidatos." }
+                            else if self.rows.is_empty() { "Nenhum candidato aguardando revisão. Novas capturas aparecerão aqui após a extração." }
+                            else { "Nenhum candidato carregado corresponde à busca." }))))
+                    .when(self.cursor.is_some(), |rail| rail.child(self.button("inbox-more", "Carregar mais", true, cx))))
+                .child(div().flex_1().min_w(px(0.0)).h_full().child(self.reading_pane())))
+    }
+}
+
+fn section(label: &'static str, content: &str) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(8.0))
+        .child(text_style(div(), TypeScale::HEADING_3).child(label))
+        .child(
+            text_style(div(), TypeScale::BODY)
+                .text_color(Theme::quiet_glass().colors.text_secondary())
+                .child(content.to_owned()),
+        )
+}
+
+fn project_label(location: &str) -> &str {
+    location
+        .trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(location)
+}
+
+fn status_label(status: application::inbox::CandidateStatus) -> &'static str {
+    if status == application::inbox::CandidateStatus::Snoozed {
+        "Adiado"
+    } else {
+        "A revisar"
+    }
+}
+
+fn matches_query(row: &CandidateSummary, query: &str) -> bool {
+    query.is_empty()
+        || [&row.question, &row.choice, &row.project_location]
+            .iter()
+            .any(|value| value.to_lowercase().contains(query))
+}
+
+fn failure_copy(error: &InboxError) -> &'static str {
+    match error {
+        InboxError::NotFound | InboxError::InvalidState => {
+            "Este candidato mudou. Atualize a Inbox para continuar."
+        }
+        _ => "Não foi possível carregar a Inbox. Tente atualizar; se persistir, reabra o app.",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn storage_details_never_reach_the_error_surface() {
+        let message = failure_copy(&InboxError::Storage("C:\\private\\token-secret.db".into()));
+        assert!(!message.contains("private"));
+        assert!(!message.contains("secret"));
+        assert_eq!(
+            message,
+            failure_copy(&InboxError::InvalidData("sensitive artifact".into()))
+        );
+    }
+
+    #[test]
+    fn project_labels_handle_both_path_styles_and_trailing_separator() {
+        assert_eq!(project_label("C:\\work\\xemnas\\"), "xemnas");
+        assert_eq!(project_label("/work/xemnas/"), "xemnas");
+    }
+}
