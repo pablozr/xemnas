@@ -13,6 +13,7 @@ pub mod export;
 pub mod extract;
 pub mod inbox;
 pub mod jobs;
+pub mod outbox;
 pub mod profile;
 pub mod projects;
 
@@ -55,6 +56,7 @@ pub use jobs::{
     JobEvent, JobFailure, JobOutcome, JobRecord, JobRepository, JobState, Jobs, RecoveryReport,
     WorkerHandle, ANALYZE_CAPTURE_KIND, INTERRUPTED_NON_IDEMPOTENT,
 };
+pub use outbox::{drain, DrainReport, OutboxError};
 pub use profile::{
     build_preview, choose_extractor, grant_consent, offline_default_profile, preview_hash,
     revoke_consent, AiProfile, AiSettings, AiStatus, ConsentPreview, ConsentRecord,
