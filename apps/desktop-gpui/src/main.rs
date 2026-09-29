@@ -21,6 +21,8 @@ use xemnas_desktop::ui::search_field::{
     SelectRight,
 };
 
+mod demo;
+
 fn main() {
     if let Err(error) = telemetry::init() {
         eprintln!("telemetry init failed: {error}");
@@ -28,6 +30,11 @@ fn main() {
     // Suppress job-handler panic payloads (PRIV-001) without changing any other
     // panic behavior.
     application::jobs::install_panic_sanitizer();
+
+    if std::env::args().any(|argument| argument == "--demo") {
+        run_shell_mode(demo::store().map_err(|error| error.to_string()), true);
+        return;
+    }
 
     let store = match SqliteStore::open(default_db_path()) {
         Ok(store) => store,
@@ -158,6 +165,10 @@ fn main() {
 
 /// Composes the desktop use cases from the ready store, or a startup failure.
 fn run_shell(store: Result<SqliteStore, String>) {
+    run_shell_mode(store, false);
+}
+
+fn run_shell_mode(store: Result<SqliteStore, String>, demo: bool) {
     application().run(move |cx: &mut App| {
         xemnas_desktop::fonts::register_embedded(cx);
         cx.bind_keys([
@@ -187,7 +198,11 @@ fn run_shell(store: Result<SqliteStore, String>) {
             ),
             Err(error) => (Err(error), None),
         };
-        let view = cx.new(|cx| Shell::<SqliteStore>::new(cx, projects, inbox));
+        let view = cx.new(|cx| {
+            let mut shell = Shell::<SqliteStore>::new(cx, projects, inbox);
+            shell.set_demo(demo);
+            shell
+        });
         let focus = view.read(cx).initial_focus(cx);
 
         let opened = cx.open_window(
