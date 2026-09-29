@@ -6,10 +6,12 @@ use application::inbox::{
 };
 use gpui::prelude::*;
 use gpui::{
-    div, px, AnyElement, Context, Div, ElementId, FocusHandle, Render, Role, Stateful, Window,
+    div, px, AnyElement, Context, Div, ElementId, Entity, FocusHandle, Render, Role, Stateful,
+    Window,
 };
 
 use crate::ui::glass::focus_ring;
+use crate::ui::search_field::SearchField;
 use crate::ui::theme::{code_style, text_style, Theme};
 use crate::ui::tokens::{SpacingScale, TypeScale};
 
@@ -36,6 +38,7 @@ pub struct InboxScreen<S: InboxStore + Send + 'static> {
     source_focus: Vec<FocusHandle>,
     project_id: Option<String>,
     generation: u64,
+    search: Option<Entity<SearchField>>,
 }
 
 impl<S: InboxStore + Send + 'static> InboxScreen<S> {
@@ -58,7 +61,13 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             source_focus: Vec::new(),
             project_id: None,
             generation: 0,
+            search: None,
         }
+    }
+
+    /// Mounts the workspace search inside the candidate list.
+    pub fn attach_search(&mut self, search: Entity<SearchField>) {
+        self.search = Some(search);
     }
 
     /// Refreshes the first page when the destination opens.
@@ -241,7 +250,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                     .text_color(theme.colors.text_muted())
                     .child(format!(
                         "{} · {}",
-                        project_label(&row.project_location),
+                        short_date(&row.received_at),
                         status_label(row.status)
                     )),
             )
@@ -331,32 +340,15 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             .child(
                 text_style(div(), TypeScale::META)
                     .text_color(theme.colors.text_muted())
-                    .child("CANDIDATO A DECISÃO"),
+                    .child(format!(
+                        "{} · {}",
+                        status_label(detail.summary.status),
+                        short_date(&detail.summary.received_at)
+                    )),
             )
             .child(text_style(div(), TypeScale::HEADING_1).child(detail.summary.question.clone()))
-            .child(section("Escolha proposta", &detail.summary.choice))
-            .child(section("Motivação", &detail.rationale))
-            .child(section(
-                "Confiança da extração",
-                &format!(
-                    "{:.0}% · {}",
-                    detail.summary.confidence * 100.0,
-                    detail.summary.confidence_reason
-                ),
-            ))
-            .child(section(
-                "Origem",
-                &format!(
-                    "{}\nSessão: {}\nRecebido: {}",
-                    detail.summary.project_location,
-                    detail
-                        .summary
-                        .session_id
-                        .as_deref()
-                        .unwrap_or("não informada"),
-                    detail.summary.received_at
-                ),
-            ))
+            .child(section("Escolha sugerida", &detail.summary.choice))
+            .child(section("Motivo", &detail.rationale))
             .child(
                 text_style(div(), TypeScale::HEADING_2)
                     .child(format!("Evidências · {} fontes", detail.artifacts.len())),
@@ -428,6 +420,27 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                             .child(artifact.content.clone()),
                     )
             }))
+            .child(section(
+                "Confiança da extração",
+                &format!(
+                    "{:.0}% · {}",
+                    detail.summary.confidence * 100.0,
+                    detail.summary.confidence_reason
+                ),
+            ))
+            .child(section(
+                "Origem",
+                &format!(
+                    "{}\nSessão: {}\nRecebido: {}",
+                    detail.summary.project_location,
+                    detail
+                        .summary
+                        .session_id
+                        .as_deref()
+                        .unwrap_or("não informada"),
+                    detail.summary.received_at
+                ),
+            ))
             .into_any_element()
     }
 }
@@ -444,11 +457,12 @@ impl<S: InboxStore + Send + 'static> Render for InboxScreen<S> {
             .children(self.error.map(|message| text_style(div(), TypeScale::BODY_SMALL).id("inbox-error").p(px(SpacingScale::S3))
                 .role(Role::Status).text_color(theme.colors.status_danger()).child(message)))
             .child(div().flex_1().min_h(px(0.0)).flex()
-                .child(div().w(px(340.0)).flex_none().h_full().flex().flex_col().bg(theme.colors.rail())
+                .child(div().w(px(320.0)).flex_none().h_full().flex().flex_col().bg(theme.colors.rail())
                     .border_r_1().border_color(theme.colors.hairline_divider())
                     .child(div().p(px(SpacingScale::S4)).flex().items_center().justify_between()
-                        .child(text_style(div(), TypeScale::HEADING_2).child("Inbox"))
+                        .child(text_style(div(), TypeScale::HEADING_2).child("Aguardando revisão"))
                         .child(self.button("inbox-refresh", "Atualizar", false, cx)))
+                    .child(div().px(px(SpacingScale::S4)).pb(px(SpacingScale::S3)).children(self.search.clone()))
                     .child(text_style(div(), TypeScale::META).px(px(SpacingScale::S4)).pb(px(SpacingScale::S3)).text_color(theme.colors.text_muted())
                         .child(format!("{} candidatos carregados · {} visíveis", self.rows.len(), visible.len())))
                     .child(div().id("inbox-list").flex_1().min_h(px(0.0)).overflow_y_scroll()
@@ -476,12 +490,31 @@ fn section(label: &'static str, content: &str) -> Div {
         )
 }
 
+#[cfg(test)]
 fn project_label(location: &str) -> &str {
     location
         .trim_end_matches(['/', '\\'])
         .rsplit(['/', '\\'])
         .next()
         .unwrap_or(location)
+}
+
+fn short_date(timestamp: &str) -> String {
+    let months = [
+        "jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez",
+    ];
+    let date = timestamp.split('T').next().unwrap_or(timestamp);
+    let parts: Vec<_> = date.split('-').collect();
+    match parts.as_slice() {
+        [year, month, day] => month
+            .parse::<usize>()
+            .ok()
+            .and_then(|m| m.checked_sub(1))
+            .and_then(|m| months.get(m))
+            .map(|month| format!("{day} {month} {year}"))
+            .unwrap_or_else(|| date.to_owned()),
+        _ => date.to_owned(),
+    }
 }
 
 fn status_label(status: application::inbox::CandidateStatus) -> &'static str {

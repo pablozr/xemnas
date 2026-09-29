@@ -20,7 +20,7 @@ mas `docs/` é ignorado pelo Git: este arquivo é a regra versionável.
 
 ## Projetos — superfície atual
 
-- Lista lateral de 322 px e detalhe selecionado ocupando toda a área restante.
+- Lista persistente de projetos de 248 px e workspace selecionado ocupando toda a área restante.
   Cabeçalho contínuo, propriedades reais (localização e data) logo abaixo dele e
   ação de remoção secundária junto às propriedades, dentro da primeira área visível.
   Não impor um card de largura fixa
@@ -37,13 +37,16 @@ mas `docs/` é ignorado pelo Git: este arquivo é a regra versionável.
   acesso às ações. `WindowControlArea` limita arraste e controles da janela;
   busca permanece fora da região arrastável.
 
-## Inbox — leitura de candidatos
+## Revisão — leitura de candidatos por projeto
 
-- Navegação discreta entre Projetos e Inbox no cabeçalho; a busca muda de contexto
-  e limpa o filtro ao trocar de tela. Controles ficam fora da região arrastável.
-- Lista lateral de 340 px, com projeto, estado, pergunta e escolha proposta.
+- A barra da janela contém marca e controles nativos. Revisão e Detalhes ficam
+  abaixo do nome e caminho do projeto; a lateral de projetos permanece visível.
+- Trocar de projeto limpa lista, evidência e filtro; respostas antigas não podem
+  aparecer no novo workspace. O filtro de projeto é aplicado no caso de uso.
+- Lista de candidatos de 320 px, com data, estado, pergunta e escolha proposta.
   Contagens representam somente itens carregados. A busca filtra esses itens;
-  paginação explícita permite carregar mais sem sugerir uma busca global.
+  fica dentro da lista; paginação explícita permite carregar mais sem sugerir
+  uma busca global. Ctrl K abre Revisão e foca o campo.
 - Leitura ocupa o restante da janela: escolha, motivação, confiança da extração
   e origem. Confiança é uma estimativa do extrator, não uma avaliação humana.
 - Evidências vêm dos artefatos reais já redigidos pelo backend. Mostrar uma fonte
@@ -52,6 +55,8 @@ mas `docs/` é ignorado pelo Git: este arquivo é a regra versionável.
   em linguagem de produto; conteúdo técnico do erro não aparece na interface.
 - Este primeiro incremento é de leitura. Ações de revisão e edição serão
   integradas aos respectivos casos de uso; não inserir controles decorativos.
+- `xemnas --demo` abre uma prévia identificada com dados fictícios em memória,
+  sem iniciar integrações, workers ou alterar o banco normal.
 
 ## Gate de entrega visual
 

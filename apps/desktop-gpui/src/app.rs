@@ -40,6 +40,7 @@ pub struct Shell<R: ProjectRepository + InboxStore + Send + 'static> {
     inbox: Option<Entity<InboxScreen<R>>>,
     in_inbox: bool,
     destination_focus: [FocusHandle; 2],
+    demo: bool,
 }
 
 impl<R: ProjectRepository + InboxStore + Send + 'static> Shell<R> {
@@ -61,13 +62,14 @@ impl<R: ProjectRepository + InboxStore + Send + 'static> Shell<R> {
             }
         };
         let search = cx.new(SearchField::new);
+        search.update(cx, |search, cx| {
+            search.set_context("Filtrar candidatos carregados", cx)
+        });
         let search_subscription = cx.subscribe(&search, |shell, _, event: &SearchChanged, cx| {
             if shell.in_inbox {
                 if let Some(screen) = &shell.inbox {
                     screen.update(cx, |screen, cx| screen.set_query(&event.0, cx));
                 }
-            } else if let Some(screen) = &shell.projects {
-                screen.update(cx, |screen, cx| screen.set_query(&event.0, cx));
             }
         });
         let project_subscription = screen.as_ref().map(|screen| {
@@ -83,23 +85,40 @@ impl<R: ProjectRepository + InboxStore + Send + 'static> Shell<R> {
                         );
                     });
                 }
+                if shell.in_inbox {
+                    shell.search.update(cx, |search, cx| {
+                        search.set_context("Filtrar candidatos carregados", cx)
+                    });
+                }
                 cx.notify();
             })
         });
         Self {
             theme: Theme::quiet_glass(),
             focus: cx.focus_handle(),
-            search,
+            search: search.clone(),
             _search_subscription: search_subscription,
             _project_subscription: project_subscription,
             projects: screen,
-            inbox: inbox.map(|inbox| cx.new(|cx| InboxScreen::new(cx, inbox))),
-            in_inbox: false,
+            inbox: inbox.map(|inbox| {
+                cx.new(|cx| {
+                    let mut screen = InboxScreen::new(cx, inbox);
+                    screen.attach_search(search.clone());
+                    screen
+                })
+            }),
+            in_inbox: true,
             destination_focus: [
                 cx.focus_handle().tab_stop(true),
                 cx.focus_handle().tab_stop(true),
             ],
+            demo: false,
         }
+    }
+
+    /// Identifies opt-in sample data visibly, without changing navigation.
+    pub fn set_demo(&mut self, demo: bool) {
+        self.demo = demo;
     }
 
     /// Focuses the actual next action rather than an inert path field.
@@ -119,6 +138,9 @@ impl<R: ProjectRepository + InboxStore + Send + 'static> Shell<R> {
     }
 
     fn on_focus_search(&mut self, _: &FocusSearch, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.in_inbox {
+            self.switch_destination(true, window, cx);
+        }
         window.focus(&self.search.read(cx).focus_handle(cx), cx);
     }
 
@@ -152,9 +174,14 @@ impl<R: ProjectRepository + InboxStore + Send + 'static> Shell<R> {
             .px(px(SpacingScale::S3))
             .flex()
             .items_center()
-            .rounded(theme.radius.control())
+            .border_b_2()
+            .border_color(if selected {
+                theme.colors.accent_subtle()
+            } else {
+                theme.colors.layer_fill()
+            })
             .role(Role::Button)
-            .aria_label(if inbox { "Inbox" } else { "Projetos" })
+            .aria_label(if inbox { "Revisão" } else { "Detalhes" })
             .aria_selected(selected)
             .track_focus(&self.destination_focus[usize::from(inbox)])
             .focus_visible(focus_ring(&theme))
@@ -187,7 +214,7 @@ impl<R: ProjectRepository + InboxStore + Send + 'static> Shell<R> {
                     }
                 }),
             )
-            .child(if inbox { "Inbox" } else { "Projetos" })
+            .child(if inbox { "Revisão" } else { "Detalhes" })
     }
 }
 
@@ -220,30 +247,73 @@ impl<R: ProjectRepository + InboxStore + Send + 'static> Render for Shell<R> {
                     .child(app_icon(22.0))
                     .child(wordmark(&theme, 15.0, 600.0)),
             )
-            .child(self.destination(false, cx))
-            .child(self.destination(true, cx))
-            .child(div().ml_auto().child(self.search.clone()))
             .child(window_controls(&theme, window.is_maximized()));
 
-        let mounted = if self.in_inbox {
-            self.inbox
-                .as_ref()
-                .map(|screen| screen.clone().into_any_element())
+        let selected = self
+            .projects
+            .as_ref()
+            .and_then(|screen| screen.read(cx).selected_project());
+        let body: gpui::AnyElement = if let Some(projects) = self.projects.clone() {
+            let sidebar = projects.update(cx, |screen, cx| screen.render_sidebar(cx));
+            let content = if selected.is_some() && self.in_inbox {
+                self.inbox
+                    .as_ref()
+                    .map(|screen| screen.clone().into_any_element())
+                    .unwrap_or_else(|| div().into_any_element())
+            } else {
+                projects.update(cx, |screen, cx| screen.render_details(cx))
+            };
+            div()
+                .size_full()
+                .flex()
+                .child(sidebar)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .h_full()
+                        .flex()
+                        .flex_col()
+                        .children(selected.as_ref().map(|project| {
+                            div()
+                                .px(px(SpacingScale::S5))
+                                .pt(px(SpacingScale::S5))
+                                .flex()
+                                .flex_col()
+                                .gap(px(SpacingScale::S2))
+                                .border_b_1()
+                                .border_color(theme.colors.hairline_divider())
+                                .child(
+                                    text_style(div(), TypeScale::HEADING_1)
+                                        .truncate()
+                                        .child(project.name().to_owned()),
+                                )
+                                .child(
+                                    text_style(div(), TypeScale::BODY_SMALL)
+                                        .truncate()
+                                        .text_color(theme.colors.text_muted())
+                                        .child(project.location().to_string()),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap(px(SpacingScale::S3))
+                                        .child(self.destination(true, cx))
+                                        .child(self.destination(false, cx)),
+                                )
+                        }))
+                        .child(div().flex_1().min_h(px(0.0)).child(content)),
+                )
+                .into_any_element()
         } else {
-            self.projects
-                .as_ref()
-                .map(|screen| screen.clone().into_any_element())
-        };
-        let body: gpui::AnyElement = match mounted {
-            Some(screen) => screen,
-            None => error_state(
+            error_state(
                 &theme,
                 "startup-error",
                 "Não foi possível abrir o banco de dados",
                 "Os projetos acompanhados não puderam ser carregados.",
                 "Feche e abra o app novamente. Se o erro persistir, verifique o espaço em disco.",
             )
-            .into_any_element(),
+            .into_any_element()
         };
 
         div()
@@ -271,6 +341,13 @@ impl<R: ProjectRepository + InboxStore + Send + 'static> Render for Shell<R> {
                     .items_center()
                     .border_t_1()
                     .border_color(theme.colors.hairline_divider())
+                    .when(self.demo, |footer| {
+                        footer.child(
+                            text_style(div(), TypeScale::META)
+                                .text_color(theme.colors.text_muted())
+                                .child("Demonstração · dados fictícios"),
+                        )
+                    })
                     .child(
                         text_style(div(), TypeScale::META)
                             .ml_auto()

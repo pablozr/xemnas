@@ -550,31 +550,16 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
     }
 }
 
-impl<R: ProjectRepository + Send + 'static> Render for ProjectsScreen<R> {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
+    /// Persistent project navigation, shared by all project destinations.
+    pub fn render_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
         let visible = self.visible_rows();
         let total = match &self.list {
             ListState::Ready(list) => list.len(),
             _ => 0,
         };
-        let selected = if self.query.is_empty() {
-            match &self.list {
-                ListState::Ready(list) => list
-                    .iter()
-                    .find(|item| Some(item.id().as_str()) == self.selected_id.as_deref())
-                    .cloned(),
-                _ => None,
-            }
-        } else {
-            // A search must not show details for a project outside its results.
-            // Keep the underlying selection so clearing the query restores it.
-            visible
-                .iter()
-                .find(|item| Some(item.id().as_str()) == self.selected_id.as_deref())
-                .or_else(|| visible.first())
-                .cloned()
-        };
+        let selected = self.selected_project();
         let selected_id = selected.as_ref().map(|item| item.id().as_str());
         let rows: Vec<AnyElement> = visible
             .iter()
@@ -610,7 +595,7 @@ impl<R: ProjectRepository + Send + 'static> Render for ProjectsScreen<R> {
 
         let sidebar = div()
             .id("projects-sidebar")
-            .w(px(322.0))
+            .w(px(248.0))
             .flex_none()
             .h_full()
             .flex()
@@ -657,6 +642,14 @@ impl<R: ProjectRepository + Send + 'static> Render for ProjectsScreen<R> {
                     .children(rows),
             );
 
+        sidebar.into_any_element()
+    }
+
+    /// Project properties and tracking controls without a duplicate sidebar.
+    pub fn render_details(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = self.theme;
+        let visible = self.visible_rows();
+        let selected = self.selected_project();
         let content: AnyElement = match &self.list {
             ListState::Loading => loading_state(&theme).into_any_element(),
             ListState::Error(failure) => error_state(
@@ -814,21 +807,29 @@ impl<R: ProjectRepository + Send + 'static> Render for ProjectsScreen<R> {
                 None => div().into_any_element(),
             },
         };
+        div()
+            .id("projects-detail-scroll")
+            .size_full()
+            .overflow_y_scroll()
+            .child(content)
+            .into_any_element()
+    }
+}
 
+impl<R: ProjectRepository + Send + 'static> Render for ProjectsScreen<R> {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("projects-screen")
             .size_full()
             .flex()
             .overflow_hidden()
-            .child(sidebar)
+            .child(self.render_sidebar(cx))
             .child(
                 div()
-                    .id("projects-detail-scroll")
                     .flex_1()
                     .min_w(px(0.0))
                     .h_full()
-                    .overflow_y_scroll()
-                    .child(content),
+                    .child(self.render_details(cx)),
             )
     }
 }
