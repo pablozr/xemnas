@@ -9,6 +9,7 @@
 pub mod captures;
 mod clock;
 pub mod decisions;
+pub mod export;
 pub mod extract;
 pub mod inbox;
 pub mod jobs;
@@ -37,6 +38,7 @@ pub use decisions::{
     DecisionRevision, DecisionSearchHit, DecisionStatus, DecisionSummary, Decisions,
     DecisionsError, SearchQuery, MAX_ARRAY_ITEMS, MAX_ARRAY_ITEM_CHARS,
 };
+pub use export::{Export, ExportDocument, ExportError, ExportFormat, ExportResult};
 
 // Re-exported so integration tests in other crates can build a Capture Envelope
 // (and its metadata map) without adding a new dependency to those crates.
