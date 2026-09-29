@@ -4,9 +4,16 @@
 //! This crate owns the embedded migrations, the single shared `rusqlite`
 //! connection and the [`SqliteStore`] that fulfils both the Project and Job
 //! repository ports through one write queue (spec §9).
+//!
+//! Embedded migrations (0001..0006) run forward-only when the database opens,
+//! covering projects, jobs, captures, adapter checkpoints, the decision
+//! candidates produced by extraction and the extraction assessments recorded for
+//! provenance.
 #![warn(missing_docs)]
 
+mod assessments;
 mod captures;
+mod extraction;
 mod jobs;
 mod projects;
 mod store;
