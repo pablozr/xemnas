@@ -5,11 +5,13 @@ use application::inbox::{
     CandidateDetail, CandidateSummary, Inbox, InboxError, InboxFilter, InboxPage, InboxStore,
 };
 use gpui::prelude::*;
-use gpui::{div, px, AnyElement, Context, Div, FocusHandle, Render, Role, Stateful, Window};
+use gpui::{
+    div, px, AnyElement, Context, Div, ElementId, FocusHandle, Render, Role, Stateful, Window,
+};
 
 use crate::ui::glass::focus_ring;
 use crate::ui::theme::{code_style, text_style, Theme};
-use crate::ui::tokens::TypeScale;
+use crate::ui::tokens::{SpacingScale, TypeScale};
 
 enum Outcome {
     Page(Result<InboxPage, InboxError>, bool),
@@ -30,6 +32,8 @@ pub struct InboxScreen<S: InboxStore + Send + 'static> {
     row_focus: Vec<(String, FocusHandle)>,
     refresh_focus: FocusHandle,
     more_focus: FocusHandle,
+    source_index: usize,
+    source_focus: Vec<FocusHandle>,
 }
 
 impl<S: InboxStore + Send + 'static> InboxScreen<S> {
@@ -48,6 +52,8 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             row_focus: Vec::new(),
             refresh_focus: cx.focus_handle().tab_stop(true),
             more_focus: cx.focus_handle().tab_stop(true),
+            source_index: 0,
+            source_focus: Vec::new(),
         }
     }
 
@@ -79,6 +85,8 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
         }
         self.selected = Some(id.clone());
         self.detail = None;
+        self.source_index = 0;
+        self.source_focus.clear();
         self.run(cx, move |inbox| Outcome::Detail(inbox.detail(&id)));
     }
 
@@ -142,7 +150,14 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                             }
                         }
                     }
-                    Outcome::Detail(Ok(detail)) => this.detail = Some(detail),
+                    Outcome::Detail(Ok(detail)) => {
+                        this.source_focus = detail
+                            .artifacts
+                            .iter()
+                            .map(|_| cx.focus_handle().tab_stop(true))
+                            .collect();
+                        this.detail = Some(detail);
+                    }
                     Outcome::Page(Err(error), _) | Outcome::Detail(Err(error)) => {
                         tracing::warn!(code = error.code(), "inbox view operation failed");
                         this.error = Some(failure_copy(&error));
@@ -160,11 +175,11 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
         let id = row.id.clone();
         let key_id = id.clone();
         let mut element = div()
-            .id(("candidate", row.id.clone()))
-            .p(px(16.0))
+            .id((ElementId::from("candidate"), row.id.clone()))
+            .p(px(SpacingScale::S4))
             .flex()
             .flex_col()
-            .gap(px(8.0))
+            .gap(px(SpacingScale::S2))
             .border_b_1()
             .border_color(theme.colors.hairline_divider())
             .bg(if selected {
@@ -220,11 +235,11 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
         let theme = Theme::quiet_glass();
         text_style(div(), TypeScale::BODY_SMALL)
             .id(id)
-            .px(px(12.0))
+            .px(px(SpacingScale::S3))
             .h(px(36.0))
             .flex()
             .items_center()
-            .rounded(px(6.0))
+            .rounded(theme.radius.control())
             .role(Role::Button)
             .aria_label(label)
             .track_focus(if more {
@@ -250,7 +265,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             .child(label)
     }
 
-    fn reading_pane(&self) -> AnyElement {
+    fn reading_pane(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::quiet_glass();
         let visible_detail = self
             .detail
@@ -277,10 +292,10 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             .id("inbox-reading")
             .size_full()
             .overflow_y_scroll()
-            .p(px(32.0))
+            .p(px(SpacingScale::S8))
             .flex()
             .flex_col()
-            .gap(px(24.0))
+            .gap(px(SpacingScale::S6))
             .child(
                 text_style(div(), TypeScale::META)
                     .text_color(theme.colors.text_muted())
@@ -314,14 +329,62 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                 text_style(div(), TypeScale::HEADING_2)
                     .child(format!("Evidências · {} fontes", detail.artifacts.len())),
             )
-            .children(detail.artifacts.iter().map(|artifact| {
+            .child(
+                div().flex().flex_wrap().gap(px(SpacingScale::S2)).children(
+                    detail
+                        .artifacts
+                        .iter()
+                        .enumerate()
+                        .map(|(index, artifact)| {
+                            let selected = index == self.source_index;
+                            text_style(div(), TypeScale::BODY_SMALL)
+                                .id(("source", index))
+                                .p(px(SpacingScale::S2))
+                                .rounded(theme.radius.control())
+                                .role(Role::Button)
+                                .aria_label(format!("Fonte {}: {}", index + 1, artifact.kind))
+                                .aria_selected(selected)
+                                .track_focus(&self.source_focus[index])
+                                .focus_visible(focus_ring(&theme))
+                                .cursor_pointer()
+                                .bg(if selected {
+                                    theme.colors.glass_surface_lavender()
+                                } else {
+                                    theme.colors.layer_fill()
+                                })
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.source_index = index;
+                                    window.focus(&this.source_focus[index], cx);
+                                    cx.notify();
+                                }))
+                                .on_key_down(cx.listener(
+                                    move |this, event: &gpui::KeyDownEvent, _, cx| {
+                                        if matches!(event.keystroke.key.as_str(), "enter" | "space")
+                                        {
+                                            this.source_index = index;
+                                            cx.notify();
+                                            cx.stop_propagation();
+                                        }
+                                    },
+                                ))
+                                .child(format!("{} · {}", index + 1, artifact.kind))
+                        }),
+                ),
+            )
+            .when(detail.artifacts.is_empty(), |pane| {
+                pane.child(section(
+                    "Fontes",
+                    "Nenhuma fonte disponível para este candidato.",
+                ))
+            })
+            .children(detail.artifacts.get(self.source_index).map(|artifact| {
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(12.0))
+                    .gap(px(SpacingScale::S3))
                     .border_t_1()
                     .border_color(theme.colors.hairline_divider())
-                    .pt(px(16.0))
+                    .pt(px(SpacingScale::S4))
                     .child(
                         text_style(div(), TypeScale::META)
                             .text_color(theme.colors.text_muted())
@@ -346,25 +409,25 @@ impl<S: InboxStore + Send + 'static> Render for InboxScreen<S> {
             .filter(|row| matches_query(row, &self.query))
             .collect();
         div().size_full().flex().flex_col()
-            .children(self.error.map(|message| text_style(div(), TypeScale::BODY_SMALL).p(px(12.0))
+            .children(self.error.map(|message| text_style(div(), TypeScale::BODY_SMALL).p(px(SpacingScale::S3))
                 .role(Role::Status).text_color(theme.colors.status_danger()).child(message)))
             .child(div().flex_1().min_h(px(0.0)).flex()
                 .child(div().w(px(340.0)).flex_none().h_full().flex().flex_col().bg(theme.colors.rail())
                     .border_r_1().border_color(theme.colors.hairline_divider())
-                    .child(div().p(px(16.0)).flex().items_center().justify_between()
+                    .child(div().p(px(SpacingScale::S4)).flex().items_center().justify_between()
                         .child(text_style(div(), TypeScale::HEADING_2).child("Inbox"))
                         .child(self.button("inbox-refresh", "Atualizar", false, cx)))
-                    .child(text_style(div(), TypeScale::META).px(px(16.0)).pb(px(12.0)).text_color(theme.colors.text_muted())
+                    .child(text_style(div(), TypeScale::META).px(px(SpacingScale::S4)).pb(px(SpacingScale::S3)).text_color(theme.colors.text_muted())
                         .child(format!("{} candidatos carregados · {} visíveis", self.rows.len(), visible.len())))
                     .child(div().id("inbox-list").flex_1().min_h(px(0.0)).overflow_y_scroll()
                         .children(visible.iter().map(|row| self.row(row, cx)))
-                        .when(visible.is_empty(), |list| list.child(text_style(div(), TypeScale::BODY_SMALL).p(px(24.0))
+                        .when(visible.is_empty(), |list| list.child(text_style(div(), TypeScale::BODY_SMALL).p(px(SpacingScale::S6))
                             .text_color(theme.colors.text_muted()).child(if self.busy { "Carregando candidatos…" }
                             else if !self.loaded { "Atualize para carregar os candidatos." }
                             else if self.rows.is_empty() { "Nenhum candidato aguardando revisão. Novas capturas aparecerão aqui após a extração." }
                             else { "Nenhum candidato carregado corresponde à busca." }))))
                     .when(self.cursor.is_some(), |rail| rail.child(self.button("inbox-more", "Carregar mais", true, cx))))
-                .child(div().flex_1().min_w(px(0.0)).h_full().child(self.reading_pane())))
+                .child(div().flex_1().min_w(px(0.0)).h_full().child(self.reading_pane(cx))))
     }
 }
 
@@ -372,7 +435,7 @@ fn section(label: &'static str, content: &str) -> Div {
     div()
         .flex()
         .flex_col()
-        .gap(px(8.0))
+        .gap(px(SpacingScale::S2))
         .child(text_style(div(), TypeScale::HEADING_3).child(label))
         .child(
             text_style(div(), TypeScale::BODY)
