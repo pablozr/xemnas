@@ -4,7 +4,32 @@ use crate::ui::theme::{code_style, text_style, Theme};
 use crate::ui::tokens::{SpacingScale, TypeScale};
 use application::inbox::ArtifactView;
 use gpui::prelude::*;
-use gpui::{div, px, AnyElement};
+use gpui::{div, px, uniform_list, AnyElement, ListHorizontalSizingBehavior};
+use std::sync::Arc;
+
+/// Parsed once per loaded source; only visible rows are built during rendering.
+pub(super) struct SourceLines {
+    lines: Arc<Vec<String>>,
+    widest: usize,
+}
+impl SourceLines {
+    pub(super) fn new(artifact: &ArtifactView) -> Self {
+        let mut lines: Vec<String> = artifact.content.lines().map(str::to_owned).collect();
+        if lines.is_empty() {
+            lines.push(String::new());
+        }
+        let widest = lines
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, line)| line.chars().count())
+            .map(|(index, _)| index)
+            .unwrap_or(0);
+        Self {
+            lines: Arc::new(lines),
+            widest,
+        }
+    }
+}
 
 pub(super) fn label(artifact: &ArtifactView) -> String {
     let metadata = metadata(artifact);
@@ -30,7 +55,7 @@ fn kind_label(kind: &str) -> &str {
     }
 }
 
-pub(super) fn snippet(artifact: &ArtifactView, index: usize) -> AnyElement {
+pub(super) fn snippet(artifact: &ArtifactView, id: String, source: &SourceLines) -> AnyElement {
     let theme = Theme::quiet_glass();
     let metadata = metadata(artifact);
     let path = metadata
@@ -43,45 +68,50 @@ pub(super) fn snippet(artifact: &ArtifactView, index: usize) -> AnyElement {
         .and_then(|value| value.as_u64())
         .filter(|line| *line > 0);
     let code = artifact.kind == "diff_hunk" || metadata.get("language").is_some();
-    let lines: Vec<_> = artifact
-        .content
-        .lines()
-        .enumerate()
-        .map(|(offset, line)| {
-            div()
-                .flex()
-                .min_w(px(0.0))
-                .child(
-                    code_style(div(), TypeScale::CODE)
-                        .w(px(48.0))
-                        .flex_none()
-                        .text_color(theme.colors.text_muted())
-                        .child(start.unwrap_or(1).saturating_add(offset as u64).to_string()),
-                )
-                .child(
-                    code_style(div(), TypeScale::CODE)
-                        .whitespace_nowrap()
-                        .text_color(if line.starts_with('+') && !line.starts_with("+++") {
-                            theme.colors.accent_emphasis()
-                        } else {
-                            theme.colors.text_secondary()
-                        })
-                        .child(if line.is_empty() {
-                            " ".to_owned()
-                        } else {
-                            line.to_owned()
-                        }),
-                )
-        })
-        .collect();
+    let lines = source.lines.clone();
+    let body_id = format!("{id}-body");
+    let height = (lines.len() as f32 * TypeScale::CODE.line_height).min(240.0);
+    let code_list = uniform_list(id, lines.len(), move |range, _, _| {
+        range
+            .map(|offset| {
+                let line = &lines[offset];
+                div()
+                    .h(px(TypeScale::CODE.line_height))
+                    .flex()
+                    .min_w(px(0.0))
+                    .child(
+                        code_style(div(), TypeScale::CODE)
+                            .w(px(48.0))
+                            .flex_none()
+                            .text_color(theme.colors.text_muted())
+                            .child(start.unwrap_or(1).saturating_add(offset as u64).to_string()),
+                    )
+                    .child(
+                        code_style(div(), TypeScale::CODE)
+                            .whitespace_nowrap()
+                            .text_color(if line.starts_with('+') && !line.starts_with("+++") {
+                                theme.colors.accent_emphasis()
+                            } else {
+                                theme.colors.text_secondary()
+                            })
+                            .child(if line.is_empty() {
+                                " ".to_owned()
+                            } else {
+                                line.to_owned()
+                            }),
+                    )
+            })
+            .collect::<Vec<_>>()
+    })
+    .with_width_from_item(Some(source.widest))
+    .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
+    .h(px(height))
+    .w_full();
     div()
         .w_full()
         .min_w(px(0.0))
         .flex()
         .flex_col()
-        .rounded(theme.radius.control())
-        .border_1()
-        .border_color(theme.colors.glass_border())
         .bg(theme.colors.rail())
         .child(
             div()
@@ -113,12 +143,13 @@ pub(super) fn snippet(artifact: &ArtifactView, index: usize) -> AnyElement {
         )
         .child(
             div()
-                .id(("evidence-code", index))
-                .max_h(px(240.0))
-                .overflow_y_scroll()
-                .overflow_x_scroll()
+                .id(body_id)
+                .w_full()
+                .min_w(px(0.0))
+                .overflow_hidden()
                 .p(px(SpacingScale::S4))
-                .children(lines),
+                .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+                .child(code_list),
         )
         .into_any_element()
 }

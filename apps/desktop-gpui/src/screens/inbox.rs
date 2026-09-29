@@ -14,6 +14,7 @@ use gpui::{
 use super::evidence;
 use super::review_editor::{EditorEvent, ReviewEditor};
 use crate::ui::glass::focus_ring;
+use crate::ui::icons::Icon;
 use crate::ui::search_field::SearchField;
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{SpacingScale, TypeScale};
@@ -48,6 +49,7 @@ pub struct InboxScreen<S: InboxStore + Send + 'static> {
     more_focus: FocusHandle,
     source_index: usize,
     source_focus: Vec<FocusHandle>,
+    source_lines: Vec<evidence::SourceLines>,
     project_id: Option<String>,
     generation: u64,
     search: Option<Entity<SearchField>>,
@@ -76,6 +78,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             more_focus: cx.focus_handle().tab_stop(true),
             source_index: 0,
             source_focus: Vec::new(),
+            source_lines: Vec::new(),
             project_id: None,
             generation: 0,
             search: None,
@@ -243,6 +246,11 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                         }
                     }
                     Outcome::Detail(Ok(detail)) => {
+                        this.source_lines = detail
+                            .artifacts
+                            .iter()
+                            .map(evidence::SourceLines::new)
+                            .collect();
                         this.source_focus = detail
                             .artifacts
                             .iter()
@@ -507,13 +515,17 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                 }
             }))
             .child(
-                text_style(div(), TypeScale::META)
-                    .text_color(theme.colors.text_muted())
-                    .child(format!(
-                        "{} · {}",
-                        short_date(&row.received_at),
-                        status_label(row.status)
-                    )),
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(SpacingScale::S2))
+                    .child(
+                        text_style(div(), TypeScale::META)
+                            .text_color(theme.colors.text_muted())
+                            .child(short_date(&row.received_at)),
+                    )
+                    .child(status_badge(row.status)),
             )
             .child(text_style(div(), TypeScale::HEADING_3).child(row.question.clone()))
             .child(
@@ -599,13 +611,16 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             .flex_col()
             .gap(px(SpacingScale::S6))
             .child(
-                text_style(div(), TypeScale::META)
-                    .text_color(theme.colors.text_muted())
-                    .child(format!(
-                        "{} · {}",
-                        status_label(detail.summary.status),
-                        short_date(&detail.summary.received_at)
-                    )),
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(SpacingScale::S3))
+                    .child(status_badge(detail.summary.status))
+                    .child(
+                        text_style(div(), TypeScale::META)
+                            .text_color(theme.colors.text_muted())
+                            .child(short_date(&detail.summary.received_at)),
+                    ),
             )
             .child(text_style(div(), TypeScale::HEADING_1).child(detail.summary.question.clone()))
             .child(section("Escolha sugerida", &detail.summary.choice))
@@ -617,70 +632,110 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                     .pt(px(SpacingScale::S4))
                     .child(format!("Evidências · {} fontes", detail.artifacts.len())),
             )
-            .child(
-                div().flex().flex_wrap().gap(px(SpacingScale::S2)).children(
-                    detail
-                        .artifacts
-                        .iter()
-                        .enumerate()
-                        .map(|(index, artifact)| {
-                            let selected = index == self.source_index;
-                            text_style(div(), TypeScale::BODY_SMALL)
-                                .id(("source", index))
+            .when(!detail.artifacts.is_empty(), |pane| {
+                pane.child(
+                    div()
+                        .w_full()
+                        .min_w(px(0.0))
+                        .flex_none()
+                        .flex()
+                        .flex_col()
+                        .rounded(theme.radius.control())
+                        .border_1()
+                        .border_color(theme.colors.glass_border())
+                        .bg(theme.colors.rail())
+                        .overflow_hidden()
+                        .child(
+                            div()
+                                .id("evidence-tabs")
+                                .w_full()
+                                .min_w(px(0.0))
+                                .flex()
+                                .overflow_x_scroll()
+                                .gap(px(SpacingScale::S1))
                                 .p(px(SpacingScale::S2))
-                                .rounded(theme.radius.control())
-                                .border_1()
-                                .border_color(if selected {
-                                    theme.colors.accent_subtle()
-                                } else {
-                                    theme.colors.hairline_divider()
-                                })
-                                .role(Role::Button)
-                                .aria_label(format!(
-                                    "Fonte {}: {}",
-                                    index + 1,
-                                    evidence::label(artifact)
-                                ))
-                                .aria_selected(selected)
-                                .track_focus(&self.source_focus[index])
-                                .focus_visible(focus_ring(&theme))
-                                .cursor_pointer()
-                                .bg(if selected {
-                                    theme.colors.glass_surface_lavender()
-                                } else {
-                                    theme.colors.layer_fill()
-                                })
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.source_index = index;
-                                    window.focus(&this.source_focus[index], cx);
-                                    cx.notify();
-                                }))
-                                .on_key_down(cx.listener(
-                                    move |this, event: &gpui::KeyDownEvent, _, cx| {
-                                        if matches!(event.keystroke.key.as_str(), "enter" | "space")
-                                        {
-                                            this.source_index = index;
-                                            cx.notify();
-                                            cx.stop_propagation();
-                                        }
+                                .border_b_1()
+                                .border_color(theme.colors.hairline_divider())
+                                .children(detail.artifacts.iter().enumerate().map(
+                                    |(index, artifact)| {
+                                        let selected = index == self.source_index;
+                                        text_style(div(), TypeScale::BODY_SMALL)
+                                            .id(("source", index))
+                                            .flex_none()
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(SpacingScale::S2))
+                                            .p(px(SpacingScale::S2))
+                                            .rounded(theme.radius.control())
+                                            .border_1()
+                                            .border_color(if selected {
+                                                theme.colors.accent_subtle()
+                                            } else {
+                                                theme.colors.hairline_divider()
+                                            })
+                                            .role(Role::Button)
+                                            .aria_label(format!(
+                                                "Fonte {}: {}",
+                                                index + 1,
+                                                evidence::label(artifact)
+                                            ))
+                                            .aria_selected(selected)
+                                            .track_focus(&self.source_focus[index])
+                                            .focus_visible(focus_ring(&theme))
+                                            .cursor_pointer()
+                                            .bg(if selected {
+                                                theme.colors.glass_surface_lavender()
+                                            } else {
+                                                theme.colors.layer_fill()
+                                            })
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                this.source_index = index;
+                                                window.focus(&this.source_focus[index], cx);
+                                                cx.notify();
+                                            }))
+                                            .on_key_down(cx.listener(
+                                                move |this, event: &gpui::KeyDownEvent, _, cx| {
+                                                    if matches!(
+                                                        event.keystroke.key.as_str(),
+                                                        "enter" | "space"
+                                                    ) {
+                                                        this.source_index = index;
+                                                        cx.notify();
+                                                        cx.stop_propagation();
+                                                    }
+                                                },
+                                            ))
+                                            .child(Icon::file(&theme, 14.0, !selected))
+                                            .child(
+                                                div()
+                                                    .max_w(px(200.0))
+                                                    .truncate()
+                                                    .child(evidence::label(artifact)),
+                                            )
                                     },
-                                ))
-                                .child(evidence::label(artifact))
-                        }),
-                ),
-            )
+                                )),
+                        )
+                        .children(
+                            detail
+                                .artifacts
+                                .get(self.source_index)
+                                .zip(self.source_lines.get(self.source_index))
+                                .map(|(artifact, lines)| {
+                                    evidence::snippet(
+                                        artifact,
+                                        format!("{}-{}", detail.summary.id, self.source_index),
+                                        lines,
+                                    )
+                                }),
+                        ),
+                )
+            })
             .when(detail.artifacts.is_empty(), |pane| {
                 pane.child(section(
                     "Fontes",
                     "Nenhuma fonte disponível para este candidato.",
                 ))
             })
-            .children(
-                detail
-                    .artifacts
-                    .get(self.source_index)
-                    .map(|artifact| evidence::snippet(artifact, self.source_index)),
-            )
             .child(section(
                 "Confiança da extração",
                 &format!(
@@ -785,12 +840,31 @@ fn short_date(timestamp: &str) -> String {
     }
 }
 
-fn status_label(status: application::inbox::CandidateStatus) -> &'static str {
-    if status == application::inbox::CandidateStatus::Snoozed {
-        "Adiado"
-    } else {
-        "A revisar"
-    }
+fn status_badge(status: CandidateStatus) -> Div {
+    let theme = Theme::quiet_glass();
+    let (label, color) = match status {
+        CandidateStatus::Pending => ("Pendente", theme.colors.status_warning()),
+        CandidateStatus::Snoozed => ("Adiado", theme.colors.status_info()),
+        CandidateStatus::Accepted => ("Confirmado", theme.colors.status_success()),
+        CandidateStatus::EditedAndAccepted => {
+            ("Ajustado e confirmado", theme.colors.status_success())
+        }
+        CandidateStatus::Dismissed => ("Rejeitado", theme.colors.status_danger()),
+    };
+    text_style(div(), TypeScale::META)
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap(px(6.0))
+        .px(px(SpacingScale::S2))
+        .py(px(SpacingScale::S1))
+        .rounded(theme.radius.control())
+        .border_1()
+        .border_color(theme.colors.hairline_divider())
+        .bg(theme.colors.layer_fill())
+        .text_color(theme.colors.text_secondary())
+        .child(div().size(px(6.0)).flex_none().rounded_full().bg(color))
+        .child(label)
 }
 
 fn matches_query(row: &CandidateSummary, query: &str) -> bool {

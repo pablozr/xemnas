@@ -59,6 +59,16 @@ fn glyph(body: &str) -> String {
 pub struct Icon;
 
 impl Icon {
+    /// A source file, beside its name in the evidence tab strip.
+    pub fn file(theme: &Theme, size: f32, muted: bool) -> impl IntoElement {
+        render(
+            &glyph(
+                r#"<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>"#,
+            ),
+            size,
+            icon_color(theme, muted),
+        )
+    }
     /// Home: a roof over a body.
     pub fn home(theme: &Theme, size: f32, muted: bool) -> impl IntoElement {
         render(
