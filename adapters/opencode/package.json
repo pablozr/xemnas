@@ -6,7 +6,8 @@
   "description": "Contract tests for the versioned Capture Envelope consumed by the OpenCode adapter.",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node --test dist/tests/*.test.js"
+    "test": "npm run build && node --test dist/tests/*.test.js",
+    "send-fixture": "node dist/src/cli/send-fixture.js"
   },
   "dependencies": {
     "ajv": "8.20.0",

@@ -1,0 +1,70 @@
+{
+  "session_id": "session-e2e-1",
+  "directory": "C:/synthetic/projects/e2e",
+  "pages": [
+    [
+      {
+        "info": {
+          "id": "msg-0001",
+          "role": "user",
+          "sessionID": "session-e2e-1",
+          "time": { "created": 1759000000000 }
+        },
+        "parts": [
+          {
+            "id": "part-0001",
+            "sessionID": "session-e2e-1",
+            "messageID": "msg-0001",
+            "type": "text",
+            "text": "Refactor the tokenizer. Fixture secret sk-test-0123456789abcdef must be redacted."
+          }
+        ]
+      },
+      {
+        "info": {
+          "id": "msg-0002",
+          "role": "assistant",
+          "sessionID": "session-e2e-1",
+          "parentID": "msg-0001",
+          "time": { "created": 1759000001000 }
+        },
+        "parts": [
+          {
+            "id": "part-0002",
+            "sessionID": "session-e2e-1",
+            "messageID": "msg-0002",
+            "type": "reasoning",
+            "text": "Private chain of thought mentioning sk-test-0123456789abcdef."
+          },
+          {
+            "id": "part-0003",
+            "sessionID": "session-e2e-1",
+            "messageID": "msg-0002",
+            "type": "text",
+            "text": "Tokenizer refactored."
+          },
+          {
+            "id": "part-0004",
+            "sessionID": "session-e2e-1",
+            "messageID": "msg-0002",
+            "type": "tool",
+            "callID": "call-0001",
+            "tool": "edit",
+            "state": { "status": "completed" }
+          }
+        ]
+      }
+    ]
+  ],
+  "diffs": {
+    "msg-0001": [
+      {
+        "file": "src/tokenizer.ts",
+        "before": "export function tokenize(input: string) {\n  return input.split(\" \");\n}\n",
+        "after": "export function tokenize(input: string) {\n  return input.split(/\\s+/);\n}\n",
+        "additions": 1,
+        "deletions": 1
+      }
+    ]
+  }
+}
