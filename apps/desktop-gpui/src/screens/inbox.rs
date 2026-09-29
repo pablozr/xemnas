@@ -34,6 +34,8 @@ pub struct InboxScreen<S: InboxStore + Send + 'static> {
     more_focus: FocusHandle,
     source_index: usize,
     source_focus: Vec<FocusHandle>,
+    project_id: Option<String>,
+    generation: u64,
 }
 
 impl<S: InboxStore + Send + 'static> InboxScreen<S> {
@@ -54,12 +56,35 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             more_focus: cx.focus_handle().tab_stop(true),
             source_index: 0,
             source_focus: Vec::new(),
+            project_id: None,
+            generation: 0,
         }
     }
 
     /// Refreshes the first page when the destination opens.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         self.page(false, cx);
+    }
+
+    /// Changes the review scope, discarding responses from the previous project.
+    pub fn set_project(&mut self, project_id: Option<String>, cx: &mut Context<Self>) {
+        if self.project_id == project_id {
+            return;
+        }
+        self.project_id = project_id;
+        self.generation += 1;
+        self.rows.clear();
+        self.cursor = None;
+        self.selected = None;
+        self.detail = None;
+        self.query.clear();
+        self.error = None;
+        self.loaded = false;
+        self.row_focus.clear();
+        self.source_focus.clear();
+        self.source_index = 0;
+        self.page(false, cx);
+        cx.notify();
     }
 
     /// Filters loaded rows, explicitly distinct from a database-wide search.
@@ -69,10 +94,11 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
     }
 
     fn page(&mut self, append: bool, cx: &mut Context<Self>) {
-        if self.busy || (append && self.cursor.is_none()) {
+        if self.busy || self.project_id.is_none() || (append && self.cursor.is_none()) {
             return;
         }
         let filter = InboxFilter {
+            project_id: self.project_id.clone(),
             cursor: if append { self.cursor.clone() } else { None },
             ..InboxFilter::default()
         };
@@ -100,6 +126,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
         };
         self.busy = true;
         self.error = None;
+        let generation = self.generation;
         cx.notify();
         cx.spawn(async move |this, cx| {
             let (inbox, outcome) = cx
@@ -112,6 +139,11 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             let _ = this.update(cx, |this, cx| {
                 this.inbox = Some(inbox);
                 this.busy = false;
+                if generation != this.generation {
+                    this.page(false, cx);
+                    cx.notify();
+                    return;
+                }
                 match outcome {
                     Outcome::Page(Ok(page), append) => {
                         this.loaded = true;

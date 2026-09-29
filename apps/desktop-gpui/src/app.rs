@@ -10,7 +10,7 @@ use gpui::{
 
 use crate::fonts::{app_icon, wordmark};
 use crate::screens::inbox::InboxScreen;
-use crate::screens::projects::ProjectsScreen;
+use crate::screens::projects::{ProjectChanged, ProjectsScreen};
 use crate::ui::feedback::error_state;
 use crate::ui::glass::focus_ring;
 use crate::ui::search_field::{SearchChanged, SearchField};
@@ -35,6 +35,7 @@ pub struct Shell<R: ProjectRepository + InboxStore + Send + 'static> {
     focus: FocusHandle,
     search: Entity<SearchField>,
     _search_subscription: Subscription,
+    _project_subscription: Option<Subscription>,
     projects: Option<Entity<ProjectsScreen<R>>>,
     inbox: Option<Entity<InboxScreen<R>>>,
     in_inbox: bool,
@@ -69,11 +70,28 @@ impl<R: ProjectRepository + InboxStore + Send + 'static> Shell<R> {
                 screen.update(cx, |screen, cx| screen.set_query(&event.0, cx));
             }
         });
+        let project_subscription = screen.as_ref().map(|screen| {
+            cx.subscribe(screen, |shell, _, event: &ProjectChanged, cx| {
+                if let Some(inbox) = &shell.inbox {
+                    inbox.update(cx, |inbox, cx| {
+                        inbox.set_project(
+                            event
+                                .0
+                                .as_ref()
+                                .map(|project| project.id().as_str().to_owned()),
+                            cx,
+                        );
+                    });
+                }
+                cx.notify();
+            })
+        });
         Self {
             theme: Theme::quiet_glass(),
             focus: cx.focus_handle(),
             search,
             _search_subscription: search_subscription,
+            _project_subscription: project_subscription,
             projects: screen,
             inbox: inbox.map(|inbox| cx.new(|cx| InboxScreen::new(cx, inbox))),
             in_inbox: false,

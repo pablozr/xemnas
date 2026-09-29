@@ -15,8 +15,8 @@ use application::projects::{ProjectError, ProjectRepository, Projects};
 use domain::projects::ProjectSummary;
 use gpui::prelude::*;
 use gpui::{
-    div, px, AnyElement, BoxShadow, Context, Div, ElementId, FocusHandle, PathPromptOptions,
-    Render, Role, Stateful, Window,
+    div, px, AnyElement, BoxShadow, Context, Div, ElementId, EventEmitter, FocusHandle,
+    PathPromptOptions, Render, Role, Stateful, Window,
 };
 
 use crate::ui::feedback::{error_state, status_dot, StatusKind};
@@ -24,6 +24,9 @@ use crate::ui::glass::focus_ring;
 use crate::ui::icons::Icon;
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{SpacingScale, TypeScale};
+
+/// The project currently visible in the workspace, including empty selections.
+pub struct ProjectChanged(pub Option<ProjectSummary>);
 
 /// What the list area is currently showing.
 enum ListState {
@@ -134,6 +137,8 @@ pub struct ProjectsScreen<R: ProjectRepository + Send + 'static> {
     query: String,
 }
 
+impl<R: ProjectRepository + Send + 'static> EventEmitter<ProjectChanged> for ProjectsScreen<R> {}
+
 impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
     /// Builds the screen around an already composed `Projects` use case.
     pub fn new(cx: &mut Context<Self>, projects: Projects<R>) -> Self {
@@ -160,6 +165,16 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
         self.register_focus.clone()
     }
 
+    /// Returns the project visible after applying the sidebar filter.
+    pub fn selected_project(&self) -> Option<ProjectSummary> {
+        let visible = self.visible_rows();
+        visible
+            .iter()
+            .find(|item| Some(item.id().as_str()) == self.selected_id.as_deref())
+            .or_else(|| visible.first())
+            .cloned()
+    }
+
     /// Schedules the first list load, painting the loading state first.
     pub(crate) fn start(&mut self, cx: &mut Context<Self>, query: &str) {
         self.set_query(query, cx);
@@ -175,6 +190,7 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             return;
         }
         self.query = query.to_string();
+        cx.emit(ProjectChanged(self.selected_project()));
         cx.notify();
     }
 
@@ -289,6 +305,7 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                 self.list = ListState::Error(storage_failure(StorageContext::Mutate, &error));
             }
         }
+        cx.emit(ProjectChanged(self.selected_project()));
         cx.notify();
     }
 
@@ -387,6 +404,7 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             window.focus(focus, cx);
         }
         self.selected_id = Some(id);
+        cx.emit(ProjectChanged(self.selected_project()));
         cx.notify();
     }
 
