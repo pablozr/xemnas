@@ -236,6 +236,9 @@ impl SearchField {
         }
     }
     fn clear(&mut self, _: &Clear, _: &mut Window, cx: &mut Context<Self>) {
+        if self.fill_width {
+            return;
+        }
         self.edit = SearchEdit::default();
         self.changed(cx);
     }
@@ -448,7 +451,11 @@ impl Element for SearchTextElement {
                 .text_system()
                 .shape_line(content.to_string().into(), font_size, &runs, None);
         let caret_x = line.x_for_index(input.edit.caret());
-        let scroll_x = (caret_x - bounds.size.width + px(4.0)).max(px(0.0));
+        let scroll_x = if focused {
+            (caret_x - bounds.size.width + px(4.0)).max(px(0.0))
+        } else {
+            px(0.0)
+        };
         let origin_x = bounds.left() - scroll_x;
         let selection = (!input.edit.selection.is_empty()).then(|| {
             fill(
@@ -570,7 +577,9 @@ impl Render for SearchField {
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
-            .child(Icon::search(&theme, 14.0, !focused))
+            .when(!self.fill_width, |field| {
+                field.child(Icon::search(&theme, 14.0, !focused))
+            })
             .child(
                 text_style(div(), TypeScale::BODY_SMALL)
                     .flex_1()
@@ -578,12 +587,15 @@ impl Render for SearchField {
                     .overflow_hidden()
                     .child(SearchTextElement { input: cx.entity() }),
             )
-            .when(self.show_shortcut || focused, |field| {
-                field.child(
-                    text_style(div(), TypeScale::META)
-                        .text_color(theme.colors.text_muted())
-                        .child(if focused { "Esc · limpar" } else { "Ctrl K" }),
-                )
-            })
+            .when(
+                !self.fill_width && (self.show_shortcut || focused),
+                |field| {
+                    field.child(
+                        text_style(div(), TypeScale::META)
+                            .text_color(theme.colors.text_muted())
+                            .child(if focused { "Esc · limpar" } else { "Ctrl K" }),
+                    )
+                },
+            )
     }
 }
