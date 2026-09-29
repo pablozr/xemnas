@@ -19,12 +19,15 @@ Para explorar o layout com candidatos fictícios:
 cargo run --locked -p desktop-gpui --bin xemnas -- --demo
 # Prévia na menor janela suportada:
 cargo run --locked -p desktop-gpui --bin xemnas -- --demo --compact
+# Evidência extensa para conferir rolagem e virtualização:
+cargo run --locked -p desktop-gpui --bin xemnas -- --demo --long-evidence
 ```
 
 A demonstração usa um banco em memória e não inicia workers, API ou provedores.
 Os dados desaparecem ao fechar a janela. Na tela atual, Revisão permite ler
-candidatos e evidências do projeto selecionado; Detalhes mantém as propriedades
-e a remoção do acompanhamento. As ações de revisão do mock ainda serão integradas.
+candidatos e evidências do projeto selecionado, ajustar, confirmar, rejeitar e
+adiar/retomar candidatos. A contagem da aba considera toda a fila do projeto.
+Detalhes mantém as propriedades e a remoção do acompanhamento.
 
 Pacote distribuível (ZIP versionado em `dist\`):
 

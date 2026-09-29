@@ -37,26 +37,34 @@ mas `docs/` é ignorado pelo Git: este arquivo é a regra versionável.
   acesso às ações. `WindowControlArea` limita arraste e controles da janela;
   busca permanece fora da região arrastável.
 
-## Revisão — leitura de candidatos por projeto
+## Revisão — candidatos por projeto
 
 - A barra da janela contém marca e controles nativos. Revisão e Detalhes ficam
   abaixo do nome e caminho do projeto; a lateral de projetos permanece visível.
 - Trocar de projeto limpa lista, evidência e filtro; respostas antigas não podem
   aparecer no novo workspace. O filtro de projeto é aplicado no caso de uso.
 - Lista de candidatos de 320 px, com data, estado, pergunta e escolha proposta.
-  Contagens representam somente itens carregados. A busca filtra esses itens;
+  A badge da aba conta toda a fila do projeto; a lista informa carregados e
+  visíveis separadamente. A busca filtra esses itens;
   fica dentro da lista; paginação explícita permite carregar mais sem sugerir
   uma busca global. Ctrl K abre Revisão e foca o campo.
 - Leitura ocupa o restante da janela: escolha, motivação, confiança da extração
   e origem. Confiança é uma estimativa do extrator, não uma avaliação humana.
 - Evidências vêm dos artefatos reais já redigidos pelo backend. Mostrar uma fonte
   por vez em tipografia monoespaçada, com seleção acessível por teclado.
+  Abas com ícone SVG de arquivo compartilham a borda do painel. Caminho e linhas
+  usam metadados registrados; o código tem rolagem horizontal e vertical,
+  altura limitada e linhas virtualizadas. Abas extensas rolam horizontalmente.
+  Estados têm badge com texto e bolinha: Pendente, Adiado, Confirmado e Rejeitado.
 - Sem candidatos, orientar sobre captura e extração. Falhas mostram recuperação
   em linguagem de produto; conteúdo técnico do erro não aparece na interface.
-- Este primeiro incremento é de leitura. Ações de revisão e edição serão
-  integradas aos respectivos casos de uso; não inserir controles decorativos.
+- Confirmar, Rejeitar, Adiar/Retomar e Ajustar usam os casos de uso da Inbox.
+  Ações ficam visíveis fora da rolagem de leitura, bloqueiam envios duplicados
+  durante a operação e atualizam fila e contagem. Ajustes só persistem ao salvar;
+  cancelar não escreve. Salvar e confirmar cria a decisão com os ajustes.
 - `xemnas --demo` abre uma prévia identificada com dados fictícios em memória,
   sem iniciar integrações, workers ou alterar o banco normal.
+  `--demo --long-evidence` permite verificar fontes com 1.500 linhas.
 
 ## Gate de entrega visual
 

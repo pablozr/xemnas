@@ -12,6 +12,7 @@ use storage_sqlite::SqliteStore;
 
 pub(crate) fn store() -> Result<SqliteStore, Box<dyn std::error::Error>> {
     let store = SqliteStore::open(":memory:")?;
+    let long_evidence = std::env::args().any(|arg| arg == "--long-evidence");
     let samples = [
         ("Como garantir uma única decisão por captura?", "Confirmar candidatos em uma transação com validação de versão.", "A validação impede decisões duplicadas quando duas revisões acontecem ao mesmo tempo.", "transaction.begin();\nvalidate_version(candidate);\npersist_decision(candidate);\ntransaction.commit();"),
         ("Onde armazenar credenciais do provedor?", "Guardar a chave no cofre de credenciais do sistema.", "A chave fica fora do arquivo de configuração e dos logs.", "let secret = keystore.get(profile_id)?;\nprovider.configure(secret);"),
@@ -36,7 +37,26 @@ pub(crate) fn store() -> Result<SqliteStore, Box<dyn std::error::Error>> {
             let capture = format!("{project}-capture-{index}");
             let timestamp = format!("2026-09-29T{:02}:00:00Z", 15 - index);
             let artifacts = [
-                ("source", "diff_hunk", (*source).to_owned()),
+                (
+                    "source",
+                    "diff_hunk",
+                    if long_evidence {
+                        (0..1500)
+                            .map(|line| {
+                                format!(
+                                    "// linha {line:04}: {}\n",
+                                    if line == 0 {
+                                        "conteudo_extenso_".repeat(50)
+                                    } else {
+                                        "trecho ficticio para verificar rolagem".into()
+                                    }
+                                )
+                            })
+                            .collect()
+                    } else {
+                        (*source).to_owned()
+                    },
+                ),
                 (
                     "context",
                     "user_text",
