@@ -1,6 +1,6 @@
-//! One desktop work surface: project navigation and the selected project's
-//! context. There is no separate Home destination with the same actions.
+//! Desktop navigation between tracked projects and the candidate reading Inbox.
 
+use application::inbox::{Inbox, InboxStore};
 use application::projects::{ProjectRepository, Projects};
 use gpui::prelude::*;
 use gpui::{
@@ -9,8 +9,10 @@ use gpui::{
 };
 
 use crate::fonts::{app_icon, wordmark};
+use crate::screens::inbox::InboxScreen;
 use crate::screens::projects::ProjectsScreen;
 use crate::ui::feedback::error_state;
+use crate::ui::glass::focus_ring;
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{SpacingScale, TypeScale};
@@ -22,23 +24,30 @@ actions!(
         TabNext,
         /// Focuses the previous control.
         TabPrev,
-        /// Focuses the project search field.
+        /// Focuses the current destination's search field.
         FocusSearch
     ]
 );
 
-/// The only mounted content is the project work surface, or a startup error.
-pub struct Shell<R: ProjectRepository + Send + 'static> {
+/// Persistent product screens with contextual search and native window controls.
+pub struct Shell<R: ProjectRepository + InboxStore + Send + 'static> {
     theme: Theme,
     focus: FocusHandle,
     search: Entity<SearchField>,
     _search_subscription: Subscription,
     projects: Option<Entity<ProjectsScreen<R>>>,
+    inbox: Option<Entity<InboxScreen<R>>>,
+    in_inbox: bool,
+    destination_focus: [FocusHandle; 2],
 }
 
-impl<R: ProjectRepository + Send + 'static> Shell<R> {
-    /// Mounts the use case once; switching project selection never remounts it.
-    pub fn new(cx: &mut Context<Self>, projects: Result<Projects<R>, String>) -> Self {
+impl<R: ProjectRepository + InboxStore + Send + 'static> Shell<R> {
+    /// Mounts both use cases once, retaining their state across navigation.
+    pub fn new(
+        cx: &mut Context<Self>,
+        projects: Result<Projects<R>, String>,
+        inbox: Option<Inbox<R>>,
+    ) -> Self {
         let screen = match projects {
             Ok(projects) => {
                 let screen = cx.new(|cx| ProjectsScreen::new(cx, projects));
@@ -52,7 +61,11 @@ impl<R: ProjectRepository + Send + 'static> Shell<R> {
         };
         let search = cx.new(SearchField::new);
         let search_subscription = cx.subscribe(&search, |shell, _, event: &SearchChanged, cx| {
-            if let Some(screen) = &shell.projects {
+            if shell.in_inbox {
+                if let Some(screen) = &shell.inbox {
+                    screen.update(cx, |screen, cx| screen.set_query(&event.0, cx));
+                }
+            } else if let Some(screen) = &shell.projects {
                 screen.update(cx, |screen, cx| screen.set_query(&event.0, cx));
             }
         });
@@ -62,6 +75,12 @@ impl<R: ProjectRepository + Send + 'static> Shell<R> {
             search,
             _search_subscription: search_subscription,
             projects: screen,
+            inbox: inbox.map(|inbox| cx.new(|cx| InboxScreen::new(cx, inbox))),
+            in_inbox: false,
+            destination_focus: [
+                cx.focus_handle().tab_stop(true),
+                cx.focus_handle().tab_stop(true),
+            ],
         }
     }
 
@@ -84,12 +103,84 @@ impl<R: ProjectRepository + Send + 'static> Shell<R> {
     fn on_focus_search(&mut self, _: &FocusSearch, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.search.read(cx).focus_handle(cx), cx);
     }
+
+    fn switch_destination(&mut self, inbox: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.in_inbox = inbox;
+        window.focus(&self.destination_focus[usize::from(inbox)], cx);
+        self.search.update(cx, |search, cx| {
+            search.set_context(
+                if inbox {
+                    "Filtrar candidatos carregados"
+                } else {
+                    "Buscar projetos"
+                },
+                cx,
+            )
+        });
+        if inbox {
+            if let Some(screen) = &self.inbox {
+                screen.update(cx, |screen, cx| screen.refresh(cx));
+            }
+        }
+        cx.notify();
+    }
+
+    fn destination(&self, inbox: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let selected = self.in_inbox == inbox;
+        text_style(div(), TypeScale::BODY_SMALL)
+            .id(if inbox { "nav-inbox" } else { "nav-projects" })
+            .h(px(36.0))
+            .px(px(SpacingScale::S3))
+            .flex()
+            .items_center()
+            .rounded(theme.radius.control())
+            .role(Role::Button)
+            .aria_label(if inbox { "Inbox" } else { "Projetos" })
+            .aria_selected(selected)
+            .track_focus(&self.destination_focus[usize::from(inbox)])
+            .focus_visible(focus_ring(&theme))
+            .cursor_pointer()
+            .text_color(if selected {
+                theme.colors.text_primary()
+            } else {
+                theme.colors.text_muted()
+            })
+            .bg(if selected {
+                theme.colors.glass_surface_lavender()
+            } else {
+                theme.colors.layer_fill()
+            })
+            .hover(move |style| {
+                style.bg(if selected {
+                    theme.colors.glass_surface_lavender()
+                } else {
+                    theme.colors.hover_veil()
+                })
+            })
+            .on_click(
+                cx.listener(move |this, _, window, cx| this.switch_destination(inbox, window, cx)),
+            )
+            .on_key_down(
+                cx.listener(move |this, event: &gpui::KeyDownEvent, window, cx| {
+                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                        this.switch_destination(inbox, window, cx);
+                        cx.stop_propagation();
+                    }
+                }),
+            )
+            .child(if inbox { "Inbox" } else { "Projetos" })
+    }
 }
 
-impl<R: ProjectRepository + Send + 'static> Render for Shell<R> {
+impl<R: ProjectRepository + InboxStore + Send + 'static> Render for Shell<R> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        window.set_window_title("xemnas — Projetos");
+        window.set_window_title(if self.in_inbox {
+            "xemnas — Inbox"
+        } else {
+            "xemnas — Projetos"
+        });
 
         let title = div()
             .id("title-bar")
@@ -111,11 +202,22 @@ impl<R: ProjectRepository + Send + 'static> Render for Shell<R> {
                     .child(app_icon(22.0))
                     .child(wordmark(&theme, 15.0, 600.0)),
             )
+            .child(self.destination(false, cx))
+            .child(self.destination(true, cx))
             .child(div().ml_auto().child(self.search.clone()))
             .child(window_controls(&theme, window.is_maximized()));
 
-        let body: gpui::AnyElement = match &self.projects {
-            Some(screen) => screen.clone().into_any_element(),
+        let mounted = if self.in_inbox {
+            self.inbox
+                .as_ref()
+                .map(|screen| screen.clone().into_any_element())
+        } else {
+            self.projects
+                .as_ref()
+                .map(|screen| screen.clone().into_any_element())
+        };
+        let body: gpui::AnyElement = match mounted {
+            Some(screen) => screen,
             None => error_state(
                 &theme,
                 "startup-error",

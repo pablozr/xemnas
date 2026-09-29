@@ -1,4 +1,4 @@
-﻿//! xemnas desktop shell.
+//! xemnas desktop shell.
 //!
 //! Composition root: opens the SQLite store, recovers interrupted jobs, starts
 //! the jobs worker and the loopback-only local API, and mounts the Projects use
@@ -137,7 +137,7 @@ fn main() {
         }
     };
 
-    run_shell(Ok(application::projects::Projects::new(store)));
+    run_shell(Ok(store));
 
     // Graceful shutdown mirrors startup: stop the API first so the discovery
     // and per-session token files are removed, then stop the jobs worker.
@@ -156,8 +156,8 @@ fn main() {
     }
 }
 
-/// Runs the GPUI application with a ready Projects use case or a failure detail.
-fn run_shell(projects: Result<application::projects::Projects<SqliteStore>, String>) {
+/// Composes the desktop use cases from the ready store, or a startup failure.
+fn run_shell(store: Result<SqliteStore, String>) {
     application().run(move |cx: &mut App| {
         xemnas_desktop::fonts::register_embedded(cx);
         cx.bind_keys([
@@ -180,7 +180,14 @@ fn run_shell(projects: Result<application::projects::Projects<SqliteStore>, Stri
         ]);
 
         let bounds = Bounds::centered(None, size(px(1440.0), px(1024.0)), cx);
-        let view = cx.new(|cx| Shell::<SqliteStore>::new(cx, projects));
+        let (projects, inbox) = match store {
+            Ok(store) => (
+                Ok(application::projects::Projects::new(store.clone())),
+                Some(application::inbox::Inbox::new(store)),
+            ),
+            Err(error) => (Err(error), None),
+        };
+        let view = cx.new(|cx| Shell::<SqliteStore>::new(cx, projects, inbox));
         let focus = view.read(cx).initial_focus(cx);
 
         let opened = cx.open_window(

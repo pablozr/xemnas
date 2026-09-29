@@ -37,6 +37,22 @@ mas `docs/` é ignorado pelo Git: este arquivo é a regra versionável.
   acesso às ações. `WindowControlArea` limita arraste e controles da janela;
   busca permanece fora da região arrastável.
 
+## Inbox — leitura de candidatos
+
+- Navegação discreta entre Projetos e Inbox no cabeçalho; a busca muda de contexto
+  e limpa o filtro ao trocar de tela. Controles ficam fora da região arrastável.
+- Lista lateral de 340 px, com projeto, estado, pergunta e escolha proposta.
+  Contagens representam somente itens carregados. A busca filtra esses itens;
+  paginação explícita permite carregar mais sem sugerir uma busca global.
+- Leitura ocupa o restante da janela: escolha, motivação, confiança da extração
+  e origem. Confiança é uma estimativa do extrator, não uma avaliação humana.
+- Evidências vêm dos artefatos reais já redigidos pelo backend. Mostrar uma fonte
+  por vez em tipografia monoespaçada, com seleção acessível por teclado.
+- Sem candidatos, orientar sobre captura e extração. Falhas mostram recuperação
+  em linguagem de produto; conteúdo técnico do erro não aparece na interface.
+- Este primeiro incremento é de leitura. Ações de revisão e edição serão
+  integradas aos respectivos casos de uso; não inserir controles decorativos.
+
 ## Gate de entrega visual
 
 Compilar e testar não bastam: capturar a janela **GPUI do binário recém-gerado**
@@ -46,5 +62,6 @@ confirmação/cancelamento e contraste. Se o executável estiver bloqueado pela
 política do Windows, registrar o limite em vez de validar com uma janela antiga
 ou enfraquecer as proteções do sistema.
 
-Inbox, capturas e decisões são superfícies futuras: só integrar ao detalhe
-quando houver dados e ações reais no produto.
+Para a Inbox, conferir também lista vazia, filtro sem resultados, paginação,
+troca de fonte e leitura de evidências extensas. Capturas e decisões só ganham
+superfícies quando ligadas a dados e ações reais no produto.
