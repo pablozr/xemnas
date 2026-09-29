@@ -6,6 +6,8 @@ use unicode_segmentation::UnicodeSegmentation;
 /// Editable search value with a selection and optional IME composition.
 #[derive(Default)]
 pub struct SearchEdit {
+    /// Retains line breaks for document editors; searches remain single-line.
+    pub multiline: bool,
     /// Current text.
     pub text: String,
     /// Selected UTF-8 byte range.
@@ -22,7 +24,7 @@ impl SearchEdit {
         let range = range
             .or_else(|| self.marked.clone())
             .unwrap_or(self.selection.clone());
-        let text = text.replace("\r\n", " ").replace(['\r', '\n'], " ");
+        let text = self.normalize(text);
         self.text.replace_range(range.clone(), &text);
         let offset = range.start + text.len();
         self.selection = offset..offset;
@@ -111,7 +113,7 @@ impl SearchEdit {
         let range = range
             .or_else(|| self.marked.clone())
             .unwrap_or(self.selection.clone());
-        let text = text.replace("\r\n", " ").replace(['\r', '\n'], " ");
+        let text = self.normalize(text);
         self.text.replace_range(range.clone(), &text);
         self.marked = (!text.is_empty()).then(|| range.start..range.start + text.len());
         self.selection = selected
@@ -121,6 +123,14 @@ impl SearchEdit {
             })
             .unwrap_or_else(|| range.start + text.len()..range.start + text.len());
         self.reversed = false;
+    }
+
+    fn normalize(&self, text: &str) -> String {
+        if self.multiline {
+            text.replace("\r\n", "\n").replace('\r', "\n")
+        } else {
+            text.replace("\r\n", " ").replace(['\r', '\n'], " ")
+        }
     }
 }
 
@@ -178,6 +188,22 @@ mod tests {
         let mut edit = SearchEdit::default();
         edit.replace(None, "foo\r\nbar");
         assert_eq!(edit.text, "foo bar");
+    }
+
+    #[test]
+    fn document_editing_preserves_lines_and_composition_offsets() {
+        let mut edit = SearchEdit {
+            multiline: true,
+            ..Default::default()
+        };
+        edit.replace(None, "um\r\n🪷\ndois");
+        assert_eq!(edit.text, "um\n🪷\ndois");
+        edit.move_to(3);
+        edit.replace_and_mark(None, "é\n", Some(2..2));
+        assert_eq!(edit.text, "um\né\n🪷\ndois");
+        assert_eq!(edit.caret(), 6);
+        edit.replace(None, "x\n");
+        assert_eq!(edit.text, "um\nx\n🪷\ndois");
     }
 
     #[test]

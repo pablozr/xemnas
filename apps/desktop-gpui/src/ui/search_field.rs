@@ -4,6 +4,7 @@
 //! editing mechanics. `Role::TextInput` alone does not make a `div` editable.
 
 use std::ops::Range;
+use std::sync::Arc;
 
 use gpui::prelude::*;
 use gpui::{
@@ -68,6 +69,10 @@ pub struct SearchField {
     width: f32,
     show_shortcut: bool,
     fill_width: bool,
+    multiline_height: Option<f32>,
+    wrapped: Vec<VisualLine>,
+    scroll_y: Pixels,
+    last_caret: Option<usize>,
 }
 
 impl EventEmitter<SearchChanged> for SearchField {}
@@ -87,6 +92,10 @@ impl SearchField {
             width: 280.0,
             show_shortcut: true,
             fill_width: false,
+            multiline_height: None,
+            wrapped: Vec::new(),
+            scroll_y: px(0.0),
+            last_caret: None,
         }
     }
 
@@ -102,9 +111,17 @@ impl SearchField {
         self.show_shortcut = false;
     }
 
+    /// Enables wrapped, scrollable document editing with native selection and IME.
+    pub fn multiline(&mut self, height: f32) {
+        self.stretch();
+        self.multiline_height = Some(height);
+        self.edit.multiline = true;
+    }
+
     /// Seeds a single-line value while preserving all normal editing mechanics.
     pub fn set_value(&mut self, value: &str, cx: &mut Context<Self>) {
         self.edit = SearchEdit::default();
+        self.edit.multiline = self.multiline_height.is_some();
         self.edit.replace(None, value);
         self.changed(cx);
     }
@@ -118,6 +135,7 @@ impl SearchField {
     pub fn set_context(&mut self, placeholder: &'static str, cx: &mut Context<Self>) {
         self.placeholder = placeholder;
         self.edit = SearchEdit::default();
+        self.edit.multiline = self.multiline_height.is_some();
         self.changed(cx);
     }
 
@@ -127,6 +145,13 @@ impl SearchField {
     }
 
     fn index_at(&self, position: Point<Pixels>) -> usize {
+        if self.multiline_height.is_some() {
+            let Some(bounds) = self.bounds else {
+                return 0;
+            };
+            let position = position - bounds.origin + point(px(0.0), self.scroll_y);
+            return wrapped_index(&self.wrapped, position).min(self.edit.text.len());
+        }
         match (self.layout.as_ref(), self.bounds.as_ref()) {
             (Some(line), Some(bounds)) => {
                 line.closest_index_for_x(position.x - bounds.left() + self.scroll_x)
@@ -317,6 +342,13 @@ impl EntityInputHandler for SearchField {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
+        if self.multiline_height.is_some() {
+            let position = wrapped_position(&self.wrapped, self.edit.from_utf16(range.start));
+            return Some(Bounds::new(
+                bounds.origin + position - point(px(0.0), self.scroll_y),
+                size(px(1.0), px(19.0)),
+            ));
+        }
         let line = self.layout.as_ref()?;
         let start = self.edit.from_utf16(range.start);
         let end = self.edit.from_utf16(range.end);
@@ -529,6 +561,242 @@ impl Element for SearchTextElement {
     }
 }
 
+#[derive(Clone)]
+struct VisualLine {
+    offset: usize,
+    y: Pixels,
+    line: Arc<gpui::WrappedLine>,
+}
+
+fn wrapped_position(lines: &[VisualLine], index: usize) -> Point<Pixels> {
+    let Some(line) = lines.iter().rev().find(|line| line.offset <= index) else {
+        return point(px(0.0), px(0.0));
+    };
+    line.line
+        .position_for_index((index - line.offset).min(line.line.len()), px(19.0))
+        .unwrap_or_default()
+        + point(px(0.0), line.y)
+}
+fn wrapped_index(lines: &[VisualLine], position: Point<Pixels>) -> usize {
+    let Some(line) = lines
+        .iter()
+        .rev()
+        .find(|line| line.y <= position.y)
+        .or(lines.first())
+    else {
+        return 0;
+    };
+    let index = line
+        .line
+        .closest_index_for_position(position - point(px(0.0), line.y), px(19.0));
+    line.offset + index.unwrap_or_else(|index| index)
+}
+struct MultilineTextElement {
+    input: Entity<SearchField>,
+}
+struct MultilinePaint {
+    lines: Vec<VisualLine>,
+    quads: Vec<PaintQuad>,
+    scroll: Pixels,
+}
+impl IntoElement for MultilineTextElement {
+    type Element = Self;
+    fn into_element(self) -> Self {
+        self
+    }
+}
+impl Element for MultilineTextElement {
+    type RequestLayoutState = ();
+    type PrepaintState = MultilinePaint;
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+    fn request_layout(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, ()) {
+        let mut style = Style::default();
+        style.size.width = relative(1.).into();
+        style.size.height = px(self.input.read(cx).multiline_height.unwrap_or(120.0) - 24.0).into();
+        (window.request_layout(style, [], cx), ())
+    }
+    fn prepaint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) -> MultilinePaint {
+        let input = self.input.read(cx);
+        let focused = input.focus.is_focused(window);
+        let content = if input.edit.text.is_empty() && !focused {
+            input.placeholder
+        } else {
+            &input.edit.text
+        };
+        let style = window.text_style();
+        let run = TextRun {
+            len: content.len(),
+            font: style.font(),
+            color: if input.edit.text.is_empty() {
+                input.theme.colors.text_muted().into()
+            } else {
+                input.theme.colors.text_primary().into()
+            },
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let runs = if let Some(marked) = &input.edit.marked {
+            vec![
+                TextRun {
+                    len: marked.start,
+                    ..run.clone()
+                },
+                TextRun {
+                    len: marked.len(),
+                    underline: Some(UnderlineStyle {
+                        color: Some(run.color),
+                        thickness: px(1.0),
+                        wavy: false,
+                    }),
+                    ..run.clone()
+                },
+                TextRun {
+                    len: content.len() - marked.end,
+                    ..run
+                },
+            ]
+        } else {
+            vec![run]
+        };
+        let shaped = window
+            .text_system()
+            .shape_text(
+                content.to_owned().into(),
+                style.font_size.to_pixels(window.rem_size()),
+                &runs,
+                Some(bounds.size.width),
+                None,
+            )
+            .unwrap_or_default();
+        let mut offset = 0;
+        let mut y = px(0.0);
+        let mut lines = Vec::new();
+        for line in shaped {
+            let height = line.size(px(19.0)).height;
+            let len = line.len();
+            lines.push(VisualLine {
+                offset,
+                y,
+                line: Arc::new(line),
+            });
+            offset += len + 1;
+            y += height;
+        }
+        let caret = wrapped_position(&lines, input.edit.caret());
+        let mut scroll = input.scroll_y;
+        if focused && input.last_caret != Some(input.edit.caret()) {
+            if caret.y < scroll {
+                scroll = caret.y;
+            } else if caret.y + px(19.0) > scroll + bounds.size.height {
+                scroll = caret.y + px(19.0) - bounds.size.height;
+            }
+        }
+        scroll = scroll
+            .max(px(0.0))
+            .min((y - bounds.size.height).max(px(0.0)));
+        let origin = bounds.origin - point(px(0.0), scroll);
+        let mut quads = Vec::new();
+        if focused {
+            for line in &lines {
+                let height = line.line.size(px(19.0)).height;
+                let mut row_y = px(0.0);
+                while row_y < height {
+                    let start = wrapped_index(&lines, point(px(0.0), line.y + row_y));
+                    let end = wrapped_index(&lines, point(bounds.size.width, line.y + row_y));
+                    let left = start.max(input.edit.selection.start);
+                    let right = end.min(input.edit.selection.end);
+                    if left < right {
+                        let x0 = if left == start {
+                            px(0.0)
+                        } else {
+                            wrapped_position(&lines, left).x
+                        };
+                        let x1 = if right == end {
+                            bounds.size.width
+                        } else {
+                            wrapped_position(&lines, right).x
+                        };
+                        quads.push(fill(
+                            Bounds::new(
+                                origin + point(x0, line.y + row_y),
+                                size((x1 - x0).max(px(1.0)), px(19.0)),
+                            ),
+                            input.theme.colors.glass_fill_strong(),
+                        ));
+                    }
+                    row_y += px(19.0);
+                }
+            }
+            if input.edit.selection.is_empty() {
+                quads.push(fill(
+                    Bounds::new(origin + caret, size(px(1.0), px(19.0))),
+                    input.theme.colors.accent_default(),
+                ));
+            }
+        }
+        MultilinePaint {
+            lines,
+            quads,
+            scroll,
+        }
+    }
+    fn paint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut (),
+        paint: &mut MultilinePaint,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        window.handle_input(
+            &self.input.read(cx).focus.clone(),
+            ElementInputHandler::new(bounds, self.input.clone()),
+            cx,
+        );
+        for quad in paint.quads.drain(..) {
+            window.paint_quad(quad);
+        }
+        for line in &paint.lines {
+            let _ = line.line.paint(
+                bounds.origin + point(px(0.0), line.y - paint.scroll),
+                px(19.0),
+                TextAlign::Left,
+                None,
+                window,
+                cx,
+            );
+        }
+        self.input.update(cx, |input, _| {
+            input.wrapped = paint.lines.clone();
+            input.bounds = Some(bounds);
+            input.scroll_y = paint.scroll;
+            input.last_caret = Some(input.edit.caret());
+        });
+    }
+}
+
 impl Render for SearchField {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
@@ -537,7 +805,7 @@ impl Render for SearchField {
             .id("title-search")
             .w(px(self.width))
             .when(self.fill_width, |field| field.w_full())
-            .h(px(32.0))
+            .h(px(self.multiline_height.unwrap_or(32.0)))
             .px(px(SpacingScale::S3))
             .flex()
             .items_center()
@@ -577,6 +845,55 @@ impl Render for SearchField {
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                if this.multiline_height.is_none() {
+                    return;
+                }
+                match event.keystroke.key.as_str() {
+                    "enter" if this.edit.marked.is_none() => {
+                        this.edit.replace(None, "\n");
+                        this.changed(cx);
+                    }
+                    "up" | "down" => {
+                        let mut position = wrapped_position(&this.wrapped, this.edit.caret());
+                        position.y = (position.y
+                            + px(if event.keystroke.key == "up" {
+                                -19.0
+                            } else {
+                                19.0
+                            }))
+                        .max(px(0.0));
+                        let index =
+                            wrapped_index(&this.wrapped, position).min(this.edit.text.len());
+                        if event.keystroke.modifiers.shift {
+                            this.edit.select_to(index);
+                        } else {
+                            this.edit.move_to(index);
+                        }
+                        cx.notify();
+                    }
+                    _ => return,
+                }
+                cx.stop_propagation();
+            }))
+            .on_scroll_wheel(cx.listener(|this, event: &gpui::ScrollWheelEvent, _, cx| {
+                if this.multiline_height.is_some() {
+                    let height = this
+                        .bounds
+                        .map(|bounds| bounds.size.height)
+                        .unwrap_or(px(0.0));
+                    let total = this
+                        .wrapped
+                        .last()
+                        .map(|line| line.y + line.line.size(px(19.0)).height)
+                        .unwrap_or(height);
+                    this.scroll_y = (this.scroll_y - event.delta.pixel_delta(px(19.0)).y)
+                        .max(px(0.0))
+                        .min((total - height).max(px(0.0)));
+                    cx.notify();
+                    cx.stop_propagation();
+                }
+            }))
             .when(!self.fill_width, |field| {
                 field.child(Icon::search(&theme, 14.0, !focused))
             })
@@ -585,7 +902,11 @@ impl Render for SearchField {
                     .flex_1()
                     .min_w(px(0.0))
                     .overflow_hidden()
-                    .child(SearchTextElement { input: cx.entity() }),
+                    .child(if self.multiline_height.is_some() {
+                        MultilineTextElement { input: cx.entity() }.into_any_element()
+                    } else {
+                        SearchTextElement { input: cx.entity() }.into_any_element()
+                    }),
             )
             .when(
                 !self.fill_width && (self.show_shortcut || focused),
