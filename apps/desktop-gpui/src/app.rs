@@ -14,11 +14,13 @@ use crate::fonts::{app_icon, wordmark};
 use crate::screens::decisions::DecisionsScreen;
 use crate::screens::inbox::InboxScreen;
 use crate::screens::projects::{ProjectChanged, ProjectsScreen};
+use crate::ui::controls::icon_action;
 use crate::ui::feedback::error_state;
 use crate::ui::glass::focus_ring;
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme, ThemeMode};
-use crate::ui::tokens::{SpacingScale, TypeScale};
+use crate::ui::icons::Icon;
+use crate::ui::tokens::{ControlSize, SpacingScale, TypeScale};
 
 actions!(
     xemnas,
@@ -32,6 +34,40 @@ actions!(
     ]
 );
 
+/// The three places a selected project can be read from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Destination {
+    Review,
+    Decisions,
+    Details,
+}
+
+impl Destination {
+    fn index(self) -> usize {
+        match self {
+            Self::Details => 0,
+            Self::Review => 1,
+            Self::Decisions => 2,
+        }
+    }
+
+    fn id(self) -> &'static str {
+        match self {
+            Self::Review => "nav-inbox",
+            Self::Decisions => "nav-decisions",
+            Self::Details => "nav-projects",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Review => "Revisão",
+            Self::Decisions => "Decisões",
+            Self::Details => "Detalhes",
+        }
+    }
+}
+
 /// Persistent product screens with contextual search and native window controls.
 pub struct Shell<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> {
     theme: Theme,
@@ -43,8 +79,7 @@ pub struct Shell<R: ProjectRepository + InboxStore + DecisionStore + Send + 'sta
     projects: Option<Entity<ProjectsScreen<R>>>,
     inbox: Option<Entity<InboxScreen<R>>>,
     decisions: Option<Entity<DecisionsScreen<R>>>,
-    in_decisions: bool,
-    in_inbox: bool,
+    destination: Destination,
     destination_focus: [FocusHandle; 3],
     theme_focus: FocusHandle,
     demo: bool,
@@ -74,7 +109,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
             search.set_context("Filtrar candidatos carregados", cx)
         });
         let search_subscription = cx.subscribe(&search, |shell, _, event: &SearchChanged, cx| {
-            if shell.in_inbox {
+            if shell.destination == Destination::Review {
                 if let Some(screen) = &shell.inbox {
                     screen.update(cx, |screen, cx| screen.set_query(&event.0, cx));
                 }
@@ -104,7 +139,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
                         )
                     });
                 }
-                if shell.in_inbox {
+                if shell.destination == Destination::Review {
                     shell.search.update(cx, |search, cx| {
                         search.set_context("Filtrar candidatos carregados", cx)
                     });
@@ -134,8 +169,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
             projects: screen,
             inbox,
             decisions,
-            in_decisions: false,
-            in_inbox: true,
+            destination: Destination::Review,
             destination_focus: [
                 cx.focus_handle().tab_stop(true),
                 cx.focus_handle().tab_stop(true),
@@ -177,60 +211,71 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
             window.focus(&self.initial_focus(cx), cx);
             return;
         }
-        if self.in_decisions {
+        if self.destination == Destination::Decisions {
             if let Some(screen) = &self.decisions {
                 screen.update(cx, |screen, cx| screen.focus_search(window, cx));
             }
             return;
         }
-        if !self.in_inbox {
-            self.switch_destination(true, window, cx);
+        if self.destination != Destination::Review {
+            self.switch_to(Destination::Review, window, cx);
         }
         window.focus(&self.search.read(cx).focus_handle(cx), cx);
     }
 
-    fn switch_destination(&mut self, inbox: bool, window: &mut Window, cx: &mut Context<Self>) {
-        self.in_inbox = inbox;
-        self.in_decisions = false;
-        window.focus(&self.destination_focus[usize::from(inbox)], cx);
-        self.search.update(cx, |search, cx| {
-            search.set_context(
-                if inbox {
-                    "Filtrar candidatos carregados"
-                } else {
-                    "Buscar projetos"
-                },
-                cx,
-            )
-        });
-        if inbox {
-            if let Some(screen) = &self.inbox {
-                screen.update(cx, |screen, cx| screen.refresh(cx));
+    fn switch_to(&mut self, destination: Destination, window: &mut Window, cx: &mut Context<Self>) {
+        self.destination = destination;
+        window.focus(&self.destination_focus[destination.index()], cx);
+        match destination {
+            Destination::Review => {
+                self.search.update(cx, |search, cx| {
+                    search.set_context("Filtrar candidatos carregados", cx)
+                });
+                if let Some(screen) = &self.inbox {
+                    screen.update(cx, |screen, cx| screen.refresh(cx));
+                }
             }
+            Destination::Decisions => {
+                if let Some(screen) = &self.decisions {
+                    screen.update(cx, |screen, cx| screen.refresh(cx));
+                }
+            }
+            Destination::Details => self
+                .search
+                .update(cx, |search, cx| search.set_context("Buscar projetos", cx)),
         }
         cx.notify();
     }
 
-    fn destination(&self, inbox: bool, cx: &mut Context<Self>) -> impl IntoElement {
+    /// One tab recipe for every project destination: quiet at rest, a soft
+    /// filled pill when selected, no underline or outline competing with it.
+    fn nav_tab(&self, destination: Destination, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let selected = !self.in_decisions && self.in_inbox == inbox;
+        let selected = self.destination == destination;
+        let icon = match destination {
+            Destination::Review => Icon::list(&theme, 14.0).into_any_element(),
+            Destination::Decisions => Icon::file(&theme, 14.0, !selected).into_any_element(),
+            Destination::Details => Icon::layers(&theme, 14.0).into_any_element(),
+        };
+        let count = (destination == Destination::Review).then(|| {
+            self.inbox
+                .as_ref()
+                .and_then(|screen| screen.read(cx).total_count())
+                .map(|count| count.to_string())
+                .unwrap_or_else(|| "…".into())
+        });
         text_style(div(), TypeScale::BODY_SMALL)
-            .id(if inbox { "nav-inbox" } else { "nav-projects" })
-            .h(px(36.0))
+            .id(destination.id())
+            .h(px(ControlSize::MD))
             .px(px(SpacingScale::S3))
             .flex()
             .items_center()
             .gap(px(SpacingScale::S2))
-            .border_b_2()
-            .border_color(if selected {
-                theme.colors.accent_subtle()
-            } else {
-                theme.colors.layer_fill()
-            })
-            .role(Role::Button)
-            .aria_label(if inbox { "Revisão" } else { "Detalhes" })
+            .rounded(theme.radius.control())
+            .role(Role::Tab)
+            .aria_label(destination.label())
             .aria_selected(selected)
-            .track_focus(&self.destination_focus[usize::from(inbox)])
+            .track_focus(&self.destination_focus[destination.index()])
             .focus_visible(focus_ring(&theme))
             .cursor_pointer()
             .text_color(if selected {
@@ -238,104 +283,35 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
             } else {
                 theme.colors.text_muted()
             })
-            .bg(if selected {
-                theme.colors.glass_surface_lavender()
-            } else {
-                theme.colors.layer_fill()
-            })
-            .hover(move |style| {
-                style.bg(if selected {
-                    theme.colors.glass_surface_lavender()
-                } else {
-                    theme.colors.hover_veil()
+            .when(selected, |tab| tab.bg(theme.colors.decision_selected()))
+            .when(!selected, |tab| {
+                tab.hover(move |style| {
+                    style
+                        .bg(theme.colors.hover_veil())
+                        .text_color(theme.colors.text_secondary())
                 })
             })
             .on_click(
-                cx.listener(move |this, _, window, cx| this.switch_destination(inbox, window, cx)),
+                cx.listener(move |this, _, window, cx| this.switch_to(destination, window, cx)),
             )
             .on_key_down(
                 cx.listener(move |this, event: &gpui::KeyDownEvent, window, cx| {
                     if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                        this.switch_destination(inbox, window, cx);
+                        this.switch_to(destination, window, cx);
                         cx.stop_propagation();
                     }
                 }),
             )
-            .child(if inbox {
-                crate::ui::icons::Icon::list(&theme, 14.0).into_any_element()
-            } else {
-                crate::ui::icons::Icon::layers(&theme, 14.0).into_any_element()
-            })
-            .child(if inbox { "Revisão" } else { "Detalhes" })
-            .when(inbox, |tab| {
-                tab.child(
-                    text_style(div(), TypeScale::META)
-                        .px(px(6.0))
-                        .rounded(px(4.0))
-                        .bg(theme.colors.glass_fill_medium())
-                        .child(
-                            self.inbox
-                                .as_ref()
-                                .and_then(|screen| screen.read(cx).total_count())
-                                .map(|count| count.to_string())
-                                .unwrap_or_else(|| "…".into()),
-                        ),
-                )
-            })
-    }
-
-    fn decisions_destination(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
-        let selected = self.in_decisions;
-        text_style(div(), TypeScale::BODY_SMALL)
-            .id("nav-decisions")
-            .h(px(36.0))
-            .px(px(12.0))
-            .flex()
-            .items_center()
-            .gap(px(7.0))
-            .rounded(px(6.0))
-            .border_1()
-            .border_color(if selected {
-                theme.colors.glass_edge_lavender()
-            } else {
-                theme.colors.canvas()
-            })
-            .bg(if selected {
-                theme.colors.decision_selected()
-            } else {
-                theme.colors.layer_fill()
-            })
-            .text_color(if selected {
-                theme.colors.text_primary()
-            } else {
-                theme.colors.text_muted()
-            })
-            .role(Role::Button)
-            .aria_label("Decisões")
-            .aria_selected(selected)
-            .track_focus(&self.destination_focus[2])
-            .focus_visible(focus_ring(&theme))
-            .cursor_pointer()
-            .on_click(cx.listener(|this, _, window, cx| this.switch_decisions(window, cx)))
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                    this.switch_decisions(window, cx);
-                    cx.stop_propagation();
-                }
+            .child(icon)
+            .child(destination.label())
+            .children(count.map(|count| {
+                text_style(div(), TypeScale::META)
+                    .px(px(6.0))
+                    .rounded(px(4.0))
+                    .bg(theme.colors.glass_fill_medium())
+                    .text_color(theme.colors.text_secondary())
+                    .child(count)
             }))
-            .child(crate::ui::icons::Icon::file(&theme, 14.0, !selected))
-            .child("Decisões")
-    }
-
-    fn switch_decisions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.in_decisions = true;
-        self.in_inbox = false;
-        window.focus(&self.destination_focus[2], cx);
-        if let Some(screen) = &self.decisions {
-            screen.update(cx, |screen, cx| screen.refresh(cx));
-        }
-        cx.notify();
     }
 
     fn toggle_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -349,32 +325,19 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
         cx.notify();
     }
 
+    /// A quiet icon action in the title bar; the palette name lives in the
+    /// accessible label instead of a permanent text chip beside the brand.
     fn theme_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let mode = cx.try_global::<ThemeMode>().copied().unwrap_or_default();
-        text_style(div(), TypeScale::BODY_SMALL)
-            .id("theme-switch")
-            .h(px(30.0))
-            .px(px(10.0))
-            .mr(px(12.0))
-            .flex()
-            .items_center()
-            .gap(px(7.0))
-            .rounded(px(6.0))
-            .border_1()
-            .border_color(theme.colors.hairline_divider())
-            .bg(theme.colors.surface())
-            .text_color(theme.colors.text_secondary())
-            .hover(move |style| style.bg(theme.colors.surface_hover()))
-            .role(Role::Button)
-            .aria_label(format!(
-                "Tema: {}. Alternar para {}",
-                mode.label(),
-                mode.toggled().label()
-            ))
+        let label = format!(
+            "Tema: {}. Alternar para {}",
+            mode.label(),
+            mode.toggled().label()
+        );
+        icon_action(&theme, "theme-switch", &label)
+            .mr(px(SpacingScale::S2))
             .track_focus(&self.theme_focus)
-            .focus_visible(focus_ring(&theme))
-            .cursor_pointer()
             .on_click(cx.listener(Self::on_theme_click))
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 if matches!(event.keystroke.key.as_str(), "enter" | "space") {
@@ -382,8 +345,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
                     cx.stop_propagation();
                 }
             }))
-            .child(crate::ui::icons::Icon::layers(&theme, 14.0))
-            .child(format!("Tema · {}", mode.label()))
+            .child(Icon::contrast(&theme, 16.0))
     }
 
     fn on_theme_click(
@@ -400,12 +362,10 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.theme = Theme::current(cx);
         let theme = self.theme;
-        window.set_window_title(if self.in_decisions {
-            "xemnas — Decisões"
-        } else if self.in_inbox {
-            "xemnas — Revisão"
-        } else {
-            "xemnas — Projetos"
+        window.set_window_title(match self.destination {
+            Destination::Decisions => "xemnas — Decisões",
+            Destination::Review => "xemnas — Revisão",
+            Destination::Details => "xemnas — Projetos",
         });
 
         let title = div()
@@ -437,12 +397,12 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
             .and_then(|screen| screen.read(cx).selected_project());
         let body: gpui::AnyElement = if let Some(projects) = self.projects.clone() {
             let sidebar = projects.update(cx, |screen, cx| screen.render_sidebar(cx));
-            let content = if selected.is_some() && self.in_decisions {
+            let content = if selected.is_some() && self.destination == Destination::Decisions {
                 self.decisions
                     .as_ref()
                     .map(|screen| screen.clone().into_any_element())
                     .unwrap_or_else(|| div().into_any_element())
-            } else if selected.is_some() && self.in_inbox {
+            } else if selected.is_some() && self.destination == Destination::Review {
                 self.inbox
                     .as_ref()
                     .map(|screen| screen.clone().into_any_element())
@@ -470,7 +430,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
                                 .gap(px(SpacingScale::S2))
                                 .border_b_1()
                                 .border_color(theme.colors.hairline_divider())
-                                .when(self.in_decisions, |header| {
+                                .when(self.destination == Destination::Decisions, |header| {
                                     header.bg(theme.colors.decision_canvas())
                                 })
                                 .child(
@@ -486,11 +446,14 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
                                 )
                                 .child(
                                     div()
+                                        .id("project-destinations")
                                         .flex()
-                                        .gap(px(SpacingScale::S3))
-                                        .child(self.destination(true, cx))
-                                        .child(self.decisions_destination(cx))
-                                        .child(self.destination(false, cx)),
+                                        .gap(px(SpacingScale::S1))
+                                        .pb(px(SpacingScale::S2))
+                                        .role(Role::TabList)
+                                        .child(self.nav_tab(Destination::Review, cx))
+                                        .child(self.nav_tab(Destination::Decisions, cx))
+                                        .child(self.nav_tab(Destination::Details, cx)),
                                 )
                         }))
                         .child(div().flex_1().min_h(px(0.0)).child(content)),

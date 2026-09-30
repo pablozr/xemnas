@@ -256,6 +256,17 @@ impl Icon {
         )
     }
 
+    /// A half-filled disc: switching between the two palettes.
+    pub fn contrast(theme: &Theme, size: f32) -> impl IntoElement {
+        render(
+            &glyph(
+                r#"<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="white" stroke="none"/>"#,
+            ),
+            size,
+            theme.colors.text_secondary().into(),
+        )
+    }
+
     /// An activity line, for a busy state.
     pub fn activity(theme: &Theme, size: f32) -> impl IntoElement {
         render(
