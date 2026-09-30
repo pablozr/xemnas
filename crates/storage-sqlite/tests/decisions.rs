@@ -5,7 +5,9 @@ use application::captures::{
     CaptureArtifactRecord, CaptureCheckpointRecord, CaptureReceiptRecord, CaptureRepository,
     CaptureWrite,
 };
-use application::decisions::{DecisionEdits, DecisionFilter, Decisions, SearchQuery};
+use application::decisions::{
+    DecisionEdits, DecisionFilter, Decisions, DecisionsError, SearchQuery,
+};
 use application::extract::{DecisionCandidateRecord, ExtractionStore};
 use application::inbox::{CandidateStatus, DecisionSeed, Inbox, InboxStore};
 use application::jobs::{JobRecord, JobState, ANALYZE_CAPTURE_KIND};
@@ -378,7 +380,7 @@ fn revise_updates_the_index_and_keeps_the_history() {
             ..DecisionEdits::default()
         },
     );
-    assert!(stale.is_err());
+    assert_eq!(stale.map(|_| ()), Err(DecisionsError::Conflict));
     assert_eq!(
         decisions
             .detail(&outcome.decision_id)

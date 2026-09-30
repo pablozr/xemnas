@@ -59,6 +59,8 @@ pub enum DecisionsError {
     Storage(String),
     /// No decision with the requested id exists.
     NotFound,
+    /// Another revision was saved first: the editor's version is stale.
+    Conflict,
     /// The submitted revision failed validation.
     InvalidEdits(String),
     /// The search query was empty after sanitization.
@@ -75,6 +77,7 @@ impl DecisionsError {
         match self {
             Self::Storage(_) => "storage",
             Self::NotFound => "not_found",
+            Self::Conflict => "conflict",
             Self::InvalidEdits(_) => "invalid_edits",
             Self::InvalidQuery(_) => "invalid_query",
             Self::InvalidFilter(_) => "invalid_filter",
@@ -88,6 +91,8 @@ impl std::fmt::Display for DecisionsError {
         match self {
             Self::Storage(message) => write!(formatter, "falha de armazenamento: {message}"),
             Self::NotFound => formatter.write_str("decisão não encontrada"),
+            Self::Conflict => formatter
+                .write_str("a decisão recebeu outra versão; atualize antes de salvar novamente"),
             Self::InvalidEdits(message) => write!(formatter, "revisão inválida: {message}"),
             Self::InvalidQuery(message) => write!(formatter, "consulta inválida: {message}"),
             Self::InvalidFilter(message) => write!(formatter, "filtro inválido: {message}"),
@@ -670,6 +675,11 @@ impl<S: DecisionStore> Decisions<S> {
     }
 
     /// Saves a revision only if the version displayed by the editor is still current.
+    ///
+    /// # Errors
+    ///
+    /// [`DecisionsError::Conflict`] when `expected_version` is no longer the live
+    /// version, or when another revision wins the compare-and-set.
     pub fn revise_version(
         &self,
         id: &str,
@@ -688,9 +698,7 @@ impl<S: DecisionStore> Decisions<S> {
         let edits = edits.validate()?;
         let row = self.store.get(id)?.ok_or(DecisionsError::NotFound)?;
         if expected.is_some_and(|expected| row.version != expected) {
-            return Err(DecisionsError::InvalidEdits(
-                "a decisão recebeu outra versão".into(),
-            ));
+            return Err(DecisionsError::Conflict);
         }
         let content = DecisionContent {
             question: edits.question.unwrap_or(row.question),
@@ -707,7 +715,12 @@ impl<S: DecisionStore> Decisions<S> {
         };
         let version = row.version + 1;
         if !self.store.revise(id, &content, version, &now_rfc3339())? {
-            return Err(DecisionsError::NotFound);
+            // The compare-and-set lost: either the decision vanished or a
+            // concurrent revision advanced the version first.
+            return Err(match self.store.get(id)? {
+                Some(_) => DecisionsError::Conflict,
+                None => DecisionsError::NotFound,
+            });
         }
         self.detail(id)
     }
