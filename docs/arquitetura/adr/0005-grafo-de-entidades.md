@@ -30,7 +30,7 @@ Uma aresta `human` nasce confirmada. Uma `derived` nasce como **sugestão** (sem
 - **Tecnologias propostas e sugestões `uses`**: dependências adicionadas em `Cargo.toml` ou `package.json` nos diffs de evidência da decisão, resolvidas por chave ou alias.
 - **Ação do usuário**: qualquer entidade, padrão, alias ou aresta, confirmada na hora.
 
-A derivação é determinística e roda sob demanda ("Atualizar sugestões"). Ela não lê o disco do repositório, só o que o app já capturou.
+A derivação é determinística e roda ao abrir o Mapa e depois de cada mudança nele. Ela não lê o disco do repositório, só o que o app já capturou.
 
 ## Consultas
 

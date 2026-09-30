@@ -13,6 +13,16 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use storage_sqlite::SqliteStore;
 
+/// Files the sample decisions touched, so the project map has something to
+/// propose: two of them fall in the seeded `storage-sqlite` component.
+const DEMO_FILES: [&str; 5] = [
+    "crates/storage-sqlite/src/inbox.rs",
+    "crates/ai-provider/src/lib.rs",
+    "crates/application/src/jobs.rs",
+    "adapters/opencode/src/index.ts",
+    "crates/storage-sqlite/src/decisions.rs",
+];
+
 pub(crate) fn store() -> Result<SqliteStore, Box<dyn std::error::Error>> {
     let store = SqliteStore::open(":memory:")?;
     let long_evidence = std::env::args().any(|arg| arg == "--long-evidence");
@@ -126,7 +136,10 @@ pub(crate) fn store() -> Result<SqliteStore, Box<dyn std::error::Error>> {
                 confidence: 0.84,
                 confidence_reason: "Exemplo fictício baseado na evidência exibida.".into(),
                 evidence_refs: "[\"source\",\"context\"]".into(),
-                diff_summary: "{\"files\":[\"src/inbox.rs\"],\"artifacts\":2}".into(),
+                diff_summary: format!(
+                    "{{\"files\":[\"{}\"],\"artifacts\":2}}",
+                    DEMO_FILES[index % DEMO_FILES.len()]
+                ),
                 dedup_hash: format!("demo-{project}-{index}"),
                 created_at: timestamp.clone(),
                 updated_at: timestamp,
@@ -162,7 +175,43 @@ pub(crate) fn store() -> Result<SqliteStore, Box<dyn std::error::Error>> {
             }
         }
     }
+    seed_map(&store)?;
     Ok(store)
+}
+
+/// A small project map for the demo: two components, one confirmed link and
+/// the suggestions the sample files imply.
+fn seed_map(store: &SqliteStore) -> Result<(), Box<dyn std::error::Error>> {
+    use application::graph::{KnowledgeGraph, NewEntity};
+    use domain::entities::EntityKind;
+
+    let graph = KnowledgeGraph::new(store.clone());
+    for (name, pattern, description) in [
+        (
+            "storage-sqlite",
+            "crates/storage-sqlite/**",
+            "Banco local: decisões, capturas e o mapa.",
+        ),
+        (
+            "application",
+            "crates/application/**",
+            "Casos de uso e portas.",
+        ),
+    ] {
+        graph.create_entity(NewEntity {
+            project_id: "demo-xemnas".into(),
+            kind: Some(EntityKind::Component),
+            name: name.into(),
+            description: description.into(),
+            patterns: vec![pattern.into()],
+            ..NewEntity::default()
+        })?;
+    }
+    graph.refresh_suggestions("demo-xemnas")?;
+    if let Some(first) = graph.suggestions("demo-xemnas")?.first() {
+        graph.confirm(&first.edge_id)?;
+    }
+    Ok(())
 }
 
 /// In-memory AI settings for the demo: never touches the profile file or the
@@ -268,6 +317,20 @@ mod tests {
                 .iter()
                 .all(|artifact| !artifact.content.is_empty()));
         }
+        let graph = application::graph::KnowledgeGraph::new(store.clone());
+        let map = graph.project_map("demo-xemnas", None).expect("map");
+        assert_eq!(map.entities.len(), 2, "two seeded components");
+        assert!(
+            map.entities.iter().any(|row| row.decisions == 1),
+            "one confirmed link"
+        );
+        let report = graph
+            .refresh_suggestions("demo-xemnas")
+            .expect("suggestions");
+        assert!(
+            !report.components.is_empty(),
+            "the other sample files propose components"
+        );
         assert!(
             ProjectRepository::list(&SqliteStore::open(":memory:").expect("fresh store"))
                 .expect("projects")

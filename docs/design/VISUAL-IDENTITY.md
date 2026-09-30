@@ -139,6 +139,24 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
 - Encerrar uma regra não apaga: ela deixa de valer e fica no histórico. A
   prévia não é salva; exportar é ação explícita com destino escolhido.
 
+## Mapa — o grafo do projeto
+
+- Quarto destino do projeto (Ctrl 4, paleta), ADR-0005. Índice à esquerda
+  (296 px, `pane`, filete à direita) com três visões fixas (Sugestões com
+  contagem, Lente de arquivo, Linha do tempo) e as listas de Componentes e
+  Tecnologias; cada linha mostra o nome e o peso ("3 decisões · 1 regra") e um
+  ponto âmbar quando há conflito. Seleção com `mark_selected`; o `+` do
+  cabeçalho abre o formulário de item novo.
+- Coluna de leitura (`reading_page`) por visão: sugestões com Confirmar e
+  Rejeitar por linha e itens propostos com Criar; detalhe da entidade (tipo,
+  nome, descrição, padrões em mono, ações Vincular decisão, Vincular regra,
+  Faz parte de…, Editar e Aposentar com confirmação na própria página) e as
+  seções Decisões em vigor (abrem em Decisões), Conflitos, Regras, Estrutura,
+  Impacto e Linha do tempo; lente de arquivo com campo e resultado; linha do
+  tempo com data, ponto de estado e frase.
+- Nunca o grafo inteiro: sempre um item e o que está em volta. Nada entra no
+  mapa sem confirmação; aposentar e rejeitar não apagam.
+
 ## Configurações
 
 - Página do app (engrenagem na barra de título, paleta Ctrl K ou a linha de

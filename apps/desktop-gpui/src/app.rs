@@ -18,6 +18,7 @@ use crate::palette::{self, PaletteItem};
 use crate::screens::context::{ContextScreen, ContextServices, ContextStores, OpenDecision};
 use crate::screens::decisions::DecisionsScreen;
 use crate::screens::inbox::InboxScreen;
+use crate::screens::map::{MapScreen, MapServices};
 use crate::screens::projects::{ProjectChanged, ProjectsScreen};
 use crate::screens::settings::{CloseSettings, SettingsScreen, SettingsSection, SettingsServices};
 use crate::ui::controls::icon_action;
@@ -60,6 +61,8 @@ actions!(
         GoDecisions,
         /// Opens Contexto.
         GoContext,
+        /// Opens Mapa.
+        GoMap,
         /// Opens or closes the command palette.
         TogglePalette,
         /// Moves the palette highlight down.
@@ -130,6 +133,7 @@ enum Destination {
     Review,
     Decisions,
     Context,
+    Map,
 }
 
 impl Destination {
@@ -138,6 +142,7 @@ impl Destination {
             Self::Review => 0,
             Self::Decisions => 1,
             Self::Context => 2,
+            Self::Map => 3,
         }
     }
 
@@ -146,6 +151,7 @@ impl Destination {
             Self::Review => "nav-inbox",
             Self::Decisions => "nav-decisions",
             Self::Context => "nav-context",
+            Self::Map => "nav-map",
         }
     }
 
@@ -154,6 +160,7 @@ impl Destination {
             Self::Review => "Revisão",
             Self::Decisions => "Decisões",
             Self::Context => "Contexto",
+            Self::Map => "Mapa",
         }
     }
 
@@ -162,6 +169,7 @@ impl Destination {
             Self::Review => IconName::List,
             Self::Decisions => IconName::File,
             Self::Context => IconName::Layers,
+            Self::Map => IconName::Graph,
         }
     }
 
@@ -170,6 +178,7 @@ impl Destination {
             Self::Review => "Ctrl 1",
             Self::Decisions => "Ctrl 2",
             Self::Context => "Ctrl 3",
+            Self::Map => "Ctrl 4",
         }
     }
 }
@@ -190,9 +199,11 @@ pub struct Shell<R: ProjectRepository + InboxStore + DecisionStore + ContextStor
     settings_open: bool,
     settings_focus: FocusHandle,
     destination: Destination,
-    destination_focus: [FocusHandle; 3],
+    destination_focus: [FocusHandle; 4],
     context: Option<Entity<ContextScreen<R>>>,
     _context_subscription: Option<Subscription>,
+    map: Option<Entity<MapScreen<R>>>,
+    _map_subscription: Option<Subscription>,
     /// Destination tab under the pointer, driving the hover spring.
     hovered_tab: Option<Destination>,
     theme_focus: FocusHandle,
@@ -216,6 +227,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + ContextStores> Shell<R>
         inbox: Option<Inbox<R>>,
         decisions: Option<(Decisions<R>, Export<R>, DecisionRelations<R>)>,
         context: Option<ContextServices<R>>,
+        map: Option<MapServices<R>>,
         settings: Option<SettingsServices>,
     ) -> Self {
         let screen = match projects {
@@ -260,6 +272,13 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + ContextStores> Shell<R>
                         .map(|project| project.id().as_str().to_owned());
                     context.update(cx, |screen, cx| screen.set_project(project, cx));
                 }
+                if let Some(map) = &shell.map {
+                    let project = event
+                        .0
+                        .as_ref()
+                        .map(|project| project.id().as_str().to_owned());
+                    map.update(cx, |screen, cx| screen.set_project(project, cx));
+                }
                 if let Some(decisions) = &shell.decisions {
                     decisions.update(cx, |screen, cx| {
                         screen.set_project(
@@ -299,6 +318,12 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + ContextStores> Shell<R>
                 shell.show_decision(event.0.clone(), cx)
             })
         });
+        let map = map.map(|services| cx.new(|cx| MapScreen::new(cx, services)));
+        let map_subscription = map.as_ref().map(|screen| {
+            cx.subscribe(screen, |shell, _, event: &OpenDecision, cx| {
+                shell.show_decision(event.0.clone(), cx)
+            })
+        });
         let settings = settings.map(|services| cx.new(|cx| SettingsScreen::new(cx, services)));
         let settings_subscription = settings.as_ref().map(|screen| {
             cx.subscribe(screen, |shell, _, _: &CloseSettings, cx| {
@@ -325,9 +350,12 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + ContextStores> Shell<R>
                 cx.focus_handle().tab_stop(true),
                 cx.focus_handle().tab_stop(true),
                 cx.focus_handle().tab_stop(true),
+                cx.focus_handle().tab_stop(true),
             ],
             context,
             _context_subscription: context_subscription,
+            map,
+            _map_subscription: map_subscription,
             hovered_tab: None,
             theme_focus: cx.focus_handle().tab_stop(true),
             project_focus: cx.focus_handle().tab_stop(true),
@@ -537,6 +565,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + ContextStores> Shell<R>
                 Destination::Review,
                 Destination::Decisions,
                 Destination::Context,
+                Destination::Map,
             ] {
                 items.push(PaletteItem {
                     group: "Ir para",
@@ -883,7 +912,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + ContextStores> Shell<R>
                     screen.update(cx, |screen, cx| screen.move_selection(delta, window, cx));
                 }
             }
-            Destination::Context => {}
+            Destination::Context | Destination::Map => {}
         }
     }
 
@@ -924,6 +953,11 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + ContextStores> Shell<R>
             }
             Destination::Context => {
                 if let Some(screen) = &self.context {
+                    screen.update(cx, |screen, cx| screen.refresh(cx));
+                }
+            }
+            Destination::Map => {
+                if let Some(screen) = &self.map {
                     screen.update(cx, |screen, cx| screen.refresh(cx));
                 }
             }
@@ -1262,7 +1296,12 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + ContextStores> Render f
             } else {
                 None
             };
-            let content = if selected.is_some() && self.destination == Destination::Context {
+            let content = if selected.is_some() && self.destination == Destination::Map {
+                self.map
+                    .as_ref()
+                    .map(|screen| screen.clone().into_any_element())
+                    .unwrap_or_else(|| div().into_any_element())
+            } else if selected.is_some() && self.destination == Destination::Context {
                 self.context
                     .as_ref()
                     .map(|screen| screen.clone().into_any_element())
@@ -1346,7 +1385,8 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + ContextStores> Render f
                                         .role(Role::TabList)
                                         .child(self.nav_tab(Destination::Review, cx))
                                         .child(self.nav_tab(Destination::Decisions, cx))
-                                        .child(self.nav_tab(Destination::Context, cx)),
+                                        .child(self.nav_tab(Destination::Context, cx))
+                                        .child(self.nav_tab(Destination::Map, cx)),
                                 )
                                 .children(panel.take().map(|panel| {
                                     deferred(
@@ -1435,6 +1475,9 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + ContextStores> Render f
             }))
             .on_action(cx.listener(|this, _: &GoContext, window, cx| {
                 this.switch_to(Destination::Context, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &GoMap, window, cx| {
+                this.switch_to(Destination::Map, window, cx)
             }))
             .on_action(cx.listener(|this, _: &GoDecisions, window, cx| {
                 this.switch_to(Destination::Decisions, window, cx)

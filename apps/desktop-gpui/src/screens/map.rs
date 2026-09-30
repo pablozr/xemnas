@@ -1,0 +1,2154 @@
+//! Mapa: the project's components and technologies and what ties decisions
+//! and rules to them (ADR-0005).
+//!
+//! An index on the left (suggestions, file lens, timeline, then every
+//! component and technology) and the reading column on the right. Never the
+//! whole graph at once: one entity and what is around it. Every read and
+//! write goes through `KnowledgeGraph` off the UI thread; a project
+//! generation discards answers that arrive after the user switched projects.
+
+use std::collections::BTreeMap;
+
+use application::claims::{ClaimStore, Claims};
+use application::decisions::{DecisionFilter, DecisionStatus, DecisionStore, Decisions};
+use application::graph::{
+    EntityDetail, EntityEdit, EntityRecord, FileLens, GraphStore, KnowledgeGraph, LinkRequest,
+    MapEntity, NewEntity, NodeSummary, ProjectMap, Suggestion, SuggestionReport, TimelineEvent,
+    TimelineKind,
+};
+use application::projects::ProjectRepository;
+use application::relations::RelationStore;
+use domain::entities::{EdgeKind, EntityKind, NodeKind};
+use gpui::prelude::*;
+use gpui::{
+    div, px, AnyElement, Context, Div, Entity, EventEmitter, FocusHandle, Render, Role,
+    SharedString, Stateful, Subscription, Toggled, Window,
+};
+
+use super::context::OpenDecision;
+use super::format::short_date;
+use crate::ui::controls::{action_button, icon_action, ButtonKind};
+use crate::ui::icons::{icon, IconName};
+use crate::ui::patterns::{
+    count_chip, empty_panel, error_banner, mark_selected, panel_title, reading_page, section_label,
+    skeleton_list, toast, TOAST_DURATION,
+};
+use crate::ui::search_field::{SearchChanged, SearchField};
+use crate::ui::theme::{text_style, Theme};
+use crate::ui::tokens::{SpacingScale, TypeScale};
+use crate::ui::tooltip::tooltip;
+
+/// Every port the Mapa screen reads through.
+pub trait MapStores:
+    GraphStore + RelationStore + ClaimStore + ProjectRepository + DecisionStore + Clone + Send + 'static
+{
+}
+
+impl<T> MapStores for T where
+    T: GraphStore
+        + RelationStore
+        + ClaimStore
+        + ProjectRepository
+        + DecisionStore
+        + Clone
+        + Send
+        + 'static
+{
+}
+
+/// The use cases the Mapa screen needs.
+pub struct MapServices<S> {
+    /// Entities, edges, suggestions and queries.
+    pub graph: KnowledgeGraph<S>,
+    /// Decisions in force, for linking.
+    pub decisions: Decisions<S>,
+    /// Rules of the project, for linking.
+    pub claims: Claims<S>,
+}
+
+/// Width of the index pane.
+const INDEX_WIDTH: f32 = 296.0;
+/// Decisions offered when linking.
+const PICK_LIMIT: usize = 100;
+
+/// What the reading column shows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum View {
+    Suggestions,
+    File,
+    Timeline,
+    Entity(String),
+    Form(Option<String>),
+}
+
+/// What a picker links to the open entity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PickKind {
+    Decision,
+    Claim,
+    Parent,
+}
+
+struct Picker {
+    kind: PickKind,
+    items: Vec<(String, String, String)>,
+}
+
+struct MapData {
+    map: ProjectMap,
+    suggestions: Vec<Suggestion>,
+    proposals: SuggestionReport,
+}
+
+enum Outcome {
+    Loaded(Result<Box<MapData>, String>),
+    Detail(Result<Box<(EntityDetail, Vec<TimelineEvent>)>, String>),
+    Timeline(Result<Vec<TimelineEvent>, String>),
+    Lens(Result<Box<FileLens>, String>),
+    Picker(Result<Picker, String>),
+    Changed {
+        result: Result<Option<String>, String>,
+        data: Option<Box<MapData>>,
+        notice: &'static str,
+    },
+}
+
+type Operation<S> = Box<dyn FnOnce(&MapServices<S>) -> Outcome + Send>;
+
+/// The Mapa destination of a selected project.
+pub struct MapScreen<S: MapStores> {
+    backend: Option<MapServices<S>>,
+    project: Option<String>,
+    generation: u64,
+    busy: bool,
+    data: Option<MapData>,
+    view: View,
+    detail: Option<(EntityDetail, Vec<TimelineEvent>)>,
+    timeline: Option<Vec<TimelineEvent>>,
+    lens: Option<FileLens>,
+    picker: Option<Picker>,
+    form_kind: EntityKind,
+    name: Entity<SearchField>,
+    patterns: Entity<SearchField>,
+    aliases: Entity<SearchField>,
+    description: Entity<SearchField>,
+    path: Entity<SearchField>,
+    filter: Entity<SearchField>,
+    confirm_retire: bool,
+    error: Option<String>,
+    notice: Option<String>,
+    focus: BTreeMap<String, FocusHandle>,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl<S: MapStores> EventEmitter<OpenDecision> for MapScreen<S> {}
+
+impl<S: MapStores> MapScreen<S> {
+    /// Mounts the screen; nothing is read until a project is set.
+    pub fn new(cx: &mut Context<Self>, services: MapServices<S>) -> Self {
+        let field = |cx: &mut Context<Self>, placeholder: &'static str| {
+            cx.new(|cx| {
+                let mut field = SearchField::new(cx);
+                field.stretch();
+                field.set_context(placeholder, cx);
+                field
+            })
+        };
+        let name = field(cx, "Ex.: storage-sqlite");
+        let patterns = field(cx, "Ex.: crates/storage-sqlite/**, migrations/*.sql");
+        let aliases = field(cx, "Ex.: armazenamento, banco");
+        let description = field(cx, "Uma frase sobre o que é");
+        let path = field(cx, "Ex.: crates/storage-sqlite/src/store.rs");
+        let filter = field(cx, "Filtrar");
+        let subscriptions = [&name, &patterns, &aliases, &description, &path, &filter]
+            .into_iter()
+            .map(|field| cx.subscribe(field, |_, _, _: &SearchChanged, cx| cx.notify()))
+            .collect();
+        Self {
+            backend: Some(services),
+            project: None,
+            generation: 0,
+            busy: false,
+            data: None,
+            view: View::Suggestions,
+            detail: None,
+            timeline: None,
+            lens: None,
+            picker: None,
+            form_kind: EntityKind::Component,
+            name,
+            patterns,
+            aliases,
+            description,
+            path,
+            filter,
+            confirm_retire: false,
+            error: None,
+            notice: None,
+            focus: BTreeMap::new(),
+            _subscriptions: subscriptions,
+        }
+    }
+
+    /// Clears the previous project's state and loads the new one.
+    pub fn set_project(&mut self, project: Option<String>, cx: &mut Context<Self>) {
+        if self.project == project {
+            return;
+        }
+        self.project = project;
+        self.generation += 1;
+        self.data = None;
+        self.detail = None;
+        self.timeline = None;
+        self.lens = None;
+        self.picker = None;
+        self.view = View::Suggestions;
+        self.error = None;
+        self.notice = None;
+        self.refresh(cx);
+    }
+
+    /// Reloads the map; refreshing also derives new suggestions.
+    pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        let Some(project) = self.project.clone() else {
+            return;
+        };
+        self.run(
+            cx,
+            Box::new(move |backend| Outcome::Loaded(load(backend, &project).map(Box::new))),
+        );
+    }
+
+    fn run(&mut self, cx: &mut Context<Self>, operation: Operation<S>) {
+        let Some(backend) = self.backend.take() else {
+            return;
+        };
+        self.busy = true;
+        self.error = None;
+        let generation = self.generation;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let (backend, outcome) = cx
+                .background_executor()
+                .spawn(async move {
+                    let outcome = operation(&backend);
+                    (backend, outcome)
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.backend = Some(backend);
+                this.busy = false;
+                if generation != this.generation {
+                    this.refresh(cx);
+                    return;
+                }
+                this.apply(outcome, cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn apply(&mut self, outcome: Outcome, cx: &mut Context<Self>) {
+        match outcome {
+            Outcome::Loaded(Ok(data)) => {
+                self.data = Some(*data);
+                // A view on an entity that no longer exists falls back.
+                if let View::Entity(id) = &self.view {
+                    let id = id.clone();
+                    if self.entity(&id).is_some() {
+                        self.open_entity(id, cx);
+                    } else {
+                        self.view = View::Suggestions;
+                    }
+                }
+            }
+            Outcome::Detail(Ok(detail)) => self.detail = Some(*detail),
+            Outcome::Timeline(Ok(events)) => self.timeline = Some(events),
+            Outcome::Lens(Ok(lens)) => self.lens = Some(*lens),
+            Outcome::Picker(Ok(picker)) => {
+                self.filter.update(cx, |field, cx| field.set_value("", cx));
+                self.picker = Some(picker);
+            }
+            Outcome::Changed {
+                result: Ok(open),
+                data,
+                notice,
+            } => {
+                if let Some(data) = data {
+                    self.data = Some(*data);
+                }
+                self.picker = None;
+                self.confirm_retire = false;
+                self.show_notice(notice.into(), cx);
+                match open {
+                    Some(id) => self.open_entity(id, cx),
+                    None => {
+                        if let View::Entity(id) = self.view.clone() {
+                            if self.entity(&id).is_some() {
+                                self.open_entity(id, cx);
+                            } else {
+                                self.view = View::Suggestions;
+                            }
+                        }
+                    }
+                }
+            }
+            Outcome::Loaded(Err(error))
+            | Outcome::Detail(Err(error))
+            | Outcome::Timeline(Err(error))
+            | Outcome::Lens(Err(error))
+            | Outcome::Picker(Err(error))
+            | Outcome::Changed {
+                result: Err(error), ..
+            } => self.error = Some(error),
+        }
+    }
+
+    fn show_notice(&mut self, message: String, cx: &mut Context<Self>) {
+        self.notice = Some(message.clone());
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(TOAST_DURATION).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.notice.as_deref() == Some(message.as_str()) {
+                    this.notice = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn entity(&self, id: &str) -> Option<&MapEntity> {
+        self.data
+            .as_ref()?
+            .map
+            .entities
+            .iter()
+            .find(|row| row.entity.entity_id == id)
+    }
+
+    fn open_entity(&mut self, id: String, cx: &mut Context<Self>) {
+        let Some(project) = self.project.clone() else {
+            return;
+        };
+        self.view = View::Entity(id.clone());
+        self.picker = None;
+        self.confirm_retire = false;
+        if self
+            .detail
+            .as_ref()
+            .is_none_or(|(detail, _)| detail.entity.entity_id != id)
+        {
+            self.detail = None;
+        }
+        self.run(
+            cx,
+            Box::new(move |backend| {
+                let detail = backend.graph.entity_detail(&id, None).map_err(|error| {
+                    failure(
+                        "entity_detail",
+                        error.code(),
+                        "Não foi possível abrir o item.",
+                    )
+                });
+                let events = backend
+                    .graph
+                    .timeline(&project, Some(&id), None, None)
+                    .map_err(|error| {
+                        failure("timeline", error.code(), "Não foi possível ler a história.")
+                    });
+                Outcome::Detail(detail.and_then(|detail| Ok(Box::new((detail, events?)))))
+            }),
+        );
+    }
+
+    fn open_view(&mut self, view: View, cx: &mut Context<Self>) {
+        self.picker = None;
+        self.confirm_retire = false;
+        match &view {
+            View::Entity(id) => return self.open_entity(id.clone(), cx),
+            View::Timeline => {
+                if let Some(project) = self.project.clone() {
+                    self.view = view;
+                    self.run(
+                        cx,
+                        Box::new(move |backend| {
+                            Outcome::Timeline(
+                                backend.graph.timeline(&project, None, None, None).map_err(
+                                    |error| {
+                                        failure(
+                                            "timeline",
+                                            error.code(),
+                                            "Não foi possível ler a linha do tempo.",
+                                        )
+                                    },
+                                ),
+                            )
+                        }),
+                    );
+                    return;
+                }
+            }
+            View::Form(editing) => {
+                let entity = editing
+                    .as_ref()
+                    .and_then(|id| self.entity(id))
+                    .map(|row| row.entity.clone());
+                self.fill_form(entity.as_ref(), cx);
+            }
+            View::Suggestions | View::File => {}
+        }
+        self.view = view;
+        cx.notify();
+    }
+
+    fn fill_form(&mut self, entity: Option<&EntityRecord>, cx: &mut Context<Self>) {
+        self.form_kind = entity.map_or(EntityKind::Component, |entity| entity.kind);
+        let values = [
+            entity.map(|entity| entity.name.clone()).unwrap_or_default(),
+            entity
+                .map(|entity| entity.patterns.join(", "))
+                .unwrap_or_default(),
+            entity
+                .map(|entity| entity.aliases.join(", "))
+                .unwrap_or_default(),
+            entity
+                .map(|entity| entity.description.clone())
+                .unwrap_or_default(),
+        ];
+        for (field, value) in [&self.name, &self.patterns, &self.aliases, &self.description]
+            .into_iter()
+            .zip(values)
+        {
+            field.update(cx, |field, cx| field.set_value(&value, cx));
+        }
+    }
+
+    fn value(&self, field: &Entity<SearchField>, cx: &Context<Self>) -> String {
+        field.read(cx).value().trim().to_owned()
+    }
+
+    fn list(&self, field: &Entity<SearchField>, cx: &Context<Self>) -> Vec<String> {
+        self.value(field, cx)
+            .split([',', ';'])
+            .map(|item| item.trim().to_owned())
+            .filter(|item| !item.is_empty())
+            .collect()
+    }
+
+    fn save_form(&mut self, editing: Option<String>, cx: &mut Context<Self>) {
+        let Some(project) = self.project.clone() else {
+            return;
+        };
+        let edit = EntityEdit {
+            name: self.value(&self.name, cx),
+            description: self.value(&self.description, cx),
+            patterns: if self.form_kind == EntityKind::Component {
+                self.list(&self.patterns, cx)
+            } else {
+                Vec::new()
+            },
+            aliases: self.list(&self.aliases, cx),
+        };
+        let kind = self.form_kind;
+        self.mutate(
+            cx,
+            if editing.is_some() {
+                "Item atualizado."
+            } else {
+                "Item criado. As sugestões foram atualizadas."
+            },
+            move |backend| match editing {
+                Some(id) => backend
+                    .graph
+                    .update_entity(&id, edit)
+                    .map(|entity| Some(entity.entity_id)),
+                None => backend
+                    .graph
+                    .create_entity(NewEntity {
+                        project_id: project,
+                        kind: Some(kind),
+                        name: edit.name,
+                        description: edit.description,
+                        patterns: edit.patterns,
+                        aliases: edit.aliases,
+                    })
+                    .map(|entity| Some(entity.entity_id)),
+            },
+        );
+    }
+
+    /// Runs a graph change, then reloads the map (which re-derives suggestions).
+    fn mutate(
+        &mut self,
+        cx: &mut Context<Self>,
+        notice: &'static str,
+        change: impl FnOnce(&MapServices<S>) -> Result<Option<String>, application::graph::GraphError>
+            + Send
+            + 'static,
+    ) {
+        let Some(project) = self.project.clone() else {
+            return;
+        };
+        self.run(
+            cx,
+            Box::new(move |backend| {
+                let result = change(backend).map_err(|error| change_failure(error.code()));
+                let data = result
+                    .is_ok()
+                    .then(|| load(backend, &project).ok().map(Box::new))
+                    .flatten();
+                Outcome::Changed {
+                    result,
+                    data,
+                    notice,
+                }
+            }),
+        );
+    }
+
+    fn open_picker(&mut self, kind: PickKind, cx: &mut Context<Self>) {
+        let (Some(project), View::Entity(entity_id)) = (self.project.clone(), self.view.clone())
+        else {
+            return;
+        };
+        let linked: Vec<String> = self
+            .detail
+            .as_ref()
+            .map(|(detail, _)| {
+                detail
+                    .decisions
+                    .iter()
+                    .chain(&detail.claims)
+                    .chain(&detail.parent)
+                    .map(|row| row.node.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let components: Vec<(String, String, String)> = self
+            .data
+            .as_ref()
+            .map(|data| {
+                data.map
+                    .entities
+                    .iter()
+                    .filter(|row| {
+                        row.entity.kind == EntityKind::Component
+                            && row.entity.entity_id != entity_id
+                    })
+                    .map(|row| {
+                        (
+                            row.entity.entity_id.clone(),
+                            row.entity.name.clone(),
+                            row.entity.patterns.join(", "),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.run(
+            cx,
+            Box::new(move |backend| {
+                let items = match kind {
+                    PickKind::Decision => backend
+                        .decisions
+                        .list(&DecisionFilter {
+                            project_id: Some(project.clone()),
+                            statuses: vec![DecisionStatus::Accepted],
+                            limit: PICK_LIMIT,
+                            cursor: None,
+                        })
+                        .map(|page| {
+                            page.decisions
+                                .into_iter()
+                                .map(|decision| {
+                                    (decision.decision_id, decision.question, decision.choice)
+                                })
+                                .collect()
+                        })
+                        .map_err(|error| {
+                            failure(
+                                "pick_decisions",
+                                error.code(),
+                                "Não foi possível listar as decisões.",
+                            )
+                        }),
+                    PickKind::Claim => backend
+                        .claims
+                        .list(&project, Some(&today()))
+                        .map(|claims| {
+                            claims
+                                .into_iter()
+                                .map(|claim| {
+                                    (
+                                        claim.claim_id,
+                                        claim.statement,
+                                        claim.kind.as_str().to_owned(),
+                                    )
+                                })
+                                .collect()
+                        })
+                        .map_err(|error| {
+                            failure(
+                                "pick_claims",
+                                error.code(),
+                                "Não foi possível listar as regras.",
+                            )
+                        }),
+                    PickKind::Parent => Ok(components),
+                };
+                Outcome::Picker(items.map(|items: Vec<(String, String, String)>| {
+                    Picker {
+                        kind,
+                        items: items
+                            .into_iter()
+                            .filter(|(id, _, _)| !linked.contains(id))
+                            .collect(),
+                    }
+                }))
+            }),
+        );
+    }
+
+    fn pick(&mut self, index: usize, cx: &mut Context<Self>) {
+        let (Some(picker), View::Entity(entity_id)) = (&self.picker, self.view.clone()) else {
+            return;
+        };
+        let Some((id, _, _)) = self.filtered(picker, cx).get(index).cloned() else {
+            return;
+        };
+        let request = match picker.kind {
+            PickKind::Decision => {
+                let kind = match self.entity(&entity_id).map(|row| row.entity.kind) {
+                    Some(EntityKind::Technology) => EdgeKind::Uses,
+                    _ => EdgeKind::Affects,
+                };
+                LinkRequest {
+                    kind,
+                    source_kind: NodeKind::Decision,
+                    source_id: id,
+                    entity_id,
+                }
+            }
+            PickKind::Claim => LinkRequest {
+                kind: EdgeKind::AppliesTo,
+                source_kind: NodeKind::Claim,
+                source_id: id,
+                entity_id,
+            },
+            PickKind::Parent => LinkRequest {
+                kind: EdgeKind::PartOf,
+                source_kind: NodeKind::Entity,
+                source_id: entity_id,
+                entity_id: id,
+            },
+        };
+        self.mutate(cx, "Vínculo registrado.", move |backend| {
+            backend.graph.link(request).map(|_| None)
+        });
+    }
+
+    fn filtered(&self, picker: &Picker, cx: &Context<Self>) -> Vec<(String, String, String)> {
+        let query = self.value(&self.filter, cx).to_lowercase();
+        picker
+            .items
+            .iter()
+            .filter(|(_, label, detail)| {
+                query.is_empty()
+                    || label.to_lowercase().contains(&query)
+                    || detail.to_lowercase().contains(&query)
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn open_lens(&mut self, cx: &mut Context<Self>) {
+        let (Some(project), path) = (self.project.clone(), self.value(&self.path, cx)) else {
+            return;
+        };
+        if path.is_empty() {
+            return;
+        }
+        self.run(
+            cx,
+            Box::new(move |backend| {
+                Outcome::Lens(
+                    backend
+                        .graph
+                        .file_lens(&project, &path, None)
+                        .map(Box::new)
+                        .map_err(|error| {
+                            failure(
+                                "file_lens",
+                                error.code(),
+                                "Não foi possível ler esse caminho.",
+                            )
+                        }),
+                )
+            }),
+        );
+    }
+
+    // ---- small builders -------------------------------------------------
+
+    fn focus_for(&mut self, id: &str, cx: &mut Context<Self>) -> FocusHandle {
+        self.focus
+            .entry(id.to_owned())
+            .or_insert_with(|| cx.focus_handle().tab_stop(true))
+            .clone()
+    }
+
+    fn button(
+        &mut self,
+        id: impl Into<String>,
+        kind: ButtonKind,
+        enabled: bool,
+        label: impl Into<SharedString>,
+        on_press: impl Fn(&mut Self, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let id = id.into();
+        let label = label.into();
+        let theme = Theme::current(cx);
+        let focus = self.focus_for(&id, cx);
+        let on_press = std::rc::Rc::new(on_press);
+        let on_key = on_press.clone();
+        action_button(&theme, SharedString::from(id), kind, enabled)
+            .aria_label(label.clone())
+            .track_focus(&focus)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if enabled {
+                    on_press(this, cx);
+                }
+            }))
+            .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                if enabled && matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    on_key(this, cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .child(label)
+    }
+
+    /// A selectable, keyboard-reachable row.
+    fn row(
+        &mut self,
+        id: String,
+        selected: bool,
+        label: &str,
+        on_press: impl Fn(&mut Self, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let theme = Theme::current(cx);
+        let colors = theme.colors;
+        let focus = self.focus_for(&id, cx);
+        let on_press = std::rc::Rc::new(on_press);
+        let on_key = on_press.clone();
+        mark_selected(
+            div()
+                .id(SharedString::from(id))
+                .relative()
+                .flex()
+                .items_center()
+                .gap(px(SpacingScale::S3))
+                .px(px(SpacingScale::S3))
+                .py(px(SpacingScale::S2))
+                .rounded(theme.radius.control())
+                .cursor_pointer()
+                .role(Role::Button)
+                .aria_label(label.to_owned())
+                .track_focus(&focus)
+                .focus_visible(crate::ui::controls::focus_ring(&theme))
+                .when(!selected, |row| {
+                    row.hover(move |style| style.bg(colors.glass_fill_medium()))
+                        .active(move |style| style.bg(colors.glass_fill_strong()))
+                })
+                .on_click(cx.listener(move |this, _, _, cx| on_press(this, cx)))
+                .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                        on_key(this, cx);
+                        cx.stop_propagation();
+                    }
+                })),
+            &theme,
+            selected,
+        )
+    }
+
+    // ---- index ----------------------------------------------------------
+
+    fn render_index(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Div {
+        let colors = theme.colors;
+        let Some(data) = self.data.as_ref() else {
+            return index_frame(theme).child(div().p(px(SpacingScale::S4)).child(skeleton_list(
+                theme,
+                "map-index-skeleton",
+                6,
+            )));
+        };
+        let pending = data.suggestions.len()
+            + data.proposals.components.len()
+            + data.proposals.technologies.len();
+        let entities: Vec<MapEntity> = data.map.entities.clone();
+        let as_of = data.map.as_of.clone();
+        let count = entities.len();
+        let new_focus = self.focus_for("map-new", cx);
+        let new_button = icon_action(theme, "map-new", "Novo componente ou tecnologia")
+            .track_focus(&new_focus)
+            .tooltip(tooltip("Novo componente ou tecnologia", None))
+            .on_click(cx.listener(|this, _, _, cx| this.open_view(View::Form(None), cx)))
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    this.open_view(View::Form(None), cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .child(icon(IconName::Plus, 14.0, colors.text_secondary()));
+
+        let fixed = [
+            (
+                View::Suggestions,
+                IconName::Rotate,
+                "Sugestões",
+                (pending > 0).then(|| pending.to_string()),
+            ),
+            (View::File, IconName::File, "Lente de arquivo", None),
+            (View::Timeline, IconName::Clock, "Linha do tempo", None),
+        ];
+        let mut rows: Vec<AnyElement> = Vec::new();
+        for (view, glyph, label, badge) in fixed {
+            let selected = self.view == view;
+            let id = format!("map-view-{label}");
+            let target = view.clone();
+            let row = self
+                .row(
+                    id,
+                    selected,
+                    label,
+                    move |this, cx| this.open_view(target.clone(), cx),
+                    cx,
+                )
+                .child(icon(
+                    glyph,
+                    16.0,
+                    if selected {
+                        colors.text_primary()
+                    } else {
+                        colors.text_muted()
+                    },
+                ))
+                .child(
+                    text_style(div(), TypeScale::ROW_TITLE)
+                        .flex_1()
+                        .text_color(if selected {
+                            colors.text_primary()
+                        } else {
+                            colors.text_secondary()
+                        })
+                        .child(label),
+                )
+                .children(badge.map(|badge| count_chip(theme, badge)));
+            rows.push(row.into_any_element());
+        }
+
+        for kind in EntityKind::ALL {
+            let group: Vec<&MapEntity> = entities
+                .iter()
+                .filter(|row| row.entity.kind == kind)
+                .collect();
+            rows.push(
+                div()
+                    .px(px(SpacingScale::S3))
+                    .pt(px(SpacingScale::S4))
+                    .pb(px(SpacingScale::S1))
+                    .child(section_label(theme, kind_plural(kind)))
+                    .into_any_element(),
+            );
+            if group.is_empty() {
+                rows.push(
+                    text_style(div(), TypeScale::BODY_SMALL)
+                        .px(px(SpacingScale::S3))
+                        .text_color(colors.text_muted())
+                        .child(match kind {
+                            EntityKind::Component => "Nenhum ainda. Crie um ou veja as sugestões.",
+                            EntityKind::Technology => "Nenhuma ainda.",
+                        })
+                        .into_any_element(),
+                );
+            }
+            for row in group {
+                let id = row.entity.entity_id.clone();
+                let selected = self.view == View::Entity(id.clone());
+                let meta = weight(row);
+                let target = id.clone();
+                let element = self
+                    .row(
+                        format!("map-entity-{id}"),
+                        selected,
+                        &row.entity.name,
+                        move |this, cx| this.open_entity(target.clone(), cx),
+                        cx,
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .flex()
+                            .flex_col()
+                            .child(
+                                text_style(div(), TypeScale::ROW_TITLE)
+                                    .truncate()
+                                    .text_color(if selected {
+                                        colors.text_primary()
+                                    } else {
+                                        colors.text_secondary()
+                                    })
+                                    .child(row.entity.name.clone()),
+                            )
+                            .child(
+                                text_style(div(), TypeScale::META)
+                                    .truncate()
+                                    .text_color(colors.text_muted())
+                                    .child(meta),
+                            ),
+                    )
+                    .when(row.conflicts > 0, |element| {
+                        element.child(
+                            div()
+                                .size(px(6.0))
+                                .flex_none()
+                                .rounded_full()
+                                .bg(colors.status_warning()),
+                        )
+                    });
+                rows.push(element.into_any_element());
+            }
+        }
+
+        index_frame(theme)
+            .child(
+                div()
+                    .px(px(SpacingScale::S4))
+                    .pt(px(SpacingScale::S3))
+                    .pb(px(SpacingScale::S2))
+                    .flex()
+                    .items_center()
+                    .gap(px(SpacingScale::S2))
+                    .child(panel_title(theme, "Mapa"))
+                    .child(count_chip(theme, count.to_string()))
+                    .child(div().flex_1())
+                    .child(new_button),
+            )
+            .child(
+                div()
+                    .id("map-index")
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .overflow_y_scroll()
+                    .px(px(SpacingScale::S2))
+                    .pb(px(SpacingScale::S3))
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .children(rows),
+            )
+            .child(
+                text_style(div(), TypeScale::META)
+                    .flex_none()
+                    .px(px(SpacingScale::S4))
+                    .py(px(SpacingScale::S2))
+                    .border_t_1()
+                    .border_color(colors.hairline_divider())
+                    .text_color(colors.text_muted())
+                    .child(if self.busy {
+                        "Carregando…".to_owned()
+                    } else {
+                        format!("Situação em {}", short_date(&as_of))
+                    }),
+            )
+    }
+
+    // ---- reading column -------------------------------------------------
+
+    fn render_suggestions(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let colors = theme.colors;
+        let Some(data) = self.data.as_ref() else {
+            return div().into_any_element();
+        };
+        let suggestions = data.suggestions.clone();
+        let components = data.proposals.components.clone();
+        let technologies = data.proposals.technologies.clone();
+        if suggestions.is_empty() && components.is_empty() && technologies.is_empty() {
+            return empty_panel(
+                theme,
+                IconName::Rotate,
+                "Sugestões",
+                "Nada para revisar",
+                "Sugestões aparecem quando decisões confirmadas tocam arquivos ou adicionam \
+                 dependências. Crie componentes com padrões de caminho para ligá-los às decisões.",
+            )
+            .min_h(px(420.0))
+            .into_any_element();
+        }
+        let mut column = div()
+            .flex()
+            .flex_col()
+            .gap(px(SpacingScale::S8))
+            .child(page_header(
+                theme,
+                "Sugestões",
+                "O que o trabalho capturado indica. Nada entra no mapa sem a sua confirmação.",
+            ));
+        if !suggestions.is_empty() {
+            let mut list = div().flex().flex_col();
+            for (index, suggestion) in suggestions.iter().enumerate() {
+                let confirm_id = suggestion.edge_id.clone();
+                let reject_id = suggestion.edge_id.clone();
+                let confirm = self.button(
+                    format!("map-confirm-{index}"),
+                    ButtonKind::Secondary,
+                    !self.busy,
+                    "Confirmar",
+                    move |this, cx| {
+                        let id = confirm_id.clone();
+                        this.mutate(cx, "Vínculo confirmado.", move |backend| {
+                            backend.graph.confirm(&id).map(|_| None)
+                        });
+                    },
+                    cx,
+                );
+                let reject = self.button(
+                    format!("map-reject-{index}"),
+                    ButtonKind::Ghost,
+                    !self.busy,
+                    "Rejeitar",
+                    move |this, cx| {
+                        let id = reject_id.clone();
+                        this.mutate(cx, "Sugestão rejeitada; ela não volta.", move |backend| {
+                            backend.graph.invalidate(&id).map(|_| None)
+                        });
+                    },
+                    cx,
+                );
+                list = list.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(SpacingScale::S3))
+                        .py(px(SpacingScale::S3))
+                        .when(index > 0, |row| {
+                            row.border_t_1().border_color(colors.hairline_divider())
+                        })
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.0))
+                                .child(
+                                    text_style(div(), TypeScale::ROW_TITLE)
+                                        .child(suggestion.source.label.clone()),
+                                )
+                                .child(
+                                    text_style(div(), TypeScale::BODY_SMALL)
+                                        .text_color(colors.text_muted())
+                                        .child(format!(
+                                            "{} {} · por {}",
+                                            edge_verb(suggestion.kind),
+                                            suggestion.entity.label,
+                                            suggestion.reason
+                                        )),
+                                ),
+                        )
+                        .child(reject)
+                        .child(confirm),
+                );
+            }
+            column = column.child(section(theme, "Vínculos sugeridos", list));
+        }
+        if !components.is_empty() || !technologies.is_empty() {
+            let mut list = div().flex().flex_col();
+            let proposals = components
+                .iter()
+                .map(|proposal| {
+                    (
+                        EntityKind::Component,
+                        proposal.name.clone(),
+                        Some(proposal.pattern.clone()),
+                        proposal.decisions,
+                    )
+                })
+                .chain(technologies.iter().map(|proposal| {
+                    (
+                        EntityKind::Technology,
+                        proposal.name.clone(),
+                        None,
+                        proposal.decisions,
+                    )
+                }));
+            for (index, (kind, name, pattern, decisions)) in proposals.enumerate() {
+                let project = self.project.clone().unwrap_or_default();
+                let (create_name, create_pattern) = (name.clone(), pattern.clone());
+                let create = self.button(
+                    format!("map-create-{index}"),
+                    ButtonKind::Secondary,
+                    !self.busy,
+                    "Criar",
+                    move |this, cx| {
+                        let input = NewEntity {
+                            project_id: project.clone(),
+                            kind: Some(kind),
+                            name: create_name.clone(),
+                            patterns: create_pattern.clone().into_iter().collect(),
+                            ..NewEntity::default()
+                        };
+                        this.mutate(
+                            cx,
+                            "Item criado. As sugestões foram atualizadas.",
+                            move |backend| backend.graph.create_entity(input).map(|_| None),
+                        );
+                    },
+                    cx,
+                );
+                list = list.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(SpacingScale::S3))
+                        .py(px(SpacingScale::S3))
+                        .when(index > 0, |row| {
+                            row.border_t_1().border_color(colors.hairline_divider())
+                        })
+                        .child(icon(kind_icon(kind), 16.0, colors.text_muted()))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.0))
+                                .child(text_style(div(), TypeScale::ROW_TITLE).child(name))
+                                .child(
+                                    text_style(div(), TypeScale::BODY_SMALL)
+                                        .text_color(colors.text_muted())
+                                        .child(match pattern {
+                                            Some(pattern) => {
+                                                format!("{pattern} · {} decisão(ões)", decisions)
+                                            }
+                                            None => format!(
+                                                "dependência adicionada em {} decisão(ões)",
+                                                decisions
+                                            ),
+                                        }),
+                                ),
+                        )
+                        .child(create),
+                );
+            }
+            column = column.child(section(theme, "Itens sugeridos", list));
+        }
+        reading_page("map-suggestions", column).into_any_element()
+    }
+
+    fn render_entity(&mut self, id: &str, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let colors = theme.colors;
+        let Some((detail, events)) = self
+            .detail
+            .clone()
+            .filter(|(detail, _)| detail.entity.entity_id == id)
+        else {
+            return reading_page(
+                "map-entity-loading",
+                skeleton_list(theme, "map-entity-skeleton", 5),
+            )
+            .into_any_element();
+        };
+        let entity = detail.entity.clone();
+        let component = entity.kind == EntityKind::Component;
+        let busy = self.busy;
+
+        let mut actions: Vec<AnyElement> = vec![
+            self.button(
+                "map-link-decision",
+                ButtonKind::Secondary,
+                !busy,
+                "Vincular decisão",
+                |this, cx| this.open_picker(PickKind::Decision, cx),
+                cx,
+            )
+            .into_any_element(),
+            self.button(
+                "map-link-claim",
+                ButtonKind::Secondary,
+                !busy,
+                "Vincular regra",
+                |this, cx| this.open_picker(PickKind::Claim, cx),
+                cx,
+            )
+            .into_any_element(),
+        ];
+        if component {
+            actions.push(
+                self.button(
+                    "map-link-parent",
+                    ButtonKind::Ghost,
+                    !busy,
+                    "Faz parte de…",
+                    |this, cx| this.open_picker(PickKind::Parent, cx),
+                    cx,
+                )
+                .into_any_element(),
+            );
+        }
+        let edit_id = entity.entity_id.clone();
+        actions.push(
+            self.button(
+                "map-edit",
+                ButtonKind::Ghost,
+                !busy,
+                "Editar",
+                move |this, cx| this.open_view(View::Form(Some(edit_id.clone())), cx),
+                cx,
+            )
+            .into_any_element(),
+        );
+        actions.push(
+            self.button(
+                "map-retire",
+                ButtonKind::Ghost,
+                !busy,
+                "Aposentar",
+                |this, cx| {
+                    this.confirm_retire = true;
+                    cx.notify();
+                },
+                cx,
+            )
+            .into_any_element(),
+        );
+
+        let confirmation = self.confirm_retire.then(|| {
+            let retire_id = entity.entity_id.clone();
+            let cancel = self.button("map-retire-cancel", ButtonKind::Ghost, true, "Cancelar", |this, cx| {
+                this.confirm_retire = false;
+                cx.notify();
+            }, cx);
+            let confirm = self.button("map-retire-confirm", ButtonKind::Secondary, !busy, "Aposentar item", move |this, cx| {
+                let id = retire_id.clone();
+                this.view = View::Suggestions;
+                this.mutate(cx, "Item aposentado; a história continua.", move |backend| backend.graph.retire_entity(&id).map(|_| None));
+            }, cx);
+            div()
+                .id("map-retire-confirmation")
+                .flex()
+                .flex_col()
+                .gap(px(SpacingScale::S3))
+                .p(px(SpacingScale::S3))
+                .rounded(theme.radius.control())
+                .border_1()
+                .border_color(colors.hairline_divider())
+                .role(Role::Alert)
+                .child(
+                    text_style(div(), TypeScale::BODY_SMALL)
+                        .text_color(colors.text_secondary())
+                        .child("Aposentar tira o item do mapa e desfaz os vínculos dele. Nada é apagado: a linha do tempo continua mostrando o que valeu."),
+                )
+                .child(div().flex().justify_end().gap(px(SpacingScale::S2)).child(cancel).child(confirm))
+        });
+
+        let picker = self.render_picker(theme, cx);
+
+        let mut column = div().flex().flex_col().gap(px(SpacingScale::S8)).child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(SpacingScale::S2))
+                .child(section_label(theme, kind_label(entity.kind)))
+                .child(text_style(div(), TypeScale::HEADING_1).child(entity.name.clone()))
+                .when(!entity.description.is_empty(), |header| {
+                    header.child(
+                        text_style(div(), TypeScale::BODY)
+                            .text_color(colors.text_secondary())
+                            .child(entity.description.clone()),
+                    )
+                })
+                .when(!entity.patterns.is_empty(), |header| {
+                    header.child(
+                        text_style(div(), TypeScale::BODY_SMALL)
+                            .font_family(Theme::font_mono())
+                            .text_color(colors.text_muted())
+                            .child(entity.patterns.join("  ·  ")),
+                    )
+                })
+                .when(!entity.aliases.is_empty(), |header| {
+                    header.child(
+                        text_style(div(), TypeScale::META)
+                            .text_color(colors.text_muted())
+                            .child(format!("Também chamado de {}", entity.aliases.join(", "))),
+                    )
+                })
+                .child(
+                    div()
+                        .pt(px(SpacingScale::S2))
+                        .flex()
+                        .flex_wrap()
+                        .gap(px(SpacingScale::S2))
+                        .children(actions),
+                )
+                .children(confirmation)
+                .children(picker),
+        );
+
+        let decisions = self.node_list(
+            theme,
+            "map-decisions",
+            &detail.decisions,
+            true,
+            "Nenhuma decisão ligada. Vincule uma ou confirme sugestões.",
+            cx,
+        );
+        column = column.child(section(theme, "Decisões em vigor", decisions));
+        if !detail.conflicts.is_empty() {
+            let mut list = div().flex().flex_col();
+            for (index, (left, right)) in detail.conflicts.iter().enumerate() {
+                list = list.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(SpacingScale::S3))
+                        .py(px(SpacingScale::S2))
+                        .when(index > 0, |row| {
+                            row.border_t_1().border_color(colors.hairline_divider())
+                        })
+                        .child(icon(IconName::Info, 16.0, colors.status_warning()))
+                        .child(
+                            text_style(div(), TypeScale::BODY_SMALL)
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .child(format!("{}  ×  {}", left.label, right.label)),
+                        ),
+                );
+            }
+            column = column.child(section(theme, "Conflitos neste item", list));
+        }
+        let claims = self.node_list(
+            theme,
+            "map-claims",
+            &detail.claims,
+            false,
+            "Nenhuma regra ligada.",
+            cx,
+        );
+        column = column.child(section(theme, "Regras que se aplicam", claims));
+        if component {
+            let mut structure = div().flex().flex_col();
+            let parent: Vec<NodeSummary> = detail.parent.clone().into_iter().collect();
+            if !parent.is_empty() {
+                structure = structure.child(self.entity_list(
+                    theme,
+                    "map-parent",
+                    "Faz parte de",
+                    &parent,
+                    cx,
+                ));
+            }
+            if !detail.parts.is_empty() {
+                structure = structure.child(self.entity_list(
+                    theme,
+                    "map-parts",
+                    "Partes",
+                    &detail.parts,
+                    cx,
+                ));
+            }
+            if !parent.is_empty() || !detail.parts.is_empty() {
+                column = column.child(section(theme, "Estrutura", structure));
+            }
+        }
+        if !detail.impact.is_empty() {
+            let impact = self.node_list(theme, "map-impact", &detail.impact, true, "", cx);
+            column = column.child(section(
+                theme,
+                "Impacto: decisões que dependem deste item",
+                impact,
+            ));
+        }
+        column = column.child(section(
+            theme,
+            "Linha do tempo",
+            timeline_list(theme, &events),
+        ));
+        reading_page("map-entity", column).into_any_element()
+    }
+
+    fn render_picker(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Option<Div> {
+        let picker = self.picker.as_ref()?;
+        let colors = theme.colors;
+        let items = self.filtered(picker, cx);
+        let kind = picker.kind;
+        let title = match kind {
+            PickKind::Decision => "Escolha a decisão",
+            PickKind::Claim => "Escolha a regra",
+            PickKind::Parent => "Escolha o componente que contém este",
+        };
+        let close = self.button(
+            "map-picker-close",
+            ButtonKind::Ghost,
+            true,
+            "Fechar",
+            |this, cx| {
+                this.picker = None;
+                cx.notify();
+            },
+            cx,
+        );
+        let mut list = div()
+            .id("map-picker-list")
+            .max_h(px(280.0))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .gap(px(2.0));
+        if items.is_empty() {
+            list = list.child(
+                text_style(div(), TypeScale::BODY_SMALL)
+                    .p(px(SpacingScale::S2))
+                    .text_color(colors.text_muted())
+                    .child("Nada para vincular aqui."),
+            );
+        }
+        for (index, (_, label, detail)) in items.iter().enumerate() {
+            let row = self
+                .row(
+                    format!("map-pick-{index}"),
+                    false,
+                    label,
+                    move |this, cx| this.pick(index, cx),
+                    cx,
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .flex()
+                        .flex_col()
+                        .child(
+                            text_style(div(), TypeScale::ROW_TITLE)
+                                .truncate()
+                                .child(label.clone()),
+                        )
+                        .child(
+                            text_style(div(), TypeScale::META)
+                                .truncate()
+                                .text_color(colors.text_muted())
+                                .child(detail.clone()),
+                        ),
+                );
+            list = list.child(row);
+        }
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(SpacingScale::S2))
+                .p(px(SpacingScale::S3))
+                .rounded(px(10.0))
+                .border_1()
+                .border_color(colors.glass_border_card())
+                .bg(colors.glass_fill_card())
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(SpacingScale::S2))
+                        .child(
+                            text_style(div(), TypeScale::ROW_TITLE)
+                                .flex_1()
+                                .child(title),
+                        )
+                        .child(close),
+                )
+                .child(self.filter.clone())
+                .child(list),
+        )
+    }
+
+    fn node_list(
+        &mut self,
+        theme: &Theme,
+        prefix: &str,
+        rows: &[NodeSummary],
+        decisions: bool,
+        empty: &'static str,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let colors = theme.colors;
+        let mut list = div().flex().flex_col().gap(px(2.0));
+        if rows.is_empty() && !empty.is_empty() {
+            return list.child(
+                text_style(div(), TypeScale::BODY_SMALL)
+                    .text_color(colors.text_muted())
+                    .child(empty),
+            );
+        }
+        for (index, row) in rows.iter().enumerate() {
+            let id = row.node.id.clone();
+            let body = div()
+                .flex_1()
+                .min_w(px(0.0))
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .child(text_style(div(), TypeScale::ROW_TITLE).child(row.label.clone()))
+                .child(
+                    text_style(div(), TypeScale::BODY_SMALL)
+                        .text_color(colors.text_muted())
+                        .child(if decisions {
+                            format!("{} · {}", row.detail, short_date(&row.at))
+                        } else {
+                            format!(
+                                "{} · desde {}",
+                                claim_label(&row.detail),
+                                short_date(&row.at)
+                            )
+                        }),
+                );
+            if decisions {
+                let element = self
+                    .row(
+                        format!("{prefix}-{index}"),
+                        false,
+                        &row.label,
+                        move |_, cx| cx.emit(OpenDecision(id.clone())),
+                        cx,
+                    )
+                    .tooltip(tooltip("Abrir em Decisões", None))
+                    .child(body)
+                    .child(icon(IconName::ChevronRight, 14.0, colors.text_muted()));
+                list = list.child(element);
+            } else {
+                list = list.child(
+                    div()
+                        .px(px(SpacingScale::S3))
+                        .py(px(SpacingScale::S2))
+                        .flex()
+                        .child(body),
+                );
+            }
+        }
+        list
+    }
+
+    fn entity_list(
+        &mut self,
+        theme: &Theme,
+        prefix: &str,
+        title: &str,
+        rows: &[NodeSummary],
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let colors = theme.colors;
+        let mut list = div().flex().flex_col().gap(px(2.0)).child(
+            text_style(div(), TypeScale::META)
+                .px(px(SpacingScale::S3))
+                .text_color(colors.text_muted())
+                .child(title.to_owned()),
+        );
+        for (index, row) in rows.iter().enumerate() {
+            let id = row.node.id.clone();
+            let element = self
+                .row(
+                    format!("{prefix}-{index}"),
+                    false,
+                    &row.label,
+                    move |this, cx| this.open_entity(id.clone(), cx),
+                    cx,
+                )
+                .child(icon(IconName::Layers, 16.0, colors.text_muted()))
+                .child(
+                    text_style(div(), TypeScale::ROW_TITLE)
+                        .flex_1()
+                        .child(row.label.clone()),
+                );
+            list = list.child(element);
+        }
+        list
+    }
+
+    fn render_file(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let colors = theme.colors;
+        let has_path = !self.value(&self.path, cx).is_empty();
+        let show = self.button(
+            "map-lens-run",
+            ButtonKind::Primary,
+            has_path && !self.busy,
+            "Ver o que vale",
+            |this, cx| this.open_lens(cx),
+            cx,
+        );
+        let mut column = div()
+            .flex()
+            .flex_col()
+            .gap(px(SpacingScale::S8))
+            .child(page_header(
+                theme,
+                "Lente de arquivo",
+                "O que vale para um arquivo: os componentes que o contêm, as decisões em vigor e as regras ligadas a eles.",
+            ))
+            .child(
+                div()
+                    .flex()
+                    .items_end()
+                    .gap(px(SpacingScale::S3))
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .gap(px(SpacingScale::S2))
+                            .child(section_label(theme, "Caminho relativo ao projeto"))
+                            .child(self.path.clone()),
+                    )
+                    .child(show),
+            );
+        if let Some(lens) = self.lens.clone() {
+            if lens.components.is_empty() {
+                column = column.child(
+                    text_style(div(), TypeScale::BODY)
+                        .text_color(colors.text_secondary())
+                        .child(format!("Nenhum componente cobre {}. Crie um com um padrão de caminho que o inclua.", lens.path)),
+                );
+            } else {
+                column = column.child(section(
+                    theme,
+                    "Componentes",
+                    div().child(
+                        text_style(div(), TypeScale::BODY).child(
+                            lens.components
+                                .iter()
+                                .map(|row| row.label.clone())
+                                .collect::<Vec<_>>()
+                                .join(" › "),
+                        ),
+                    ),
+                ));
+                let decisions = self.node_list(
+                    theme,
+                    "map-lens-decisions",
+                    &lens.decisions,
+                    true,
+                    "Nenhuma decisão em vigor ligada a esses componentes.",
+                    cx,
+                );
+                column = column.child(section(theme, "Decisões em vigor", decisions));
+                let claims = self.node_list(
+                    theme,
+                    "map-lens-claims",
+                    &lens.claims,
+                    false,
+                    "Nenhuma regra ligada.",
+                    cx,
+                );
+                column = column.child(section(theme, "Regras", claims));
+            }
+        }
+        reading_page("map-file", column).into_any_element()
+    }
+
+    fn render_timeline(&mut self, theme: &Theme) -> AnyElement {
+        let Some(events) = self.timeline.clone() else {
+            return reading_page(
+                "map-timeline-loading",
+                skeleton_list(theme, "map-timeline-skeleton", 6),
+            )
+            .into_any_element();
+        };
+        let column = div()
+            .flex()
+            .flex_col()
+            .gap(px(SpacingScale::S8))
+            .child(page_header(
+                theme,
+                "Linha do tempo",
+                "O que passou a valer e o que deixou de valer no projeto, do mais antigo ao mais recente.",
+            ))
+            .child(timeline_list(theme, &events));
+        reading_page("map-timeline", column).into_any_element()
+    }
+
+    fn render_form(
+        &mut self,
+        editing: Option<String>,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let colors = theme.colors;
+        let named = !self.value(&self.name, cx).is_empty();
+        let save_editing = editing.clone();
+        let save = self.button(
+            "map-form-save",
+            ButtonKind::Primary,
+            named && !self.busy,
+            if editing.is_some() { "Salvar" } else { "Criar" },
+            move |this, cx| this.save_form(save_editing.clone(), cx),
+            cx,
+        );
+        let back = editing.clone();
+        let cancel = self.button(
+            "map-form-cancel",
+            ButtonKind::Ghost,
+            true,
+            "Cancelar",
+            move |this, cx| {
+                let view = back.clone().map_or(View::Suggestions, View::Entity);
+                this.open_view(view, cx)
+            },
+            cx,
+        );
+        let kinds: Vec<AnyElement> = EntityKind::ALL
+            .into_iter()
+            .map(|kind| {
+                let selected = self.form_kind == kind;
+                let locked = editing.is_some();
+                let id = format!("map-form-kind-{}", kind.as_str());
+                let focus = self.focus_for(&id, cx);
+                mark_selected(
+                    div()
+                        .id(SharedString::from(id))
+                        .relative()
+                        .flex_1()
+                        .flex()
+                        .items_center()
+                        .gap(px(SpacingScale::S3))
+                        .px(px(SpacingScale::S3))
+                        .py(px(SpacingScale::S2))
+                        .rounded(theme.radius.control())
+                        .border_1()
+                        .border_color(colors.hairline_divider())
+                        .when(!locked, |option| option.cursor_pointer())
+                        .role(Role::RadioButton)
+                        .aria_label(kind_label(kind))
+                        .aria_toggled(if selected {
+                            Toggled::True
+                        } else {
+                            Toggled::False
+                        })
+                        .track_focus(&focus)
+                        .focus_visible(crate::ui::controls::focus_ring(theme))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if !locked {
+                                this.form_kind = kind;
+                                cx.notify();
+                            }
+                        }))
+                        .child(icon(
+                            kind_icon(kind),
+                            16.0,
+                            if selected {
+                                colors.text_primary()
+                            } else {
+                                colors.text_muted()
+                            },
+                        ))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    text_style(div(), TypeScale::ROW_TITLE).child(kind_label(kind)),
+                                )
+                                .child(
+                                    text_style(div(), TypeScale::META)
+                                        .text_color(colors.text_muted())
+                                        .child(match kind {
+                                            EntityKind::Component => {
+                                                "Uma parte do projeto, achada por caminhos"
+                                            }
+                                            EntityKind::Technology => {
+                                                "Linguagem, biblioteca ou serviço usado"
+                                            }
+                                        }),
+                                ),
+                        ),
+                    theme,
+                    selected,
+                )
+                .into_any_element()
+            })
+            .collect();
+        let field = |label: &str, hint: &str, control: Entity<SearchField>| {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(SpacingScale::S2))
+                .child(section_label(theme, label))
+                .child(control)
+                .child(
+                    text_style(div(), TypeScale::META)
+                        .text_color(colors.text_muted())
+                        .child(hint.to_owned()),
+                )
+        };
+        let mut column = div()
+            .flex()
+            .flex_col()
+            .gap(px(SpacingScale::S6))
+            .child(page_header(
+                theme,
+                if editing.is_some() { "Editar item" } else { "Novo item do mapa" },
+                "Componentes ligam decisões a caminhos do projeto; tecnologias, às dependências que elas adotam.",
+            ))
+            .child(div().id("map-form-kind").flex().gap(px(SpacingScale::S3)).role(Role::RadioGroup).aria_label("Tipo").children(kinds))
+            .child(field("Nome", "Como o time chama esta parte.", self.name.clone()));
+        if self.form_kind == EntityKind::Component {
+            column = column.child(field(
+                "Padrões de caminho",
+                "Separados por vírgula. * vale dentro de uma pasta, ** atravessa pastas; sem curinga, vale a pasta inteira.",
+                self.patterns.clone(),
+            ));
+        }
+        column = column
+            .child(field(
+                "Apelidos",
+                "Outros nomes, separados por vírgula. Resolvem dependências com nome diferente.",
+                self.aliases.clone(),
+            ))
+            .child(field("Descrição", "Opcional.", self.description.clone()))
+            .child(
+                div()
+                    .flex()
+                    .justify_end()
+                    .gap(px(SpacingScale::S2))
+                    .child(cancel)
+                    .child(save),
+            );
+        reading_page("map-form", column).into_any_element()
+    }
+}
+
+impl<S: MapStores> Render for MapScreen<S> {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::current(cx);
+        let index = self.render_index(&theme, cx);
+        let body: AnyElement = if self.data.is_none() {
+            if self.error.is_some() {
+                empty_panel(
+                    &theme,
+                    IconName::Layers,
+                    "Mapa",
+                    "Não foi possível carregar o mapa",
+                    "Tente de novo; seus dados não foram alterados.",
+                )
+                .into_any_element()
+            } else {
+                div()
+                    .p(px(SpacingScale::S8))
+                    .child(skeleton_list(&theme, "map-skeleton", 5))
+                    .into_any_element()
+            }
+        } else {
+            match self.view.clone() {
+                View::Suggestions => self.render_suggestions(&theme, cx),
+                View::File => self.render_file(&theme, cx),
+                View::Timeline => self.render_timeline(&theme),
+                View::Entity(id) => self.render_entity(&id, &theme, cx),
+                View::Form(editing) => self.render_form(editing, &theme, cx),
+            }
+        };
+        let retry = self.error.is_some().then(|| {
+            action_button(&theme, "map-retry", ButtonKind::Ghost, !self.busy)
+                .aria_label("Tentar de novo")
+                .on_click(cx.listener(|this, _, _, cx| this.refresh(cx)))
+                .child("Tentar de novo")
+        });
+        div()
+            .size_full()
+            .relative()
+            .flex()
+            .child(index)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .children(self.error.clone().map(|error| {
+                        error_banner(&theme, &error)
+                            .id("map-error")
+                            .role(Role::Alert)
+                            .children(retry)
+                    }))
+                    .child(div().flex_1().min_h(px(0.0)).flex().flex_col().child(body)),
+            )
+            .children(
+                self.notice
+                    .clone()
+                    .map(|notice| toast(&theme, &notice, 24.0)),
+            )
+    }
+}
+
+// ---- helpers --------------------------------------------------------------
+
+fn load<S: MapStores>(backend: &MapServices<S>, project: &str) -> Result<MapData, String> {
+    let proposals = backend
+        .graph
+        .refresh_suggestions(project)
+        .map_err(|error| {
+            failure(
+                "refresh_suggestions",
+                error.code(),
+                "Não foi possível atualizar as sugestões.",
+            )
+        })?;
+    let map = backend
+        .graph
+        .project_map(project, None)
+        .map_err(|error| failure("project_map", error.code(), "Não foi possível ler o mapa."))?;
+    let suggestions = backend.graph.suggestions(project).map_err(|error| {
+        failure(
+            "suggestions",
+            error.code(),
+            "Não foi possível ler as sugestões.",
+        )
+    })?;
+    Ok(MapData {
+        map,
+        suggestions,
+        proposals,
+    })
+}
+
+/// Logs the technical code and returns product copy.
+fn failure(operation: &'static str, code: &str, message: &str) -> String {
+    tracing::error!(code, operation, "map operation failed");
+    message.to_owned()
+}
+
+/// Product copy for a failed change.
+fn change_failure(code: &str) -> String {
+    match code {
+        "duplicate_name" => "Já existe um item desse tipo com esse nome ou apelido.".into(),
+        "duplicate_edge" => "Esse vínculo já existe.".into(),
+        "empty_name" => "Dê um nome com ao menos uma letra ou dígito.".into(),
+        "name_too_long" => "O nome passa de 80 caracteres.".into(),
+        "description_too_long" => "A descrição passa de 500 caracteres.".into(),
+        "invalid_pattern" => {
+            "Use caminhos relativos ao projeto, como crates/app/**, sem .. nem letra de disco."
+                .into()
+        }
+        "cycle" => "Esse vínculo criaria um ciclo de componentes.".into(),
+        "self_reference" => "Um componente não pode fazer parte de si mesmo.".into(),
+        "conflict" => "O item mudou enquanto você editava. O mapa foi atualizado.".into(),
+        "invalid_request" => "Use até 20 padrões e 20 apelidos por item.".into(),
+        _ => {
+            tracing::error!(code, operation = "map_change", "map change failed");
+            "Não foi possível salvar a mudança no mapa.".into()
+        }
+    }
+}
+
+fn today() -> String {
+    chrono::Utc::now().format("%Y-%m-%d").to_string()
+}
+
+fn index_frame(theme: &Theme) -> Div {
+    div()
+        .w(px(INDEX_WIDTH))
+        .flex_none()
+        .h_full()
+        .flex()
+        .flex_col()
+        .bg(theme.colors.pane())
+        .border_r_1()
+        .border_color(theme.colors.hairline_divider())
+}
+
+fn page_header(theme: &Theme, title: &str, subtitle: &str) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SpacingScale::S1))
+        .child(text_style(div(), TypeScale::HEADING_1).child(title.to_owned()))
+        .child(
+            text_style(div(), TypeScale::BODY_SMALL)
+                .text_color(theme.colors.text_muted())
+                .child(subtitle.to_owned()),
+        )
+}
+
+fn section(theme: &Theme, label: &str, content: Div) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SpacingScale::S3))
+        .child(section_label(theme, label))
+        .child(content)
+}
+
+fn timeline_list(theme: &Theme, events: &[TimelineEvent]) -> Div {
+    let colors = theme.colors;
+    let mut list = div().flex().flex_col();
+    if events.is_empty() {
+        return list.child(
+            text_style(div(), TypeScale::BODY_SMALL)
+                .text_color(colors.text_muted())
+                .child("Nada aconteceu aqui ainda."),
+        );
+    }
+    for (index, event) in events.iter().enumerate() {
+        let (verb, color) = timeline_copy(event.kind, theme);
+        let text = match &event.other {
+            Some(other) => format!("{} {verb} {}", event.node.label, other.label),
+            None => format!("{} {verb}", event.node.label),
+        };
+        list = list.child(
+            div()
+                .flex()
+                .items_start()
+                .gap(px(SpacingScale::S3))
+                .py(px(SpacingScale::S2))
+                .when(index > 0, |row| {
+                    row.border_t_1().border_color(colors.hairline_divider())
+                })
+                .child(
+                    text_style(div(), TypeScale::META)
+                        .w(px(88.0))
+                        .flex_none()
+                        .pt(px(2.0))
+                        .text_color(colors.text_muted())
+                        .child(short_date(&event.at)),
+                )
+                .child(
+                    div()
+                        .mt(px(6.0))
+                        .size(px(6.0))
+                        .flex_none()
+                        .rounded_full()
+                        .bg(color),
+                )
+                .child(
+                    text_style(div(), TypeScale::BODY_SMALL)
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .child(text),
+                ),
+        );
+    }
+    list
+}
+
+fn timeline_copy(kind: TimelineKind, theme: &Theme) -> (&'static str, gpui::Rgba) {
+    let colors = theme.colors;
+    match kind {
+        TimelineKind::DecisionConfirmed => ("foi confirmada", colors.status_success()),
+        TimelineKind::DecisionSuperseded => ("foi substituída por", colors.status_warning()),
+        TimelineKind::ClaimStarted => ("passou a valer", colors.status_success()),
+        TimelineKind::ClaimEnded => ("deixou de valer", colors.status_warning()),
+        TimelineKind::EntityCreated => ("entrou no mapa", colors.text_muted()),
+        TimelineKind::EntityRetired => ("foi aposentado", colors.text_muted()),
+        TimelineKind::EdgeConfirmed => ("ficou ligada a", colors.text_muted()),
+        TimelineKind::EdgeInvalidated => ("deixou de estar ligada a", colors.text_muted()),
+    }
+}
+
+fn weight(row: &MapEntity) -> String {
+    let mut parts = vec![plural(row.decisions, "decisão", "decisões")];
+    if row.claims > 0 {
+        parts.push(plural(row.claims, "regra", "regras"));
+    }
+    if row.conflicts > 0 {
+        parts.push(plural(row.conflicts, "conflito", "conflitos"));
+    }
+    parts.join(" · ")
+}
+
+fn plural(count: usize, one: &str, many: &str) -> String {
+    format!("{count} {}", if count == 1 { one } else { many })
+}
+
+fn edge_verb(kind: EdgeKind) -> &'static str {
+    match kind {
+        EdgeKind::Affects => "afeta",
+        EdgeKind::Uses => "usa",
+        EdgeKind::AppliesTo => "vale para",
+        EdgeKind::PartOf => "faz parte de",
+    }
+}
+
+fn kind_label(kind: EntityKind) -> &'static str {
+    match kind {
+        EntityKind::Component => "Componente",
+        EntityKind::Technology => "Tecnologia",
+    }
+}
+
+fn kind_plural(kind: EntityKind) -> &'static str {
+    match kind {
+        EntityKind::Component => "Componentes",
+        EntityKind::Technology => "Tecnologias",
+    }
+}
+
+fn kind_icon(kind: EntityKind) -> IconName {
+    match kind {
+        EntityKind::Component => IconName::Layers,
+        EntityKind::Technology => IconName::Cpu,
+    }
+}
+
+fn claim_label(kind: &str) -> &'static str {
+    match kind {
+        "assumption" => "Premissa",
+        "constraint" => "Restrição",
+        "goal" => "Objetivo",
+        "convention" => "Convenção",
+        _ => "Regra",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{change_failure, weight};
+    use application::graph::{EntityRecord, MapEntity};
+    use domain::entities::EntityKind;
+
+    #[test]
+    fn change_failures_never_echo_the_code() {
+        for code in [
+            "duplicate_name",
+            "invalid_pattern",
+            "cycle",
+            "conflict",
+            "storage",
+        ] {
+            assert!(!change_failure(code).contains(code));
+        }
+    }
+
+    #[test]
+    fn weights_read_naturally() {
+        let row = MapEntity {
+            entity: EntityRecord {
+                entity_id: "e".into(),
+                project_id: "p".into(),
+                kind: EntityKind::Component,
+                name: "x".into(),
+                key: "x".into(),
+                description: String::new(),
+                patterns: Vec::new(),
+                aliases: Vec::new(),
+                created_at: "2026-01-01T00:00:00Z".into(),
+                retired_at: None,
+            },
+            decisions: 1,
+            claims: 2,
+            last_activity: None,
+            conflicts: 0,
+        };
+        assert_eq!(weight(&row), "1 decisão · 2 regras");
+    }
+}

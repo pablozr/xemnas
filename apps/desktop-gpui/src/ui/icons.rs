@@ -109,6 +109,8 @@ pub enum IconName {
     User,
     /// A link that opens outside the app, in the browser.
     ArrowUpRight,
+    /// The project map: entities and what ties them together.
+    Graph,
 }
 
 impl IconName {
@@ -193,6 +195,9 @@ impl IconName {
                 r#"<circle cx="12" cy="8.5" r="3.75"/><path d="M4.75 20a7.25 7.25 0 0 1 14.5 0"/>"#
             ),
             Self::ArrowUpRight => glyph!(r#"<path d="M7 17 17 7M8.5 7H17v8.5"/>"#),
+            Self::Graph => glyph!(
+                r#"<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="9" cy="18" r="2.5"/><path d="M8.3 7.2 15.6 7.7M7 8.4 8.4 15.6M16.6 10.1 10.7 16.2"/>"#
+            ),
         }
     }
 }
