@@ -18,6 +18,7 @@ pub mod jobs;
 pub mod outbox;
 pub mod profile;
 pub mod projects;
+pub mod redact;
 
 pub use captures::{
     CaptureApi, CaptureArtifactRecord, CaptureCheckpointRecord, CaptureError, CaptureIngest,

@@ -9,6 +9,10 @@
 //! legitimate, because those are different events. Analysis is scheduled as an
 //! [`ANALYZE_CAPTURE_KIND`] job; the composition root registers its handler
 //! (ticket 12), so the job runs the deterministic extraction pass.
+//!
+//! Content and metadata strings are redacted with [`crate::redact`] after the
+//! declared fingerprint is verified and before anything is persisted, so the
+//! stored fingerprint is the SHA-256 of the redacted content (PRIV-001).
 
 use std::collections::HashSet;
 
@@ -17,6 +21,7 @@ use integration_contracts::capture::{artifact_fingerprint, CaptureEnvelope};
 use crate::clock::now_rfc3339;
 use crate::jobs::{JobRecord, JobState, ANALYZE_CAPTURE_KIND};
 use crate::projects::{canonicalize_location, ProjectRepository};
+use crate::redact::{redact_json, redact_secrets};
 
 /// A persisted capture receipt.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -251,26 +256,32 @@ where
         }
 
         // Recompute the SHA-256 of each content and require the declared
-        // fingerprint to match, then deduplicate by the *computed* fingerprint.
-        // Two different contents that declare the same fingerprint are rejected
-        // instead of silently dropping one.
+        // fingerprint to match. Two different contents that declare the same
+        // fingerprint are rejected instead of silently dropping one.
+        //
+        // Then redact, and deduplicate by the fingerprint of the *redacted*
+        // content: that is what is stored, and two originals that differ only
+        // in a masked secret must not collide on the storage constraint.
         let mut seen_pairs = HashSet::new();
         let mut artifacts = Vec::new();
         for artifact in &envelope.artifacts {
-            let computed = artifact_fingerprint(&artifact.content);
-            if computed != artifact.fingerprint {
+            if artifact_fingerprint(&artifact.content) != artifact.fingerprint {
                 return Err(IngestError::InvalidFingerprint);
             }
-            if seen_pairs.insert((artifact.kind.as_str(), computed.clone())) {
-                let metadata = serde_json::to_string(&artifact.metadata)
-                    .map_err(|error| IngestError::Storage(error.to_string()))?;
+            let content = redact_secrets(&artifact.content);
+            let stored = artifact_fingerprint(&content);
+            if seen_pairs.insert((artifact.kind.as_str(), stored.clone())) {
+                let metadata = serde_json::to_string(&redact_json(&serde_json::Value::Object(
+                    artifact.metadata.clone(),
+                )))
+                .map_err(|error| IngestError::Storage(error.to_string()))?;
                 artifacts.push(CaptureArtifactRecord {
                     capture_id: envelope.capture_id.clone(),
                     artifact_id: artifact.artifact_id.clone(),
                     kind: artifact.kind.as_str().to_string(),
-                    content: artifact.content.clone(),
+                    content,
                     metadata,
-                    fingerprint: computed,
+                    fingerprint: stored,
                 });
             }
         }

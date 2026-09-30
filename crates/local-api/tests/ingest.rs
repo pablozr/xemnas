@@ -1240,3 +1240,121 @@ fn outbox_drain_imports_without_duplicating() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Envelope whose first artifact carries raw secrets in content and metadata,
+/// with a fingerprint that matches the raw content (a caller that skipped the
+/// adapter's redaction).
+fn envelope_with_raw_secrets(location: &str) -> Value {
+    let mut envelope = envelope_for(location);
+    let content = "API_KEY=SECRET-MARKER-RAW\nusar sk-SECRETMARKERKEY123456 no cliente";
+    envelope["artifacts"][0]["content"] = json!(content);
+    envelope["artifacts"][0]["fingerprint"] = json!(sha256_hex(content));
+    envelope["artifacts"][0]["metadata"] = json!({
+        "note": "token ghp_SECRETMARKERabcdefghijklmnop"
+    });
+    envelope
+}
+
+fn assert_artifacts_redacted(database: &Path) {
+    let connection = rusqlite::Connection::open(database).expect("open raw connection");
+    let mut statement = connection
+        .prepare("SELECT content, metadata, fingerprint FROM capture_artifacts")
+        .expect("prepare");
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .expect("query")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect");
+    assert_eq!(rows.len(), 4);
+    let mut redacted = 0;
+    for (content, metadata, fingerprint) in rows {
+        assert!(
+            !content.contains("SECRET-MARKER") && !content.contains("SECRETMARKER"),
+            "raw secret persisted in content"
+        );
+        assert!(
+            !metadata.contains("SECRETMARKER"),
+            "raw secret persisted in metadata"
+        );
+        assert_eq!(
+            fingerprint,
+            sha256_hex(&content),
+            "the stored fingerprint is the redacted content's"
+        );
+        if content.contains("[REDACTED]") {
+            redacted += 1;
+        }
+    }
+    assert_eq!(redacted, 1);
+}
+
+#[test]
+fn raw_secrets_posted_to_the_api_are_redacted_before_persistence() {
+    let root = temporary_directory("redact-api");
+    let database = root.join("app.db");
+    let store = SqliteStore::open(&database).expect("open store");
+    let location = register_project(&store, &root);
+    let server = start(
+        &store,
+        local_api::DEFAULT_MAX_BODY_BYTES,
+        Duration::from_secs(5),
+        root.clone(),
+    );
+
+    let envelope = envelope_with_raw_secrets(&location);
+    let key = envelope_key(&envelope);
+    let (status, body) = post(
+        &server,
+        "/v1/captures",
+        Some(server.token()),
+        Some(&key),
+        None,
+        &body_of(&envelope),
+    );
+    assert_eq!(status, 201, "body: {}", String::from_utf8_lossy(&body));
+    assert_artifacts_redacted(&database);
+
+    // A replay stays idempotent: same receipt, nothing rewritten.
+    let (status, _) = post(
+        &server,
+        "/v1/captures",
+        Some(server.token()),
+        Some(&key),
+        None,
+        &body_of(&envelope),
+    );
+    assert_eq!(status, 200);
+    assert_artifacts_redacted(&database);
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn raw_secrets_imported_from_the_outbox_are_redacted_before_persistence() {
+    let root = temporary_directory("redact-outbox");
+    let database = root.join("app.db");
+    let store = SqliteStore::open(&database).expect("open store");
+    let location = register_project(&store, &root);
+    let envelope = envelope_with_raw_secrets(&location);
+    let filename = format!("{}.json", sha256_hex(&envelope_key(&envelope)));
+    let pending = root.join("outbox").join("pending");
+    std::fs::create_dir_all(&pending).expect("create pending");
+    std::fs::write(pending.join(&filename), body_of(&envelope)).expect("write pending");
+
+    let report = application::outbox::drain(
+        &root.join("outbox"),
+        &CaptureIngest::new(store.clone()),
+        Duration::from_secs(60),
+    )
+    .expect("drain");
+    assert_eq!(report.accepted, 1);
+    assert_artifacts_redacted(&database);
+
+    let _ = std::fs::remove_dir_all(&root);
+}
