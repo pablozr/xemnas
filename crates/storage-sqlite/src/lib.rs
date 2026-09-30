@@ -17,6 +17,7 @@ mod decisions;
 mod diagnostics;
 mod extraction;
 mod inbox;
+mod integration;
 mod jobs;
 mod projects;
 mod store;

@@ -13,6 +13,7 @@ pub mod diagnostics;
 pub mod export;
 pub mod extract;
 pub mod inbox;
+pub mod integration;
 pub mod jobs;
 pub mod outbox;
 pub mod profile;
@@ -53,6 +54,11 @@ pub use inbox::{
     ArtifactView, CandidateDetail, CandidateEdits, CandidateStatus, CandidateSummary,
     ConfirmOutcome, DiffSummary, Inbox, InboxError, InboxFilter, InboxPage, DEFAULT_PAGE_LIMIT,
     MAX_BATCH_IDS, MAX_CHOICE_CHARS, MAX_PAGE_LIMIT, MAX_QUESTION_CHARS, MAX_RATIONALE_CHARS,
+};
+pub use integration::{
+    AdapterStatus, CheckKind, CheckOutcome, Compatibility, Integration, IntegrationCheck,
+    IntegrationEnvironment, IntegrationError, IntegrationState, IntegrationStatus,
+    LocalApiEndpoint, OutboxStatus,
 };
 pub use integration_contracts::capture::{
     artifact_fingerprint, ArtifactKind, CaptureEnvelope, CaptureSource, ProjectRef, SourceArtifact,
