@@ -11,7 +11,9 @@
 //! task and get it back with the outcome. The view keeps only the UI state and
 //! applies the outcome back on the UI thread.
 
-use application::projects::{ProjectError, ProjectRepository, Projects};
+use application::projects::{
+    ProjectError, ProjectRepository, Projects, RemovalError, RemovalImpact,
+};
 use domain::projects::ProjectSummary;
 use gpui::prelude::*;
 use gpui::{
@@ -112,6 +114,16 @@ enum IoOutcome {
     Registered(Result<(), ProjectError>),
     /// `remove()` result (`true` when a row was deleted).
     Removed(Result<bool, ProjectError>),
+    /// What deleting a project with its data would erase.
+    Impact(String, Result<RemovalImpact, ProjectError>),
+    /// `remove_with_data()` result.
+    Purged(Result<RemovalImpact, RemovalError>),
+}
+
+/// The "delete the project and its data" confirmation of one project.
+struct Purge {
+    id: String,
+    impact: Option<RemovalImpact>,
 }
 
 /// The Projects screen view.
@@ -132,6 +144,11 @@ pub struct ProjectsScreen<R: ProjectRepository + Send + 'static> {
     inline_error: Option<String>,
     /// Identifier of the row awaiting an inline removal confirmation.
     pending_removal: Option<String>,
+    /// The destructive removal being confirmed, with its measured impact.
+    purge: Option<Purge>,
+    /// Where the project name is typed to confirm the purge.
+    purge_name: Entity<SearchField>,
+    _purge_subscription: Subscription,
     register_focus: FocusHandle,
     empty_focus: FocusHandle,
     remove_focus: FocusHandle,
@@ -155,6 +172,14 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
         let subscription = cx.subscribe(&search, |screen, _, event: &SearchChanged, cx| {
             screen.set_query(&event.0, cx);
         });
+        let purge_name = cx.new(|cx| {
+            let mut field = SearchField::new(cx);
+            field.stretch();
+            field.set_context("Nome do projeto", cx);
+            field
+        });
+        let purge_subscription =
+            cx.subscribe(&purge_name, |_, _, _: &SearchChanged, cx| cx.notify());
         Self {
             hovered: None,
             projects: Some(projects),
@@ -163,6 +188,9 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             selected_id: None,
             inline_error: None,
             pending_removal: None,
+            purge: None,
+            purge_name,
+            _purge_subscription: purge_subscription,
             register_focus: cx.focus_handle().tab_stop(true),
             empty_focus: cx.focus_handle().tab_stop(true),
             remove_focus: cx.focus_handle().tab_stop(true),
@@ -284,6 +312,13 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
     /// Applies a background outcome on the UI thread.
     fn finish(&mut self, outcome: IoOutcome, cx: &mut Context<Self>) {
         self.in_flight = InFlight::None;
+        // Measuring a purge or a mistyped confirmation leaves the list as it
+        // was; announcing a project change would close the open panel.
+        let unchanged = matches!(
+            outcome,
+            IoOutcome::Impact(_, Ok(_))
+                | IoOutcome::Purged(Err(RemovalError::ConfirmationMismatch))
+        );
         match outcome {
             IoOutcome::Listed(Ok(list)) => {
                 self.sync_row_focus(&list, cx);
@@ -319,8 +354,31 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             IoOutcome::Removed(Err(error)) => {
                 self.list = ListState::Error(storage_failure(StorageContext::Mutate, &error));
             }
+            IoOutcome::Impact(id, Ok(impact)) => {
+                if let Some(purge) = self.purge.as_mut().filter(|purge| purge.id == id) {
+                    purge.impact = Some(impact);
+                }
+            }
+            IoOutcome::Impact(_, Err(error)) => {
+                self.purge = None;
+                self.list = ListState::Error(storage_failure(StorageContext::Load, &error));
+            }
+            IoOutcome::Purged(Ok(_)) => {
+                self.purge = None;
+                self.inline_error = None;
+                self.reload(cx);
+            }
+            IoOutcome::Purged(Err(RemovalError::ConfirmationMismatch)) => {
+                self.inline_error = Some("O nome digitado não confere; nada foi apagado.".into());
+            }
+            IoOutcome::Purged(Err(RemovalError::Project(error))) => {
+                self.purge = None;
+                self.list = ListState::Error(storage_failure(StorageContext::Mutate, &error));
+            }
         }
-        cx.emit(ProjectChanged(self.selected_project()));
+        if !unchanged {
+            cx.emit(ProjectChanged(self.selected_project()));
+        }
         cx.notify();
     }
 
@@ -390,6 +448,45 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
         self.inline_error = None;
         window.focus(&self.cancel_focus, cx);
         cx.notify();
+    }
+
+    /// Opens the destructive confirmation and measures what it would erase.
+    fn request_purge(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.projects.is_none() {
+            return;
+        }
+        self.pending_removal = None;
+        self.inline_error = None;
+        self.purge = Some(Purge {
+            id: id.clone(),
+            impact: None,
+        });
+        self.purge_name
+            .update(cx, |field, cx| field.set_context("Nome do projeto", cx));
+        cx.notify();
+        self.spawn_io(cx, move |projects| {
+            let impact = projects.removal_impact(&id);
+            IoOutcome::Impact(id, impact)
+        });
+    }
+
+    fn cancel_purge(&mut self, cx: &mut Context<Self>) {
+        self.purge = None;
+        self.inline_error = None;
+        cx.notify();
+    }
+
+    /// Deletes the project and all its data; the folder on disk is untouched.
+    fn confirm_purge(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.projects.is_none() {
+            return;
+        }
+        let typed = self.purge_name.read(cx).value().to_owned();
+        self.in_flight = InFlight::Removing;
+        cx.notify();
+        self.spawn_io(cx, move |projects| {
+            IoOutcome::Purged(projects.remove_with_data(&id, &typed))
+        });
     }
 
     /// Dismisses the inline confirmation.
@@ -720,7 +817,14 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
         let summary = self.selected_project()?;
         let id = summary.id().as_str().to_string();
         let pending = self.pending_removal.as_deref() == Some(id.as_str());
-        let actions: AnyElement = if pending {
+        let purging = self
+            .purge
+            .as_ref()
+            .filter(|purge| purge.id == id)
+            .map(|purge| purge.impact);
+        let actions: AnyElement = if let Some(impact) = purging {
+            self.render_purge(&theme, &summary, impact, cx)
+        } else if pending {
             div()
                 .flex()
                 .flex_col()
@@ -755,14 +859,21 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                 )
                 .into_any_element()
         } else {
+            let purge_id = id.clone();
             div()
                 .flex()
+                .gap(px(SpacingScale::S2))
                 .child(
                     detail_action(&theme, "projects-remove", "Remover da lista", false)
                         .track_focus(&self.remove_focus)
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.request_remove(id.clone(), window, cx)
                         })),
+                )
+                .child(
+                    detail_action(&theme, "projects-purge", "Apagar dados…", true).on_click(
+                        cx.listener(move |this, _, _, cx| this.request_purge(purge_id.clone(), cx)),
+                    ),
                 )
                 .into_any_element()
         };
@@ -801,6 +912,114 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                 )
                 .into_any_element(),
         )
+    }
+
+    /// The destructive confirmation: what will be erased, then the typed name.
+    fn render_purge(
+        &self,
+        theme: &Theme,
+        summary: &ProjectSummary,
+        impact: Option<RemovalImpact>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let colors = theme.colors;
+        let name = summary.name().to_string();
+        let id = summary.id().as_str().to_string();
+        let matches = self.purge_name.read(cx).value().trim() == name;
+        let counts: AnyElement = match impact {
+            None => text_style(div(), TypeScale::META)
+                .text_color(colors.text_muted())
+                .child("Medindo o que será apagado…")
+                .into_any_element(),
+            Some(impact) if impact.is_empty() => text_style(div(), TypeScale::BODY_SMALL)
+                .text_color(colors.text_secondary())
+                .child("Este projeto ainda não tem dados; só o cadastro será apagado.")
+                .into_any_element(),
+            Some(impact) => div()
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .children(
+                    [
+                        (impact.decisions, "decisão(ões) com versões e relações"),
+                        (impact.candidates, "candidato(s)"),
+                        (impact.claims, "regra(s) do projeto"),
+                        (impact.captures, "captura(s) com evidências"),
+                        (impact.injections, "registro(s) de contexto enviado"),
+                    ]
+                    .into_iter()
+                    .filter(|(count, _)| *count > 0)
+                    .map(|(count, label)| {
+                        div()
+                            .flex()
+                            .gap(px(SpacingScale::S2))
+                            .child(
+                                text_style(div(), TypeScale::ROW_TITLE)
+                                    .w(px(40.0))
+                                    .flex_none()
+                                    .text_color(colors.status_danger())
+                                    .child(count.to_string()),
+                            )
+                            .child(
+                                text_style(div(), TypeScale::BODY_SMALL)
+                                    .text_color(colors.text_secondary())
+                                    .child(label),
+                            )
+                    }),
+                )
+                .into_any_element(),
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(SpacingScale::S3))
+            .child(
+                text_style(div(), TypeScale::ROW_TITLE)
+                    .text_color(colors.status_danger())
+                    .child("Apagar o projeto e todos os dados?"),
+            )
+            .child(counts)
+            .child(
+                text_style(div(), TypeScale::META)
+                    .text_color(colors.text_muted())
+                    .child(format!(
+                        "Não dá para desfazer. A pasta no disco não é tocada. \
+                         Digite {name} para confirmar."
+                    )),
+            )
+            .child(self.purge_name.clone())
+            .children(self.inline_error.clone().map(|error| {
+                text_style(div(), TypeScale::META)
+                    .text_color(colors.status_danger())
+                    .child(error)
+            }))
+            .child(
+                div()
+                    .flex()
+                    .justify_end()
+                    .gap(px(SpacingScale::S2))
+                    .child(
+                        detail_action(theme, "projects-purge-cancel", "Cancelar", false)
+                            .on_click(cx.listener(|this, _, _, cx| this.cancel_purge(cx))),
+                    )
+                    .child(
+                        action_button(
+                            theme,
+                            "projects-purge-confirm",
+                            ButtonKind::Secondary,
+                            matches && self.projects.is_some(),
+                        )
+                        .aria_label("Apagar tudo")
+                        .when(matches, |button| button.text_color(colors.status_danger()))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if matches {
+                                this.confirm_purge(id.clone(), cx)
+                            }
+                        }))
+                        .child("Apagar tudo"),
+                    ),
+            )
+            .into_any_element()
     }
 
     /// Project properties and tracking controls without a duplicate sidebar.
