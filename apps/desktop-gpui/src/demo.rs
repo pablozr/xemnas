@@ -110,7 +110,7 @@ pub(crate) fn store() -> Result<SqliteStore, Box<dyn std::error::Error>> {
                     updated_at: timestamp.clone(),
                 },
             })?;
-            store.insert_candidates(&[DecisionCandidateRecord {
+            let mut candidate = DecisionCandidateRecord {
                 id: format!("candidate-{capture}"),
                 project_id: project.into(),
                 capture_id: capture,
@@ -126,7 +126,36 @@ pub(crate) fn store() -> Result<SqliteStore, Box<dyn std::error::Error>> {
                 dedup_hash: format!("demo-{project}-{index}"),
                 created_at: timestamp.clone(),
                 updated_at: timestamp,
-            }])?;
+            };
+            store.insert_candidates(&[candidate.clone()])?;
+            candidate.id = format!("confirmed-{}", candidate.id);
+            candidate.dedup_hash = format!("confirmed-{}", candidate.dedup_hash);
+            store.insert_candidates(&[candidate.clone()])?;
+            let promoted =
+                application::inbox::Inbox::new(store.clone()).confirm(&candidate.id, None)?;
+            let decisions = application::decisions::Decisions::new(store.clone());
+            decisions.revise(
+                &promoted.decision_id,
+                application::decisions::DecisionEdits {
+                    assumptions: Some(vec![
+                        "A captura preserva o conteúdo redigido da fonte.".into()
+                    ]),
+                    scope: Some(vec!["Aplicação desktop e camada de persistência.".into()]),
+                    consequences: Some(vec![
+                        "A escolha permanece consultável mesmo após outras revisões.".into(),
+                    ]),
+                    reconsider_when: Some(vec![
+                        "Os requisitos de concorrência ou retenção mudarem.".into(),
+                    ]),
+                    ..Default::default()
+                },
+            )?;
+            if index == 0 {
+                decisions.revise(&promoted.decision_id, application::decisions::DecisionEdits {
+                    rationale: Some(format!("{rationale}\n\nCada alteração conserva a versão anterior e as fontes usadas para tomar a decisão.")),
+                    ..Default::default()
+                })?;
+            }
         }
     }
     Ok(store)
