@@ -65,6 +65,28 @@ fn evidence(name: &str) -> DecisionEvidence {
     }
 }
 
+/// Conversation-only evidence: text artifacts with no `diff_hunk`, as in a turn
+/// that records a decision which was not implemented (MVP-SPEC AD-08).
+fn conversation_evidence(parts: &[(&str, &str)]) -> DecisionEvidence {
+    DecisionEvidence {
+        capture_id: "capture-conversation".to_string(),
+        project_id: "project-1".to_string(),
+        adapter: Some("opencode".to_string()),
+        session_id: Some("session-conversation".to_string()),
+        observed_at: Some("2026-01-01T00:00:00Z".to_string()),
+        artifacts: parts
+            .iter()
+            .enumerate()
+            .map(|(index, (kind, content))| EvidenceArtifact {
+                artifact_id: format!("conversation-{index}"),
+                kind: (*kind).to_string(),
+                content: (*content).to_string(),
+                metadata: "{}".to_string(),
+            })
+            .collect(),
+    }
+}
+
 #[derive(Default)]
 struct FakeStore {
     evidence: Mutex<HashMap<String, DecisionEvidence>>,
@@ -269,6 +291,119 @@ fn a_trivial_marker_does_not_discard_a_real_ddl_change() {
         "the strong structural signal must survive"
     );
     assert!(!store.records().is_empty());
+}
+
+#[test]
+fn conversation_with_a_durable_choice_is_extracted() {
+    let evidence = conversation_evidence(&[
+        (
+            "user_text",
+            "Decidimos manter o schema dos candidatos em SQLite em vez de Postgres, \
+             porque o app e local e sem servidor; o trade-off e abrir mao de \
+             concorrencia entre maquinas.",
+        ),
+        (
+            "assistant_text",
+            "Registrei a escolha: SQLite, com isolamento por projeto.",
+        ),
+    ]);
+    let store = FakeStore::with(evidence.clone());
+    let report = run_extraction(
+        &store,
+        &FakeCandidateExtractor,
+        &evidence.capture_id,
+        &RunContext::for_tests(),
+    )
+    .expect("conversation extraction");
+
+    assert!(
+        report.candidates >= 1,
+        "a conversation with a durable choice must reach the extractor"
+    );
+    assert!(report.inserted >= 1, "the candidate must be inserted");
+    assert!(
+        report.signals.contains(&RelevanceSignal::PublicContract),
+        "the persistence/schema choice must be signaled"
+    );
+    assert!(
+        report
+            .signals
+            .contains(&RelevanceSignal::RejectsAlternative),
+        "the rejected alternative must be signaled"
+    );
+
+    let records = store.records();
+    assert_eq!(records.len(), report.candidates);
+    assert_eq!(records[0].status, "pending");
+    assert_eq!(records[0].capture_id, evidence.capture_id);
+}
+
+#[test]
+fn neutral_conversation_without_a_choice_is_not_extracted() {
+    let evidence = conversation_evidence(&[
+        (
+            "user_text",
+            "Bom dia! Vamos ajustar os titulos do README e revisar a ortografia.",
+        ),
+        (
+            "assistant_text",
+            "Feito: os titulos seguem o mesmo padrao das outras secoes.",
+        ),
+    ]);
+    let store = FakeStore::with(evidence.clone());
+    let report = run_extraction(
+        &store,
+        &FakeCandidateExtractor,
+        &evidence.capture_id,
+        &RunContext::for_tests(),
+    )
+    .expect("neutral extraction");
+
+    assert_eq!(report.candidates, 0, "neutral chatter is not a decision");
+    assert!(report.signals.is_empty(), "neutral chatter has no signal");
+    assert!(store.records().is_empty(), "no candidate rows");
+}
+
+#[test]
+fn conversation_fact_with_strong_terms_but_no_choice_is_not_extracted() {
+    let evidence = conversation_evidence(&[(
+        "assistant_text",
+        "CREATE TABLE migration endpoint token just an example sentence.",
+    )]);
+    let store = FakeStore::with(evidence.clone());
+    let report = run_extraction(
+        &store,
+        &FakeCandidateExtractor,
+        &evidence.capture_id,
+        &RunContext::for_tests(),
+    )
+    .expect("fact extraction");
+
+    assert_eq!(
+        report.candidates, 0,
+        "a bare mention of contract/security nouns is a fact, not a choice"
+    );
+    assert!(report.signals.is_empty(), "no signal may survive");
+    assert!(store.records().is_empty(), "no candidate rows");
+}
+
+#[test]
+fn conversation_local_detail_without_a_choice_is_not_extracted() {
+    let evidence = conversation_evidence(&[(
+        "user_text",
+        "Ajustei o espacamento do cartao e a cor do botao; e so estetica local.",
+    )]);
+    let store = FakeStore::with(evidence.clone());
+    let report = run_extraction(
+        &store,
+        &FakeCandidateExtractor,
+        &evidence.capture_id,
+        &RunContext::for_tests(),
+    )
+    .expect("local detail extraction");
+
+    assert_eq!(report.candidates, 0, "local aesthetic detail is excluded");
+    assert!(store.records().is_empty(), "no candidate rows");
 }
 
 /// A proposal that passes validation, for tests that mutate one field at a time.

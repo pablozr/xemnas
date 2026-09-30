@@ -89,7 +89,12 @@ fn is_trivially_excluded(evidence: &DecisionEvidence, text: &str) -> bool {
         return false;
     }
     if !has_diff_hunk(evidence) {
-        return true;
+        // A decision can be recorded in the conversation before (or without)
+        // any code change (MVP-SPEC AD-08). Without a diff, only explicit
+        // choice language lets the capture through: bare mentions of
+        // contract or security nouns are facts, not choices.
+        return !contains_any_phrase(text, CHOICE_LANGUAGE)
+            || TRIVIAL_MARKERS.iter().any(|marker| text.contains(marker));
     }
     if TRIVIAL_MARKERS.iter().any(|marker| text.contains(marker)) {
         return true;
@@ -421,6 +426,32 @@ const TRIVIAL_MARKERS: &[&str] = &[
     "no behavioural change",
     "sem mudanca de comportamento",
     "sem mudança de comportamento",
+];
+
+/// Explicit choice language that lets a conversation-only capture (no diff)
+/// reach the signal detection. Matched on lowercased text, accents kept.
+const CHOICE_LANGUAGE: &[&str] = &[
+    "decid",
+    "decisão",
+    "decisao",
+    "optamos",
+    "optei",
+    "escolhemos",
+    "escolhi",
+    "vamos usar",
+    "vamos manter",
+    "em vez de",
+    "ao invés de",
+    "ao inves de",
+    "rejeitamos",
+    "instead of",
+    "rather than",
+    "we chose",
+    "we will use",
+    "we'll use",
+    "going with",
+    "trade-off",
+    "tradeoff",
 ];
 
 /// DDL/migration phrases counted only on a non-comment `+` line of a

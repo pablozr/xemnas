@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use application::analysis::{AnalysisOutcome, AnalyzeCapture, ExtractorFactory};
 use application::extract::{
     connection_test_evidence, AssessmentOutcome, AssessmentRecord, AssessmentStore,
-    DecisionCandidateRecord, DecisionEvidence, ExtractError, ExtractionStore,
+    DecisionCandidateRecord, DecisionEvidence, EvidenceArtifact, ExtractError, ExtractionStore,
     FakeCandidateExtractor, ProviderSetupError,
 };
 use application::profile::{
@@ -19,9 +19,17 @@ use application::profile::{
 struct Store {
     assessments: Arc<Mutex<Vec<AssessmentRecord>>>,
     candidates: Arc<Mutex<Vec<DecisionCandidateRecord>>>,
+    evidence: Option<DecisionEvidence>,
 }
 
 impl Store {
+    fn with_evidence(evidence: DecisionEvidence) -> Self {
+        Self {
+            evidence: Some(evidence),
+            ..Self::default()
+        }
+    }
+
     fn outcomes(&self) -> Vec<(AssessmentOutcome, Option<String>, String)> {
         self.assessments
             .lock()
@@ -34,7 +42,11 @@ impl Store {
 
 impl ExtractionStore for Store {
     fn load_evidence(&self, _capture_id: &str) -> Result<Option<DecisionEvidence>, ExtractError> {
-        Ok(Some(connection_test_evidence()))
+        Ok(Some(
+            self.evidence
+                .clone()
+                .unwrap_or_else(connection_test_evidence),
+        ))
     }
 
     fn insert_candidates(
@@ -169,6 +181,41 @@ fn offline_profile_runs_the_fake_extractor() {
     };
     assert_eq!(report.inserted, 1);
     assert_eq!(store.outcomes()[0].0, AssessmentOutcome::Ok);
+}
+
+#[test]
+fn offline_profile_extracts_a_choice_recorded_only_in_the_conversation() {
+    // A turn without any diff (MVP-SPEC AD-08) must still reach the extractor.
+    let store = Store::with_evidence(DecisionEvidence {
+        capture_id: "capture-1".to_string(),
+        project_id: "project-1".to_string(),
+        adapter: Some("opencode".to_string()),
+        session_id: Some("session-1".to_string()),
+        observed_at: Some("2026-01-01T00:00:00Z".to_string()),
+        artifacts: vec![EvidenceArtifact {
+            artifact_id: "artifact-1".to_string(),
+            kind: "user_text".to_string(),
+            content: "Decidimos guardar as capturas em SQLite em vez de arquivos soltos;                       o schema fica versionado por migrations."
+                .to_string(),
+            metadata: "{}".to_string(),
+        }],
+    });
+    let analysis = AnalyzeCapture::new(
+        store.clone(),
+        AiSettings::new(
+            Profiles(Ok(Some(offline_default_profile()))),
+            Secrets(RefCell::new(HashMap::new()), false),
+        ),
+        Factory { fails: false },
+    );
+    let outcome = analysis.run("capture-1", Some("job-1".to_string()));
+    let Ok(AnalysisOutcome::Extracted(report)) = outcome else {
+        panic!("expected an extraction, got {outcome:?}");
+    };
+    assert!(
+        report.inserted >= 1,
+        "the conversation choice becomes a candidate"
+    );
 }
 
 #[test]
