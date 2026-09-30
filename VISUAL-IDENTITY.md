@@ -10,9 +10,17 @@ mas `docs/` é ignorado pelo Git: este arquivo é a regra versionável.
 - Base carvão escura, texto de alto contraste e lavanda mineral discreta. Cores,
   tipografia e espaçamento vêm de `apps/desktop-gpui/src/ui/tokens.rs` e `theme.rs`;
   não espalhar literais de cor pelas telas.
-- Superfícies grandes são quietas. Reservar lavanda e contornos para seleção,
-  cabeçalho do projeto, foco e uma ação primária real. Não usar card, glow,
-  blur ou animação para mascarar a falta de informação.
+- Superfícies grandes são quietas. Reservar lavanda para seleção, foco e uma
+  ação primária real; campos de busca são neutros em repouso. Não usar card,
+  glow, blur ou animação para mascarar a falta de informação. A única animação é
+  um fade de 160 ms quando o conteúdo é substituído (destino, projeto, item).
+- Densidade de ferramenta: interface em 13 px, leitura em 14 px, títulos de
+  painel em 12 px esmaecidos. Controles têm 28 ou 32 px (`ControlSize`), raio de
+  6 px, e vêm de `action_button`/`icon_action`; telas não desenham botões próprios.
+- Uma receita de seleção para toda lista: fundo `selection` e barra lavanda de
+  2 px (`mark_selected`). Foco visível é um anel inset que não desloca o layout.
+- Cada paleta (Quiet Glass e Carvão) é uma tabela `Palette` em `tokens.rs`;
+  toda cor nova precisa existir nas duas.
 - Mica pode compor o fundo da janela no Windows; isso **não** garante backdrop
   blur por componente. Superfícies internas precisam funcionar sem blur.
 - Cada informação tem um lugar: contagem na lista lateral, título da seção na
@@ -20,9 +28,10 @@ mas `docs/` é ignorado pelo Git: este arquivo é a regra versionável.
 
 ## Projetos — superfície atual
 
-- Lista persistente de projetos de 248 px e workspace selecionado ocupando toda a área restante.
-  Cabeçalho contínuo, propriedades reais (localização e data) logo abaixo dele e
-  ação de remoção secundária junto às propriedades, dentro da primeira área visível.
+- Lista persistente de projetos de 248 px (linhas de 48 px com nome e caminho) e
+  workspace selecionado ocupando toda a área restante. Detalhes mostra as
+  propriedades reais (localização e data) e a remoção secundária logo abaixo,
+  dentro da primeira área visível.
   Não impor um card de largura fixa
   nem criar métricas ou atividade inexistentes.
 - A linha selecionada conserva fundo e indicador lateral sob hover; foco visível
@@ -39,8 +48,10 @@ mas `docs/` é ignorado pelo Git: este arquivo é a regra versionável.
 
 ## Revisão — candidatos por projeto
 
-- A barra da janela contém marca e controles nativos. Revisão e Detalhes ficam
-  abaixo do nome e caminho do projeto; a lateral de projetos permanece visível.
+- A barra da janela (40 px) contém marca, selo de demonstração quando houver,
+  tema e controles nativos. Abaixo dela, uma única barra de projeto de 44 px leva
+  o nome do projeto como trilha e as abas Revisão, Decisões e Detalhes; o caminho
+  fica na lista lateral e em Detalhes. Não há barra de status.
 - Trocar de projeto limpa lista, evidência e filtro; respostas antigas não podem
   aparecer no novo workspace. O filtro de projeto é aplicado no caso de uso.
 - Lista de candidatos de 320 px, com data, estado, pergunta e escolha proposta.
@@ -48,11 +59,14 @@ mas `docs/` é ignorado pelo Git: este arquivo é a regra versionável.
   visíveis separadamente. A busca filtra esses itens;
   fica dentro da lista; paginação explícita permite carregar mais sem sugerir
   uma busca global. Ctrl K abre Revisão e foca o campo.
-- Leitura ocupa o restante da janela: escolha, motivação, confiança da extração
-  e origem. Confiança é uma estimativa do extrator, não uma avaliação humana.
+- Leitura ocupa o restante da janela numa coluna de 760 px com a mesma gramática
+  do documento de Decisões: escolha destacada, rótulos de seção em versalete,
+  motivação, evidências, confiança da extração e origem. Confiança é uma estimativa do extrator, não uma avaliação humana.
 - Evidências vêm dos artefatos reais já redigidos pelo backend. Mostrar uma fonte
   por vez em tipografia monoespaçada, com seleção acessível por teclado.
-  Abas com ícone SVG de arquivo compartilham a borda do painel. Caminho e linhas
+  Revisão e Decisões usam o mesmo componente (`screens/evidence.rs`): abas com
+  ícone de arquivo e sublinhado, legenda com caminho monoespaçado, numeração à
+  direita e diff com linhas `+`/`-`/`@@` tingidas. Caminho e linhas
   usam metadados registrados; o código tem rolagem horizontal e vertical,
   altura limitada e linhas virtualizadas. Abas extensas rolam horizontalmente.
   Estados têm badge com texto e bolinha: Pendente, Adiado, Confirmado e Rejeitado.
