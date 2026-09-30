@@ -1,6 +1,7 @@
 //! Application layer: use-case orchestration and the ports infrastructure implements.
 #![warn(missing_docs)]
 
+pub mod agent_access;
 pub mod analysis;
 pub mod captures;
 pub mod claims;
@@ -22,6 +23,7 @@ pub mod projects;
 pub mod redact;
 pub mod relations;
 
+pub use agent_access::{AgentAccess, AgentAccessError, AgentApi, AgentStore};
 pub use analysis::{AnalysisOutcome, AnalyzeCapture, ExtractorFactory};
 pub use captures::{
     CaptureApi, CaptureArtifactRecord, CaptureCheckpointRecord, CaptureError, CaptureIngest,

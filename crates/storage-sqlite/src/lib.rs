@@ -1,6 +1,7 @@
 //! SQLite persistence: infrastructure that implements the application's storage ports.
 #![warn(missing_docs)]
 
+mod agent;
 mod assessments;
 mod captures;
 mod claims;

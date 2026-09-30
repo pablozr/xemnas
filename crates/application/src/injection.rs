@@ -10,7 +10,7 @@ use crate::context::{
 };
 use crate::context_settings::{ContextMode, ContextSettingsStore};
 use crate::decisions::DecisionStore;
-use crate::projects::{canonicalize_location, ProjectRepository};
+use crate::projects::{find_project_by_directory, ProjectRepository};
 use crate::relations::RelationStore;
 
 /// Default token budget for one injected block.
@@ -212,12 +212,7 @@ where
         if prompt.is_empty() {
             return Ok(InjectionOutcome::empty(ContextMode::Off));
         }
-        let Ok(location) = canonicalize_location(&request.canonical_path) else {
-            return Ok(InjectionOutcome::empty(ContextMode::Off));
-        };
-        let Some(project) = self
-            .store
-            .find_by_location(&location)
+        let Some(project) = find_project_by_directory(&self.store, &request.canonical_path)
             .map_err(|error| ContextError::Storage(error.to_string()))?
         else {
             return Ok(InjectionOutcome::empty(ContextMode::Off));
@@ -419,7 +414,7 @@ fn claim_line(claim: &PackClaim) -> String {
 }
 
 /// One line of plain text: whitespace collapsed and angle brackets neutralized.
-fn clean(text: &str) -> String {
+pub(crate) fn clean(text: &str) -> String {
     text.split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")

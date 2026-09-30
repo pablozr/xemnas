@@ -166,6 +166,21 @@ pub fn canonicalize_location(location: &str) -> Result<String, ProjectError> {
         .into_owned())
 }
 
+/// Finds the registered project for an agent's working directory, if any.
+///
+/// # Errors
+///
+/// `Storage` on query failure; an invalid or unregistered directory is `Ok(None)`.
+pub fn find_project_by_directory<R: ProjectRepository + ?Sized>(
+    repository: &R,
+    directory: &str,
+) -> Result<Option<ProjectRecord>, ProjectError> {
+    match canonicalize_location(directory) {
+        Ok(location) => repository.find_by_location(&location),
+        Err(_) => Ok(None),
+    }
+}
+
 /// Project use cases over a [`ProjectRepository`].
 pub struct Projects<R> {
     repository: R,
