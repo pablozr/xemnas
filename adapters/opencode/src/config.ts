@@ -59,6 +59,12 @@ export const DEFAULT_MESSAGE_LIMIT = 200;
  */
 export const DEFAULT_MAX_MESSAGE_PAGES = 10;
 
+/** Default wait for a context block before the turn proceeds without it. */
+export const DEFAULT_CONTEXT_TIMEOUT_MS = 300;
+
+/** How the adapter uses context blocks on each user turn. */
+export type ContextMode = "off" | "shadow" | "inject";
+
 /** Resolved, immutable adapter configuration. */
 export interface AdapterConfig {
   /** OpenCode server base URL, no trailing slash. */
@@ -96,6 +102,12 @@ export interface AdapterConfig {
   messageLimit: number;
   /** Maximum backward pages fetched per reconciliation. */
   maxMessagePages: number;
+  /** Context injection mode; `off` unless `XEMNAS_CONTEXT_MODE` says otherwise. */
+  contextMode: ContextMode;
+  /** Maximum wait for a context block, in milliseconds. */
+  contextTimeoutMs: number;
+  /** Token budget sent to the local API; server default when undefined. */
+  contextBudgetTokens?: number;
 }
 
 /** Contents of `discovery.json` written by the local API. */
@@ -127,6 +139,11 @@ function envInt(
   }
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function contextMode(env: NodeJS.ProcessEnv): ContextMode {
+  const value = envValue(env, "XEMNAS_CONTEXT_MODE");
+  return value === "shadow" || value === "inject" ? value : "off";
 }
 
 function stripTrailingSlash(value: string): string {
@@ -209,6 +226,16 @@ export function resolveConfig(
       "XEMNAS_ADAPTER_MAX_MESSAGE_PAGES",
       DEFAULT_MAX_MESSAGE_PAGES,
     ),
+    contextMode: contextMode(env),
+    contextTimeoutMs: envInt(
+      env,
+      "XEMNAS_CONTEXT_TIMEOUT_MS",
+      DEFAULT_CONTEXT_TIMEOUT_MS,
+    ),
+    contextBudgetTokens:
+      envValue(env, "XEMNAS_CONTEXT_BUDGET_TOKENS") === undefined
+        ? undefined
+        : envInt(env, "XEMNAS_CONTEXT_BUDGET_TOKENS", 300),
   };
 }
 

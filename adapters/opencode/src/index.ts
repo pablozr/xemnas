@@ -18,6 +18,11 @@ import {
   resolveConfig,
   type AdapterConfig,
 } from "./config.js";
+import {
+  createChatMessageHook,
+  createContextClient,
+  type ChatMessageHook,
+} from "./context.js";
 import { buildEnvelope, validateEnvelope } from "./envelope.js";
 import {
   createOutboxWriter,
@@ -92,6 +97,7 @@ export interface OpenCodePluginEventInput {
 /** Hooks returned by the plugin factory. */
 export interface OpenCodePluginHooks {
   event?: (input: OpenCodePluginEventInput) => Promise<void> | void;
+  "chat.message"?: ChatMessageHook;
 }
 
 /** The OpenCode plugin signature. */
@@ -400,16 +406,21 @@ export function createAdapter(deps: AdapterDeps): Adapter {
  */
 export function createOpenCodePlugin(
   buildAdapter: (directory: string) => Adapter,
+  buildChatHook?: (directory: string) => ChatMessageHook,
 ): OpenCodePlugin {
   return async (input: OpenCodePluginInput): Promise<OpenCodePluginHooks> => {
     const directory =
       typeof input.directory === "string" ? input.directory : "";
     const adapter = buildAdapter(directory);
-    return {
+    const hooks: OpenCodePluginHooks = {
       event: async ({ event }): Promise<void> => {
         adapter.handleEvent(event);
       },
     };
+    if (buildChatHook !== undefined) {
+      hooks["chat.message"] = buildChatHook(directory);
+    }
+    return hooks;
   };
 }
 
@@ -432,10 +443,26 @@ function buildDefaultAdapter(
   });
 }
 
+function buildDefaultChatHook(
+  config: AdapterConfig,
+  directory: string,
+): ChatMessageHook {
+  return createChatMessageHook({
+    config,
+    directory,
+    client: createContextClient({
+      resolveEndpoint: createLocalApiEndpointResolver(config),
+      timeoutMs: config.contextTimeoutMs,
+    }),
+    log: createStderrLog(),
+  });
+}
+
 /** OpenCode plugin entry point. */
 export const XemnasOpenCodeAdapter: OpenCodePlugin = (input) => {
   const config = resolveConfig();
-  return createOpenCodePlugin((directory) =>
-    buildDefaultAdapter(config, directory),
+  return createOpenCodePlugin(
+    (directory) => buildDefaultAdapter(config, directory),
+    (directory) => buildDefaultChatHook(config, directory),
   )(input);
 };

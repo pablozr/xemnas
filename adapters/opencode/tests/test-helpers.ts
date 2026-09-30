@@ -47,6 +47,8 @@ export function testConfig(
     maxDiffBytes: DEFAULT_MAX_DIFF_BYTES,
     messageLimit: DEFAULT_MESSAGE_LIMIT,
     maxMessagePages: DEFAULT_MAX_MESSAGE_PAGES,
+    contextMode: "off",
+    contextTimeoutMs: 300,
     ...overrides,
   };
 }
