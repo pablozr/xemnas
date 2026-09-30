@@ -178,6 +178,30 @@ pub struct LossMetrics {
     pub outbox_rejected: i64,
 }
 
+/// Context blocks computed in one delivery mode.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ContextModeMetrics {
+    /// Blocks computed.
+    pub blocks: i64,
+    /// Distinct agent sessions that received a block.
+    pub sessions: i64,
+    /// Items across all blocks.
+    pub items: i64,
+    /// Estimated tokens across all blocks.
+    pub tokens_total: i64,
+    /// Average estimated tokens per block, when any.
+    pub tokens_avg: Option<i64>,
+}
+
+/// Context injection metrics, split by mode.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ContextMetrics {
+    /// Measured but not sent to the agent.
+    pub shadow: ContextModeMetrics,
+    /// Appended to the agent prompt.
+    pub inject: ContextModeMetrics,
+}
+
 /// Operational metrics for the dogfood (spec §780).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DiagnosticsMetrics {
@@ -189,6 +213,9 @@ pub struct DiagnosticsMetrics {
     pub noise: NoiseMetrics,
     /// Losses: failed/skipped work.
     pub losses: LossMetrics,
+    /// Context injection volume.
+    #[serde(default)]
+    pub context: ContextMetrics,
 }
 
 /// The exported diagnostics document.

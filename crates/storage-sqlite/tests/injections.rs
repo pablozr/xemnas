@@ -139,3 +139,35 @@ fn migration_0012_upgrades_a_version_11_database() {
         ))
         .expect("record after upgrade");
 }
+
+#[test]
+fn diagnostics_aggregate_context_blocks_per_mode() {
+    use application::diagnostics::DiagnosticsStore;
+
+    let test = support::open("injections-metrics", &["p1"]);
+    let store = &test.store;
+    let empty = store.metrics().expect("metrics").context;
+    assert_eq!(empty.inject.blocks, 0);
+    assert_eq!(empty.inject.tokens_avg, None);
+
+    for (id, session, mode, items) in [
+        ("i1", "s1", InjectionMode::Inject, 2),
+        ("i2", "s2", InjectionMode::Inject, 1),
+        ("i3", "s1", InjectionMode::Shadow, 1),
+    ] {
+        let items = (0..items)
+            .map(|index| item(ItemKind::Decision, &format!("{id}-{index}"), 1))
+            .collect();
+        store
+            .record_injection(&record(id, session, mode, items))
+            .expect("record");
+    }
+    let context = store.metrics().expect("metrics").context;
+    assert_eq!(context.inject.blocks, 2);
+    assert_eq!(context.inject.sessions, 2);
+    assert_eq!(context.inject.items, 3);
+    assert_eq!(context.inject.tokens_total, 84);
+    assert_eq!(context.inject.tokens_avg, Some(42));
+    assert_eq!(context.shadow.blocks, 1);
+    assert_eq!(context.shadow.items, 1);
+}

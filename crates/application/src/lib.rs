@@ -37,9 +37,10 @@ pub use decisions::{
     DecisionsError, SearchQuery, MAX_ARRAY_ITEMS, MAX_ARRAY_ITEM_CHARS,
 };
 pub use diagnostics::{
-    AiProfileDiagnostic, AssessmentDiagnostic, Diagnostics, DiagnosticsCounts, DiagnosticsDocument,
-    DiagnosticsError, DiagnosticsMetrics, Distribution, JobDiagnostic, LossMetrics, NoiseMetrics,
-    OutboxCounts, ReceiptDiagnostic, RuntimeDiagnostic, SchemaInfo,
+    AiProfileDiagnostic, AssessmentDiagnostic, ContextMetrics, ContextModeMetrics, Diagnostics,
+    DiagnosticsCounts, DiagnosticsDocument, DiagnosticsError, DiagnosticsMetrics, Distribution,
+    JobDiagnostic, LossMetrics, NoiseMetrics, OutboxCounts, ReceiptDiagnostic, RuntimeDiagnostic,
+    SchemaInfo,
 };
 pub use export::{
     preview_pack, write_pack, Export, ExportDocument, ExportError, ExportFormat, ExportResult,

@@ -2,9 +2,9 @@
 
 use crate::store::SqliteStore;
 use application::diagnostics::{
-    AssessmentDiagnosticRow, DiagnosticsCounts, DiagnosticsError, DiagnosticsMetrics,
-    DiagnosticsStore, Distribution, JobDiagnosticRow, LossMetrics, NoiseMetrics,
-    ReceiptDiagnosticRow,
+    AssessmentDiagnosticRow, ContextMetrics, ContextModeMetrics, DiagnosticsCounts,
+    DiagnosticsError, DiagnosticsMetrics, DiagnosticsStore, Distribution, JobDiagnosticRow,
+    LossMetrics, NoiseMetrics, ReceiptDiagnosticRow,
 };
 use std::collections::BTreeMap;
 
@@ -241,8 +241,40 @@ impl DiagnosticsStore for SqliteStore {
                 jobs_failed,
                 outbox_rejected: 0,
             },
+            context: ContextMetrics {
+                shadow: context_mode(&connection, "shadow")?,
+                inject: context_mode(&connection, "inject")?,
+            },
         })
     }
+}
+
+/// Aggregates the context injection audit for one mode.
+fn context_mode(
+    connection: &rusqlite::Connection,
+    mode: &str,
+) -> Result<ContextModeMetrics, DiagnosticsError> {
+    connection
+        .query_row(
+            "SELECT COUNT(*), COUNT(DISTINCT session_id), COALESCE(SUM(tokens), 0), \
+                    (SELECT COUNT(*) FROM context_injection_items i \
+                     JOIN context_injections c ON c.injection_id = i.injection_id \
+                     WHERE c.mode = ?1) \
+             FROM context_injections WHERE mode = ?1",
+            [mode],
+            |row| {
+                let blocks: i64 = row.get(0)?;
+                let tokens_total: i64 = row.get(2)?;
+                Ok(ContextModeMetrics {
+                    blocks,
+                    sessions: row.get(1)?,
+                    items: row.get(3)?,
+                    tokens_total,
+                    tokens_avg: (blocks > 0).then(|| tokens_total / blocks),
+                })
+            },
+        )
+        .map_err(storage_error)
 }
 
 /// Rounds a ratio to four decimals, as promised by the document shape.
