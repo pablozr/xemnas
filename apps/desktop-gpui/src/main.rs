@@ -236,22 +236,9 @@ fn run_shell_mode(store: Result<SqliteStore, String>, demo: bool) {
                 }),
                 app_id: Some("com.xemnas.desktop".into()),
                 window_min_size: Some(size(px(1180.0), px(760.0))),
-                // Mica Alt as the window material, the darker Mica variant that
-                // Windows 11 provides specifically so a commanding surface —
-                // the title bar and the navigation rail — reads as distinct from
-                // the content beneath it. This is what the design system
-                // anticipated in `docs/design-system-quiet-glass.md` §
-                // "Fallback técnico" ("No Windows, Mica/blur pode ser usado no
-                // fundo da janela quando o backend do GPUI estiver estável").
-                //
-                // The window itself paints nothing: the shell's canvas is a
-                // translucent `layer.fill` over this backdrop, which is the
-                // three-layer Mica model from the Fluent 2 material spec
-                // (base material → commanding layer → content layer). On a
-                // platform without Mica the backdrop is ignored and the same
-                // translucent fill still composites against the opaque canvas,
-                // so contrast is preserved either way.
-                window_background: WindowBackgroundAppearance::MicaAltBackdrop,
+                // Opaque window: the shell paints its own solid canvas. The
+                // Mica Alt backdrop was removed after rendering glitches in use.
+                window_background: WindowBackgroundAppearance::Opaque,
                 ..Default::default()
             },
             |window, cx| {

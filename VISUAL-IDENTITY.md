@@ -21,8 +21,7 @@ mas `docs/` é ignorado pelo Git: este arquivo é a regra versionável.
   2 px (`mark_selected`). Foco visível é um anel inset que não desloca o layout.
 - Cada paleta (Quiet Glass e Carvão) é uma tabela `Palette` em `tokens.rs`;
   toda cor nova precisa existir nas duas.
-- Mica pode compor o fundo da janela no Windows; isso **não** garante backdrop
-  blur por componente. Superfícies internas precisam funcionar sem blur.
+- A janela é opaca (sem Mica/acrílico); nenhuma superfície depende de blur.
 - Cada informação tem um lugar: contagem na lista lateral, título da seção na
   própria seção; não repetir a mesma informação no título e no rodapé.
 

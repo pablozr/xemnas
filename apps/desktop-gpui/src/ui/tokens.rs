@@ -42,7 +42,6 @@ struct Palette {
     glass_surface_lavender: Tone,
     glass_edge_lavender: Tone,
     hairline_divider: Tone,
-    layer_fill: Tone,
     text_primary: Tone,
     text_secondary: Tone,
     text_muted: Tone,
@@ -61,7 +60,6 @@ const QUIET_GLASS: Palette = Palette {
     glass_surface_lavender: Tone::solid(0x1C1A28),
     glass_edge_lavender: Tone::solid(0x514A63),
     hairline_divider: Tone(0xCDC7DC, 0.10),
-    layer_fill: Tone(0x0D111A, 0.72),
     text_primary: Tone::solid(0xECEEF4),
     text_secondary: Tone::solid(0xBEC3D0),
     text_muted: Tone::solid(0x858C9D),
@@ -80,7 +78,6 @@ const CHARCOAL: Palette = Palette {
     glass_surface_lavender: Tone::solid(0x26262C),
     glass_edge_lavender: Tone::solid(0x49434F),
     hairline_divider: Tone::solid(0x35353D),
-    layer_fill: Tone::solid(0x202024),
     text_primary: Tone::solid(0xEDEDF0),
     text_secondary: Tone::solid(0xC0C0CA),
     text_muted: Tone::solid(0xA09FAB),
@@ -163,11 +160,6 @@ impl ColorTokens {
     /// `hairline.divider` — 1 px separation inside a continuous surface.
     pub fn hairline_divider(&self) -> Rgba {
         self.palette.hairline_divider.rgba()
-    }
-
-    /// `layer.fill` — the content layer painted on top of a Mica backdrop.
-    pub fn layer_fill(&self) -> Rgba {
-        self.palette.layer_fill.rgba()
     }
 
     /// `text.primary` — titles and primary content.

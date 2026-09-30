@@ -170,36 +170,13 @@ Evitar raios maiores que 12 px em painéis do desktop. Elementos não devem pare
 
 ## Materiais
 
-### Backdrop da janela: Mica Alt
+### Fundo da janela: opaco
 
-No Windows 11 a janela usa o material nativo **Mica Alt** como camada base:
+A janela usa `WindowBackgroundAppearance::Opaque` e o shell pinta o próprio
+`canvas` sólido. O material Mica Alt foi usado numa fase anterior e removido em
+30/09/2026 por falhas visuais no uso; não há camada translúcida sobre o sistema.
 
-```rust
-WindowOptions {
-    window_background: WindowBackgroundAppearance::MicaAltBackdrop,
-    ..Default::default()
-}
-```
-
-Escolha do material e das camadas segue o modelo do Fluent 2
-([Mica](https://learn.microsoft.com/en-us/windows/apps/design/style/mica)):
-
-| Camada | Token | Valor | Papel |
-|---|---|---|---|
-| Base | material do sistema | `MicaAltBackdrop` | papel de parede entra na janela |
-| Comando | `hairline.divider` | `rgba(205,199,220,0.10)` | barra de título e rail |
-| Conteúdo | `layer.fill` | `rgba(13,17,26,0.72)` | shell e colunas |
-
-`Mica Alt` (e não `Mica`) porque a variante escura existe exatamente para
-superfícies de comando: é ela que separa a barra de título e a navegação do
-conteúdo sem precisar de um fundo próprio.
-
-O `layer.fill` é translúcido de propósito — é ele que deixa o material aparecer.
-Em plataforma sem Mica o material é ignorado e o mesmo fill translúcido compõe
-sobre o canvas opaco, então o contraste se mantém nos dois casos.
-
-**Limite registrado:** GPUI não faz *backdrop blur* por elemento. O material só
-existe no fundo da janela; superfícies internas (rail, cards, empty state) usam
+**Limite registrado:** GPUI não faz *backdrop blur* por elemento. Superfícies internas (rail, cards, empty state) usam
 a receita translúcida + borda + *inset shadow* descrita abaixo. Para vidro
 desfocado em superfície interna seria preciso um shader WGSL próprio, fora do
 escopo deste design system.
