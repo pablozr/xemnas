@@ -6,6 +6,7 @@
 //! use cases and the port traits their repositories implement.
 #![warn(missing_docs)]
 
+pub mod analysis;
 pub mod captures;
 mod clock;
 pub mod decisions;
@@ -21,6 +22,7 @@ pub mod profile;
 pub mod projects;
 pub mod redact;
 
+pub use analysis::{AnalysisOutcome, AnalyzeCapture, ExtractorFactory};
 pub use captures::{
     CaptureApi, CaptureArtifactRecord, CaptureCheckpointRecord, CaptureError, CaptureIngest,
     CaptureReceiptRecord, CaptureRepository, CaptureWrite, IngestError, IngestOutcome, Receipt,

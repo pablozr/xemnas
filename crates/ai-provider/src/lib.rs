@@ -27,6 +27,7 @@ use std::io::Read;
 use std::sync::Arc;
 use std::time::Duration;
 
+use application::analysis::ExtractorFactory;
 use application::extract::{
     run_connection_test, truncate_content, CandidateExtractor, CandidateProposal,
     ConnectionTestReport, DecisionEvidence, ExtractError, RelevanceSignal, MAX_DIFF_SUMMARY_FILES,
@@ -124,6 +125,22 @@ pub fn test_connection(
 ) -> Result<ConnectionTestReport, ExtractError> {
     let extractor = OpenAiCompatibleExtractor::new(profile, secret)?;
     run_connection_test(&extractor)
+}
+
+/// Builds [`OpenAiCompatibleExtractor`]s for the analysis job.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OpenAiCompatibleFactory;
+
+impl ExtractorFactory for OpenAiCompatibleFactory {
+    type Extractor = OpenAiCompatibleExtractor;
+
+    fn external(
+        &self,
+        profile: &AiProfile,
+        secret: String,
+    ) -> Result<OpenAiCompatibleExtractor, ExtractError> {
+        OpenAiCompatibleExtractor::new(profile, secret)
+    }
 }
 
 /// An OpenAI-compatible candidate extractor.

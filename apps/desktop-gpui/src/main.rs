@@ -13,7 +13,7 @@ use gpui::{
     WindowOptions,
 };
 use gpui_platform::application;
-use storage_sqlite::{default_data_dir, default_db_path, SqliteStore};
+use storage_sqlite::SqliteStore;
 
 use xemnas_desktop::app::{FocusSearch, Shell, TabNext, TabPrev};
 use xemnas_desktop::ui::search_field::{
@@ -36,7 +36,8 @@ fn main() {
         return;
     }
 
-    let store = match SqliteStore::open(default_db_path()) {
+    let paths = application::AppPaths::from_env();
+    let store = match SqliteStore::open(&paths.database) {
         Ok(store) => store,
         Err(error) => {
             // The shell logs the technical detail through `tracing` and paints a
@@ -50,7 +51,7 @@ fn main() {
 
     // AI settings: the profile file is seeded with the offline default so the
     // inbox keeps working without any provider (MVP-SPEC §7 line 404).
-    let ai_profile_path = default_data_dir().join("settings").join("ai-profile.json");
+    let ai_profile_path = paths.ai_profile.clone();
     let settings = application::profile::AiSettings::new(
         application::profile::FileProfileStore::new(ai_profile_path.clone()),
         ai_provider::KeyringSecretStore::new(),
@@ -74,9 +75,12 @@ fn main() {
     jobs.register(
         application::jobs::ANALYZE_CAPTURE_KIND,
         std::sync::Arc::new({
-            let store = store.clone();
-            let settings = settings.clone();
-            move |record: &application::jobs::JobRecord| analyze_capture(&store, &settings, record)
+            let analysis = application::analysis::AnalyzeCapture::new(
+                store.clone(),
+                settings.clone(),
+                ai_provider::OpenAiCompatibleFactory,
+            );
+            move |record: &application::jobs::JobRecord| analyze_capture(&analysis, record)
         }),
     );
     jobs.observe_with(|event| match event {
@@ -126,13 +130,13 @@ fn main() {
     // discovers an app whose pending captures are already being imported.
     // Transient items stay in `pending` for the next start; a drain failure
     // only logs (MVP-SPEC §14 - an integration problem never blocks the app).
-    drain_outbox(&store);
+    drain_outbox(&store, &paths.outbox_dir);
 
     // The local API shares the process lifetime: it runs on its own Tokio
     // runtime thread beside the jobs worker, and a startup failure is logged
     // while the window still opens (MVP-SPEC §14 - a broken integration must
     // never block the rest of the app).
-    let api = match start_local_api(store.clone()) {
+    let api = match start_local_api(store.clone(), &paths.runtime_dir) {
         Ok(api) => Some(api),
         Err(error) => {
             tracing::error!(
@@ -267,151 +271,23 @@ fn run_shell_mode(store: Result<SqliteStore, String>, demo: bool) {
     });
 }
 
-/// Concrete AI settings used by the composition root.
-type AiSettings = application::profile::AiSettings<
+/// Analysis use case wired with the concrete stores and provider.
+type Analysis = application::analysis::AnalyzeCapture<
+    SqliteStore,
     application::profile::FileProfileStore,
     ai_provider::KeyringSecretStore,
+    ai_provider::OpenAiCompatibleFactory,
 >;
 
-/// Runs one capture analysis honoring the stored AI profile.
-///
-/// The profile is reloaded every run, so a Settings change needs no restart.
-/// Logs carry only counts and status; the provider key never reaches a log.
+/// Runs one capture analysis and logs only counts, codes and status.
 fn analyze_capture(
-    store: &SqliteStore,
-    settings: &AiSettings,
+    analysis: &Analysis,
     record: &application::jobs::JobRecord,
 ) -> Result<(), application::jobs::JobFailure> {
-    use application::profile::{choose_extractor, ExtractorChoice};
+    use application::analysis::AnalysisOutcome;
 
-    let capture_id = record.payload.as_str();
-    let profile = match settings.load_or_seed() {
-        Ok(profile) => profile,
-        Err(error) => {
-            tracing::error!(
-                error = %error,
-                operation = "analyze_capture",
-                "could not load the AI profile"
-            );
-            // An unreadable profile must still leave a provenance row; the
-            // helper forces the fixed unavailable context.
-            return fail_provider_setup(
-                store,
-                capture_id,
-                &application::extract::RunContext::unavailable(Some(record.id.clone())),
-                application::extract::ProviderSetupError::ProfileUnavailable,
-            );
-        }
-    };
-    let context = application::extract::RunContext::for_profile(&profile, Some(record.id.clone()));
-
-    match choose_extractor(Some(&profile)) {
-        ExtractorChoice::OfflineFake => run_extraction_logged(
-            store,
-            &application::extract::FakeCandidateExtractor,
-            capture_id,
-            &context,
-        ),
-        ExtractorChoice::ExternalBlocked => {
-            // Consent is missing or stale: no provider is contacted, but the
-            // run is still recorded so the reason is traceable (assessment
-            // "skipped"). A storage failure while recording fails the job.
-            if let Err(error) =
-                application::extract::record_skipped_assessment(store, capture_id, &context)
-            {
-                tracing::error!(
-                    error = %error,
-                    operation = "analyze_capture",
-                    "could not record the skipped assessment"
-                );
-                return Err(application::jobs::JobFailure::Failed);
-            }
-            tracing::info!(
-                operation = "analyze_capture",
-                "external extraction blocked: consent missing"
-            );
-            Ok(())
-        }
-        ExtractorChoice::ExternalEnabled => {
-            let secret = match settings.secret(&profile.id) {
-                Ok(Some(secret)) => secret,
-                Ok(None) => {
-                    tracing::error!(
-                        operation = "analyze_capture",
-                        "external extraction blocked: provider key missing"
-                    );
-                    return fail_provider_setup(
-                        store,
-                        capture_id,
-                        &context,
-                        application::extract::ProviderSetupError::MissingSecret,
-                    );
-                }
-                Err(error) => {
-                    tracing::error!(
-                        error = %error,
-                        operation = "analyze_capture",
-                        "could not read the provider key"
-                    );
-                    return fail_provider_setup(
-                        store,
-                        capture_id,
-                        &context,
-                        application::extract::ProviderSetupError::Keystore,
-                    );
-                }
-            };
-            match ai_provider::OpenAiCompatibleExtractor::new(&profile, secret) {
-                Ok(extractor) => run_extraction_logged(store, &extractor, capture_id, &context),
-                Err(error) => {
-                    tracing::error!(
-                        error = %error,
-                        operation = "analyze_capture",
-                        "could not prepare the external extractor"
-                    );
-                    fail_provider_setup(
-                        store,
-                        capture_id,
-                        &context,
-                        application::extract::ProviderSetupError::InvalidConfig,
-                    )
-                }
-            }
-        }
-    }
-}
-
-/// Records the `failed` assessment for a provider that never started, then
-/// returns the typed job failure. A storage error while recording still fails
-/// the job, so provenance never silently disappears.
-fn fail_provider_setup(
-    store: &SqliteStore,
-    capture_id: &str,
-    context: &application::extract::RunContext,
-    error: application::extract::ProviderSetupError,
-) -> Result<(), application::jobs::JobFailure> {
-    match application::extract::fail_provider_setup(store, capture_id, context, error) {
-        Ok(failure) => Err(failure),
-        Err(storage_error) => {
-            tracing::error!(
-                error = %storage_error,
-                operation = "analyze_capture",
-                "could not record the provider setup failure"
-            );
-            Err(application::jobs::JobFailure::Failed)
-        }
-    }
-}
-
-/// Runs an extractor and logs only counts; never artifact content.
-fn run_extraction_logged<E: application::extract::CandidateExtractor>(
-    store: &SqliteStore,
-    extractor: &E,
-    capture_id: &str,
-    context: &application::extract::RunContext,
-) -> Result<(), application::jobs::JobFailure> {
-    match application::extract::run_extraction(store, extractor, capture_id, context) {
-        Ok(report) => {
+    match analysis.run(&record.payload, Some(record.id.clone())) {
+        Ok(AnalysisOutcome::Extracted(report)) => {
             tracing::info!(
                 candidates = report.candidates,
                 inserted = report.inserted,
@@ -419,6 +295,21 @@ fn run_extraction_logged<E: application::extract::CandidateExtractor>(
                 "capture analysis finished"
             );
             Ok(())
+        }
+        Ok(AnalysisOutcome::Skipped) => {
+            tracing::info!(
+                operation = "analyze_capture",
+                "external extraction blocked: consent missing"
+            );
+            Ok(())
+        }
+        Ok(AnalysisOutcome::SetupFailed(error)) => {
+            tracing::error!(
+                code = error.code(),
+                operation = "analyze_capture",
+                "the AI provider could not start"
+            );
+            Err(application::jobs::JobFailure::Failed)
         }
         Err(error) => {
             tracing::error!(
@@ -438,11 +329,7 @@ fn run_extraction_logged<E: application::extract::CandidateExtractor>(
 /// (default 7); rejected diagnostics are never pruned here. The report is
 /// logged as counts only — filenames and envelope content stay out of the log
 /// (PRIV-001).
-fn drain_outbox(store: &SqliteStore) {
-    let root = std::env::var_os("XEMNAS_OUTBOX_DIR")
-        .filter(|value| !value.is_empty())
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| default_data_dir().join("outbox"));
+fn drain_outbox(store: &SqliteStore, root: &std::path::Path) {
     // Accept only a sane day count (1..=3650) and multiply without overflowing,
     // so a hostile environment value can never panic the boot path. Any invalid
     // value falls back to the 7-day default.
@@ -454,7 +341,7 @@ fn drain_outbox(store: &SqliteStore) {
     let retention =
         std::time::Duration::from_secs(retention_days.checked_mul(86_400).unwrap_or(7 * 86_400));
     let ingest = application::captures::CaptureIngest::new(store.clone());
-    match application::outbox::drain(&root, &ingest, retention) {
+    match application::outbox::drain(root, &ingest, retention) {
         Ok(report) => tracing::info!(
             accepted = report.accepted,
             rejected = report.rejected.values().sum::<usize>(),
@@ -478,11 +365,10 @@ fn drain_outbox(store: &SqliteStore) {
 /// `app.db`, so `discovery.json` and the per-session token file live with the
 /// rest of the app state. Defaults are a 4 MiB body limit and a 5 s request
 /// timeout; the token never reaches the UI or the logs.
-fn start_local_api(store: SqliteStore) -> Result<local_api::RunningApi, local_api::ApiServerError> {
-    let runtime_dir = default_db_path()
-        .parent()
-        .map(std::path::Path::to_path_buf)
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
+fn start_local_api(
+    store: SqliteStore,
+    runtime_dir: &std::path::Path,
+) -> Result<local_api::RunningApi, local_api::ApiServerError> {
     let use_case = std::sync::Arc::new(application::captures::CaptureIngest::new(store));
     local_api::ApiServer::start(local_api::ApiServerConfig::new(use_case, runtime_dir))
 }
