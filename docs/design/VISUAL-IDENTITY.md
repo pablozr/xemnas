@@ -154,6 +154,16 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   seções Decisões em vigor (abrem em Decisões), Conflitos, Regras, Estrutura,
   Impacto e Linha do tempo; lente de arquivo com campo e resultado; linha do
   tempo com data, ponto de estado e frase.
+- **Visão geral** (primeira visão do Mapa): blocos no estilo C4, dois por
+  linha, um por componente de topo, com as partes dentro como chips; cada
+  decisão em vigor é um quadrado cheio de 8 px e cada regra um vazado, e o
+  bloco cresce com as decisões; ponto verde = atividade nos últimos 14 dias,
+  âmbar = decisões em conflito, com legenda. Tecnologias em chips abaixo.
+- **Vizinhança** (topo do detalhe): diagrama em camadas, decisões à esquerda
+  (abrem em Decisões), o item no centro (única superfície com `selection`) e
+  regras à direita, ligados por curvas de 1,25 px desenhadas com `canvas` +
+  `PathBuilder` (tracejadas para regras); no máximo 6 por lado e "Mais N nas
+  listas abaixo". Layout determinístico, nunca force-directed.
 - Nunca o grafo inteiro: sempre um item e o que está em volta. Nada entra no
   mapa sem confirmação; aposentar e rejeitar não apagam.
 

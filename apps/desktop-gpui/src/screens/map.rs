@@ -21,8 +21,8 @@ use application::relations::RelationStore;
 use domain::entities::{EdgeKind, EntityKind, NodeKind};
 use gpui::prelude::*;
 use gpui::{
-    div, px, AnyElement, Context, Div, Entity, EventEmitter, FocusHandle, Render, Role,
-    SharedString, Stateful, Subscription, Toggled, Window,
+    canvas, div, point, px, AnyElement, Context, Div, Entity, EventEmitter, FocusHandle, Hsla,
+    PathBuilder, Pixels, Render, Role, SharedString, Stateful, Subscription, Toggled, Window,
 };
 
 use super::context::OpenDecision;
@@ -70,10 +70,23 @@ pub struct MapServices<S> {
 const INDEX_WIDTH: f32 = 296.0;
 /// Decisions offered when linking.
 const PICK_LIMIT: usize = 100;
+/// Days an entity counts as recently active on the overview.
+const RECENT_DAYS: i64 = 14;
+/// Squares drawn per kind on an overview block before "+N".
+const MAX_SQUARES: usize = 12;
+/// Nodes per side of the neighborhood diagram.
+const MAX_SIDE: usize = 6;
+/// Height of a neighborhood node.
+const NODE_H: f32 = 52.0;
+/// Vertical gap between neighborhood nodes.
+const NODE_GAP: f32 = 10.0;
+/// Horizontal gap the curves cross between columns.
+const COLUMN_GAP: f32 = 48.0;
 
 /// What the reading column shows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum View {
+    Overview,
     Suggestions,
     File,
     Timeline,
@@ -170,7 +183,7 @@ impl<S: MapStores> MapScreen<S> {
             generation: 0,
             busy: false,
             data: None,
-            view: View::Suggestions,
+            view: View::Overview,
             detail: None,
             timeline: None,
             lens: None,
@@ -202,7 +215,7 @@ impl<S: MapStores> MapScreen<S> {
         self.timeline = None;
         self.lens = None;
         self.picker = None;
-        self.view = View::Suggestions;
+        self.view = View::Overview;
         self.error = None;
         self.notice = None;
         self.refresh(cx);
@@ -397,7 +410,7 @@ impl<S: MapStores> MapScreen<S> {
                     .map(|row| row.entity.clone());
                 self.fill_form(entity.as_ref(), cx);
             }
-            View::Suggestions | View::File => {}
+            View::Overview | View::Suggestions | View::File => {}
         }
         self.view = view;
         cx.notify();
@@ -807,6 +820,7 @@ impl<S: MapStores> MapScreen<S> {
             .child(icon(IconName::Plus, 14.0, colors.text_secondary()));
 
         let fixed = [
+            (View::Overview, IconName::Graph, "Visão geral", None),
             (
                 View::Suggestions,
                 IconName::Rotate,
@@ -1301,6 +1315,8 @@ impl<S: MapStores> MapScreen<S> {
                 .children(picker),
         );
 
+        let diagram = self.neighborhood_diagram(theme, &detail, cx);
+        column = column.child(section(theme, "Vizinhança", diagram));
         let decisions = self.node_list(
             theme,
             "map-decisions",
@@ -1828,6 +1844,525 @@ impl<S: MapStores> MapScreen<S> {
     }
 }
 
+impl<S: MapStores> MapScreen<S> {
+    /// The project at a glance, like a C4 container view drawn by the real
+    /// decisions: one block per top-level component, its parts inside, a
+    /// square per decision in force, and technologies as chips.
+    fn render_overview(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let colors = theme.colors;
+        let Some(data) = self.data.as_ref() else {
+            return div().into_any_element();
+        };
+        let entities = data.map.entities.clone();
+        let part_of = data.map.part_of.clone();
+        if entities.is_empty() {
+            let open = self.button(
+                "map-overview-suggestions",
+                ButtonKind::Primary,
+                true,
+                "Ver sugestões",
+                |this, cx| this.open_view(View::Suggestions, cx),
+                cx,
+            );
+            return reading_page(
+                "map-overview-empty",
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S4))
+                    .child(page_header(
+                        theme,
+                        "Mapa do projeto",
+                        "Ainda vazio. Componentes ligam as decisões às partes do código; comece pelas sugestões, que vêm dos arquivos que as decisões tocaram.",
+                    ))
+                    .child(div().flex().child(open)),
+            )
+            .into_any_element();
+        }
+        let recent_since = (chrono::Utc::now() - chrono::Duration::days(RECENT_DAYS))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+        let parent_of: BTreeMap<String, String> = part_of.into_iter().collect();
+        let tops: Vec<MapEntity> = entities
+            .iter()
+            .filter(|row| {
+                row.entity.kind == EntityKind::Component
+                    && !parent_of.contains_key(&row.entity.entity_id)
+            })
+            .cloned()
+            .collect();
+        let technologies: Vec<MapEntity> = entities
+            .iter()
+            .filter(|row| row.entity.kind == EntityKind::Technology)
+            .cloned()
+            .collect();
+
+        let mut grid = div().flex().flex_col().gap(px(SpacingScale::S3));
+        for pair in tops.chunks(2) {
+            let mut line = div().flex().gap(px(SpacingScale::S3)).items_start();
+            for row in pair {
+                let parts: Vec<MapEntity> = entities
+                    .iter()
+                    .filter(|part| {
+                        parent_of.get(&part.entity.entity_id) == Some(&row.entity.entity_id)
+                    })
+                    .cloned()
+                    .collect();
+                let block = self.component_block(theme, row, &parts, &recent_since, cx);
+                line = line.child(div().flex_1().min_w(px(0.0)).child(block));
+            }
+            if pair.len() == 1 {
+                line = line.child(div().flex_1());
+            }
+            grid = grid.child(line);
+        }
+
+        let mut chips = div().flex().flex_wrap().gap(px(SpacingScale::S2));
+        for row in &technologies {
+            let id = row.entity.entity_id.clone();
+            let chip = self
+                .row(
+                    format!("map-tech-{id}"),
+                    false,
+                    &row.entity.name,
+                    move |this, cx| this.open_entity(id.clone(), cx),
+                    cx,
+                )
+                .border_1()
+                .border_color(colors.glass_border_card())
+                .bg(colors.glass_fill_card())
+                .child(icon(IconName::Cpu, 14.0, colors.text_muted()))
+                .child(text_style(div(), TypeScale::ROW_TITLE).child(row.entity.name.clone()))
+                .child(
+                    text_style(div(), TypeScale::META)
+                        .text_color(colors.text_muted())
+                        .child(row.decisions.to_string()),
+                );
+            chips = chips.child(chip);
+        }
+
+        let legend = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(px(SpacingScale::S4))
+            .child(legend_item(
+                theme,
+                weight_square(theme, true),
+                "decisão em vigor",
+            ))
+            .child(legend_item(theme, weight_square(theme, false), "regra"))
+            .child(legend_item(
+                theme,
+                status_dot(colors.status_success()),
+                "atividade nos últimos 14 dias",
+            ))
+            .child(legend_item(
+                theme,
+                status_dot(colors.status_warning()),
+                "decisões em conflito",
+            ));
+
+        let mut column = div()
+            .flex()
+            .flex_col()
+            .gap(px(SpacingScale::S8))
+            .child(page_header(
+                theme,
+                "Mapa do projeto",
+                "A arquitetura desenhada pelas decisões confirmadas. Abra um bloco para ver o que vale ali.",
+            ))
+            .child(section(theme, "Componentes", grid));
+        if !technologies.is_empty() {
+            column = column.child(section(theme, "Tecnologias", chips));
+        }
+        column = column.child(legend);
+        reading_page("map-overview", column).into_any_element()
+    }
+
+    fn component_block(
+        &mut self,
+        theme: &Theme,
+        row: &MapEntity,
+        parts: &[MapEntity],
+        recent_since: &str,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let colors = theme.colors;
+        let id = row.entity.entity_id.clone();
+        let recent = row
+            .last_activity
+            .as_deref()
+            .is_some_and(|at| at >= recent_since);
+        let focus = self.focus_for(&format!("map-block-{id}"), cx);
+        let open_id = id.clone();
+        let key_id = id.clone();
+        let mut squares = div().flex().flex_wrap().gap(px(3.0));
+        for _ in 0..row.decisions.min(MAX_SQUARES) {
+            squares = squares.child(weight_square(theme, true));
+        }
+        for _ in 0..row.claims.min(MAX_SQUARES) {
+            squares = squares.child(weight_square(theme, false));
+        }
+        let extra = (row.decisions + row.claims).saturating_sub(2 * MAX_SQUARES);
+        let mut parts_row = div().flex().flex_wrap().gap(px(SpacingScale::S2));
+        for part in parts {
+            let part_id = part.entity.entity_id.clone();
+            parts_row = parts_row.child(
+                self.row(
+                    format!("map-part-{part_id}"),
+                    false,
+                    &part.entity.name,
+                    move |this, cx| this.open_entity(part_id.clone(), cx),
+                    cx,
+                )
+                .border_1()
+                .border_color(colors.hairline_divider())
+                .child(text_style(div(), TypeScale::META).child(part.entity.name.clone()))
+                .child(
+                    text_style(div(), TypeScale::META)
+                        .text_color(colors.text_muted())
+                        .child(part.decisions.to_string()),
+                ),
+            );
+        }
+        div()
+            .id(SharedString::from(format!("map-block-{id}")))
+            .flex()
+            .flex_col()
+            .gap(px(SpacingScale::S2))
+            .p(px(SpacingScale::S4))
+            .min_h(px(96.0 + 8.0 * row.decisions.min(MAX_SQUARES) as f32))
+            .rounded(px(10.0))
+            .border_1()
+            .border_color(colors.glass_border_card())
+            .bg(colors.glass_fill_card())
+            .cursor_pointer()
+            .hover(move |style| {
+                style
+                    .border_color(colors.glass_border_card_hover())
+                    .bg(colors.glass_fill_medium())
+            })
+            .role(Role::Button)
+            .aria_label(format!("{}: {}", row.entity.name, weight(row)))
+            .track_focus(&focus)
+            .focus_visible(crate::ui::controls::focus_ring(theme))
+            .on_click(cx.listener(move |this, _, _, cx| this.open_entity(open_id.clone(), cx)))
+            .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    this.open_entity(key_id.clone(), cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(SpacingScale::S2))
+                    .child(
+                        text_style(div(), TypeScale::HEADING_3)
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .truncate()
+                            .child(row.entity.name.clone()),
+                    )
+                    .when(recent, |line| {
+                        line.child(status_dot(colors.status_success()))
+                    })
+                    .when(row.conflicts > 0, |line| {
+                        line.child(status_dot(colors.status_warning()))
+                    }),
+            )
+            .when(!row.entity.patterns.is_empty(), |block| {
+                block.child(
+                    text_style(div(), TypeScale::META)
+                        .font_family(Theme::font_mono())
+                        .truncate()
+                        .text_color(colors.text_muted())
+                        .child(row.entity.patterns.join("  ")),
+                )
+            })
+            .child(squares.when(extra > 0, |squares| {
+                squares.child(
+                    text_style(div(), TypeScale::META)
+                        .text_color(colors.text_muted())
+                        .child(format!("+{extra}")),
+                )
+            }))
+            .child(
+                text_style(div(), TypeScale::META)
+                    .text_color(colors.text_secondary())
+                    .child(weight(row)),
+            )
+            .when(!parts.is_empty(), |block| block.child(parts_row))
+    }
+
+    /// One entity in the middle, the decisions tied to it on the left and the
+    /// rules on the right, joined by curves: a layered ego view, never the
+    /// whole graph.
+    fn neighborhood_diagram(
+        &mut self,
+        theme: &Theme,
+        detail: &EntityDetail,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let colors = theme.colors;
+        let left: Vec<NodeSummary> = detail.decisions.iter().take(MAX_SIDE).cloned().collect();
+        let right: Vec<NodeSummary> = detail.claims.iter().take(MAX_SIDE).cloned().collect();
+        let hidden = detail.decisions.len().saturating_sub(MAX_SIDE)
+            + detail.claims.len().saturating_sub(MAX_SIDE);
+        let rows = left.len().max(right.len()).max(1);
+        let height = rows as f32 * NODE_H + (rows - 1) as f32 * NODE_GAP;
+        let (left_count, right_count) = (left.len(), right.len());
+        let line = Hsla::from(colors.glass_border_card_hover());
+        let dashed = Hsla::from(colors.text_muted()).opacity(0.6);
+        let edges = canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                let column = (bounds.size.width - px(2.0 * COLUMN_GAP)) / 3.0;
+                let top = bounds.origin.y;
+                let center_y = top + px(height / 2.0);
+                let center_left = bounds.origin.x + column + px(COLUMN_GAP);
+                let center_right = center_left + column;
+                let node_y = |count: usize, index: usize| {
+                    let stack = count as f32 * NODE_H + count.saturating_sub(1) as f32 * NODE_GAP;
+                    top + px((height - stack) / 2.0
+                        + index as f32 * (NODE_H + NODE_GAP)
+                        + NODE_H / 2.0)
+                };
+                for index in 0..left_count {
+                    let start = point(bounds.origin.x + column, node_y(left_count, index));
+                    let end = point(center_left, center_y);
+                    curve(window, start, end, line, false);
+                }
+                for index in 0..right_count {
+                    let start = point(center_right, center_y);
+                    let end = point(center_right + px(COLUMN_GAP), node_y(right_count, index));
+                    curve(window, start, end, dashed, true);
+                }
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full();
+
+        let mut left_column = div()
+            .flex_1()
+            .min_w(px(0.0))
+            .h_full()
+            .flex()
+            .flex_col()
+            .justify_center()
+            .gap(px(NODE_GAP));
+        for (index, node) in left.iter().enumerate() {
+            let id = node.node.id.clone();
+            let element = self
+                .diagram_node(
+                    theme,
+                    format!("map-ego-left-{index}"),
+                    &node.label,
+                    &node.detail,
+                    false,
+                    cx,
+                )
+                .tooltip(tooltip("Abrir em Decisões", None))
+                .on_click(cx.listener(move |_, _, _, cx| cx.emit(OpenDecision(id.clone()))));
+            left_column = left_column.child(element);
+        }
+        if left.is_empty() {
+            left_column = left_column.child(
+                text_style(div(), TypeScale::META)
+                    .text_color(colors.text_muted())
+                    .child("Nenhuma decisão ligada."),
+            );
+        }
+        let entity = &detail.entity;
+        let center = div()
+            .flex_1()
+            .min_w(px(0.0))
+            .h_full()
+            .flex()
+            .flex_col()
+            .justify_center()
+            .child(
+                div()
+                    .h(px(NODE_H))
+                    .px(px(SpacingScale::S3))
+                    .flex()
+                    .flex_col()
+                    .justify_center()
+                    .rounded(px(10.0))
+                    .border_1()
+                    .border_color(colors.accent_default())
+                    .bg(colors.selection())
+                    .child(
+                        text_style(div(), TypeScale::ROW_TITLE)
+                            .truncate()
+                            .child(entity.name.clone()),
+                    )
+                    .child(
+                        text_style(div(), TypeScale::META)
+                            .truncate()
+                            .text_color(colors.text_muted())
+                            .child(kind_label(entity.kind)),
+                    ),
+            );
+        let mut right_column = div()
+            .flex_1()
+            .min_w(px(0.0))
+            .h_full()
+            .flex()
+            .flex_col()
+            .justify_center()
+            .gap(px(NODE_GAP));
+        for (index, node) in right.iter().enumerate() {
+            right_column = right_column.child(self.diagram_node(
+                theme,
+                format!("map-ego-right-{index}"),
+                &node.label,
+                claim_label(&node.detail),
+                true,
+                cx,
+            ));
+        }
+        if right.is_empty() {
+            right_column = right_column.child(
+                text_style(div(), TypeScale::META)
+                    .text_color(colors.text_muted())
+                    .child("Nenhuma regra ligada."),
+            );
+        }
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(SpacingScale::S2))
+            .child(
+                div()
+                    .id("map-ego")
+                    .relative()
+                    .w_full()
+                    .h(px(height))
+                    .flex()
+                    .gap(px(COLUMN_GAP))
+                    .role(Role::Group)
+                    .aria_label(format!(
+                        "{}: {} decisões à esquerda, {} regras à direita",
+                        entity.name, left_count, right_count
+                    ))
+                    .child(edges)
+                    .child(left_column)
+                    .child(center)
+                    .child(right_column),
+            )
+            .when(hidden > 0, |diagram| {
+                diagram.child(
+                    text_style(div(), TypeScale::META)
+                        .text_color(colors.text_muted())
+                        .child(format!("Mais {hidden} nas listas abaixo.")),
+                )
+            })
+    }
+
+    fn diagram_node(
+        &mut self,
+        theme: &Theme,
+        id: String,
+        label: &str,
+        detail: &str,
+        rule: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let colors = theme.colors;
+        let focus = self.focus_for(&id, cx);
+        div()
+            .id(SharedString::from(id))
+            .h(px(NODE_H))
+            .px(px(SpacingScale::S3))
+            .flex()
+            .flex_col()
+            .justify_center()
+            .rounded(px(10.0))
+            .border_1()
+            .border_color(colors.glass_border_card())
+            .bg(colors.glass_fill_card())
+            .when(!rule, |node| {
+                node.cursor_pointer()
+                    .hover(move |style| {
+                        style
+                            .border_color(colors.glass_border_card_hover())
+                            .bg(colors.glass_fill_medium())
+                    })
+                    .role(Role::Button)
+                    .track_focus(&focus)
+                    .focus_visible(crate::ui::controls::focus_ring(theme))
+            })
+            .aria_label(label.to_owned())
+            .child(
+                text_style(div(), TypeScale::BODY_SMALL)
+                    .truncate()
+                    .child(label.to_owned()),
+            )
+            .child(
+                text_style(div(), TypeScale::META)
+                    .truncate()
+                    .text_color(colors.text_muted())
+                    .child(detail.to_owned()),
+            )
+    }
+}
+
+/// A stroked cubic curve from `start` to `end`, bending horizontally.
+fn curve(
+    window: &mut Window,
+    start: gpui::Point<Pixels>,
+    end: gpui::Point<Pixels>,
+    color: Hsla,
+    dashed: bool,
+) {
+    let bend = (end.x - start.x) / 2.0;
+    let mut builder = PathBuilder::stroke(px(1.25));
+    if dashed {
+        builder = builder.dash_array(&[px(4.0), px(4.0)]);
+    }
+    builder.move_to(start);
+    builder.cubic_bezier_to(
+        end,
+        point(start.x + bend, start.y),
+        point(end.x - bend, end.y),
+    );
+    if let Ok(path) = builder.build() {
+        window.paint_path(path, color);
+    }
+}
+
+fn weight_square(theme: &Theme, filled: bool) -> Div {
+    let colors = theme.colors;
+    let square = div().size(px(8.0)).rounded(px(2.0));
+    if filled {
+        square.bg(colors.text_secondary())
+    } else {
+        square.border_1().border_color(colors.text_muted())
+    }
+}
+
+fn status_dot(color: gpui::Rgba) -> Div {
+    div().size(px(7.0)).flex_none().rounded_full().bg(color)
+}
+
+fn legend_item(theme: &Theme, mark: Div, label: &str) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(SpacingScale::S2))
+        .child(mark)
+        .child(
+            text_style(div(), TypeScale::META)
+                .text_color(theme.colors.text_muted())
+                .child(label.to_owned()),
+        )
+}
+
 impl<S: MapStores> Render for MapScreen<S> {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::current(cx);
@@ -1850,6 +2385,7 @@ impl<S: MapStores> Render for MapScreen<S> {
             }
         } else {
             match self.view.clone() {
+                View::Overview => self.render_overview(&theme, cx),
                 View::Suggestions => self.render_suggestions(&theme, cx),
                 View::File => self.render_file(&theme, cx),
                 View::Timeline => self.render_timeline(&theme),
