@@ -13,17 +13,28 @@ use application::profile::{
 };
 use gpui::prelude::*;
 use gpui::{
-    div, px, AnyElement, App, Context, Div, Entity, EventEmitter, FocusHandle, Render, Role,
+    div, px, AnyElement, App, Context, Div, Entity, EventEmitter, FocusHandle, Render, Rgba, Role,
     SharedString, Stateful, Subscription, Toggled, Window,
 };
 
 use super::format::date_time;
 use crate::ui::controls::{action_button, button_foreground, ButtonKind};
 use crate::ui::icons::{icon, IconName};
-use crate::ui::patterns::{mark_selected, section_label, status_pill};
+use crate::ui::patterns::{mark_selected, status_pill};
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme};
-use crate::ui::tokens::{ControlSize, SpacingScale, TypeScale};
+use crate::ui::tokens::{tint, SpacingScale, TypeScale};
+
+/// Product copy too long to sit inside the element chains.
+const REVOKE_WARNING: &str = "Isso desliga as chamadas externas e apaga a chave do cofre. \
+                              O endereço e o modelo continuam salvos.";
+const PAGE_SUBTITLE: &str = "Como as capturas viram candidatos e o que pode sair desta máquina.";
+const LOCAL_ONLY: &str = "Com o extrator local, nenhum conteúdo das capturas sai desta máquina.";
+const KEY_DESCRIPTION: &str =
+    "Fica no Gerenciador de Credenciais do sistema, nunca em arquivo, e não é exibida aqui.";
+const CONSENT_INVALIDATION: &str =
+    "Salvar muda a prévia: o consentimento atual deixa de valer até você consentir de novo.";
+const REDACTION_ON: &str = "Segredos são redigidos na captura, antes de qualquer envio.";
 
 /// Width of the section navigation.
 const NAV_WIDTH: f32 = 220.0;
@@ -459,41 +470,62 @@ impl SettingsScreen {
             .bg(theme.colors.rail())
             .border_r_1()
             .border_color(theme.colors.hairline_divider())
-            .child(div().mb(px(SpacingScale::S3)).child(back))
+            .child(div().mb(px(SpacingScale::S4)).child(back))
             .child(
-                text_style(div(), TypeScale::LABEL)
+                text_style(div(), TypeScale::META)
                     .px(px(SpacingScale::S2))
                     .pb(px(SpacingScale::S2))
                     .text_color(theme.colors.text_muted())
-                    .child("Configurações"),
+                    .child("CONFIGURAÇÕES"),
             )
             .child(
                 mark_selected(
-                    text_style(div(), TypeScale::BODY_SMALL)
+                    div()
                         .id("settings-section-ai")
                         .relative()
-                        .h(px(ControlSize::SM))
                         .px(px(SpacingScale::S2))
+                        .py(px(SpacingScale::S2))
                         .flex()
                         .items_center()
-                        .gap(px(SpacingScale::S2))
+                        .gap(px(SpacingScale::S3))
                         .rounded(theme.radius.control())
                         .role(Role::Tab)
                         .aria_selected(true)
-                        .text_color(theme.colors.text_primary()),
+                        .aria_label("IA e privacidade"),
                     theme,
                     true,
                 )
-                .child(icon(IconName::Shield, 14.0, theme.colors.text_primary()))
-                .child("IA e privacidade"),
+                .child(icon_tile(
+                    theme,
+                    IconName::Shield,
+                    theme.colors.accent_hover(),
+                    28.0,
+                ))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            text_style(div(), TypeScale::ROW_TITLE)
+                                .text_color(theme.colors.text_primary())
+                                .child("IA e privacidade"),
+                        )
+                        .child(
+                            text_style(div(), TypeScale::META)
+                                .text_color(theme.colors.text_muted())
+                                .child("Extração, chave e envio"),
+                        ),
+                ),
             )
     }
 
     fn render_status(&self, theme: &Theme, stored: &AiProfile) -> Stateful<Div> {
-        let (color, pill, title, body): (_, _, &str, String) = match choose_extractor(Some(stored))
-        {
+        let (color, glyph, pill, title, body): (_, _, _, &str, String) = match choose_extractor(
+            Some(stored),
+        ) {
             ExtractorChoice::OfflineFake => (
                 theme.colors.status_info(),
+                IconName::Cpu,
                 "Local",
                 "Extração local, sem rede",
                 "Candidatos são extraídos nesta máquina. Nenhum conteúdo das capturas é enviado."
@@ -501,10 +533,11 @@ impl SettingsScreen {
             ),
             ExtractorChoice::ExternalEnabled => (
                 theme.colors.status_success(),
+                IconName::CheckCircle,
                 "Ativo",
                 "Provedor externo ativo",
                 format!(
-                    "Capturas são analisadas por {}, dentro dos limites da prévia abaixo.",
+                    "Capturas são analisadas por {}, dentro dos limites da prévia.",
                     build_preview(stored)
                         .endpoint_host
                         .unwrap_or_else(|| "provedor configurado".into())
@@ -512,6 +545,7 @@ impl SettingsScreen {
             ),
             ExtractorChoice::ExternalBlocked => (
                 theme.colors.status_warning(),
+                IconName::Shield,
                 "Bloqueado",
                 "Provedor externo bloqueado",
                 format!(
@@ -523,26 +557,36 @@ impl SettingsScreen {
         div()
             .id("settings-status")
             .flex()
-            .flex_col()
-            .gap(px(SpacingScale::S2))
+            .items_center()
+            .gap(px(SpacingScale::S4))
             .p(px(SpacingScale::S4))
-            .rounded(theme.radius.control())
+            .rounded(px(10.0))
             .border_1()
-            .border_color(theme.colors.hairline_divider())
+            .border_color(tint(color, 0.28))
+            .bg(tint(color, 0.07))
             .role(Role::Status)
             .aria_label(format!("{title}. {body}"))
+            .child(icon_tile(theme, glyph, color, 40.0))
             .child(
                 div()
+                    .flex_1()
+                    .min_w(px(0.0))
                     .flex()
-                    .items_center()
-                    .gap(px(SpacingScale::S2))
-                    .child(text_style(div(), TypeScale::HEADING_3).child(title))
-                    .child(status_pill(theme, color, pill)),
-            )
-            .child(
-                text_style(div(), TypeScale::BODY_SMALL)
-                    .text_color(theme.colors.text_secondary())
-                    .child(body),
+                    .flex_col()
+                    .gap(px(2.0))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(SpacingScale::S2))
+                            .child(text_style(div(), TypeScale::HEADING_3).child(title))
+                            .child(status_pill(theme, color, pill)),
+                    )
+                    .child(
+                        text_style(div(), TypeScale::BODY_SMALL)
+                            .text_color(theme.colors.text_secondary())
+                            .child(body),
+                    ),
             )
     }
 
@@ -555,32 +599,45 @@ impl SettingsScreen {
     ) -> impl IntoElement {
         let theme = Theme::current(cx);
         let selected = self.kind == kind;
-        let id = match kind {
-            ProfileKind::Fake => "settings-kind-local",
-            ProfileKind::OpenAiCompatible => "settings-kind-external",
+        let (id, glyph) = match kind {
+            ProfileKind::Fake => ("settings-kind-local", IconName::Cpu),
+            ProfileKind::OpenAiCompatible => ("settings-kind-external", IconName::Cloud),
         };
         let focus = self
             .focus
             .entry(id)
             .or_insert_with(|| cx.focus_handle().tab_stop(true))
             .clone();
+        let colors = theme.colors;
         div()
             .id(id)
+            .relative()
             .flex_1()
             .min_w(px(0.0))
             .flex()
+            .flex_col()
             .gap(px(SpacingScale::S3))
-            .p(px(SpacingScale::S3))
-            .rounded(theme.radius.control())
+            .p(px(SpacingScale::S4))
+            .rounded(px(10.0))
             .border_1()
             .border_color(if selected {
-                theme.colors.glass_edge_lavender()
+                colors.accent_default()
             } else {
-                theme.colors.hairline_divider()
+                colors.glass_border_card()
             })
-            .when(selected, |option| option.bg(theme.colors.selection()))
+            .bg(if selected {
+                colors.selection()
+            } else {
+                colors.glass_fill_card()
+            })
             .when(!selected, |option| {
-                option.hover(move |style| style.bg(theme.colors.hover_veil()))
+                option
+                    .hover(move |style| {
+                        style
+                            .bg(colors.glass_fill_medium())
+                            .border_color(colors.glass_border_card_hover())
+                    })
+                    .active(move |style| style.bg(colors.glass_fill_strong()))
             })
             .cursor_pointer()
             .role(Role::RadioButton)
@@ -601,39 +658,50 @@ impl SettingsScreen {
             }))
             .child(
                 div()
-                    .mt(px(3.0))
-                    .size(px(12.0))
-                    .flex_none()
                     .flex()
                     .items_center()
-                    .justify_center()
-                    .rounded_full()
-                    .border_1()
-                    .border_color(if selected {
-                        theme.colors.accent_default()
-                    } else {
-                        theme.colors.glass_border_control()
-                    })
-                    .when(selected, |dot| {
-                        dot.child(
-                            div()
-                                .size(px(6.0))
-                                .rounded_full()
-                                .bg(theme.colors.accent_default()),
-                        )
-                    }),
+                    .justify_between()
+                    .child(icon_tile(
+                        &theme,
+                        glyph,
+                        if selected {
+                            colors.accent_hover()
+                        } else {
+                            colors.text_secondary()
+                        },
+                        32.0,
+                    ))
+                    .child(
+                        div()
+                            .size(px(18.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_full()
+                            .border_1()
+                            .border_color(if selected {
+                                colors.accent_hover()
+                            } else {
+                                colors.glass_border_control()
+                            })
+                            .when(selected, |mark| {
+                                mark.bg(colors.accent_hover()).child(icon(
+                                    IconName::Check,
+                                    12.0,
+                                    colors.accent_on_emphasis(),
+                                ))
+                            }),
+                    ),
             )
             .child(
                 div()
-                    .flex_1()
-                    .min_w(px(0.0))
                     .flex()
                     .flex_col()
                     .gap(px(2.0))
                     .child(text_style(div(), TypeScale::ROW_TITLE).child(title))
                     .child(
                         text_style(div(), TypeScale::BODY_SMALL)
-                            .text_color(theme.colors.text_muted())
+                            .text_color(colors.text_muted())
                             .child(body),
                     ),
             )
@@ -656,12 +724,12 @@ impl SettingsScreen {
         let remote = self.kind_option(
             ProfileKind::OpenAiCompatible,
             "Compatível com OpenAI",
-            "Envia trechos das capturas ao endereço configurado, só com consentimento.",
+            "Envia trechos ao endereço configurado, só com consentimento.",
             cx,
         );
         let save = self.button(
             "settings-save",
-            ButtonKind::Secondary,
+            ButtonKind::Primary,
             !self.busy && edited && draft.is_ok(),
             if self.busy {
                 "Salvando…"
@@ -679,37 +747,76 @@ impl SettingsScreen {
                 theme.colors.text_muted(),
             )),
             (Ok(_), true) if consent_active => Some((
-                "Salvar muda a prévia: o consentimento atual deixa de valer e as chamadas externas param até você consentir de novo."
-                    .to_owned(),
+                CONSENT_INVALIDATION.to_owned(),
                 theme.colors.status_warning(),
+            )),
+            (Ok(_), true) => Some((
+                "Alterações não salvas.".to_owned(),
+                theme.colors.text_muted(),
             )),
             _ => None,
         };
-        section(theme, "Extrator")
-            .child(
-                div()
-                    .id("settings-kind")
-                    .w_full()
-                    .flex()
-                    .gap(px(SpacingScale::S2))
-                    .role(Role::RadioGroup)
-                    .aria_label("Extrator")
-                    .child(local)
-                    .child(remote),
-            )
-            .when(external, |section| {
-                section.children(FIELD_LABELS.iter().enumerate().map(|(index, label)| {
-                    field_row(theme, label, self.fields[index].clone().into_any_element())
-                }))
-            })
-            .children(hint.map(|(message, color)| {
-                text_style(div(), TypeScale::BODY_SMALL)
-                    .text_color(color)
-                    .child(message)
-            }))
-            .when(edited || self.busy, |section| {
-                section.child(div().flex().child(save))
-            })
+        let fields = external.then(|| {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(SpacingScale::S4))
+                .pt(px(SpacingScale::S2))
+                .child(field_row(
+                    theme,
+                    FIELD_LABELS[0],
+                    self.fields[0].clone().into_any_element(),
+                ))
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(SpacingScale::S4))
+                        .child(div().flex_1().min_w(px(0.0)).child(field_row(
+                            theme,
+                            FIELD_LABELS[1],
+                            self.fields[1].clone().into_any_element(),
+                        )))
+                        .child(div().w(px(220.0)).flex_none().child(field_row(
+                            theme,
+                            FIELD_LABELS[2],
+                            self.fields[2].clone().into_any_element(),
+                        ))),
+                )
+        });
+        let footer = (edited || self.busy).then(|| {
+            card_footer(theme)
+                .child(
+                    text_style(div(), TypeScale::BODY_SMALL)
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .children(
+                            hint.map(|(message, color)| div().text_color(color).child(message)),
+                        ),
+                )
+                .child(save)
+        });
+        card(
+            theme,
+            IconName::Cpu,
+            "Extrator",
+            "Quem lê as capturas para propor candidatos a decisão.",
+        )
+        .child(
+            card_body()
+                .child(
+                    div()
+                        .id("settings-kind")
+                        .w_full()
+                        .flex()
+                        .gap(px(SpacingScale::S3))
+                        .role(Role::RadioGroup)
+                        .aria_label("Extrator")
+                        .child(local)
+                        .child(remote),
+                )
+                .children(fields),
+        )
+        .children(footer)
     }
 
     fn render_key(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Div {
@@ -726,24 +833,29 @@ impl SettingsScreen {
             Action::StoreKey,
             cx,
         );
-        section(theme, "Chave do provedor")
-            .child(
-                text_style(div(), TypeScale::BODY_SMALL)
-                    .text_color(theme.colors.text_secondary())
-                    .child(if self.has_secret {
-                        "Há uma chave guardada no cofre de credenciais do sistema. Ela não é exibida aqui."
-                    } else {
-                        "Nenhuma chave guardada. A chave vai para o cofre de credenciais do sistema, nunca para o arquivo de configuração."
-                    }),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(SpacingScale::S2))
-                    .child(div().flex_1().child(self.key.clone()))
-                    .child(store),
-            )
+        let (color, state) = if self.has_secret {
+            (theme.colors.status_success(), "Guardada no cofre")
+        } else {
+            (theme.colors.text_muted(), "Nenhuma chave")
+        };
+        card(theme, IconName::Key, "Chave do provedor", KEY_DESCRIPTION).child(
+            card_body()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(SpacingScale::S2))
+                        .child(status_pill(theme, color, state)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(SpacingScale::S2))
+                        .child(div().flex_1().child(self.key.clone()))
+                        .child(store),
+                ),
+        )
     }
 
     fn render_preview(&self, theme: &Theme, cx: &App) -> Div {
@@ -753,83 +865,145 @@ impl SettingsScreen {
                 profile
             })
         });
-        let body: AnyElement = match profile {
-            Some(profile) if profile.kind == ProfileKind::OpenAiCompatible => {
-                let preview = build_preview(&profile);
-                let mut rows = vec![
-                    (
-                        "Destino",
-                        preview
-                            .endpoint_host
-                            .clone()
-                            .unwrap_or_else(|| "Não configurado".into()),
-                    ),
-                    (
-                        "Modelo",
-                        if preview.model.is_empty() {
-                            "Não configurado".into()
-                        } else {
-                            preview.model.clone()
-                        },
-                    ),
-                ];
-                rows.extend(preview.categories.iter().map(|category| {
-                    (
-                        category_label(&category.kind),
-                        format!(
-                            "até {} caracteres por item",
-                            thousands(category.max_chars_per_item)
+        let body: AnyElement =
+            match profile {
+                Some(profile) if profile.kind == ProfileKind::OpenAiCompatible => {
+                    let preview = build_preview(&profile);
+                    let unset = || "Não configurado".to_owned();
+                    let stats = [
+                        (
+                            "Destino",
+                            preview.endpoint_host.clone().unwrap_or_else(unset),
                         ),
-                    )
-                }));
-                rows.push((
-                    "Total aproximado",
-                    format!(
-                        "{} caracteres por análise",
-                        thousands(preview.total_approximate_chars)
-                    ),
-                ));
-                rows.push((
-                    "Segredos",
-                    if preview.redaction_on_ingest {
-                        "Redigidos na captura, antes de qualquer envio".into()
-                    } else {
-                        "Sem redação na captura".into()
-                    },
-                ));
-                div()
-                    .flex()
-                    .flex_col()
-                    .rounded(theme.radius.control())
-                    .border_1()
-                    .border_color(theme.colors.hairline_divider())
-                    .children(rows.into_iter().enumerate().map(|(index, (label, value))| {
-                        div()
-                            .flex()
-                            .gap(px(SpacingScale::S4))
-                            .px(px(SpacingScale::S3))
-                            .py(px(SpacingScale::S2))
-                            .when(index > 0, |row| {
-                                row.border_t_1()
+                        (
+                            "Modelo",
+                            Some(preview.model.clone())
+                                .filter(|model| !model.is_empty())
+                                .unwrap_or_else(unset),
+                        ),
+                        (
+                            "Por análise",
+                            format!(
+                                "≈ {} caracteres",
+                                thousands(preview.total_approximate_chars)
+                            ),
+                        ),
+                    ];
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(SpacingScale::S4))
+                        .child(div().flex().gap(px(SpacingScale::S3)).children(
+                            stats.into_iter().map(|(label, value)| {
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(4.0))
+                                    .p(px(SpacingScale::S3))
+                                    .rounded(theme.radius.control())
+                                    .bg(theme.colors.glass_fill_low())
+                                    .border_1()
                                     .border_color(theme.colors.hairline_divider())
-                            })
-                            .child(
-                                text_style(div(), TypeScale::BODY_SMALL)
-                                    .w(px(220.0))
-                                    .flex_none()
-                                    .text_color(theme.colors.text_muted())
-                                    .child(label),
-                            )
-                            .child(text_style(div(), TypeScale::BODY_SMALL).child(value))
-                    }))
-                    .into_any_element()
-            }
-            _ => text_style(div(), TypeScale::BODY_SMALL)
-                .text_color(theme.colors.text_secondary())
-                .child("Com o extrator local, nenhum conteúdo das capturas sai desta máquina.")
-                .into_any_element(),
-        };
-        section(theme, "O que sai da máquina").child(body)
+                                    .child(
+                                        text_style(div(), TypeScale::META)
+                                            .text_color(theme.colors.text_muted())
+                                            .child(label.to_uppercase()),
+                                    )
+                                    .child(
+                                        text_style(div(), TypeScale::ROW_TITLE)
+                                            .truncate()
+                                            .child(value),
+                                    )
+                            }),
+                        ))
+                        .child(
+                            div().flex().flex_col().children(
+                                preview
+                                    .categories
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(index, category)| {
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(SpacingScale::S3))
+                                            .py(px(SpacingScale::S2))
+                                            .when(index > 0, |row| {
+                                                row.border_t_1()
+                                                    .border_color(theme.colors.hairline_divider())
+                                            })
+                                            .child(icon(
+                                                category_icon(&category.kind),
+                                                14.0,
+                                                theme.colors.text_muted(),
+                                            ))
+                                            .child(
+                                                text_style(div(), TypeScale::BODY_SMALL)
+                                                    .flex_1()
+                                                    .child(category_label(&category.kind)),
+                                            )
+                                            .child(
+                                                text_style(div(), TypeScale::BODY_SMALL)
+                                                    .text_color(theme.colors.text_muted())
+                                                    .child(format!(
+                                                        "até {} por item",
+                                                        thousands(category.max_chars_per_item)
+                                                    )),
+                                            )
+                                    }),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(SpacingScale::S2))
+                                .child(icon(
+                                    IconName::CheckCircle,
+                                    14.0,
+                                    if preview.redaction_on_ingest {
+                                        theme.colors.status_success()
+                                    } else {
+                                        theme.colors.status_warning()
+                                    },
+                                ))
+                                .child(
+                                    text_style(div(), TypeScale::BODY_SMALL)
+                                        .text_color(theme.colors.text_secondary())
+                                        .child(if preview.redaction_on_ingest {
+                                            REDACTION_ON
+                                        } else {
+                                            "Sem redação de segredos na captura."
+                                        }),
+                                ),
+                        )
+                        .into_any_element()
+                }
+                _ => div()
+                    .flex()
+                    .items_center()
+                    .gap(px(SpacingScale::S2))
+                    .child(icon(
+                        IconName::CheckCircle,
+                        14.0,
+                        theme.colors.status_success(),
+                    ))
+                    .child(
+                        text_style(div(), TypeScale::BODY_SMALL)
+                            .text_color(theme.colors.text_secondary())
+                            .child(LOCAL_ONLY),
+                    )
+                    .into_any_element(),
+            };
+        card(
+            theme,
+            IconName::Eye,
+            "O que sai da máquina",
+            "Prévia exata do que o provedor pode receber. O consentimento fica ligado a ela.",
+        )
+        .child(card_body().child(body))
     }
 
     fn render_consent(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Div {
@@ -838,98 +1012,139 @@ impl SettingsScreen {
         };
         let active = consent_status(&stored).is_ok();
         let saved = !self.edited(cx) && stored.kind == ProfileKind::OpenAiCompatible;
-        let mut content = section(theme, "Consentimento");
+        let mut body = card_body();
         if active {
             let granted = stored
                 .consent
                 .as_ref()
                 .map(|consent| date_time(&consent.granted_at))
                 .unwrap_or_default();
-            content = content.child(
-                text_style(div(), TypeScale::BODY_SMALL)
-                    .text_color(theme.colors.text_secondary())
-                    .child(format!(
-                        "Consentido em {granted} para a prévia acima. Qualquer mudança na configuração exige consentir de novo."
-                    )),
+            body = body.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(SpacingScale::S3))
+                    .p(px(SpacingScale::S3))
+                    .rounded(theme.radius.control())
+                    .bg(tint(theme.colors.status_success(), 0.07))
+                    .border_1()
+                    .border_color(tint(theme.colors.status_success(), 0.25))
+                    .child(icon(
+                        IconName::CheckCircle,
+                        16.0,
+                        theme.colors.status_success(),
+                    ))
+                    .child(
+                        text_style(div(), TypeScale::BODY_SMALL)
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .text_color(theme.colors.text_secondary())
+                            .child(format!(
+                                "Consentido em {granted} para a prévia acima. \
+                                 Mudar a configuração exige consentir de novo."
+                            )),
+                    ),
             );
         } else {
-            content = content
-                .child(requirement(theme, saved, "Configuração do provedor salva"))
-                .child(requirement(
-                    theme,
-                    self.has_secret,
-                    "Chave guardada no cofre",
-                ));
-            let grant = self.button(
+            let steps = [
+                (saved, "Configuração salva", "Endereço, modelo e limite"),
+                (self.has_secret, "Chave no cofre", "Guardada no sistema"),
+                (false, "Consentimento", "Liga as chamadas externas"),
+            ];
+            body =
+                body.child(
+                    div()
+                        .id("settings-consent-steps")
+                        .flex()
+                        .items_start()
+                        .role(Role::List)
+                        .children(steps.into_iter().enumerate().map(
+                            |(index, (done, title, hint))| {
+                                step(theme, index, done, title, hint, index + 1 < 3)
+                            },
+                        )),
+                );
+        }
+        let grant = (!active).then(|| {
+            self.button(
                 "settings-grant",
                 ButtonKind::Primary,
                 !self.busy && saved && self.has_secret,
                 "Consentir e ativar",
                 Action::Grant,
                 cx,
+            )
+        });
+        let revoke = ((active || self.has_secret) && !self.confirm_revoke).then(|| {
+            self.button(
+                "settings-revoke",
+                ButtonKind::Ghost,
+                !self.busy,
+                if active {
+                    "Revogar consentimento"
+                } else {
+                    "Apagar chave do cofre"
+                },
+                Action::AskRevoke,
+                cx,
+            )
+        });
+        let confirmation = self.confirm_revoke.then(|| {
+            let cancel = self.button(
+                "settings-revoke-cancel",
+                ButtonKind::Ghost,
+                true,
+                "Cancelar",
+                Action::CancelRevoke,
+                cx,
             );
-            content = content.child(div().flex().child(grant));
-        }
-        if active || self.has_secret {
-            content = if self.confirm_revoke {
-                let cancel = self.button(
-                    "settings-revoke-cancel",
-                    ButtonKind::Ghost,
-                    true,
-                    "Cancelar",
-                    Action::CancelRevoke,
-                    cx,
-                );
-                let confirm = self.button(
-                    "settings-revoke-confirm",
-                    ButtonKind::Secondary,
-                    !self.busy,
-                    "Desligar e apagar chave",
-                    Action::Revoke,
-                    cx,
-                );
-                content.child(
+            let confirm = self.button(
+                "settings-revoke-confirm",
+                ButtonKind::Secondary,
+                !self.busy,
+                "Desligar e apagar chave",
+                Action::Revoke,
+                cx,
+            );
+            div()
+                .id("settings-revoke-confirmation")
+                .flex()
+                .flex_col()
+                .gap(px(SpacingScale::S3))
+                .p(px(SpacingScale::S3))
+                .rounded(theme.radius.control())
+                .bg(tint(theme.colors.status_danger(), 0.07))
+                .border_1()
+                .border_color(tint(theme.colors.status_danger(), 0.45))
+                .role(Role::Alert)
+                .child(
+                    text_style(div(), TypeScale::BODY_SMALL)
+                        .text_color(theme.colors.text_secondary())
+                        .child(REVOKE_WARNING),
+                )
+                .child(
                     div()
                         .flex()
-                        .flex_col()
-                        .gap(px(SpacingScale::S3))
-                        .p(px(SpacingScale::S3))
-                        .rounded(theme.radius.control())
-                        .border_1()
-                        .border_color(theme.colors.status_danger())
-                        .id("settings-revoke-confirmation")
-                        .role(Role::Alert)
-                        .child(
-                            text_style(div(), TypeScale::BODY_SMALL)
-                                .text_color(theme.colors.text_secondary())
-                                .child("Isso desliga as chamadas externas e apaga a chave do cofre. O endereço e o modelo continuam salvos."),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .justify_end()
-                                .gap(px(SpacingScale::S2))
-                                .child(cancel)
-                                .child(confirm),
-                        ),
+                        .justify_end()
+                        .gap(px(SpacingScale::S2))
+                        .child(cancel)
+                        .child(confirm),
                 )
-            } else {
-                let revoke = self.button(
-                    "settings-revoke",
-                    ButtonKind::Ghost,
-                    !self.busy,
-                    if active {
-                        "Revogar consentimento"
-                    } else {
-                        "Apagar chave do cofre"
-                    },
-                    Action::AskRevoke,
-                    cx,
-                );
-                content.child(div().flex().child(revoke))
-            };
-        }
-        content
+        });
+        card(
+            theme,
+            IconName::Shield,
+            "Consentimento",
+            "Nada é enviado antes deste passo, e você pode revogar a qualquer momento.",
+        )
+        .child(body.children(confirmation))
+        .when(grant.is_some() || revoke.is_some(), |card| {
+            card.child(
+                card_footer(theme)
+                    .child(div().flex_1().children(revoke))
+                    .children(grant),
+            )
+        })
     }
 }
 
@@ -981,21 +1196,25 @@ impl Render for SettingsScreen {
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(28.0))
+                    .gap(px(SpacingScale::S5))
                     .child(status)
                     .children(self.notice.clone().map(|notice| {
-                        text_style(div(), TypeScale::BODY_SMALL)
-                            .id("settings-notice")
-                            .role(Role::Status)
-                            .text_color(theme.colors.status_success())
-                            .child(notice)
+                        banner(
+                            &theme,
+                            "settings-notice",
+                            theme.colors.status_success(),
+                            notice,
+                        )
+                        .role(Role::Status)
                     }))
                     .children(self.error.clone().map(|error| {
-                        text_style(div(), TypeScale::BODY_SMALL)
-                            .id("settings-error")
-                            .role(Role::Alert)
-                            .text_color(theme.colors.status_danger())
-                            .child(error)
+                        banner(
+                            &theme,
+                            "settings-error",
+                            theme.colors.status_danger(),
+                            error,
+                        )
+                        .role(Role::Alert)
                     }))
                     .child(extractor)
                     .children(key)
@@ -1004,45 +1223,140 @@ impl Render for SettingsScreen {
                     .into_any_element()
             }
         };
-        div()
-            .size_full()
-            .flex()
-            .child(nav)
-            .child(
-                div()
-                    .id("settings-content")
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .h_full()
-                    .overflow_y_scroll()
-                    .px(px(32.0))
-                    .pt(px(28.0))
-                    .pb(px(56.0))
-                    .child(
-                        div()
-                            .max_w(px(READING_WIDTH))
-                            .flex()
-                            .flex_col()
-                            .gap(px(SpacingScale::S2))
-                            .child(text_style(div(), TypeScale::HEADING_1).child("IA e privacidade"))
-                            .child(
-                                text_style(div(), TypeScale::BODY_SMALL)
-                                    .mb(px(SpacingScale::S5))
-                                    .text_color(theme.colors.text_muted())
-                                    .child("Como os candidatos a decisão são extraídos das capturas e o que pode sair desta máquina."),
-                            )
-                            .child(body),
-                    ),
-            )
+        div().size_full().flex().child(nav).child(
+            div()
+                .id("settings-content")
+                .flex_1()
+                .min_w(px(0.0))
+                .h_full()
+                .overflow_y_scroll()
+                .px(px(40.0))
+                .pt(px(32.0))
+                .pb(px(64.0))
+                .child(
+                    div()
+                        .w_full()
+                        .max_w(px(READING_WIDTH))
+                        .mx_auto()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(SpacingScale::S4))
+                                .mb(px(28.0))
+                                .child(icon_tile(
+                                    &theme,
+                                    IconName::Shield,
+                                    theme.colors.accent_hover(),
+                                    48.0,
+                                ))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(2.0))
+                                        .child(
+                                            text_style(div(), TypeScale::HEADING_1)
+                                                .child("IA e privacidade"),
+                                        )
+                                        .child(
+                                            text_style(div(), TypeScale::BODY_SMALL)
+                                                .text_color(theme.colors.text_muted())
+                                                .child(PAGE_SUBTITLE),
+                                        ),
+                                ),
+                        )
+                        .child(body),
+                ),
+        )
     }
 }
 
-fn section(theme: &Theme, label: &str) -> Div {
+/// A rounded square holding a glyph in its own soft tint.
+fn icon_tile(theme: &Theme, glyph: IconName, color: Rgba, size: f32) -> Div {
+    div()
+        .size(px(size))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px((size * 0.28).round()))
+        .bg(tint(color, 0.12))
+        .border_1()
+        .border_color(tint(color, 0.22))
+        .child(icon(glyph, (size * 0.5).round(), color))
+        .text_color(theme.colors.text_primary())
+}
+
+/// A settings group: header with glyph, title and one-line purpose.
+fn card(theme: &Theme, glyph: IconName, title: &'static str, description: &'static str) -> Div {
     div()
         .flex()
         .flex_col()
+        .rounded(px(12.0))
+        .border_1()
+        .border_color(theme.colors.glass_border_card())
+        .bg(theme.colors.glass_fill_card())
+        .overflow_hidden()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(SpacingScale::S3))
+                .px(px(SpacingScale::S5))
+                .pt(px(SpacingScale::S5))
+                .child(icon_tile(theme, glyph, theme.colors.text_secondary(), 28.0))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .child(text_style(div(), TypeScale::HEADING_3).child(title))
+                        .child(
+                            text_style(div(), TypeScale::BODY_SMALL)
+                                .text_color(theme.colors.text_muted())
+                                .child(description),
+                        ),
+                ),
+        )
+}
+
+fn card_body() -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SpacingScale::S4))
+        .p(px(SpacingScale::S5))
+}
+
+fn card_footer(theme: &Theme) -> Div {
+    div()
+        .flex()
+        .items_center()
         .gap(px(SpacingScale::S3))
-        .child(section_label(theme, label))
+        .px(px(SpacingScale::S5))
+        .py(px(SpacingScale::S3))
+        .border_t_1()
+        .border_color(theme.colors.hairline_divider())
+        .bg(theme.colors.glass_fill_low())
+}
+
+fn banner(theme: &Theme, id: &'static str, color: Rgba, message: String) -> Stateful<Div> {
+    text_style(div(), TypeScale::BODY_SMALL)
+        .id(id)
+        .flex()
+        .items_center()
+        .gap(px(SpacingScale::S2))
+        .px(px(SpacingScale::S3))
+        .py(px(SpacingScale::S2))
+        .rounded(theme.radius.control())
+        .bg(tint(color, 0.08))
+        .border_1()
+        .border_color(tint(color, 0.3))
+        .text_color(theme.colors.text_primary())
+        .child(div().size(px(6.0)).flex_none().rounded_full().bg(color))
+        .child(message)
 }
 
 fn field_row(theme: &Theme, label: &str, field: AnyElement) -> Div {
@@ -1058,36 +1372,97 @@ fn field_row(theme: &Theme, label: &str, field: AnyElement) -> Div {
         .child(field)
 }
 
-fn requirement(theme: &Theme, met: bool, label: &'static str) -> Stateful<Div> {
-    let color = if met {
-        theme.colors.status_success()
-    } else {
-        theme.colors.text_muted()
-    };
-    text_style(div(), TypeScale::BODY_SMALL)
-        .id(label)
+/// One consent step: a numbered (or checked) node, its label and the
+/// connector to the next step.
+fn step(
+    theme: &Theme,
+    index: usize,
+    done: bool,
+    title: &'static str,
+    hint: &'static str,
+    connector: bool,
+) -> Stateful<Div> {
+    let colors = theme.colors;
+    let node = div()
+        .size(px(24.0))
+        .flex_none()
         .flex()
         .items_center()
-        .gap(px(SpacingScale::S2))
-        .text_color(if met {
-            theme.colors.text_primary()
-        } else {
-            theme.colors.text_secondary()
-        })
-        .aria_label(format!(
-            "{label}: {}",
-            if met { "concluído" } else { "pendente" }
-        ))
-        .child(icon(
-            if met {
-                IconName::CheckCircle
+        .justify_center()
+        .rounded_full()
+        .border_1()
+        .map(|node| {
+            if done {
+                node.bg(colors.status_success())
+                    .border_color(colors.status_success())
+                    .child(icon(IconName::Check, 14.0, colors.accent_on_emphasis()))
             } else {
-                IconName::Circle
-            },
-            14.0,
-            color,
+                node.border_color(colors.glass_border_card_hover()).child(
+                    text_style(div(), TypeScale::META)
+                        .text_color(colors.text_secondary())
+                        .child((index + 1).to_string()),
+                )
+            }
+        });
+    div()
+        .id(("settings-step", index))
+        .flex_1()
+        .min_w(px(0.0))
+        .flex()
+        .flex_col()
+        .gap(px(SpacingScale::S2))
+        .role(Role::ListItem)
+        .aria_label(format!(
+            "{title}: {}",
+            if done { "concluído" } else { "pendente" }
         ))
-        .child(label)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(SpacingScale::S2))
+                .child(node)
+                .when(connector, |row| {
+                    row.child(
+                        div()
+                            .flex_1()
+                            .h(px(1.0))
+                            .mr(px(SpacingScale::S2))
+                            .bg(if done {
+                                tint(colors.status_success(), 0.5)
+                            } else {
+                                colors.hairline_divider()
+                            }),
+                    )
+                }),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .child(
+                    text_style(div(), TypeScale::ROW_TITLE)
+                        .text_color(if done {
+                            colors.text_primary()
+                        } else {
+                            colors.text_secondary()
+                        })
+                        .child(title),
+                )
+                .child(
+                    text_style(div(), TypeScale::META)
+                        .text_color(colors.text_muted())
+                        .child(hint),
+                ),
+        )
+}
+
+fn category_icon(kind: &str) -> IconName {
+    match kind {
+        "diff_hunk" => IconName::File,
+        "tool_summary" => IconName::Activity,
+        _ => IconName::List,
+    }
 }
 
 /// Product copy for a failure: validation messages are already sanitized

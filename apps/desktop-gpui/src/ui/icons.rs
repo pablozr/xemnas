@@ -95,6 +95,16 @@ pub enum IconName {
     ArrowLeft,
     /// A pending requirement (the met one is [`IconName::CheckCircle`]).
     Circle,
+    /// Work done on this machine.
+    Cpu,
+    /// A remote provider.
+    Cloud,
+    /// A stored credential.
+    Key,
+    /// What becomes visible to a third party.
+    Eye,
+    /// A confirmed step or a selected option.
+    Check,
 }
 
 impl IconName {
@@ -160,6 +170,21 @@ impl IconName {
             }
             Self::ArrowLeft => glyph!(r#"<path d="M19 12H5m6-6-6 6 6 6"/>"#),
             Self::Circle => glyph!(r#"<circle cx="12" cy="12" r="8.5"/>"#),
+            Self::Cpu => glyph!(
+                r#"<rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx=".5"/><path d="M9.5 2.5V6M14.5 2.5V6M9.5 18v3.5M14.5 18v3.5M2.5 9.5H6M2.5 14.5H6M18 9.5h3.5M18 14.5h3.5"/>"#
+            ),
+            Self::Cloud => {
+                glyph!(
+                    r#"<path d="M7 18.5a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 9a4.75 4.75 0 0 1-.5 9.5z"/>"#
+                )
+            }
+            Self::Key => glyph!(
+                r#"<circle cx="8" cy="15.5" r="4"/><path d="m10.9 12.6 8.6-8.6M16.5 7l2.5 2.5M14 9.5l2 2"/>"#
+            ),
+            Self::Eye => glyph!(
+                r#"<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/>"#
+            ),
+            Self::Check => glyph!(r#"<path d="m5 12.5 4.5 4.5L19 7.5"/>"#),
         }
     }
 }
