@@ -36,12 +36,16 @@ struct Palette {
     canvas_raised: Tone,
     canvas_deep: Tone,
     rail: Tone,
+    chrome_glass: Tone,
+    content_glass: Tone,
+    floating_glass: Tone,
     surface: Tone,
     surface_hover: Tone,
     selection: Tone,
     glass_surface_lavender: Tone,
     glass_edge_lavender: Tone,
     hairline_divider: Tone,
+    layer_fill: Tone,
     text_primary: Tone,
     text_secondary: Tone,
     text_muted: Tone,
@@ -54,12 +58,16 @@ const QUIET_GLASS: Palette = Palette {
     canvas_raised: Tone::solid(0x111622),
     canvas_deep: Tone::solid(0x090D15),
     rail: Tone::solid(0x0A0E17),
+    chrome_glass: Tone(0x0A0E17, 0.62),
+    content_glass: Tone(0x0D111A, 0.86),
+    floating_glass: Tone(0x181E2A, 0.94),
     surface: Tone::solid(0x181E2A),
     surface_hover: Tone::solid(0x202634),
     selection: Tone::solid(0x1C1A28),
     glass_surface_lavender: Tone::solid(0x1C1A28),
     glass_edge_lavender: Tone::solid(0x514A63),
     hairline_divider: Tone(0xCDC7DC, 0.10),
+    layer_fill: Tone(0x0D111A, 0.72),
     text_primary: Tone::solid(0xECEEF4),
     text_secondary: Tone::solid(0xBEC3D0),
     text_muted: Tone::solid(0x858C9D),
@@ -72,12 +80,16 @@ const CHARCOAL: Palette = Palette {
     canvas_raised: Tone::solid(0x26262C),
     canvas_deep: Tone::solid(0x1B1B1F),
     rail: Tone::solid(0x1B1B1F),
+    chrome_glass: Tone(0x1B1B1F, 0.66),
+    content_glass: Tone(0x202024, 0.88),
+    floating_glass: Tone(0x26262C, 0.95),
     surface: Tone::solid(0x26262C),
     surface_hover: Tone::solid(0x302B39),
     selection: Tone::solid(0x302B39),
     glass_surface_lavender: Tone::solid(0x26262C),
     glass_edge_lavender: Tone::solid(0x49434F),
     hairline_divider: Tone::solid(0x35353D),
+    layer_fill: Tone::solid(0x202024),
     text_primary: Tone::solid(0xEDEDF0),
     text_secondary: Tone::solid(0xC0C0CA),
     text_muted: Tone::solid(0xA09FAB),
@@ -97,6 +109,7 @@ pub fn tint(color: Rgba, alpha: f32) -> Rgba {
 #[derive(Clone, Copy, Debug)]
 pub struct ColorTokens {
     palette: &'static Palette,
+    glass: bool,
 }
 
 impl Default for ColorTokens {
@@ -110,12 +123,77 @@ impl ColorTokens {
     pub const fn quiet_glass() -> Self {
         Self {
             palette: &QUIET_GLASS,
+            glass: false,
         }
     }
 
     /// Neutral charcoal palette.
     pub const fn charcoal() -> Self {
-        Self { palette: &CHARCOAL }
+        Self {
+            palette: &CHARCOAL,
+            glass: false,
+        }
+    }
+
+    /// The same palette with the window material showing through the chrome.
+    pub const fn with_glass(mut self, glass: bool) -> Self {
+        self.glass = glass;
+        self
+    }
+
+    /// `color.chrome` — the window frame: painted once on the shell root, so
+    /// title bar, sidebar and the gutter around the content card share it.
+    ///
+    /// With the system material (Mica Alt or Acrylic) behind the window this is
+    /// a translucent tint of the rail, so the blurred desktop reads through the
+    /// commanding surfaces while every reading surface stays opaque. Without a
+    /// material, or in a light system theme where the material turns pale, it
+    /// is the opaque rail.
+    pub fn chrome(&self) -> Rgba {
+        if self.glass {
+            self.palette.chrome_glass.rgba()
+        } else {
+            self.rail()
+        }
+    }
+
+    /// `color.content` — the content card over the material (Fluent's content
+    /// layer: a low-opacity fill that lets the base tint through). Opaque
+    /// canvas when there is no material.
+    pub fn content(&self) -> Rgba {
+        if self.glass {
+            self.palette.content_glass.rgba()
+        } else {
+            self.canvas()
+        }
+    }
+
+    /// `color.pane` — a secondary list inside the content (review queue,
+    /// decision index). Over the material it has no fill of its own and is
+    /// separated by hairlines: GPUI clips children rectangularly, so a filled
+    /// pane would square off the card's rounded corners.
+    pub fn pane(&self) -> Rgba {
+        if self.glass {
+            self.rail().alpha(0.0)
+        } else {
+            self.rail()
+        }
+    }
+
+    /// `color.floating` — transient surfaces (palette, panels, toasts,
+    /// tooltips): nearly opaque over the material, as Fluent asks of text on
+    /// glass, and fully opaque without it.
+    pub fn floating(&self) -> Rgba {
+        if self.glass {
+            self.palette.floating_glass.rgba()
+        } else {
+            self.surface()
+        }
+    }
+
+    /// Whether the chrome is translucent over the window material.
+    pub fn is_glass(&self) -> bool {
+        self.glass
     }
 
     /// `color.canvas` — main continuous background.
@@ -166,6 +244,11 @@ impl ColorTokens {
     /// `hairline.divider` — 1 px separation inside a continuous surface.
     pub fn hairline_divider(&self) -> Rgba {
         self.palette.hairline_divider.rgba()
+    }
+
+    /// `layer.fill` — the content layer painted on top of a Mica backdrop.
+    pub fn layer_fill(&self) -> Rgba {
+        self.palette.layer_fill.rgba()
     }
 
     /// `text.primary` — titles and primary content.
@@ -348,6 +431,16 @@ impl ColorTokens {
         rgb(0x9790AC).alpha(0.22)
     }
 
+    /// `scrim` — dims the window behind a modal surface.
+    pub fn scrim(&self) -> Rgba {
+        rgb(0x000000).alpha(0.40)
+    }
+
+    /// `status.danger-tint` — background of an error banner.
+    pub fn danger_tint(&self) -> Rgba {
+        self.status_danger().alpha(0.10)
+    }
+
     /// `diff.added` — row tint behind an added line in a diff hunk.
     pub fn diff_added(&self) -> Rgba {
         rgb(0x83C59A).alpha(0.10)
@@ -423,6 +516,10 @@ impl TypeToken {
 
 /// The typographic scale.
 ///
+/// Weights are named instances (400/500/600) only: GPUI selects a face by
+/// weight and does not set the variable `wght` axis, so 520 or 560 silently
+/// snapped to the nearest instance.
+///
 /// Stepped down one notch from the first pass (body 15 → 14, headings
 /// 24/18/15 → 20/16/14): at 15 px the product read like a document editor,
 /// while the reference tools (Linear, Zed) set their chrome at 13 px and let
@@ -431,24 +528,24 @@ impl TypeToken {
 pub struct TypeScale;
 
 impl TypeScale {
-    /// `type.display` — 26 / 34, weight 560: the decision title.
-    pub const DISPLAY: TypeToken = TypeToken::new(26.0, 34.0, 560.0);
-    /// `type.heading-1` — 20 / 28, weight 580: the title of a reading pane.
-    pub const HEADING_1: TypeToken = TypeToken::new(20.0, 28.0, 580.0);
-    /// `type.heading-2` — 16 / 24, weight 560: a proposed choice, empty states.
-    pub const HEADING_2: TypeToken = TypeToken::new(16.0, 24.0, 560.0);
-    /// `type.heading-3` — 14 / 20, weight 560: section headings.
-    pub const HEADING_3: TypeToken = TypeToken::new(14.0, 20.0, 560.0);
+    /// `type.display` — 26 / 34, weight 500: the decision title.
+    pub const DISPLAY: TypeToken = TypeToken::new(26.0, 34.0, 500.0);
+    /// `type.heading-1` — 20 / 28, weight 600: the title of a reading pane.
+    pub const HEADING_1: TypeToken = TypeToken::new(20.0, 28.0, 600.0);
+    /// `type.heading-2` — 16 / 24, weight 500: a proposed choice, empty states.
+    pub const HEADING_2: TypeToken = TypeToken::new(16.0, 24.0, 500.0);
+    /// `type.heading-3` — 14 / 20, weight 600: section headings.
+    pub const HEADING_3: TypeToken = TypeToken::new(14.0, 20.0, 600.0);
     /// `type.body` — 14 / 22, weight 400: reading text.
     pub const BODY: TypeToken = TypeToken::new(14.0, 22.0, 400.0);
     /// `type.body-small` — 13 / 19, weight 400: chrome and list text.
     pub const BODY_SMALL: TypeToken = TypeToken::new(13.0, 19.0, 400.0);
-    /// `type.row-title` — 13 / 19, weight 520: the name in a list row.
-    pub const ROW_TITLE: TypeToken = TypeToken::new(13.0, 19.0, 520.0);
-    /// `type.label` — 12 / 16, weight 540: panel titles and field labels.
-    pub const LABEL: TypeToken = TypeToken::new(12.0, 16.0, 540.0);
-    /// `type.meta` — 11 / 16, weight 450: dates, counts, paths.
-    pub const META: TypeToken = TypeToken::new(11.0, 16.0, 450.0);
+    /// `type.row-title` — 13 / 19, weight 500: the name in a list row.
+    pub const ROW_TITLE: TypeToken = TypeToken::new(13.0, 19.0, 500.0);
+    /// `type.label` — 12 / 16, weight 500: panel titles and field labels.
+    pub const LABEL: TypeToken = TypeToken::new(12.0, 16.0, 500.0);
+    /// `type.meta` — 11 / 16, weight 400: dates, counts, paths.
+    pub const META: TypeToken = TypeToken::new(11.0, 16.0, 400.0);
     /// `type.code` — 12.5 / 20, weight 400.
     pub const CODE: TypeToken = TypeToken::new(12.5, 20.0, 400.0);
 }
@@ -543,6 +640,11 @@ impl MotionTokens {
     pub const EASING_ENTER: [f32; 4] = [0.16, 1.0, 0.3, 1.0];
     /// `easing.exit` = cubic-bezier(0.4, 0, 1, 1).
     pub const EASING_EXIT: [f32; 4] = [0.4, 0.0, 1.0, 1.0];
+
+    /// Hover spring: critically damped (no overshoot), settles in ~200 ms, and
+    /// keeps its velocity when the pointer leaves mid-way, so a fast sweep
+    /// across a list reads as one soft wave instead of flickering rows.
+    pub const HOVER_SPRING: gpui::SpringConfig = gpui::SpringConfig::new(500.0, 44.7, 1.0);
 
     /// The documented `easing.enter` as a GPUI easing function.
     ///

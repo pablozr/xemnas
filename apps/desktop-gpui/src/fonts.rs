@@ -1,7 +1,7 @@
 //! Embedded fonts and imagery for the desktop app.
 //!
 //! Inter Variable (interface), JetBrains Mono (code / technical IDs) and
-//! Bricolage Grotesque (the `xemnas` wordmark) are compiled into the binary and
+//! Bricolage Grotesque (wordmark and reading titles) are compiled into the binary and
 //! registered through the GPUI text system, so the app does not depend on fonts
 //! installed on the machine. The app mark is embedded the same way, so the
 //! window never opens with an empty hole where the icon belongs. The OFL-1.1
@@ -23,17 +23,16 @@ const INTER_VARIABLE: &[u8] = include_bytes!("../assets/fonts/InterVariable.ttf"
 /// Monospace font: `JetBrains Mono` (SIL Open Font License 1.1).
 const JETBRAINS_MONO: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-VariableFont_wght.ttf");
 
-/// Wordmark face: `Bricolage Grotesque` (SIL Open Font License 1.1).
+/// Display face: `Bricolage Grotesque` (SIL Open Font License 1.1).
 ///
-/// Only the `xemnas` wordmark uses it. It is a three-axis variable font
-/// (`opsz` 12-96, `wght` 200-800, `wdth` 75-100); the wordmark asks for the
-/// display optical size and a firm weight, so the letterforms stay wide and
-/// confident at 15 px instead of collapsing into the interface texture. Every
-/// other surface stays on Inter, so the product keeps one reading voice and
-/// one identity voice.
+/// The wordmark and the one reading title per pane (the question a decision
+/// answers) use it; everything else stays on Inter, so the product keeps one
+/// reading voice and one identity voice. The file is variable, but GPUI picks
+/// named instances (opsz 14, weights 200–800) rather than setting axes.
 const BRICOLAGE: &[u8] = include_bytes!("../assets/fonts/BricolageGrotesque-Variable.ttf");
 
-/// The app mark: the glass tile with the X aperture, supplied by the product.
+/// The app mark: a decision crossing (chosen path unbroken, the alternative
+/// interrupted) on a charcoal tile. Source: `assets/brand/xemnas-mark.svg`.
 ///
 /// 256 px is the size the mark is drawn at. Every consumer scales it down, and
 /// down-scaling a raster keeps the inner highlight intact where up-scaling
@@ -56,6 +55,13 @@ pub fn register_embedded(cx: &App) {
     if let Err(error) = cx.text_system().add_fonts(fonts) {
         eprintln!("failed to register embedded fonts: {error}");
     }
+    let families = crate::ui::theme::resolve_font_families(&cx.text_system().all_font_names());
+    tracing::debug!(
+        interface = %families.interface,
+        display = %families.display,
+        mono = %families.mono,
+        "resolved embedded font families"
+    );
 }
 
 /// Materialises the embedded icon as a file that `img` can load.
@@ -66,7 +72,13 @@ pub fn register_embedded(cx: &App) {
 /// content, PRIV-001); the image then simply does not appear, which is a
 /// degraded title bar rather than a failed frame.
 fn app_icon_path() -> PathBuf {
-    let path = std::env::temp_dir().join("xemnas-app-icon.png");
+    // Named after the bytes, so a new mark never reuses a stale cached file.
+    let digest = APP_ICON
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
+        });
+    let path = std::env::temp_dir().join(format!("xemnas-mark-{digest:016x}.png"));
     if !path.exists() {
         if let Err(error) = std::fs::write(&path, APP_ICON) {
             tracing::error!(
@@ -86,15 +98,6 @@ fn app_icon_path() -> PathBuf {
 pub fn app_icon(size: f32) -> impl IntoElement {
     img(app_icon_path()).w(px(size)).h(px(size)).flex_none()
 }
-/// The wordmark font family, registered from the embedded Bricolage file.
-pub const FONT_WORDMARK: &str = "Bricolage Grotesque";
-
-/// The monospace family, for paths, IDs and other technical content.
-///
-/// Named rather than inlined at the call sites because a path rendered in the
-/// interface face is a path a person has to squint at: the separators stop
-/// lining up and the tail stops being scannable.
-pub const FONT_CODE: &str = "JetBrains Mono";
 
 /// The product name as the wordmark spells it.
 const WORDMARK: &str = "xemnas";
@@ -109,7 +112,7 @@ const WORDMARK: &str = "xemnas";
 pub fn wordmark(theme: &Theme, size: f32, weight: f32) -> impl IntoElement {
     let token = TypeToken::new(size, size * 1.25, weight);
     text_style(div(), token)
-        .font_family(FONT_WORDMARK)
+        .font_family(Theme::font_display())
         .text_color(theme.colors.text_primary())
         .child(WORDMARK)
 }

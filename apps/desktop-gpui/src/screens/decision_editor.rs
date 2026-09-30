@@ -1,8 +1,10 @@
 //! Explicit revision form. Unchanged fields retain their original snapshots.
+use crate::app::SaveEditor;
 use crate::ui::controls::{action_button, ButtonKind};
+use crate::ui::patterns::{action_footer, form_field, reading_page, section_label};
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme};
-use crate::ui::tokens::TypeScale;
+use crate::ui::tokens::{SpacingScale, TypeScale};
 use application::decisions::{DecisionDetail, DecisionEdits};
 use gpui::prelude::*;
 use gpui::{
@@ -112,7 +114,7 @@ impl DecisionEditor {
         }
         if save {
             let edits = self.edits(cx);
-            if edits.validate().is_ok() {
+            if !edits.is_empty() && edits.validate().is_ok() {
                 cx.emit(RevisionEvent::Save(edits));
             }
         } else {
@@ -126,21 +128,77 @@ impl Render for DecisionEditor {
         let edits = self.edits(cx);
         let valid = edits.validate().is_ok();
         let _ = &self.subscriptions;
-        div().size_full().flex().flex_col()
-            .child(div().h(px(60.0)).flex_none().px(px(28.0)).flex().items_center().gap(px(8.0)).border_b_1().border_color(t.colors.hairline_divider())
-                .child(text_style(div(),TypeScale::HEADING_3).flex_1().child("Revisar decisão"))
-                .children([false,true].into_iter().enumerate().map(|(i,save)|{
-                    let enabled=!self.busy&&(!save||valid);
-                    let kind=if save{ButtonKind::Primary}else{ButtonKind::Ghost};
-                    action_button(&t,("revision-action",i),kind,enabled)
-                        .aria_label(if save{"Salvar nova versão"}else{"Cancelar revisão"}).track_focus(&self.focus[i])
-                        .on_click(cx.listener(move|this,_,_,cx|this.submit(save,cx)))
-                        .on_key_down(cx.listener(move|this,event:&gpui::KeyDownEvent,_,cx|{if matches!(event.keystroke.key.as_str(),"enter"|"space"){this.submit(save,cx);cx.stop_propagation();}}))
-                        .child(if save&&self.busy{"Salvando…"}else if save{"Salvar nova versão"}else{"Cancelar"})
-                })))
-            .child(div().id("revision-fields").flex_1().min_h(px(0.0)).overflow_y_scroll().px(px(34.0)).py(px(28.0))
-                .child(text_style(div(),TypeScale::BODY_SMALL).mb(px(24.0)).text_color(t.colors.text_muted()).child("A versão anterior permanece no histórico. Nas listas, use um item por linha."))
-                .children(LABELS.iter().enumerate().map(|(i,label)|div().mb(px(20.0)).flex().flex_col().gap(px(8.0)).child(text_style(div(),TypeScale::HEADING_3).child(*label)).child(self.fields[i].clone()))))
-            .when(!edits.is_empty()&&!valid,|view|view.child(text_style(div(),TypeScale::BODY_SMALL).p(px(12.0)).text_color(t.colors.status_danger()).child("Preencha os campos obrigatórios e respeite os limites de tamanho.")))
+        let column = div()
+            .flex()
+            .flex_col()
+            .gap(px(SpacingScale::S6))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S2))
+                    .child(section_label(&t, "Revisar decisão"))
+                    .child(
+                        text_style(div(), TypeScale::BODY)
+                            .text_color(t.colors.text_secondary())
+                            .child("A versão anterior permanece no histórico."),
+                    ),
+            )
+            .children(LABELS.iter().enumerate().map(|(index, label)| {
+                form_field(
+                    &t,
+                    label,
+                    (index >= 3).then_some("Um item por linha."),
+                    self.fields[index].clone(),
+                )
+            }));
+        let message = if self.busy {
+            Some(("Salvando…", false))
+        } else if !edits.is_empty() && !valid {
+            Some((
+                "Preencha os campos obrigatórios e respeite os limites de tamanho.",
+                true,
+            ))
+        } else if edits.is_empty() {
+            Some(("Nenhuma alteração ainda.", false))
+        } else {
+            None
+        };
+        let actions = [false, true].into_iter().enumerate().map(|(index, save)| {
+            let enabled = !self.busy && (!save || (valid && !edits.is_empty()));
+            let kind = if save {
+                ButtonKind::Primary
+            } else {
+                ButtonKind::Ghost
+            };
+            action_button(&t, ("revision-action", index), kind, enabled)
+                .px(px(SpacingScale::S4))
+                .aria_label(if save {
+                    "Salvar nova versão"
+                } else {
+                    "Cancelar revisão"
+                })
+                .track_focus(&self.focus[index])
+                .on_click(cx.listener(move |this, _, _, cx| this.submit(save, cx)))
+                .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                        this.submit(save, cx);
+                        cx.stop_propagation();
+                    }
+                }))
+                .child(if save {
+                    "Salvar nova versão"
+                } else {
+                    "Cancelar"
+                })
+        });
+        div()
+            .key_context("Editor")
+            .on_action(cx.listener(|this, _: &SaveEditor, _, cx| this.submit(true, cx)))
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(reading_page("revision-fields", column))
+            .child(action_footer(&t, message).children(actions))
     }
 }

@@ -7,7 +7,6 @@
 use gpui::prelude::*;
 use gpui::{div, px, Div, ElementId, Role, Stateful};
 
-use crate::ui::glass::{GlassSurface, GlassVariant};
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{SpacingScale, TypeScale};
 
@@ -69,40 +68,6 @@ pub fn status_dot(
         )
 }
 
-/// The empty-state pattern: title, explanation and a hint.
-pub fn empty_state(
-    theme: &Theme,
-    id: impl Into<ElementId>,
-    title: &str,
-    body: &str,
-    hint: &str,
-) -> Stateful<Div> {
-    GlassSurface::new(GlassVariant::Low)
-        .render(theme)
-        .id(id)
-        .p(px(SpacingScale::S6))
-        .flex()
-        .flex_col()
-        .gap(px(SpacingScale::S2))
-        .role(Role::Status)
-        .aria_label(title.to_string())
-        .child(
-            text_style(div(), TypeScale::HEADING_2)
-                .text_color(theme.colors.text_primary())
-                .child(title.to_string()),
-        )
-        .child(
-            text_style(div(), TypeScale::BODY)
-                .text_color(theme.colors.text_secondary())
-                .child(body.to_string()),
-        )
-        .child(
-            text_style(div(), TypeScale::META)
-                .text_color(theme.colors.text_muted())
-                .child(hint.to_string()),
-        )
-}
-
 /// The error-state pattern: danger accent, explanation and a recovery hint.
 ///
 /// It carries no button of its own: a retry control only belongs where the
@@ -114,9 +79,14 @@ pub fn error_state(
     body: &str,
     recovery: &str,
 ) -> Stateful<Div> {
-    GlassSurface::new(GlassVariant::Low)
-        .render(theme)
+    div()
         .id(id)
+        .max_w(px(560.0))
+        .m(px(SpacingScale::S8))
+        .rounded(theme.radius.surface())
+        .border_1()
+        .border_color(theme.colors.hairline_divider())
+        .bg(theme.colors.surface())
         .p(px(SpacingScale::S6))
         .flex()
         .flex_col()

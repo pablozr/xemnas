@@ -4,7 +4,9 @@
 //! instead of reaching for loose values. Both palettes apply to every screen;
 //! navigation never changes the user's selected mode.
 
-use gpui::{App, Global, Styled};
+use std::sync::OnceLock;
+
+use gpui::{App, Global, SharedString, Styled};
 
 /// One palette for the entire application, independent of navigation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -62,20 +64,30 @@ pub struct Theme {
 impl Theme {
     /// Reads the palette selected by the global theme control.
     pub fn current(cx: &App) -> Self {
-        cx.try_global::<ThemeMode>()
+        let mut theme = cx
+            .try_global::<ThemeMode>()
             .copied()
             .unwrap_or_default()
-            .theme()
+            .theme();
+        let glass = cx
+            .try_global::<Backdrop>()
+            .is_some_and(|backdrop| backdrop.0);
+        theme.colors = theme.colors.with_glass(glass);
+        theme
     }
-    /// Interface font family registered from the embedded Inter Variable file.
-    ///
-    /// If registration fails, the GPUI/OS text system resolves a fallback on
-    /// its own; that fallback is platform-provided (typically Segoe UI on
-    /// Windows) and is not guaranteed by this crate, so there is deliberately
-    /// no `FONT_FALLBACK` constant pretending otherwise.
-    pub const FONT_INTERFACE: &'static str = "Inter Variable";
-    /// Monospace font family for code and technical IDs.
-    pub const FONT_MONO: &'static str = "JetBrains Mono";
+    /// Interface family (embedded Inter Variable), as the platform named it.
+    pub fn font_interface() -> SharedString {
+        families().interface.clone()
+    }
+    /// Display family for reading titles and the wordmark (embedded
+    /// Bricolage Grotesque). Every control, list and paragraph stays on Inter.
+    pub fn font_display() -> SharedString {
+        families().display.clone()
+    }
+    /// Monospace family for code and technical IDs (embedded JetBrains Mono).
+    pub fn font_mono() -> SharedString {
+        families().mono.clone()
+    }
 
     /// Builds the approved Quiet Glass theme.
     pub const fn quiet_glass() -> Self {
@@ -96,9 +108,68 @@ impl Theme {
     }
 }
 
+/// Whether the window material currently shows through the chrome. The shell
+/// sets it every frame from the backdrop in use and the system appearance.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Backdrop(pub bool);
+impl Global for Backdrop {}
+
+/// Family names as the platform text system registered the embedded files.
+///
+/// The names differ per platform: DirectWrite groups variable-font instances
+/// by optical size, so Windows registers "Inter Variable Text" and
+/// "Bricolage Grotesque 14pt", while other platforms use the typographic family
+/// names. Asking for a name that does not exist silently falls back to the
+/// system face, which is how the app ended up in Segoe UI.
+#[derive(Clone, Debug)]
+pub struct FontFamilies {
+    /// Interface family.
+    pub interface: SharedString,
+    /// Display family.
+    pub display: SharedString,
+    /// Monospace family.
+    pub mono: SharedString,
+}
+
+/// Candidates tried in order; the first registered one wins.
+const INTERFACE_NAMES: &[&str] = &["Inter Variable Text", "Inter Variable", "Inter"];
+const DISPLAY_NAMES: &[&str] = &["Bricolage Grotesque 14pt", "Bricolage Grotesque"];
+const MONO_NAMES: &[&str] = &["JetBrains Mono", "JetBrains Mono Regular"];
+
+static FAMILIES: OnceLock<FontFamilies> = OnceLock::new();
+
+fn families() -> &'static FontFamilies {
+    FAMILIES.get_or_init(|| FontFamilies {
+        interface: INTERFACE_NAMES[0].into(),
+        display: DISPLAY_NAMES[0].into(),
+        mono: MONO_NAMES[0].into(),
+    })
+}
+
+fn pick(available: &[String], candidates: &[&str]) -> SharedString {
+    candidates
+        .iter()
+        .find(|name| available.iter().any(|family| family == *name))
+        .copied()
+        .unwrap_or(candidates[0])
+        .into()
+}
+
+/// Resolves the families once, after the embedded fonts are registered.
+/// Returns the chosen names so the caller can log them.
+pub fn resolve_font_families(available: &[String]) -> FontFamilies {
+    let resolved = FontFamilies {
+        interface: pick(available, INTERFACE_NAMES),
+        display: pick(available, DISPLAY_NAMES),
+        mono: pick(available, MONO_NAMES),
+    };
+    let _ = FAMILIES.set(resolved.clone());
+    resolved
+}
+
 /// Applies a typographic token with the interface font family.
 pub fn text_style<T: Styled>(mut element: T, token: TypeToken) -> T {
-    element = element.font_family(Theme::FONT_INTERFACE);
+    element = element.font_family(Theme::font_interface());
     element = element.font_weight(token.font_weight());
     element = element.text_size(token.size_px());
     element = element.line_height(token.line_height_px());
@@ -107,7 +178,7 @@ pub fn text_style<T: Styled>(mut element: T, token: TypeToken) -> T {
 
 /// Applies a typographic token with the monospace font family (`type.code`).
 pub fn code_style<T: Styled>(mut element: T, token: TypeToken) -> T {
-    element = element.font_family(Theme::FONT_MONO);
+    element = element.font_family(Theme::font_mono());
     element = element.font_weight(token.font_weight());
     element = element.text_size(token.size_px());
     element = element.line_height(token.line_height_px());

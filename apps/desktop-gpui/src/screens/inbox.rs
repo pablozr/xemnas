@@ -7,18 +7,20 @@ use application::inbox::{
 };
 use gpui::prelude::*;
 use gpui::{
-    div, px, AnyElement, Context, Div, ElementId, Entity, FocusHandle, Render, Role, Stateful,
-    Subscription, Window,
+    div, px, AnyElement, Context, Div, ElementId, Entity, FocusHandle, Render, Role, ScrollHandle,
+    Stateful, Subscription, Window,
 };
 
 use super::evidence;
 use super::format::short_date;
 use super::review_editor::{EditorEvent, ReviewEditor};
-use crate::ui::controls::{action_button, ButtonKind};
+use crate::ui::controls::{action_button, button_foreground, ButtonKind};
 use crate::ui::glass::focus_ring;
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
-    count_chip, fade_in, mark_selected, panel_title, section_label, status_pill,
+    action_footer, count_chip, empty_panel, error_banner, fade_in, hover_tint, kbd, mark_selected,
+    panel_title, reading_title, section_label, skeleton_list, status_pill, toast, track_hover,
+    word_wrapped, READING_WIDTH, TOAST_DURATION,
 };
 use crate::ui::search_field::SearchField;
 use crate::ui::theme::{text_style, Theme};
@@ -40,6 +42,8 @@ enum ReviewAction {
 
 /// A paginated candidate list and its source-reading pane.
 pub struct InboxScreen<S: InboxStore + Send + 'static> {
+    /// Row under the pointer, driving the hover spring.
+    hovered: Option<String>,
     inbox: Option<Inbox<S>>,
     rows: Vec<CandidateSummary>,
     cursor: Option<String>,
@@ -63,15 +67,16 @@ pub struct InboxScreen<S: InboxStore + Send + 'static> {
     editor_subscription: Option<Subscription>,
     action_focus: [FocusHandle; 4],
     notice: Option<&'static str>,
+    /// Notice whose dismissal timer is already running.
+    notice_scheduled: Option<&'static str>,
+    list_scroll: ScrollHandle,
 }
-
-/// The reading column shared with the Decisions document.
-const READING_WIDTH: f32 = 760.0;
 
 impl<S: InboxStore + Send + 'static> InboxScreen<S> {
     /// Composes the application use case without opening storage in the view.
     pub fn new(cx: &mut Context<Self>, inbox: Inbox<S>) -> Self {
         Self {
+            hovered: None,
             inbox: Some(inbox),
             rows: Vec::new(),
             cursor: None,
@@ -95,6 +100,8 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             editor_subscription: None,
             action_focus: std::array::from_fn(|_| cx.focus_handle().tab_stop(true)),
             notice: None,
+            notice_scheduled: None,
+            list_scroll: ScrollHandle::new(),
         }
     }
 
@@ -287,6 +294,70 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
         .detach();
     }
 
+    /// Loaded candidates for the command palette: id and question.
+    pub fn palette_rows(&self) -> Vec<(String, String)> {
+        self.rows
+            .iter()
+            .map(|row| (row.id.clone(), row.question.clone()))
+            .collect()
+    }
+
+    /// Opens a loaded candidate from the command palette.
+    pub fn open_candidate(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(index) = self.rows.iter().position(|row| row.id == id) {
+            self.list_scroll.scroll_to_item(index);
+        }
+        if let Some((_, focus)) = self.row_focus.iter().find(|(key, _)| *key == id) {
+            window.focus(focus, cx);
+        }
+        self.select(id, cx);
+    }
+
+    /// Moves the selection through the visible queue and keeps it in view.
+    pub fn move_selection(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editor.is_some() {
+            return;
+        }
+        let visible: Vec<String> = self
+            .rows
+            .iter()
+            .filter(|row| matches_query(row, &self.query))
+            .map(|row| row.id.clone())
+            .collect();
+        if visible.is_empty() {
+            return;
+        }
+        let current = self
+            .selected
+            .as_ref()
+            .and_then(|id| visible.iter().position(|row| row == id));
+        let next = match current {
+            Some(index) => (index as isize + delta).clamp(0, visible.len() as isize - 1) as usize,
+            None => 0,
+        };
+        let id = visible[next].clone();
+        if let Some((_, focus)) = self.row_focus.iter().find(|(key, _)| *key == id) {
+            window.focus(focus, cx);
+        }
+        self.list_scroll.scroll_to_item(next);
+        self.select(id, cx);
+    }
+
+    /// Keyboard shortcut for a review action, in footer order:
+    /// 0 reject, 1 snooze/resume, 2 adjust, 3 confirm.
+    pub fn run_shortcut(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editor.is_some() || self.detail.is_none() {
+            return;
+        }
+        let action = [
+            ReviewAction::Reject,
+            ReviewAction::Snooze,
+            ReviewAction::Edit,
+            ReviewAction::Confirm,
+        ][index.min(3)];
+        self.review(action, window, cx);
+    }
+
     fn review(&mut self, action: ReviewAction, window: &mut Window, cx: &mut Context<Self>) {
         if self.busy {
             return;
@@ -393,17 +464,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             "Ajustar",
             "Confirmar",
         ];
-        div()
-            .flex_none()
-            .border_t_1()
-            .border_color(theme.colors.hairline_divider())
-            .px(px(SpacingScale::S8))
-            .py(px(SpacingScale::S3))
-            .bg(theme.colors.canvas())
-            .flex()
-            .flex_wrap()
-            .justify_end()
-            .gap(px(SpacingScale::S2))
+        action_footer(&theme, self.busy.then_some(("Registrando…", false)))
             .children(
                 [
                     ReviewAction::Reject,
@@ -435,18 +496,22 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                             },
                         ))
                         .child(labels[index])
+                        .child(kbd(
+                            button_foreground(&theme, kind, !self.busy),
+                            ["R", "S", "A", "C"][index],
+                        ))
                 }),
             )
             .into_any_element()
     }
 
-    fn row(&self, row: &CandidateSummary, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn row(&self, row: &CandidateSummary, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
         let selected = self.selected.as_deref() == Some(&row.id);
         let id = row.id.clone();
         let key_id = id.clone();
-        let hover = theme.colors.glass_fill_medium();
-        let pressed = theme.colors.glass_fill_strong();
+        let hover_key = id.clone();
+        let hovered = self.hovered.as_deref() == Some(row.id.as_str());
         let element = div()
             .id((ElementId::from("candidate"), row.id.clone()))
             .relative()
@@ -455,10 +520,11 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             .flex()
             .flex_col()
             .gap(px(SpacingScale::S1))
-            .when(!selected, |row| {
-                row.hover(move |style| style.bg(hover))
-                    .active(move |style| style.bg(pressed))
-            })
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                if track_hover(&mut this.hovered, hover_key.clone(), *hovered) {
+                    cx.notify();
+                }
+            }))
             .role(Role::Button)
             .aria_label(row.question.clone())
             .aria_selected(selected)
@@ -492,10 +558,8 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                     }),
             )
             .child(
-                text_style(div(), TypeScale::ROW_TITLE)
-                    .text_color(theme.colors.text_primary())
-                    .line_clamp(2)
-                    .child(row.question.clone()),
+                word_wrapped(&row.question, TypeScale::ROW_TITLE, Some(2))
+                    .text_color(theme.colors.text_primary()),
             )
             .child(
                 text_style(div(), TypeScale::BODY_SMALL)
@@ -507,7 +571,13 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
         if let Some((_, focus)) = self.row_focus.iter().find(|(id, _)| *id == row.id) {
             element = element.track_focus(focus);
         }
-        element
+        hover_tint(
+            element,
+            ElementId::Name(format!("candidate-hover-{}", row.id).into()),
+            hovered,
+            !selected,
+            &theme,
+        )
     }
 
     fn button(
@@ -542,6 +612,16 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             .as_ref()
             .filter(|detail| matches_query(&detail.summary, &self.query));
         let Some(detail) = visible_detail else {
+            if self.loaded && self.rows.is_empty() && !self.busy {
+                return empty_panel(
+                    &theme,
+                    IconName::List,
+                    "Fila de revisão",
+                    "Nada aguardando revisão",
+                    "Quando uma sessão do OpenCode registrar uma escolha de engenharia, o extrator propõe um candidato aqui para você confirmar, ajustar ou rejeitar.",
+                )
+                .into_any_element();
+            }
             return div()
                 .size_full()
                 .flex()
@@ -551,7 +631,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                     text_style(div(), TypeScale::BODY_SMALL)
                         .text_color(theme.colors.text_muted())
                         .child(if self.busy {
-                            "Carregando…"
+                            ""
                         } else {
                             "Selecione um candidato para ler as evidências."
                         }),
@@ -635,11 +715,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                             .child(short_date(&detail.summary.received_at)),
                     ),
             )
-            .child(
-                text_style(div(), TypeScale::DISPLAY)
-                    .text_color(theme.colors.text_primary())
-                    .child(detail.summary.question.clone()),
-            )
+            .child(reading_title(&detail.summary.question).text_color(theme.colors.text_primary()))
             .child(
                 div()
                     .flex()
@@ -695,14 +771,10 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                     .flex_wrap()
                     .gap(px(SpacingScale::S8))
                     .child(
-                        section(
+                        confidence(
                             theme,
-                            "Confiança da extração",
-                            &format!(
-                                "{:.0}% · {}",
-                                detail.summary.confidence * 100.0,
-                                detail.summary.confidence_reason
-                            ),
+                            detail.summary.confidence as f32,
+                            &detail.summary.confidence_reason,
                         )
                         .flex_1()
                         .min_w(px(220.0)),
@@ -748,13 +820,32 @@ impl<S: InboxStore + Send + 'static> Render for InboxScreen<S> {
             .iter()
             .filter(|row| matches_query(row, &self.query))
             .collect();
-        div().size_full().flex().flex_col()
-            .children(self.notice.map(|message| text_style(div(), TypeScale::BODY_SMALL).id("review-notice").p(px(SpacingScale::S3))
-                .role(Role::Status).text_color(theme.colors.text_secondary()).child(message)))
-            .children(self.error.map(|message| text_style(div(), TypeScale::BODY_SMALL).id("inbox-error").p(px(SpacingScale::S3))
-                .role(Role::Status).text_color(theme.colors.status_danger()).child(message)))
+        if self.notice.is_some() && self.notice != self.notice_scheduled {
+            self.notice_scheduled = self.notice;
+            let shown = self.notice;
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(TOAST_DURATION).await;
+                let _ = this.update(cx, |screen, cx| {
+                    if screen.notice == shown {
+                        screen.notice = None;
+                        screen.notice_scheduled = None;
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
+        let retry = self.error.map(|_| {
+            action_button(&theme, "inbox-retry", ButtonKind::Secondary, !self.busy)
+                .aria_label("Tentar novamente")
+                .on_click(cx.listener(|this, _, _, cx| this.page(false, cx)))
+                .child("Tentar novamente")
+        });
+        div().size_full().relative().flex().flex_col()
+            .children(self.error.map(|message| error_banner(&theme, message).id("inbox-error").role(Role::Alert).children(retry)))
+            .children(self.notice.map(|message| toast(&theme, message, 72.0)))
             .child(div().flex_1().min_h(px(0.0)).flex()
-                .child(div().w(px(320.0)).flex_none().h_full().flex().flex_col().bg(theme.colors.rail())
+                .child(div().w(px(320.0)).flex_none().h_full().flex().flex_col().bg(theme.colors.pane())
                     .border_r_1().border_color(theme.colors.hairline_divider())
                     .child(div().px(px(SpacingScale::S4)).pt(px(SpacingScale::S3)).pb(px(SpacingScale::S2)).flex().items_center().gap(px(SpacingScale::S2))
                         .child(panel_title(&theme, "Aguardando revisão"))
@@ -766,22 +857,69 @@ impl<S: InboxStore + Send + 'static> Render for InboxScreen<S> {
                         .child(div().flex_1())
                         .child(self.button("inbox-refresh", "Atualizar", false, cx)))
                     .child(div().px(px(SpacingScale::S4)).pb(px(SpacingScale::S3)).children(self.search.clone()))
-                    .child(div().id("inbox-list").flex_1().min_h(px(0.0)).overflow_y_scroll()
+                    .child(div().id("inbox-list").flex_1().min_h(px(0.0)).overflow_y_scroll().track_scroll(&self.list_scroll)
                         .children(visible.iter().map(|row| self.row(row, cx)))
-                        .when(visible.is_empty(), |list| list.child(text_style(div(), TypeScale::BODY_SMALL).p(px(SpacingScale::S6))
-                            .text_color(theme.colors.text_muted()).child(if self.busy { "Carregando candidatos…" }
-                            else if !self.loaded { "Atualize para carregar os candidatos." }
-                            else if self.rows.is_empty() { "Nenhum candidato aguardando revisão. Novas capturas aparecerão aqui após a extração." }
+                        .when(visible.is_empty() && self.busy, |list| list.child(skeleton_list(&theme, "inbox-skeleton", 5)))
+                        .when(visible.is_empty() && !self.busy, |list| list.child(text_style(div(), TypeScale::BODY_SMALL).p(px(SpacingScale::S4))
+                            .text_color(theme.colors.text_muted()).child(
+                            if !self.loaded { "Atualize para carregar os candidatos." }
+                            else if self.rows.is_empty() { "Fila vazia." }
                             else { "Nenhum candidato carregado corresponde à busca." }))))
-                    .child(text_style(div(), TypeScale::META).flex_none().px(px(SpacingScale::S4)).py(px(SpacingScale::S2))
+                    .when(self.cursor.is_some() || self.rows.len() != visible.len(), |rail| rail.child(text_style(div(), TypeScale::META).flex_none().px(px(SpacingScale::S4)).py(px(SpacingScale::S2))
                         .flex().items_center().justify_between()
                         .border_t_1().border_color(theme.colors.hairline_divider()).text_color(theme.colors.text_muted())
                         .child(format!("{} carregados · {} visíveis", self.rows.len(), visible.len()))
-                        .when(self.cursor.is_some(), |footer| footer.child(self.button("inbox-more", "Carregar mais", true, cx)))))
+                        .when(self.cursor.is_some(), |footer| footer.child(self.button("inbox-more", "Carregar mais", true, cx))))))
                 .child(div().flex_1().min_w(px(0.0)).h_full().flex().flex_col()
                     .child(div().flex_1().min_h(px(0.0)).child(if let Some(editor) = self.editor.as_ref().filter(|_| self.detail.as_ref().is_some_and(|detail| matches_query(&detail.summary, &self.query))) { editor.clone().into_any_element() } else { self.reading_pane(cx) }))
                     .when(self.editor.is_none(), |pane| pane.child(self.review_actions(cx)))))
     }
+}
+
+/// The extractor's own estimate, drawn as a short meter beside the number.
+/// Labelled as an estimate: it is not a human assessment.
+fn confidence(theme: Theme, value: f32, reason: &str) -> Div {
+    let value = value.clamp(0.0, 1.0);
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SpacingScale::S2))
+        .child(section_label(&theme, "Confiança da extração"))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(SpacingScale::S3))
+                .child(
+                    div()
+                        .w(px(120.0))
+                        .h(px(4.0))
+                        .rounded_full()
+                        .bg(theme.colors.surface())
+                        .child(
+                            div()
+                                .h_full()
+                                .w(gpui::relative(value))
+                                .rounded_full()
+                                .bg(theme.colors.accent_default()),
+                        ),
+                )
+                .child(
+                    text_style(div(), TypeScale::BODY_SMALL)
+                        .text_color(theme.colors.text_primary())
+                        .child(format!("{:.0}%", value * 100.0)),
+                )
+                .child(
+                    text_style(div(), TypeScale::META)
+                        .text_color(theme.colors.text_muted())
+                        .child("estimativa do extrator"),
+                ),
+        )
+        .child(
+            text_style(div(), TypeScale::BODY)
+                .text_color(theme.colors.text_secondary())
+                .child(reason.to_owned()),
+        )
 }
 
 fn section(theme: Theme, label: &'static str, content: &str) -> Div {

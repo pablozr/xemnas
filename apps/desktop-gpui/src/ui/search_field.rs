@@ -913,7 +913,7 @@ impl Render for SearchField {
                     return;
                 }
                 match event.keystroke.key.as_str() {
-                    "enter" if this.edit.marked.is_none() => {
+                    "enter" if this.edit.marked.is_none() && !event.keystroke.modifiers.control => {
                         this.edit.replace(None, "\n");
                         this.changed(cx);
                     }
@@ -985,7 +985,7 @@ impl Render for SearchField {
                     field.child(
                         text_style(div(), TypeScale::META)
                             .text_color(theme.colors.text_muted())
-                            .child(if focused { "Esc · limpar" } else { "Ctrl K" }),
+                            .child(if focused { "Esc · limpar" } else { "Ctrl F" }),
                     )
                 },
             )

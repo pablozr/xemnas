@@ -7,11 +7,13 @@
 
 use gpui::prelude::*;
 use gpui::{
-    div, px, Animation, AnimationElement, AnimationExt, Div, ElementId, Rgba, SharedString,
+    deferred, div, px, Animation, AnimationElement, AnimationExt, AnyElement, Div, ElementId, Rgba,
+    SharedString, SpringAnimation, Stateful,
 };
 
+use crate::ui::icons::{icon, IconName};
 use crate::ui::theme::{text_style, Theme};
-use crate::ui::tokens::{MotionTokens, SpacingScale, TypeScale};
+use crate::ui::tokens::{MotionTokens, SpacingScale, TypeScale, TypeToken};
 
 /// The quiet title of a side panel: 12 px, muted. The content, not the
 /// panel name, carries the weight.
@@ -30,6 +32,292 @@ pub fn count_chip(theme: &Theme, value: impl Into<SharedString>) -> Div {
         .bg(theme.colors.surface())
         .text_color(theme.colors.text_secondary())
         .child(value.into())
+}
+
+/// Text laid out word by word, so punctuation stays with its word.
+///
+/// GPUI's line wrapper treats `?` as a break opportunity (for URLs), which left
+/// a lone "?" on the last line of a question. Each word here is one flex item,
+/// so "captura?" wraps as a unit. `max_lines` clips extra lines.
+pub fn word_wrapped(text: &str, token: TypeToken, max_lines: Option<usize>) -> Div {
+    let words = text
+        .split_whitespace()
+        .map(|word| div().flex_none().child(word.to_owned()));
+    text_style(div(), token)
+        .w_full()
+        .min_w(px(0.0))
+        .flex()
+        .flex_wrap()
+        .gap_x(px(token.size * 0.27))
+        .when_some(max_lines, |text, lines| {
+            text.max_h(px(token.line_height * lines as f32))
+                .overflow_hidden()
+        })
+        .children(words)
+}
+
+/// The title of a reading pane: display face, word-wrapped.
+pub fn reading_title(text: &str) -> Div {
+    // 500 is a named instance of the variable face; an in-between weight such
+    // as 560 made the text system fall back to the interface family.
+    word_wrapped(text, TypeScale::DISPLAY, None)
+        .font_family(Theme::font_display())
+        .font_weight(gpui::FontWeight::MEDIUM)
+}
+
+/// The reading column width shared by Revisão, Decisões and the editors.
+pub const READING_WIDTH: f32 = 760.0;
+
+/// A scrollable page with the reading column centred in it.
+pub fn reading_page(id: impl Into<ElementId>, column: impl IntoElement) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex_1()
+        .min_h(px(0.0))
+        .overflow_y_scroll()
+        .px(px(SpacingScale::S8))
+        .py(px(SpacingScale::S8))
+        .child(
+            div()
+                .w_full()
+                .max_w(px(READING_WIDTH))
+                .mx_auto()
+                .flex()
+                .flex_col()
+                .gap(px(SpacingScale::S6))
+                .child(column),
+        )
+}
+
+/// A labelled form field: section label above the control, optional hint.
+pub fn form_field(
+    theme: &Theme,
+    label: &str,
+    hint: Option<&str>,
+    control: impl IntoElement,
+) -> Div {
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(px(SpacingScale::S2))
+        .child(section_label(theme, label))
+        .child(control)
+        .when_some(hint, |field, hint| {
+            field.child(
+                text_style(div(), TypeScale::META)
+                    .text_color(theme.colors.text_muted())
+                    .child(hint.to_owned()),
+            )
+        })
+}
+
+/// The bar that holds a surface's actions, pinned under its scrolling
+/// content: Revisão's review actions and both editors share it. A message on
+/// the left explains why the primary action is unavailable.
+pub fn action_footer(theme: &Theme, message: Option<(&str, bool)>) -> Div {
+    div()
+        .flex_none()
+        .px(px(SpacingScale::S8))
+        .py(px(SpacingScale::S3))
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(px(SpacingScale::S2))
+        .border_t_1()
+        .border_color(theme.colors.hairline_divider())
+        .child(
+            text_style(div(), TypeScale::BODY_SMALL)
+                .flex_1()
+                .min_w(px(0.0))
+                .when_some(message, |text, (message, danger)| {
+                    text.text_color(if danger {
+                        theme.colors.status_danger()
+                    } else {
+                        theme.colors.text_muted()
+                    })
+                    .child(message.to_owned())
+                }),
+        )
+}
+
+/// How long a confirmation toast stays on screen.
+pub const TOAST_DURATION: std::time::Duration = std::time::Duration::from_millis(3500);
+
+/// A confirmation that floats over the bottom of a surface and leaves on its
+/// own. The parent must be `relative()`; `bottom` clears its action footer.
+pub fn toast(theme: &Theme, message: &str, bottom: f32) -> AnyElement {
+    let pill = div()
+        .flex()
+        .items_center()
+        .gap(px(SpacingScale::S2))
+        .px(px(SpacingScale::S4))
+        .py(px(SpacingScale::S2))
+        .rounded(theme.radius.surface())
+        .border_1()
+        .border_color(theme.colors.hairline_divider())
+        .bg(theme.colors.floating())
+        .shadow(vec![gpui::BoxShadow::new(
+            px(0.0),
+            px(8.0),
+            theme.colors.shadow_emphasis().into(),
+        )
+        .blur_radius(px(24.0))])
+        .child(icon(
+            IconName::CheckCircle,
+            14.0,
+            theme.colors.status_success(),
+        ))
+        .child(
+            text_style(div(), TypeScale::BODY_SMALL)
+                .text_color(theme.colors.text_primary())
+                .child(message.to_owned()),
+        );
+    deferred(
+        div()
+            .id("toast")
+            .absolute()
+            .left_0()
+            .right_0()
+            .bottom(px(bottom))
+            .flex()
+            .justify_center()
+            .role(gpui::Role::Status)
+            .aria_label(message.to_owned())
+            .child(fade_in(
+                pill,
+                ElementId::Name(format!("toast-{message}").into()),
+            )),
+    )
+    .with_priority(2)
+    .into_any_element()
+}
+
+/// A recoverable failure pinned to the top of a surface. The caller appends
+/// its retry action; the message is product language, never the raw error.
+pub fn error_banner(theme: &Theme, message: &str) -> Div {
+    div()
+        .flex_none()
+        .px(px(SpacingScale::S4))
+        .py(px(SpacingScale::S2))
+        .flex()
+        .items_center()
+        .gap(px(SpacingScale::S3))
+        .bg(theme.colors.danger_tint())
+        .border_b_1()
+        .border_color(theme.colors.hairline_divider())
+        .child(
+            div()
+                .size(px(6.0))
+                .flex_none()
+                .rounded_full()
+                .bg(theme.colors.status_danger()),
+        )
+        .child(
+            text_style(div(), TypeScale::BODY_SMALL)
+                .flex_1()
+                .min_w(px(0.0))
+                .text_color(theme.colors.text_primary())
+                .child(message.to_owned()),
+        )
+}
+
+/// Placeholder rows while a list loads: the shape of what is coming, softly
+/// breathing, instead of the word "Carregando". Honours reduced motion
+/// through GPUI's animation element.
+pub fn skeleton_list(theme: &Theme, id: &'static str, rows: usize) -> AnyElement {
+    let bar = |width: f32, height: f32| {
+        div()
+            .h(px(height))
+            .w(gpui::relative(width))
+            .rounded(px(3.0))
+            .bg(theme.colors.surface())
+    };
+    div()
+        .id(id)
+        .w_full()
+        .flex()
+        .flex_col()
+        .role(gpui::Role::Status)
+        .aria_label("Carregando")
+        .children((0..rows).map(|row| {
+            let wide = [0.86, 0.72, 0.8, 0.64][row % 4];
+            div()
+                .px(px(SpacingScale::S4))
+                .py(px(SpacingScale::S3))
+                .flex()
+                .flex_col()
+                .gap(px(SpacingScale::S2))
+                .child(bar(0.28, 8.0))
+                .child(bar(wide, 10.0))
+                .child(bar(wide - 0.2, 8.0))
+        }))
+        .with_animation(
+            ElementId::NamedInteger(id.into(), 1),
+            Animation::new(std::time::Duration::from_millis(1400))
+                .repeat()
+                .with_easing(gpui::ease_in_out),
+            |list, delta| list.opacity(0.55 + 0.45 * (1.0 - (2.0 * delta - 1.0).abs())),
+        )
+        .into_any_element()
+}
+
+/// The empty state of a reading surface: a quiet mark, what this place is,
+/// and what makes it fill. No card, no glow.
+pub fn empty_panel(theme: &Theme, glyph: IconName, eyebrow: &str, title: &str, body: &str) -> Div {
+    div()
+        .size_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .max_w(px(420.0))
+                .px(px(SpacingScale::S6))
+                .flex()
+                .flex_col()
+                .items_start()
+                .gap(px(SpacingScale::S3))
+                .child(
+                    div()
+                        .size(px(40.0))
+                        .mb(px(SpacingScale::S2))
+                        .rounded(theme.radius.surface())
+                        .border_1()
+                        .border_color(theme.colors.hairline_divider())
+                        .bg(theme.colors.surface())
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(icon(glyph, 20.0, theme.colors.text_secondary())),
+                )
+                .child(section_label(theme, eyebrow))
+                .child(
+                    text_style(div(), TypeScale::HEADING_1)
+                        .text_color(theme.colors.text_primary())
+                        .child(title.to_owned()),
+                )
+                .child(
+                    text_style(div(), TypeScale::BODY)
+                        .text_color(theme.colors.text_secondary())
+                        .child(body.to_owned()),
+                ),
+        )
+}
+
+/// A keyboard shortcut hint placed inside a button, tinted like its label.
+pub fn kbd(color: Rgba, key: &'static str) -> Div {
+    text_style(div(), TypeScale::META)
+        .flex_none()
+        .min_w(px(16.0))
+        .px(px(4.0))
+        .rounded(px(3.0))
+        .border_1()
+        .border_color(color.alpha(0.28))
+        .text_color(color.alpha(0.72))
+        .flex()
+        .justify_center()
+        .child(key)
 }
 
 /// A status pill: dot plus text, never colour alone.
@@ -74,6 +362,51 @@ pub fn mark_selected<E: ParentElement + Styled>(row: E, theme: &Theme, selected:
             .rounded_full()
             .bg(theme.colors.accent_hover()),
     )
+}
+
+/// Records which item is under the pointer. Returns whether it changed, so
+/// callers only re-render when the hover target really moved.
+pub fn track_hover<T: PartialEq>(slot: &mut Option<T>, key: T, hovered: bool) -> bool {
+    if hovered {
+        if slot.as_ref() == Some(&key) {
+            return false;
+        }
+        *slot = Some(key);
+        true
+    } else if slot.as_ref() == Some(&key) {
+        *slot = None;
+        true
+    } else {
+        false
+    }
+}
+
+/// Eases a row's hover tint in and out with a spring instead of snapping.
+///
+/// GPUI's `.hover()` style swaps instantly; the spring keeps its state under
+/// `key`, so the tint animates toward `hovered` on every change. Selected rows
+/// keep their own fill (`enabled == false`).
+pub fn hover_tint(
+    row: Stateful<Div>,
+    key: impl Into<ElementId>,
+    hovered: bool,
+    enabled: bool,
+    theme: &Theme,
+) -> AnyElement {
+    let hover = theme.colors.hover_veil();
+    let rest = hover.alpha(0.0);
+    row.with_spring(
+        key,
+        SpringAnimation::new(MotionTokens::HOVER_SPRING).to(hovered && enabled),
+        move |row, phase| {
+            if enabled {
+                row.bg(phase.interpolate_between_clamped(0.0..=1.0, rest, hover))
+            } else {
+                row
+            }
+        },
+    )
+    .into_any_element()
 }
 
 /// Fades content in when `key` changes (a new selection, a new destination).

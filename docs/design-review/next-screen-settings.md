@@ -10,7 +10,8 @@ Cada seção entra apenas com o que o contrato atual oferece.
   projetos e barra do projeto saem de cena). "Voltar aos projetos" e o mesmo
   ícone fecham a página e devolvem a seleção anterior.
 - Página com navegação à esquerda (seções) e coluna de leitura de até 720 px.
-- A janela é opaca; nada depende de material do sistema.
+- A janela usa o material do sistema (Mica Alt/acrílico); nada na página depende
+  de blur.
 
 ## Seções, em ordem
 
