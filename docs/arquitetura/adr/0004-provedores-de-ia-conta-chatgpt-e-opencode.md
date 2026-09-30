@@ -1,0 +1,61 @@
+# ADR-0004: Provedores de IA — modelo local, conta ChatGPT e OpenCode
+
+- **Status:** aceito
+- **Data:** 2026-09-30
+- **Contexto:** o MVP entregou dois extratores: a heurística local (`Fake`) e um provedor compatível com OpenAI por chave (`OpenAiCompatible`). O MVP-SPEC §12 pedia "apenas um provider real de menor esforço" e dizia que o gateway do OpenCode "é orquestrador, não modelo". Na prática, a chave paga afasta o uso real, e modelos locais sem chave não conseguem consentir. A pesquisa `docs/pesquisas/provedores-e-modelos-de-ia.md` levantou três caminhos sem chave paga. O usuário decidiu implementar os três, pular a semana de dogfood antes disso e seguir direto para backend e telas. Este ADR revisa o §12 nesses pontos e mantém todas as outras regras dele.
+
+## Decisão
+
+O perfil de IA passa a ter quatro tipos (`ProfileKind`). Os dois existentes não mudam de nome, então perfis salvos continuam carregando e os consentimentos já dados continuam válidos.
+
+| Tipo | Para quem | Autenticação | Destino dos dados |
+| --- | --- | --- | --- |
+| `fake` | Heurística local, padrão | nenhuma | nada sai da máquina |
+| `open_ai_compatible` | Chave de API **ou** modelo local (Ollama, LM Studio) | chave no cofre; **opcional** quando o endereço é loopback | o endereço configurado |
+| `chat_gpt_plan` | Conta ChatGPT, usando o plano do usuário | Sign in with ChatGPT (OAuth com PKCE) | `https://api.openai.com/v1`, na conta do usuário |
+| `open_code` | O que já está configurado no OpenCode do usuário | senha opcional do servidor do OpenCode, no cofre | o provedor/modelo que o usuário escolher no OpenCode |
+
+### Regras comuns (continuam as do §12)
+
+- Qualquer tipo diferente de `fake` só é usado depois do **consentimento** sobre a prévia do que sai da máquina. O hash da prévia inclui o tipo, o destino, o modelo e, na conta ChatGPT, a conta conectada. Trocar qualquer um deles pede novo consentimento.
+- A saída do modelo continua com esquema estrito e a mesma validação de lote; texto do modelo nunca vira SQL, caminho ou comando; falha do provedor não bloqueia a captura nem a UI; nada confirma decisão sozinho.
+- Segredos (chave, refresh token, senha do OpenCode) ficam só no cofre do sistema (Credential Manager no Windows). O domínio não conhece nomes de fornecedores.
+- Toda chamada de rede de catálogo, login ou extração roda fora da thread de UI, com tempo limite.
+
+### Catálogo de modelos
+
+Um port `ModelCatalog` lista os modelos do destino configurado: `GET {endpoint}/models` para compatíveis com OpenAI (formato `data[].id`); `GET /v1/models` com o token do plano para a conta ChatGPT (formato `models[]` com `slug`, `display_name` e `visibility`, mostrando só `visibility: "list"`); e `GET /provider` no OpenCode (provedores conectados e seus modelos, identificados como `provider/model`). Falha vira lista vazia com motivo; digitar o modelo à mão continua possível.
+
+### Conta ChatGPT (Sign in with ChatGPT para apps open source)
+
+Segue a documentação oficial (`developers.openai.com/siwc/token-sharing-open-source`), conferida em 30/09/2026:
+
+- **Login:** navegador na própria máquina, callback em `http://127.0.0.1:{porta}/auth/callback`, `response_type=code`, PKCE `S256`, `state` e `nonce` novos a cada tentativa. Endpoints do issuer `https://auth.openai.com`: autorização `/api/accounts/authorize`, token `/api/accounts/oauth/token`, revogação `/api/accounts/oauth/revoke`, userinfo `/api/accounts/oauth/userinfo`.
+- **Registro:** o primeiro login usa `client_id=dynamic_agent_client`, `agent_name_hint=xemnas` e um `ext_agent_host_id` estável por instalação (`urn:uuid:…`). O callback devolve o `client_id` emitido (`oaiapp_…`), que é guardado; `dynamic_agent_client` nunca é guardado. Logins seguintes reutilizam o `client_id` emitido.
+- **Escopos:** `openid profile email offline_access resource.invoke chatgpt.tokens.use.direct`, com `resource=https://api.openai.com/v1`. Sem `chatgpt.tokens.use.direct` concedido, o login fica válido, mas o uso do plano fica desligado e a tela diz isso.
+- **Tokens:** o access token vale 1 h e fica só em memória; o refresh token (30 dias, rotaciona a cada uso) fica só no cofre. O perfil guarda apenas dados não secretos: `client_id` emitido, `ext_agent_host_id`, e-mail e `sub`.
+- **ID token:** chega direto do endpoint de token, por TLS, na troca com PKCE. O xemnas valida `iss`, `aud` (o `client_id` emitido), `exp` e `nonce`, e confirma a identidade no `userinfo`, como o OpenID Connect Core §3.1.3.7 permite para tokens recebidos diretamente do endpoint de token. A verificação da assinatura RS256 pelo JWKS fica como pendência: exige uma biblioteca de RSA que não está no workspace, e crates novas com build script são bloqueadas pelo Controle de Aplicativo da máquina de desenvolvimento. Registrar quando for adicionada.
+- **Inferência:** `POST https://api.openai.com/v1/responses` com `store: false` e `stream: true` (obrigatórios), `instructions` e `input`, saída estruturada por `text.format` com `json_schema` estrito. Campos proibidos no fluxo (por exemplo `temperature`, `max_output_tokens`, `metadata`) não são enviados. Só `response.completed` conta como sucesso; os erros `subscription_sharing_*` viram mensagens de produto: limite do plano atingido leva a "Manage usage" (`https://chatgpt.com/settings/usage`).
+- **Sair:** revoga o refresh token no endpoint de revogação e apaga o token do cofre. Se a revogação falhar por rede, apaga localmente e avisa que dá para desconectar em ChatGPT › Configurações. O `client_id` emitido e o `ext_agent_host_id` ficam para um próximo login.
+- **Interface:** botão "Continue with ChatGPT", aviso "Using ChatGPT plan" perto do modelo, link "Manage usage" e, no primeiro login, o aviso de que o uso consome o plano, conforme as diretrizes de UI da OpenAI.
+
+### OpenCode como provedor (revisa o §12)
+
+- O xemnas fala com o servidor HTTP do OpenCode no endereço configurado (padrão `http://127.0.0.1:4096`, só loopback), com autenticação básica quando o usuário define `OPENCODE_SERVER_PASSWORD`.
+- Cada extração cria uma sessão com título iniciado por `xemnas · extração`, envia um único prompt com `model: { providerID, modelID }`, sem ferramentas, e `format: { type: "json_schema", schema }`; lê `info.structured_output` e **apaga a sessão** no fim, com sucesso ou falha.
+- O plugin do xemnas no OpenCode **ignora** sessões com esse título, para que uma extração não vire captura e gere um ciclo.
+- A prévia de consentimento mostra o provedor e o modelo escolhidos no OpenCode; o xemnas não vê para onde o OpenCode envia os dados, e a tela diz isso.
+
+## Consequências
+
+- `application::profile` ganha os dois tipos, campos opcionais da conta ChatGPT e do OpenCode (com `serde(default)` para ler arquivos antigos) e as regras de consentimento por tipo; `ai-provider` ganha o catálogo, o login ChatGPT, o extrator pela Responses API com streaming e o extrator pelo OpenCode.
+- O adapter do OpenCode muda (filtro de sessões de extração) e precisa ser reinstalado.
+- Configurações › IA ganha a escolha entre quatro provedores, a lista de modelos e o painel de login.
+- Cada execução continua registrando perfil, adapter, modelo e hashes (§12); o tipo novo aparece como adapter.
+
+## Alternativas rejeitadas
+
+- **Reaproveitar o login do Codex CLI** (`~/.codex/auth.json`): não é o fluxo documentado para terceiros e pode violar os termos.
+- **Usar o `backend-api` do ChatGPT**: a documentação manda usar só a Responses API pública.
+- **Guardar o access token no cofre:** o JWT pode passar do limite de tamanho do Credential Manager e só vale 1 h; basta renová-lo pelo refresh token.
+- **OpenCode sem filtro de sessão**: criaria o ciclo captura → extração → captura.

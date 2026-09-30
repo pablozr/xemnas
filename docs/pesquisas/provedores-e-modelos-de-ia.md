@@ -1,6 +1,6 @@
 # Escolha de provedor e modelo para a extração
 
-**Status:** Aberta. Não implementada.
+**Status:** Em implementação, conforme `docs/arquitetura/adr/0004-provedores-de-ia-conta-chatgpt-e-opencode.md`.
 
 Pesquisa de 30/09/2026. Parte do que está aqui vem de resumos de busca, porque
 `developers.openai.com`, `opencode.ai` e sites de notícia estavam bloqueados no
