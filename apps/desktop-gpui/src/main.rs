@@ -21,6 +21,7 @@ use xemnas_desktop::app::{
     NextItem, PaletteClose, PaletteDown, PaletteRun, PaletteUp, PrevItem, RejectItem, SaveEditor,
     Shell, SnoozeItem, TabNext, TabPrev, TogglePalette,
 };
+use xemnas_desktop::screens::settings::SettingsServices;
 use xemnas_desktop::ui::search_field::{
     Backspace, Clear, Copy, Cut, Delete, End, Home, Left, Paste, Right, SelectAll, SelectLeft,
     SelectRight,
@@ -49,12 +50,23 @@ fn main() {
     application::jobs::install_panic_sanitizer();
 
     if std::env::args().any(|argument| argument == "--demo") {
-        run_shell_mode(
-            demo::store().map_err(|error| error.to_string()),
-            Box::new(demo::ai_settings()),
-            true,
-            CaptureStatus::Demo,
-        );
+        let store = demo::store().map_err(|error| error.to_string());
+        let ai = demo::ai_settings();
+        // Sample paths and a fictitious port: the demo starts no API, and the
+        // OpenCode section reports on these as on any other environment.
+        let data_dir = std::env::temp_dir().join("xemnas-demo");
+        let environment = application::integration::IntegrationEnvironment {
+            outbox_dir: data_dir.join("outbox"),
+            runtime_dir: data_dir.join("runtime"),
+            data_dir,
+            api: Some(application::integration::LocalApiEndpoint {
+                port: 51234,
+                protocol_version: local_api::PROTOCOL_VERSION,
+            }),
+        };
+        let services =
+            settings_services(Box::new(ai.clone()), store.as_ref().ok(), environment, ai);
+        run_shell_mode(store, services, true, CaptureStatus::Demo);
         return;
     }
 
@@ -64,9 +76,15 @@ fn main() {
         Err(error) => {
             // The shell logs the technical detail through `tracing` and paints a
             // product-language error state; the raw error never reaches the UI.
-            run_shell(
+            let services = SettingsServices {
+                ai: Box::new(ai_settings(&paths.ai_profile)),
+                integration: None,
+                diagnostics: None,
+            };
+            run_shell_mode(
                 Err(error.to_string()),
-                ai_settings(&paths.ai_profile),
+                services,
+                false,
                 CaptureStatus::Unavailable,
             );
             return;
@@ -176,7 +194,24 @@ fn main() {
     } else {
         CaptureStatus::Unavailable
     };
-    run_shell(Ok(store), settings, capture);
+    let environment = application::integration::IntegrationEnvironment {
+        data_dir: paths.data_dir.clone(),
+        outbox_dir: paths.outbox_dir.clone(),
+        runtime_dir: paths.runtime_dir.clone(),
+        api: api
+            .as_ref()
+            .map(|api| application::integration::LocalApiEndpoint {
+                port: api.address().port(),
+                protocol_version: local_api::PROTOCOL_VERSION,
+            }),
+    };
+    let services = settings_services(
+        Box::new(settings.clone()),
+        Some(&store),
+        environment,
+        settings,
+    );
+    run_shell_mode(Ok(store), services, false, capture);
 
     // Graceful shutdown mirrors startup: stop the API first so the discovery
     // and per-session token files are removed, then stop the jobs worker.
@@ -195,9 +230,39 @@ fn main() {
     }
 }
 
-/// Composes the desktop use cases from the ready store, or a startup failure.
-fn run_shell(store: Result<SqliteStore, String>, settings: AiSettings, capture: CaptureStatus) {
-    run_shell_mode(store, Box::new(settings), false, capture);
+/// The settings page's use cases. Integration and diagnostics read the
+/// database, so they exist only when it opened.
+fn settings_services<P, K>(
+    ai: Box<dyn xemnas_desktop::screens::settings::AiBackend>,
+    store: Option<&SqliteStore>,
+    environment: application::integration::IntegrationEnvironment,
+    diagnostics_settings: application::profile::AiSettings<P, K>,
+) -> SettingsServices
+where
+    P: application::profile::ProfileStore + Send + 'static,
+    K: application::profile::SecretStore + Send + 'static,
+{
+    use xemnas_desktop::screens::settings::{DiagnosticsService, IntegrationService};
+    let outbox_dir = environment.outbox_dir.clone();
+    SettingsServices {
+        ai,
+        integration: store.map(|store| {
+            Box::new(IntegrationService::new(
+                application::integration::Integration::new(store.clone(), environment),
+                outbox_dir.clone(),
+            )) as Box<dyn xemnas_desktop::screens::settings::IntegrationBackend>
+        }),
+        diagnostics: store.map(|store| {
+            Box::new(DiagnosticsService::new(
+                application::diagnostics::Diagnostics::new(
+                    store.clone(),
+                    diagnostics_settings,
+                    outbox_dir,
+                ),
+                application::jobs::Jobs::new(store.clone()),
+            )) as Box<dyn xemnas_desktop::screens::settings::DiagnosticsBackend>
+        }),
+    }
 }
 
 /// Concrete AI settings used by the composition root.
@@ -230,7 +295,7 @@ fn backdrop_from_env() -> WindowBackgroundAppearance {
 
 fn run_shell_mode(
     store: Result<SqliteStore, String>,
-    settings: Box<dyn xemnas_desktop::screens::settings::AiBackend>,
+    settings: SettingsServices,
     demo: bool,
     capture: CaptureStatus,
 ) {

@@ -13,7 +13,7 @@ use application::profile::{
 };
 use gpui::prelude::*;
 use gpui::{
-    div, px, AnyElement, App, Context, Div, Entity, EventEmitter, FocusHandle, Render, Rgba, Role,
+    div, px, AnyElement, App, Context, Div, Entity, EventEmitter, FocusHandle, Render, Role,
     SharedString, Stateful, Subscription, Toggled, Window,
 };
 
@@ -90,6 +90,15 @@ where
     }
 }
 
+mod diagnostics;
+mod opencode;
+mod parts;
+
+pub use diagnostics::{DiagnosticsBackend, DiagnosticsPanel, DiagnosticsService};
+pub use opencode::{IntegrationBackend, IntegrationService, OpenCodePanel};
+
+use parts::{banner, card, card_body, card_footer, field_row, icon_tile, step};
+
 /// Emitted when the user leaves the settings page.
 pub struct CloseSettings;
 
@@ -115,7 +124,70 @@ enum Action {
 type Operation = Box<dyn FnOnce(&dyn AiBackend) -> Result<(AiProfile, bool), ProfileError> + Send>;
 
 /// Settings page with the "IA e privacidade" section.
+/// Everything the settings page reads and writes, built by the composition root.
+pub struct SettingsServices {
+    /// AI profile, key vault and consent.
+    pub ai: Box<dyn AiBackend>,
+    /// Integration status and connection test; absent without a database.
+    pub integration: Option<Box<dyn IntegrationBackend>>,
+    /// Diagnostics and job actions; absent without a database.
+    pub diagnostics: Option<Box<dyn DiagnosticsBackend>>,
+}
+
+/// The sections of the settings page, in navigation order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingsSection {
+    /// Extraction provider, key vault and consent.
+    Ai,
+    /// Capture integration with OpenCode.
+    OpenCode,
+    /// Pipeline health and the sanitized diagnostics document.
+    Diagnostics,
+}
+
+impl SettingsSection {
+    fn id(self) -> &'static str {
+        match self {
+            Self::Ai => "settings-section-ai",
+            Self::OpenCode => "settings-section-opencode",
+            Self::Diagnostics => "settings-section-diagnostics",
+        }
+    }
+    fn title(self) -> &'static str {
+        match self {
+            Self::Ai => "IA e privacidade",
+            Self::OpenCode => "OpenCode",
+            Self::Diagnostics => "Diagnóstico",
+        }
+    }
+    fn hint(self) -> &'static str {
+        match self {
+            Self::Ai => "Extração, chave e envio",
+            Self::OpenCode => "Captura e conexão",
+            Self::Diagnostics => "Saúde, perdas e tarefas",
+        }
+    }
+    fn subtitle(self) -> &'static str {
+        match self {
+            Self::Ai => PAGE_SUBTITLE,
+            Self::OpenCode => "Se as capturas do OpenCode estão chegando e, se não, por quê.",
+            Self::Diagnostics => "Como o pipeline está indo e o que se perdeu no caminho.",
+        }
+    }
+    fn glyph(self) -> IconName {
+        match self {
+            Self::Ai => IconName::Shield,
+            Self::OpenCode => IconName::Link,
+            Self::Diagnostics => IconName::Activity,
+        }
+    }
+}
+
+/// Settings page: AI and privacy, OpenCode and diagnostics.
 pub struct SettingsScreen {
+    section: SettingsSection,
+    opencode: Option<Entity<OpenCodePanel>>,
+    diagnostics: Option<Entity<DiagnosticsPanel>>,
     backend: Option<Box<dyn AiBackend>>,
     busy: bool,
     load: Load,
@@ -149,7 +221,14 @@ const FIELD_LABELS: [&str; 3] = [
 
 impl SettingsScreen {
     /// Mounts the page; nothing is read until [`Self::open`].
-    pub fn new(cx: &mut Context<Self>, backend: Box<dyn AiBackend>) -> Self {
+    pub fn new(
+        cx: &mut Context<Self>,
+        backend: Box<dyn AiBackend>,
+        integration: Option<Box<dyn IntegrationBackend>>,
+        diagnostics: Option<Box<dyn DiagnosticsBackend>>,
+    ) -> Self {
+        let opencode = integration.map(|backend| cx.new(|_| OpenCodePanel::new(backend)));
+        let diagnostics = diagnostics.map(|backend| cx.new(|_| DiagnosticsPanel::new(backend)));
         let fields = std::array::from_fn(|index| {
             cx.new(|cx| {
                 let mut field = SearchField::new(cx);
@@ -170,6 +249,9 @@ impl SettingsScreen {
             .map(|field| cx.subscribe(field, |_, _, _: &SearchChanged, cx| cx.notify()))
             .collect();
         Self {
+            section: SettingsSection::Ai,
+            opencode,
+            diagnostics,
             backend: Some(backend),
             busy: false,
             load: Load::Loading,
@@ -190,6 +272,41 @@ impl SettingsScreen {
     /// Reloads the stored profile each time the page opens, unless the user
     /// left unsaved edits behind.
     pub fn open(&mut self, cx: &mut Context<Self>) {
+        let section = self.section;
+        self.open_section(section, cx);
+    }
+
+    /// Shows `section` and reloads what it reads.
+    pub fn open_section(&mut self, section: SettingsSection, cx: &mut Context<Self>) {
+        self.section = section;
+        match section {
+            SettingsSection::Ai => self.open_ai(cx),
+            SettingsSection::OpenCode => {
+                if let Some(panel) = &self.opencode {
+                    panel.update(cx, |panel, cx| panel.refresh(cx));
+                }
+            }
+            SettingsSection::Diagnostics => {
+                if let Some(panel) = &self.diagnostics {
+                    panel.update(cx, |panel, cx| panel.refresh(cx));
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    fn sections(&self) -> Vec<SettingsSection> {
+        let mut sections = vec![SettingsSection::Ai];
+        if self.opencode.is_some() {
+            sections.push(SettingsSection::OpenCode);
+        }
+        if self.diagnostics.is_some() {
+            sections.push(SettingsSection::Diagnostics);
+        }
+        sections
+    }
+
+    fn open_ai(&mut self, cx: &mut Context<Self>) {
         if self.stored.is_some() && self.edited(cx) {
             return;
         }
@@ -478,10 +595,17 @@ impl SettingsScreen {
                     .text_color(theme.colors.text_muted())
                     .child("CONFIGURAÇÕES"),
             )
-            .child(
+            .children(self.sections().into_iter().map(|section| {
+                let selected = section == self.section;
+                let focus = self
+                    .focus
+                    .entry(section.id())
+                    .or_insert_with(|| cx.focus_handle().tab_stop(true))
+                    .clone();
+                let colors = theme.colors;
                 mark_selected(
                     div()
-                        .id("settings-section-ai")
+                        .id(section.id())
                         .relative()
                         .px(px(SpacingScale::S2))
                         .py(px(SpacingScale::S2))
@@ -489,16 +613,36 @@ impl SettingsScreen {
                         .items_center()
                         .gap(px(SpacingScale::S3))
                         .rounded(theme.radius.control())
+                        .cursor_pointer()
                         .role(Role::Tab)
-                        .aria_selected(true)
-                        .aria_label("IA e privacidade"),
+                        .aria_selected(selected)
+                        .aria_label(section.title())
+                        .track_focus(&focus)
+                        .focus_visible(crate::ui::controls::focus_ring(theme))
+                        .when(!selected, |row| {
+                            row.hover(move |style| style.bg(colors.glass_fill_medium()))
+                                .active(move |style| style.bg(colors.glass_fill_strong()))
+                        })
+                        .on_click(cx.listener(move |this, _, _, cx| this.open_section(section, cx)))
+                        .on_key_down(cx.listener(
+                            move |this, event: &gpui::KeyDownEvent, _, cx| {
+                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                    this.open_section(section, cx);
+                                    cx.stop_propagation();
+                                }
+                            },
+                        )),
                     theme,
-                    true,
+                    selected,
                 )
                 .child(icon_tile(
                     theme,
-                    IconName::Shield,
-                    theme.colors.accent_hover(),
+                    section.glyph(),
+                    if selected {
+                        colors.accent_hover()
+                    } else {
+                        colors.text_secondary()
+                    },
                     28.0,
                 ))
                 .child(
@@ -507,16 +651,20 @@ impl SettingsScreen {
                         .flex_col()
                         .child(
                             text_style(div(), TypeScale::ROW_TITLE)
-                                .text_color(theme.colors.text_primary())
-                                .child("IA e privacidade"),
+                                .text_color(if selected {
+                                    colors.text_primary()
+                                } else {
+                                    colors.text_secondary()
+                                })
+                                .child(section.title()),
                         )
                         .child(
                             text_style(div(), TypeScale::META)
-                                .text_color(theme.colors.text_muted())
-                                .child("Extração, chave e envio"),
+                                .text_color(colors.text_muted())
+                                .child(section.hint()),
                         ),
-                ),
-            )
+                )
+            }))
     }
 
     fn render_status(&self, theme: &Theme, stored: &AiProfile) -> Stateful<Div> {
@@ -1152,80 +1300,90 @@ impl Render for SettingsScreen {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::current(cx);
         let nav = self.render_nav(&theme, cx);
-        let body: AnyElement = match &self.load {
-            Load::Loading => text_style(div(), TypeScale::BODY_SMALL)
-                .text_color(theme.colors.text_muted())
-                .child("Carregando configurações…")
-                .into_any_element(),
-            Load::Failed(message) => {
-                let message = message.clone();
-                let retry = self.button(
-                    "settings-retry",
-                    ButtonKind::Secondary,
-                    !self.busy,
-                    "Tentar de novo",
-                    Action::Retry,
-                    cx,
-                );
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(SpacingScale::S3))
-                    .id("settings-load-error")
-                    .role(Role::Alert)
-                    .child(
-                        text_style(div(), TypeScale::HEADING_3)
-                            .child("Não foi possível carregar as configurações"),
-                    )
-                    .child(
-                        text_style(div(), TypeScale::BODY_SMALL)
-                            .text_color(theme.colors.text_secondary())
-                            .child(message),
-                    )
-                    .child(div().flex().child(retry))
-                    .into_any_element()
-            }
-            Load::Ready => {
-                let stored = self.stored.clone().expect("ready implies a stored profile");
-                let external = self.kind == ProfileKind::OpenAiCompatible;
-                let status = self.render_status(&theme, &stored);
-                let extractor = self.render_extractor(&theme, cx);
-                let key = external.then(|| self.render_key(&theme, cx));
-                let preview = self.render_preview(&theme, cx);
-                let consent = external.then(|| self.render_consent(&theme, cx));
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(SpacingScale::S5))
-                    .child(status)
-                    .children(self.notice.clone().map(|notice| {
-                        banner(
-                            &theme,
-                            "settings-notice",
-                            theme.colors.status_success(),
-                            notice,
-                        )
-                        .role(Role::Status)
-                    }))
-                    .children(self.error.clone().map(|error| {
-                        banner(
-                            &theme,
-                            "settings-error",
-                            theme.colors.status_danger(),
-                            error,
-                        )
+        let section = self.section;
+        let panel: Option<AnyElement> = match section {
+            SettingsSection::Ai => None,
+            SettingsSection::OpenCode => self.opencode.clone().map(|p| p.into_any_element()),
+            SettingsSection::Diagnostics => self.diagnostics.clone().map(|p| p.into_any_element()),
+        };
+        let body: AnyElement = if let Some(panel) = panel {
+            panel
+        } else {
+            match &self.load {
+                Load::Loading => text_style(div(), TypeScale::BODY_SMALL)
+                    .text_color(theme.colors.text_muted())
+                    .child("Carregando configurações…")
+                    .into_any_element(),
+                Load::Failed(message) => {
+                    let message = message.clone();
+                    let retry = self.button(
+                        "settings-retry",
+                        ButtonKind::Secondary,
+                        !self.busy,
+                        "Tentar de novo",
+                        Action::Retry,
+                        cx,
+                    );
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(SpacingScale::S3))
+                        .id("settings-load-error")
                         .role(Role::Alert)
-                    }))
-                    .child(extractor)
-                    .children(key)
-                    .child(preview)
-                    .children(consent)
-                    .into_any_element()
+                        .child(
+                            text_style(div(), TypeScale::HEADING_3)
+                                .child("Não foi possível carregar as configurações"),
+                        )
+                        .child(
+                            text_style(div(), TypeScale::BODY_SMALL)
+                                .text_color(theme.colors.text_secondary())
+                                .child(message),
+                        )
+                        .child(div().flex().child(retry))
+                        .into_any_element()
+                }
+                Load::Ready => {
+                    let stored = self.stored.clone().expect("ready implies a stored profile");
+                    let external = self.kind == ProfileKind::OpenAiCompatible;
+                    let status = self.render_status(&theme, &stored);
+                    let extractor = self.render_extractor(&theme, cx);
+                    let key = external.then(|| self.render_key(&theme, cx));
+                    let preview = self.render_preview(&theme, cx);
+                    let consent = external.then(|| self.render_consent(&theme, cx));
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(SpacingScale::S5))
+                        .child(status)
+                        .children(self.notice.clone().map(|notice| {
+                            banner(
+                                &theme,
+                                "settings-notice",
+                                theme.colors.status_success(),
+                                notice,
+                            )
+                            .role(Role::Status)
+                        }))
+                        .children(self.error.clone().map(|error| {
+                            banner(
+                                &theme,
+                                "settings-error",
+                                theme.colors.status_danger(),
+                                error,
+                            )
+                            .role(Role::Alert)
+                        }))
+                        .child(extractor)
+                        .children(key)
+                        .child(preview)
+                        .children(consent)
+                        .into_any_element()
+                }
             }
         };
         div().size_full().flex().child(nav).child(
             div()
-                .id("settings-content")
+                .id(("settings-content", section as usize))
                 .flex_1()
                 .min_w(px(0.0))
                 .h_full()
@@ -1248,7 +1406,7 @@ impl Render for SettingsScreen {
                                 .mb(px(28.0))
                                 .child(icon_tile(
                                     &theme,
-                                    IconName::Shield,
+                                    section.glyph(),
                                     theme.colors.accent_hover(),
                                     48.0,
                                 ))
@@ -1259,12 +1417,12 @@ impl Render for SettingsScreen {
                                         .gap(px(2.0))
                                         .child(
                                             text_style(div(), TypeScale::HEADING_1)
-                                                .child("IA e privacidade"),
+                                                .child(section.title()),
                                         )
                                         .child(
                                             text_style(div(), TypeScale::BODY_SMALL)
                                                 .text_color(theme.colors.text_muted())
-                                                .child(PAGE_SUBTITLE),
+                                                .child(section.subtitle()),
                                         ),
                                 ),
                         )
@@ -1272,189 +1430,6 @@ impl Render for SettingsScreen {
                 ),
         )
     }
-}
-
-/// A rounded square holding a glyph in its own soft tint.
-fn icon_tile(theme: &Theme, glyph: IconName, color: Rgba, size: f32) -> Div {
-    div()
-        .size(px(size))
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px((size * 0.28).round()))
-        .bg(tint(color, 0.12))
-        .border_1()
-        .border_color(tint(color, 0.22))
-        .child(icon(glyph, (size * 0.5).round(), color))
-        .text_color(theme.colors.text_primary())
-}
-
-/// A settings group: header with glyph, title and one-line purpose.
-fn card(theme: &Theme, glyph: IconName, title: &'static str, description: &'static str) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .rounded(px(12.0))
-        .border_1()
-        .border_color(theme.colors.glass_border_card())
-        .bg(theme.colors.glass_fill_card())
-        .overflow_hidden()
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(SpacingScale::S3))
-                .px(px(SpacingScale::S5))
-                .pt(px(SpacingScale::S5))
-                .child(icon_tile(theme, glyph, theme.colors.text_secondary(), 28.0))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .child(text_style(div(), TypeScale::HEADING_3).child(title))
-                        .child(
-                            text_style(div(), TypeScale::BODY_SMALL)
-                                .text_color(theme.colors.text_muted())
-                                .child(description),
-                        ),
-                ),
-        )
-}
-
-fn card_body() -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(SpacingScale::S4))
-        .p(px(SpacingScale::S5))
-}
-
-fn card_footer(theme: &Theme) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .gap(px(SpacingScale::S3))
-        .px(px(SpacingScale::S5))
-        .py(px(SpacingScale::S3))
-        .border_t_1()
-        .border_color(theme.colors.hairline_divider())
-        .bg(theme.colors.glass_fill_low())
-}
-
-fn banner(theme: &Theme, id: &'static str, color: Rgba, message: String) -> Stateful<Div> {
-    text_style(div(), TypeScale::BODY_SMALL)
-        .id(id)
-        .flex()
-        .items_center()
-        .gap(px(SpacingScale::S2))
-        .px(px(SpacingScale::S3))
-        .py(px(SpacingScale::S2))
-        .rounded(theme.radius.control())
-        .bg(tint(color, 0.08))
-        .border_1()
-        .border_color(tint(color, 0.3))
-        .text_color(theme.colors.text_primary())
-        .child(div().size(px(6.0)).flex_none().rounded_full().bg(color))
-        .child(message)
-}
-
-fn field_row(theme: &Theme, label: &str, field: AnyElement) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(6.0))
-        .child(
-            text_style(div(), TypeScale::LABEL)
-                .text_color(theme.colors.text_secondary())
-                .child(label.to_owned()),
-        )
-        .child(field)
-}
-
-/// One consent step: a numbered (or checked) node, its label and the
-/// connector to the next step.
-fn step(
-    theme: &Theme,
-    index: usize,
-    done: bool,
-    title: &'static str,
-    hint: &'static str,
-    connector: bool,
-) -> Stateful<Div> {
-    let colors = theme.colors;
-    let node = div()
-        .size(px(24.0))
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded_full()
-        .border_1()
-        .map(|node| {
-            if done {
-                node.bg(colors.status_success())
-                    .border_color(colors.status_success())
-                    .child(icon(IconName::Check, 14.0, colors.accent_on_emphasis()))
-            } else {
-                node.border_color(colors.glass_border_card_hover()).child(
-                    text_style(div(), TypeScale::META)
-                        .text_color(colors.text_secondary())
-                        .child((index + 1).to_string()),
-                )
-            }
-        });
-    div()
-        .id(("settings-step", index))
-        .flex_1()
-        .min_w(px(0.0))
-        .flex()
-        .flex_col()
-        .gap(px(SpacingScale::S2))
-        .role(Role::ListItem)
-        .aria_label(format!(
-            "{title}: {}",
-            if done { "concluído" } else { "pendente" }
-        ))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(SpacingScale::S2))
-                .child(node)
-                .when(connector, |row| {
-                    row.child(
-                        div()
-                            .flex_1()
-                            .h(px(1.0))
-                            .mr(px(SpacingScale::S2))
-                            .bg(if done {
-                                tint(colors.status_success(), 0.5)
-                            } else {
-                                colors.hairline_divider()
-                            }),
-                    )
-                }),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .child(
-                    text_style(div(), TypeScale::ROW_TITLE)
-                        .text_color(if done {
-                            colors.text_primary()
-                        } else {
-                            colors.text_secondary()
-                        })
-                        .child(title),
-                )
-                .child(
-                    text_style(div(), TypeScale::META)
-                        .text_color(colors.text_muted())
-                        .child(hint),
-                ),
-        )
 }
 
 fn category_icon(kind: &str) -> IconName {

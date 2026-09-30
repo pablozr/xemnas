@@ -17,7 +17,7 @@ use crate::palette::{self, PaletteItem};
 use crate::screens::decisions::DecisionsScreen;
 use crate::screens::inbox::InboxScreen;
 use crate::screens::projects::{ProjectChanged, ProjectsScreen};
-use crate::screens::settings::{AiBackend, CloseSettings, SettingsScreen};
+use crate::screens::settings::{CloseSettings, SettingsScreen, SettingsSection, SettingsServices};
 use crate::ui::controls::icon_action;
 use crate::ui::feedback::error_state;
 use crate::ui::glass::focus_ring;
@@ -102,6 +102,7 @@ enum Command {
     OpenFolder,
     ToggleTheme,
     OpenSettings,
+    SettingsAt(SettingsSection),
 }
 
 /// The open palette: its query field and highlighted row.
@@ -195,7 +196,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
         projects: Result<Projects<R>, String>,
         inbox: Option<Inbox<R>>,
         decisions: Option<(Decisions<R>, Export<R>)>,
-        ai: Option<Box<dyn AiBackend>>,
+        settings: Option<SettingsServices>,
     ) -> Self {
         let screen = match projects {
             Ok(projects) => {
@@ -264,7 +265,11 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
             .map(|screen| cx.observe(screen, |_, _, cx| cx.notify()));
         let decisions = decisions
             .map(|(decisions, export)| cx.new(|cx| DecisionsScreen::new(cx, decisions, export)));
-        let settings = ai.map(|backend| cx.new(|cx| SettingsScreen::new(cx, backend)));
+        let settings = settings.map(|services| {
+            cx.new(|cx| {
+                SettingsScreen::new(cx, services.ai, services.integration, services.diagnostics)
+            })
+        });
         let settings_subscription = settings.as_ref().map(|screen| {
             cx.subscribe(screen, |shell, _, _: &CloseSettings, cx| {
                 shell.settings_open = false;
@@ -336,7 +341,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
 
     /// The status line at the foot of the sidebar: whether captures arrive
     /// and what the extractor is doing. Only real states, never a guess.
-    fn status_line(&self) -> Option<gpui::AnyElement> {
+    fn status_line(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let theme = self.theme;
         let capture = self.capture?;
         let (dot, label, hint) = match capture {
@@ -370,9 +375,22 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
                 .border_t_1()
                 .border_color(theme.colors.hairline_divider())
                 .text_color(theme.colors.text_muted())
-                .role(Role::Status)
-                .aria_label(label)
+                .role(Role::Button)
+                .aria_label(format!("{label}. Abrir detalhes"))
                 .tooltip(tooltip(hint, None))
+                .when(self.settings.is_some(), |line| {
+                    let hover = theme.colors.glass_fill_medium();
+                    let section = if summary.failed > 0 {
+                        SettingsSection::Diagnostics
+                    } else {
+                        SettingsSection::OpenCode
+                    };
+                    line.cursor_pointer()
+                        .hover(move |style| style.bg(hover))
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.open_settings_at(section, cx)),
+                        )
+                })
                 .child(div().size(px(6.0)).flex_none().rounded_full().bg(dot))
                 .child(div().flex_1().truncate().child(label))
                 .when(working > 0, |line| {
@@ -568,6 +586,35 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
                 shortcut: None,
                 command: Command::OpenSettings,
             });
+            for (section, label, detail, glyph) in [
+                (
+                    SettingsSection::OpenCode,
+                    "Testar conexão com o OpenCode",
+                    "Configurações › OpenCode",
+                    IconName::Link,
+                ),
+                (
+                    SettingsSection::Diagnostics,
+                    "Diagnóstico e tarefas",
+                    "Configurações › Diagnóstico",
+                    IconName::Activity,
+                ),
+                (
+                    SettingsSection::Ai,
+                    "IA e privacidade",
+                    "Configurações › Extração, chave e envio",
+                    IconName::Shield,
+                ),
+            ] {
+                items.push(PaletteItem {
+                    group: "Configurações",
+                    label: label.into(),
+                    detail: Some(detail.into()),
+                    glyph,
+                    shortcut: None,
+                    command: Command::SettingsAt(section),
+                });
+            }
         }
         items
     }
@@ -633,6 +680,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
             }
             Command::ToggleTheme => self.toggle_theme(window, cx),
             Command::OpenSettings => self.toggle_settings(window, cx),
+            Command::SettingsAt(section) => self.open_settings_at(section, cx),
         }
         cx.notify();
     }
@@ -1013,6 +1061,17 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
     }
 
     /// Opens the app-level settings page, or returns to the projects.
+    /// Opens the settings page on `section` (the sidebar status line leads to
+    /// the integration or to the failures behind its counts).
+    fn open_settings_at(&mut self, section: SettingsSection, cx: &mut Context<Self>) {
+        let Some(screen) = &self.settings else {
+            return;
+        };
+        self.settings_open = true;
+        screen.update(cx, |screen, cx| screen.open_section(section, cx));
+        cx.notify();
+    }
+
     fn toggle_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(screen) = &self.settings else {
             return;
@@ -1154,7 +1213,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
             )
             .into_any_element()
         } else if let Some(projects) = self.projects.clone() {
-            let status = self.status_line();
+            let status = self.status_line(cx);
             let sidebar = projects.update(cx, |screen, cx| screen.render_sidebar(status, cx));
             let mut panel = if self.project_panel {
                 projects.update(cx, |screen, cx| screen.render_project_panel(cx))

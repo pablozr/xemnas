@@ -10,7 +10,7 @@ use application::jobs::{JobRecord, JobState, ANALYZE_CAPTURE_KIND};
 use application::profile::{AiProfile, AiSettings, ProfileError, ProfileStore, SecretStore};
 use application::projects::{ProjectRecord, ProjectRepository};
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use storage_sqlite::SqliteStore;
 
 pub(crate) fn store() -> Result<SqliteStore, Box<dyn std::error::Error>> {
@@ -171,8 +171,8 @@ pub(crate) fn ai_settings() -> AiSettings<MemoryProfile, MemorySecrets> {
     AiSettings::new(MemoryProfile::default(), MemorySecrets::default())
 }
 
-#[derive(Default)]
-pub(crate) struct MemoryProfile(Mutex<Option<AiProfile>>);
+#[derive(Default, Clone)]
+pub(crate) struct MemoryProfile(Arc<Mutex<Option<AiProfile>>>);
 
 impl ProfileStore for MemoryProfile {
     fn load(&self) -> Result<Option<AiProfile>, ProfileError> {
@@ -185,8 +185,8 @@ impl ProfileStore for MemoryProfile {
     }
 }
 
-#[derive(Default)]
-pub(crate) struct MemorySecrets(Mutex<HashMap<String, String>>);
+#[derive(Default, Clone)]
+pub(crate) struct MemorySecrets(Arc<Mutex<HashMap<String, String>>>);
 
 impl SecretStore for MemorySecrets {
     fn set_secret(&self, account: &str, secret: &str) -> Result<(), ProfileError> {
