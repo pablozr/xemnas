@@ -22,8 +22,8 @@ import { createRecordingLog } from "./test-helpers.js";
 
 const BLOCK = '<xemnas-context note="x">\nregra:abc Erros em português\n</xemnas-context>';
 
-function answer(context: string | null, items = 1): ContextAnswer {
-  return { context, tokens: 20, items, omitted: 0 };
+function answer(mode: string, context: string | null, items = 1): ContextAnswer {
+  return { mode, context, tokens: 20, items, omitted: 0 };
 }
 
 function scriptedClient(result: ContextAnswer | null): {
@@ -53,11 +53,10 @@ function output(text: string): ChatMessageOutput {
   };
 }
 
-test("inject mode appends the block to the user's last text part", async () => {
-  const { client, seen } = scriptedClient(answer(BLOCK));
+test("a block from the app is appended to the user's last text part", async () => {
+  const { client, seen } = scriptedClient(answer("inject", BLOCK));
   const recording = createRecordingLog();
   const hook = createChatMessageHook({
-    config: { contextMode: "inject", contextBudgetTokens: 200 },
     client,
     directory: "C:/projeto",
     log: recording.log,
@@ -71,8 +70,6 @@ test("inject mode appends the block to the user's last text part", async () => {
     canonical_path: "C:/projeto",
     session_id: "s1",
     prompt: "SECRET-PROMPT melhorar o cache",
-    mode: "inject",
-    budget_tokens: 200,
   });
   assert.ok(recording.lines.some((line) => line.includes("context-prepared")));
   assert.ok(
@@ -81,34 +78,19 @@ test("inject mode appends the block to the user's last text part", async () => {
   );
 });
 
-test("shadow mode asks but never changes the message", async () => {
-  const { client, seen } = scriptedClient(answer(null));
-  const hook = createChatMessageHook({
-    config: { contextMode: "shadow" },
-    client,
-    directory: "C:/projeto",
-    log: createRecordingLog().log,
-  });
-  const out = output("cache");
-  await hook({}, out);
-  assert.equal(out.parts[0]?.text, "cache");
-  assert.equal(seen[0]?.mode, "shadow");
-  assert.equal(seen[0]?.session_id, "s1", "falls back to the message session");
-  assert.equal("budget_tokens" in (seen[0] ?? {}), false);
-});
-
-test("off mode never calls the local API", async () => {
-  const { client, seen } = scriptedClient(answer(BLOCK));
-  const hook = createChatMessageHook({
-    config: { contextMode: "off" },
-    client,
-    directory: "C:/projeto",
-    log: createRecordingLog().log,
-  });
-  const out = output("cache");
-  await hook({ sessionID: "s1" }, out);
-  assert.equal(seen.length, 0);
-  assert.equal(out.parts[0]?.text, "cache");
+test("off and shadow answers leave the message untouched", async () => {
+  for (const mode of ["off", "shadow"]) {
+    const { client, seen } = scriptedClient(answer(mode, null, mode === "off" ? 0 : 1));
+    const hook = createChatMessageHook({
+      client,
+      directory: "C:/projeto",
+      log: createRecordingLog().log,
+    });
+    const out = output("cache");
+    await hook({}, out);
+    assert.equal(out.parts[0]?.text, "cache");
+    assert.equal(seen[0]?.session_id, "s1", "falls back to the message session");
+  }
 });
 
 test("an unavailable or failing API leaves the turn untouched", async () => {
@@ -119,7 +101,6 @@ test("an unavailable or failing API leaves the turn untouched", async () => {
   };
   for (const client of [scriptedClient(null).client, failing]) {
     const hook = createChatMessageHook({
-      config: { contextMode: "inject" },
       client,
       directory: "C:/projeto",
       log: createRecordingLog().log,
@@ -162,7 +143,6 @@ test("the client gives up after its timeout and returns null", async () => {
     canonical_path: "C:/p",
     session_id: "s1",
     prompt: "x",
-    mode: "inject",
   });
   assert.equal(result, null);
   assert.ok(Date.now() - started < 1_000);
@@ -175,7 +155,9 @@ test("the client sends the bearer token and validates the answer shape", async (
   const server = createServer((request, response) => {
     authorization = request.headers.authorization ?? "";
     response.writeHead(200, { "Content-Type": "application/json" });
-    response.end(JSON.stringify({ context: BLOCK, tokens: 20, items: 1, omitted: 0 }));
+    response.end(
+      JSON.stringify({ mode: "inject", context: BLOCK, tokens: 20, items: 1, omitted: 0 }),
+    );
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const port = (server.address() as AddressInfo).port;
@@ -187,20 +169,16 @@ test("the client sends the bearer token and validates the answer shape", async (
     canonical_path: "C:/p",
     session_id: "s1",
     prompt: "x",
-    mode: "inject",
   });
   assert.equal(authorization, "Bearer tok");
   assert.equal(result?.context, BLOCK);
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
 
-test("context mode defaults to off and accepts only known values", () => {
-  assert.equal(resolveConfig({}).contextMode, "off");
-  assert.equal(resolveConfig({ XEMNAS_CONTEXT_MODE: "inject" }).contextMode, "inject");
-  assert.equal(resolveConfig({ XEMNAS_CONTEXT_MODE: "always" }).contextMode, "off");
-  assert.equal(resolveConfig({}).contextBudgetTokens, undefined);
-  assert.equal(
-    resolveConfig({ XEMNAS_CONTEXT_BUDGET_TOKENS: "150" }).contextBudgetTokens,
-    150,
-  );
+test("the plugin has no mode or budget settings, only a timeout", () => {
+  const config = resolveConfig({ XEMNAS_CONTEXT_MODE: "inject" });
+  assert.equal("contextMode" in config, false);
+  assert.equal("contextBudgetTokens" in config, false);
+  assert.equal(config.contextTimeoutMs, 300);
+  assert.equal(resolveConfig({ XEMNAS_CONTEXT_TIMEOUT_MS: "150" }).contextTimeoutMs, 150);
 });

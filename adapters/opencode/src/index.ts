@@ -448,7 +448,6 @@ function buildDefaultChatHook(
   directory: string,
 ): ChatMessageHook {
   return createChatMessageHook({
-    config,
     directory,
     client: createContextClient({
       resolveEndpoint: createLocalApiEndpointResolver(config),

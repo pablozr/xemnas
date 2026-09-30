@@ -1,11 +1,11 @@
 //! Minimal context injection on each user turn (`chat.message` hook).
 //!
-//! The hook asks the local API for a compact, already-deduplicated block and,
-//! in `inject` mode, appends it to the user's text. It never throws and never
+//! The hook asks the local API for a compact, already-deduplicated block and
+//! appends it to the user's text when the app returns one. The mode (off,
+//! shadow, inject) is a per-project setting in the app, not in the plugin. It never throws and never
 //! waits longer than `contextTimeoutMs`: without an answer the turn proceeds
 //! untouched. The prompt is sent only to the loopback API and never logged.
 
-import type { AdapterConfig, ContextMode } from "./config.js";
 import type { EndpointResolver } from "./client.js";
 import type { AdapterLog } from "./index.js";
 
@@ -17,12 +17,11 @@ export interface ContextRequest {
   canonical_path: string;
   session_id: string;
   prompt: string;
-  mode: "shadow" | "inject";
-  budget_tokens?: number;
 }
 
 /** Answer of `POST /v1/context`. */
 export interface ContextAnswer {
+  mode: string;
   context: string | null;
   tokens: number;
   items: number;
@@ -94,6 +93,7 @@ function isAnswer(value: unknown): value is ContextAnswer {
   }
   const record = value as Record<string, unknown>;
   return (
+    typeof record.mode === "string" &&
     (record.context === null || typeof record.context === "string") &&
     typeof record.tokens === "number" &&
     typeof record.items === "number" &&
@@ -140,49 +140,39 @@ export function createContextClient(
 
 /** Dependencies of [`createChatMessageHook`]. */
 export interface ChatMessageHookDeps {
-  config: Pick<AdapterConfig, "contextMode" | "contextBudgetTokens">;
   client: ContextClient;
   directory: string;
   log: AdapterLog;
 }
 
-/** Builds the `chat.message` hook; mode `off` makes it a no-op. */
+/** Builds the `chat.message` hook. */
 export function createChatMessageHook(deps: ChatMessageHookDeps): ChatMessageHook {
-  const mode: ContextMode = deps.config.contextMode;
   return async (input, output) => {
-    if (mode === "off") {
-      return;
-    }
     try {
       const sessionId = input.sessionID ?? output.message?.sessionID;
       const prompt = promptText(output.parts);
       if (sessionId === undefined || prompt.length === 0) {
         return;
       }
-      const request: ContextRequest = {
+      const answer = await deps.client.prepare({
         canonical_path: deps.directory,
         session_id: sessionId,
         prompt,
-        mode,
-      };
-      if (deps.config.contextBudgetTokens !== undefined) {
-        request.budget_tokens = deps.config.contextBudgetTokens;
-      }
-      const answer = await deps.client.prepare(request);
+      });
       if (answer === null) {
-        deps.log.warn("context-unavailable", { session_id: sessionId, mode });
+        deps.log.warn("context-unavailable", { session_id: sessionId });
         return;
       }
       if (answer.items > 0) {
         deps.log.info("context-prepared", {
           session_id: sessionId,
-          mode,
+          mode: answer.mode,
           items: answer.items,
           tokens: answer.tokens,
           omitted: answer.omitted,
         });
       }
-      if (mode !== "inject" || answer.context === null) {
+      if (answer.context === null) {
         return;
       }
       const target = [...output.parts]
@@ -192,7 +182,7 @@ export function createChatMessageHook(deps: ChatMessageHookDeps): ChatMessageHoo
         target.text = `${target.text ?? ""}\n\n${answer.context}`;
       }
     } catch {
-      deps.log.warn("context-failed", { mode });
+      deps.log.warn("context-failed", {});
     }
   };
 }
