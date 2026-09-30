@@ -11,3 +11,4 @@ mod format;
 pub mod inbox;
 pub mod projects;
 mod review_editor;
+pub mod settings;

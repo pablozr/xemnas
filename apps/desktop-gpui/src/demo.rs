@@ -7,7 +7,10 @@ use application::captures::{
 };
 use application::extract::{DecisionCandidateRecord, ExtractionStore};
 use application::jobs::{JobRecord, JobState, ANALYZE_CAPTURE_KIND};
+use application::profile::{AiProfile, AiSettings, ProfileError, ProfileStore, SecretStore};
 use application::projects::{ProjectRecord, ProjectRepository};
+use std::collections::HashMap;
+use std::sync::Mutex;
 use storage_sqlite::SqliteStore;
 
 pub(crate) fn store() -> Result<SqliteStore, Box<dyn std::error::Error>> {
@@ -159,6 +162,50 @@ pub(crate) fn store() -> Result<SqliteStore, Box<dyn std::error::Error>> {
         }
     }
     Ok(store)
+}
+
+/// In-memory AI settings for the demo: never touches the profile file or the
+/// OS key vault, and starts from the offline default.
+pub(crate) fn ai_settings() -> AiSettings<MemoryProfile, MemorySecrets> {
+    AiSettings::new(MemoryProfile::default(), MemorySecrets::default())
+}
+
+#[derive(Default)]
+pub(crate) struct MemoryProfile(Mutex<Option<AiProfile>>);
+
+impl ProfileStore for MemoryProfile {
+    fn load(&self) -> Result<Option<AiProfile>, ProfileError> {
+        Ok(self.0.lock().map_err(poisoned)?.clone())
+    }
+    fn save(&self, profile: &AiProfile) -> Result<(), ProfileError> {
+        profile.validate()?;
+        *self.0.lock().map_err(poisoned)? = Some(profile.clone());
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct MemorySecrets(Mutex<HashMap<String, String>>);
+
+impl SecretStore for MemorySecrets {
+    fn set_secret(&self, account: &str, secret: &str) -> Result<(), ProfileError> {
+        self.0
+            .lock()
+            .map_err(poisoned)?
+            .insert(account.to_owned(), secret.to_owned());
+        Ok(())
+    }
+    fn get_secret(&self, account: &str) -> Result<Option<String>, ProfileError> {
+        Ok(self.0.lock().map_err(poisoned)?.get(account).cloned())
+    }
+    fn delete_secret(&self, account: &str) -> Result<(), ProfileError> {
+        self.0.lock().map_err(poisoned)?.remove(account);
+        Ok(())
+    }
+}
+
+fn poisoned<T>(_: std::sync::PoisonError<T>) -> ProfileError {
+    ProfileError::Io("demo settings lock poisoned".into())
 }
 
 #[cfg(test)]

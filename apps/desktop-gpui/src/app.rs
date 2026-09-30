@@ -14,6 +14,7 @@ use crate::fonts::{app_icon, wordmark};
 use crate::screens::decisions::DecisionsScreen;
 use crate::screens::inbox::InboxScreen;
 use crate::screens::projects::{ProjectChanged, ProjectsScreen};
+use crate::screens::settings::{AiBackend, CloseSettings, SettingsScreen};
 use crate::ui::controls::icon_action;
 use crate::ui::feedback::error_state;
 use crate::ui::glass::focus_ring;
@@ -85,6 +86,10 @@ pub struct Shell<R: ProjectRepository + InboxStore + DecisionStore + Send + 'sta
     projects: Option<Entity<ProjectsScreen<R>>>,
     inbox: Option<Entity<InboxScreen<R>>>,
     decisions: Option<Entity<DecisionsScreen<R>>>,
+    settings: Option<Entity<SettingsScreen>>,
+    _settings_subscription: Option<Subscription>,
+    settings_open: bool,
+    settings_focus: FocusHandle,
     destination: Destination,
     destination_focus: [FocusHandle; 3],
     theme_focus: FocusHandle,
@@ -98,6 +103,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
         projects: Result<Projects<R>, String>,
         inbox: Option<Inbox<R>>,
         decisions: Option<(Decisions<R>, Export<R>)>,
+        ai: Option<Box<dyn AiBackend>>,
     ) -> Self {
         let screen = match projects {
             Ok(projects) => {
@@ -165,6 +171,13 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
             .map(|screen| cx.observe(screen, |_, _, cx| cx.notify()));
         let decisions = decisions
             .map(|(decisions, export)| cx.new(|cx| DecisionsScreen::new(cx, decisions, export)));
+        let settings = ai.map(|backend| cx.new(|cx| SettingsScreen::new(cx, backend)));
+        let settings_subscription = settings.as_ref().map(|screen| {
+            cx.subscribe(screen, |shell, _, _: &CloseSettings, cx| {
+                shell.settings_open = false;
+                cx.notify();
+            })
+        });
         Self {
             theme: Theme::quiet_glass(),
             focus: cx.focus_handle(),
@@ -175,6 +188,10 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
             projects: screen,
             inbox,
             decisions,
+            settings,
+            _settings_subscription: settings_subscription,
+            settings_open: false,
+            settings_focus: cx.focus_handle().tab_stop(true),
             destination: Destination::Review,
             destination_focus: [
                 cx.focus_handle().tab_stop(true),
@@ -208,6 +225,9 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
     }
 
     fn on_focus_search(&mut self, _: &FocusSearch, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings_open {
+            return;
+        }
         if self
             .projects
             .as_ref()
@@ -360,6 +380,54 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
             ))
     }
 
+    /// Opens the app-level settings page, or returns to the projects.
+    fn toggle_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(screen) = &self.settings else {
+            return;
+        };
+        self.settings_open = !self.settings_open;
+        if self.settings_open {
+            screen.update(cx, |screen, cx| screen.open(cx));
+        } else {
+            window.focus(&self.initial_focus(cx), cx);
+        }
+        cx.notify();
+    }
+
+    fn settings_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let open = self.settings_open;
+        icon_action(
+            &theme,
+            "settings-open",
+            if open {
+                "Fechar configurações"
+            } else {
+                "Configurações"
+            },
+        )
+        .mr(px(SpacingScale::S1))
+        .track_focus(&self.settings_focus)
+        .aria_selected(open)
+        .when(open, |button| button.bg(theme.colors.selection()))
+        .on_click(cx.listener(|this, _, window, cx| this.toggle_settings(window, cx)))
+        .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                this.toggle_settings(window, cx);
+                cx.stop_propagation();
+            }
+        }))
+        .child(icon(
+            IconName::Settings,
+            16.0,
+            if open {
+                theme.colors.text_primary()
+            } else {
+                theme.colors.text_secondary()
+            },
+        ))
+    }
+
     fn on_theme_click(
         &mut self,
         _: &gpui::ClickEvent,
@@ -375,6 +443,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
         self.theme = Theme::current(cx);
         let theme = self.theme;
         window.set_window_title(match self.destination {
+            _ if self.settings_open => "xemnas — Configurações",
             Destination::Decisions => "xemnas — Decisões",
             Destination::Review => "xemnas — Revisão",
             Destination::Details => "xemnas — Projetos",
@@ -413,6 +482,9 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
                         )
                     }),
             )
+            .when(self.settings.is_some(), |title| {
+                title.child(self.settings_button(cx))
+            })
             .child(self.theme_button(cx))
             .child(window_controls(&theme, window.is_maximized()));
 
@@ -420,7 +492,14 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
             .projects
             .as_ref()
             .and_then(|screen| screen.read(cx).selected_project());
-        let body: gpui::AnyElement = if let Some(projects) = self.projects.clone() {
+        let settings = self.settings.clone().filter(|_| self.settings_open);
+        let body: gpui::AnyElement = if let Some(settings) = settings {
+            fade_in(
+                div().size_full().child(settings),
+                ElementId::Name("content-settings".into()),
+            )
+            .into_any_element()
+        } else if let Some(projects) = self.projects.clone() {
             let sidebar = projects.update(cx, |screen, cx| screen.render_sidebar(cx));
             let content = if selected.is_some() && self.destination == Destination::Decisions {
                 self.decisions

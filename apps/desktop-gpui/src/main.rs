@@ -32,7 +32,11 @@ fn main() {
     application::jobs::install_panic_sanitizer();
 
     if std::env::args().any(|argument| argument == "--demo") {
-        run_shell_mode(demo::store().map_err(|error| error.to_string()), true);
+        run_shell_mode(
+            demo::store().map_err(|error| error.to_string()),
+            Box::new(demo::ai_settings()),
+            true,
+        );
         return;
     }
 
@@ -41,7 +45,7 @@ fn main() {
         Err(error) => {
             // The shell logs the technical detail through `tracing` and paints a
             // product-language error state; the raw error never reaches the UI.
-            run_shell(Err(error.to_string()));
+            run_shell(Err(error.to_string()), ai_settings());
             return;
         }
     };
@@ -50,11 +54,8 @@ fn main() {
 
     // AI settings: the profile file is seeded with the offline default so the
     // inbox keeps working without any provider (MVP-SPEC §7 line 404).
-    let ai_profile_path = default_data_dir().join("settings").join("ai-profile.json");
-    let settings = application::profile::AiSettings::new(
-        application::profile::FileProfileStore::new(ai_profile_path.clone()),
-        ai_provider::KeyringSecretStore::new(),
-    );
+    let ai_profile_path = ai_profile_path();
+    let settings = ai_settings();
     match settings.load_or_seed() {
         Ok(_) => tracing::info!(
             path = %ai_profile_path.display(),
@@ -144,7 +145,7 @@ fn main() {
         }
     };
 
-    run_shell(Ok(store));
+    run_shell(Ok(store), settings);
 
     // Graceful shutdown mirrors startup: stop the API first so the discovery
     // and per-session token files are removed, then stop the jobs worker.
@@ -164,11 +165,29 @@ fn main() {
 }
 
 /// Composes the desktop use cases from the ready store, or a startup failure.
-fn run_shell(store: Result<SqliteStore, String>) {
-    run_shell_mode(store, false);
+fn run_shell(store: Result<SqliteStore, String>, settings: AiSettings) {
+    run_shell_mode(store, Box::new(settings), false);
 }
 
-fn run_shell_mode(store: Result<SqliteStore, String>, demo: bool) {
+/// The stored AI profile beside the database, under the data directory.
+fn ai_profile_path() -> std::path::PathBuf {
+    default_data_dir().join("settings").join("ai-profile.json")
+}
+
+/// AI settings over the profile file and the OS key vault. Settings do not
+/// depend on the database, so the page still opens when it fails to load.
+fn ai_settings() -> AiSettings {
+    application::profile::AiSettings::new(
+        application::profile::FileProfileStore::new(ai_profile_path()),
+        ai_provider::KeyringSecretStore::new(),
+    )
+}
+
+fn run_shell_mode(
+    store: Result<SqliteStore, String>,
+    settings: Box<dyn xemnas_desktop::screens::settings::AiBackend>,
+    demo: bool,
+) {
     application().run(move |cx: &mut App| {
         xemnas_desktop::fonts::register_embedded(cx);
         cx.bind_keys([
@@ -209,7 +228,8 @@ fn run_shell_mode(store: Result<SqliteStore, String>, demo: bool) {
             Err(error) => (Err(error), None, None),
         };
         let view = cx.new(|cx| {
-            let mut shell = Shell::<SqliteStore>::new(cx, projects, inbox, decisions);
+            let mut shell =
+                Shell::<SqliteStore>::new(cx, projects, inbox, decisions, Some(settings));
             shell.set_demo(demo);
             shell
         });
