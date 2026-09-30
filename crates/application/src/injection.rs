@@ -8,6 +8,7 @@ use crate::context::{
     ContextError, ContextPack, ContextPacks, ContextProvider, ContextRequest, ContextStore,
     PackClaim, PackDecision, MAX_BUDGET_CHARS, MAX_TASK_CHARS,
 };
+use crate::context_settings::{ContextMode, ContextSettingsStore};
 use crate::decisions::DecisionStore;
 use crate::projects::{canonicalize_location, ProjectRepository};
 use crate::relations::RelationStore;
@@ -145,15 +146,13 @@ pub struct InjectionRequest {
     pub session_id: String,
     /// User prompt; used only for matching and never stored.
     pub prompt: String,
-    /// Delivery mode.
-    pub mode: InjectionMode,
-    /// Token budget; [`DEFAULT_BUDGET_TOKENS`] when `None`.
-    pub budget_tokens: Option<usize>,
 }
 
 /// Result of one turn.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InjectionOutcome {
+    /// Mode configured for the project (`off` for unknown directories).
+    pub mode: ContextMode,
     /// Block to append; always `None` in shadow mode or when nothing is new.
     pub block: Option<String>,
     /// Estimated tokens of the computed block (also in shadow mode).
@@ -165,8 +164,9 @@ pub struct InjectionOutcome {
 }
 
 impl InjectionOutcome {
-    fn empty() -> Self {
+    fn empty(mode: ContextMode) -> Self {
         Self {
+            mode,
             block: None,
             tokens: 0,
             items: 0,
@@ -184,6 +184,7 @@ pub struct ContextInjection<S> {
 impl<S> ContextInjection<S>
 where
     S: InjectionStore
+        + ContextSettingsStore
         + ContextStore
         + DecisionStore
         + RelationStore
@@ -201,32 +202,36 @@ where
     ///
     /// # Errors
     ///
-    /// `invalid_request` for a malformed session or budget, `storage` otherwise.
+    /// `invalid_request` for a malformed session, `storage` otherwise.
     pub fn prepare(&self, request: InjectionRequest) -> Result<InjectionOutcome, ContextError> {
         let session = request.session_id.trim();
         if session.is_empty() || session.chars().count() > MAX_SESSION_ID_CHARS {
             return Err(ContextError::InvalidRequest("sessão inválida".into()));
         }
-        let budget = request.budget_tokens.unwrap_or(DEFAULT_BUDGET_TOKENS);
-        if !(MIN_BUDGET_TOKENS..=MAX_BUDGET_TOKENS).contains(&budget) {
-            return Err(ContextError::InvalidRequest(
-                "o orçamento deve ficar entre 50 e 2.000 tokens".into(),
-            ));
-        }
         let prompt: String = request.prompt.trim().chars().take(MAX_TASK_CHARS).collect();
         if prompt.is_empty() {
-            return Ok(InjectionOutcome::empty());
+            return Ok(InjectionOutcome::empty(ContextMode::Off));
         }
         let Ok(location) = canonicalize_location(&request.canonical_path) else {
-            return Ok(InjectionOutcome::empty());
+            return Ok(InjectionOutcome::empty(ContextMode::Off));
         };
         let Some(project) = self
             .store
             .find_by_location(&location)
             .map_err(|error| ContextError::Storage(error.to_string()))?
         else {
-            return Ok(InjectionOutcome::empty());
+            return Ok(InjectionOutcome::empty(ContextMode::Off));
         };
+        let settings = self.store.context_settings(&project.id)?;
+        let mode = settings
+            .as_ref()
+            .map_or(ContextMode::Off, |settings| settings.mode);
+        let Some(delivery) = mode.delivery() else {
+            return Ok(InjectionOutcome::empty(mode));
+        };
+        let budget = settings
+            .and_then(|settings| settings.budget_tokens)
+            .unwrap_or(DEFAULT_BUDGET_TOKENS);
 
         let pack = ContextPacks::new(self.store.clone()).build_pack(ContextRequest {
             project_id: project.id.clone(),
@@ -234,25 +239,26 @@ where
             as_of: None,
             budget_chars: Some(MAX_BUDGET_CHARS),
         })?;
-        let delivered = self.store.delivered(session, request.mode)?;
+        let delivered = self.store.delivered(session, delivery)?;
         let Some(block) = render_compact(&pack, budget, &delivered) else {
-            return Ok(InjectionOutcome::empty());
+            return Ok(InjectionOutcome::empty(mode));
         };
         self.store.record_injection(&InjectionRecord {
             injection_id: uuid::Uuid::now_v7().to_string(),
             session_id: session.to_string(),
             project_id: project.id,
-            mode: request.mode,
+            mode: delivery,
             tokens: block.tokens,
             omitted: block.omitted,
             created_at: now_rfc3339(),
             items: block.items.clone(),
         })?;
         Ok(InjectionOutcome {
+            mode,
             tokens: block.tokens,
             items: block.items.len(),
             omitted: block.omitted,
-            block: (request.mode == InjectionMode::Inject).then_some(block.text),
+            block: (delivery == InjectionMode::Inject).then_some(block.text),
         })
     }
 }
@@ -266,6 +272,7 @@ pub trait ContextApi: Send + Sync {
 impl<S> ContextApi for ContextInjection<S>
 where
     S: InjectionStore
+        + ContextSettingsStore
         + ContextStore
         + DecisionStore
         + RelationStore

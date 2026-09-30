@@ -1362,13 +1362,26 @@ fn seed_convention(store: &SqliteStore, location: &str) {
         .expect("seed claim");
 }
 
-fn context_body(location: &str, session: &str, prompt: &str, mode: &str) -> Vec<u8> {
+fn context_body(location: &str, session: &str, prompt: &str) -> Vec<u8> {
     body_of(&json!({
         "canonical_path": location,
         "session_id": session,
         "prompt": prompt,
-        "mode": mode,
     }))
+}
+
+fn set_context_mode(
+    store: &SqliteStore,
+    location: &str,
+    mode: application::context_settings::ContextMode,
+) {
+    let project = store
+        .find_by_location(location)
+        .expect("find project")
+        .expect("registered project");
+    application::context_settings::ContextSettings::new(store.clone())
+        .set(&project.id, mode, None)
+        .expect("set context mode");
 }
 
 fn post_context(server: &RunningApi, token: Option<&str>, body: &[u8]) -> (u16, Value) {
@@ -1378,28 +1391,32 @@ fn post_context(server: &RunningApi, token: Option<&str>, body: &[u8]) -> (u16, 
 }
 
 #[test]
-fn context_endpoint_returns_the_compact_block_once_per_session() {
+fn context_endpoint_follows_the_project_mode() {
+    use application::context_settings::ContextMode;
+
     let root = temporary_directory("context");
     let store = SqliteStore::open(root.join("app.db")).expect("open store");
     let location = register_project(&store, &root);
     seed_convention(&store, &location);
     let server = start_with_context(&store, root.clone());
 
-    let (status, capabilities) = {
-        let (status, raw) = get(&server, "/v1/capabilities", Some(server.token()), None);
-        (status, serde_json::from_slice::<Value>(&raw).expect("json"))
-    };
+    let (status, raw) = get(&server, "/v1/capabilities", Some(server.token()), None);
     assert_eq!(status, 200);
+    let capabilities: Value = serde_json::from_slice(&raw).expect("json");
     assert_eq!(capabilities["context"], json!(true));
 
-    let body = context_body(
-        &location,
-        "s1",
-        "SECRET-MARKER-PROMPT corrigir a tela",
-        "inject",
+    let body = context_body(&location, "s1", "SECRET-MARKER-PROMPT corrigir a tela");
+    let (status, off) = post_context(&server, Some(server.token()), &body);
+    assert_eq!(status, 200, "{off}");
+    assert_eq!(off["mode"], json!("off"));
+    assert_eq!(
+        (off["context"].clone(), off["items"].clone()),
+        (Value::Null, json!(0))
     );
-    let (status, first) = post_context(&server, Some(server.token()), &body);
-    assert_eq!(status, 200, "{first}");
+
+    set_context_mode(&store, &location, ContextMode::Inject);
+    let (_, first) = post_context(&server, Some(server.token()), &body);
+    assert_eq!(first["mode"], json!("inject"));
     let block = first["context"].as_str().expect("block");
     assert!(block.contains("regra:"));
     assert!(block.contains("Mensagens de erro em português"));
@@ -1409,15 +1426,19 @@ fn context_endpoint_returns_the_compact_block_once_per_session() {
         .is_some_and(|tokens| tokens > 0 && tokens < 60));
 
     let (_, second) = post_context(&server, Some(server.token()), &body);
-    assert_eq!(second["context"], Value::Null);
-    assert_eq!(second["tokens"], json!(0));
+    assert_eq!(
+        second["context"],
+        Value::Null,
+        "nothing new in the same session"
+    );
 
-    let (status, shadow) = post_context(
+    set_context_mode(&store, &location, ContextMode::Shadow);
+    let (_, shadow) = post_context(
         &server,
         Some(server.token()),
-        &context_body(&location, "s2", "tela", "shadow"),
+        &context_body(&location, "s2", "tela"),
     );
-    assert_eq!(status, 200);
+    assert_eq!(shadow["mode"], json!("shadow"));
     assert_eq!(shadow["context"], Value::Null);
     assert_eq!(shadow["items"], json!(1));
 
@@ -1434,28 +1455,22 @@ fn context_endpoint_enforces_auth_and_a_strict_body() {
     let store = SqliteStore::open(root.join("app.db")).expect("open store");
     let location = register_project(&store, &root);
     let server = start_with_context(&store, root.clone());
-    let body = context_body(&location, "s1", "tela", "inject");
+    let body = context_body(&location, "s1", "tela");
 
     assert_eq!(post_context(&server, None, &body).0, 401);
-    assert_eq!(
-        post_context(
-            &server,
-            Some(server.token()),
-            &context_body(&location, "s1", "tela", "always")
-        )
-        .0,
-        400
-    );
-    let extra = body_of(&json!({
-        "canonical_path": location, "session_id": "s1", "prompt": "tela",
-        "mode": "inject", "unexpected": true
+    let with_mode = body_of(&json!({
+        "canonical_path": location, "session_id": "s1", "prompt": "tela", "mode": "inject"
     }));
-    assert_eq!(post_context(&server, Some(server.token()), &extra).0, 422);
+    assert_eq!(
+        post_context(&server, Some(server.token()), &with_mode).0,
+        422,
+        "the adapter no longer chooses the mode"
+    );
     assert_eq!(
         post_context(
             &server,
             Some(server.token()),
-            &context_body(&location, " ", "tela", "inject")
+            &context_body(&location, " ", "tela")
         )
         .0,
         400
@@ -1480,7 +1495,7 @@ fn context_endpoint_is_absent_unless_enabled() {
     let (status, _) = post_context(
         &server,
         Some(server.token()),
-        &context_body(&location, "s1", "tela", "inject"),
+        &context_body(&location, "s1", "tela"),
     );
     assert_eq!(status, 404);
     let _ = std::fs::remove_dir_all(&root);

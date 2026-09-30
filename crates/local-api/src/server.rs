@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use application::captures::{CaptureApi, IngestError, Receipt};
 use application::context::ContextError;
-use application::injection::{ContextApi, InjectionMode, InjectionOutcome, InjectionRequest};
+use application::injection::{ContextApi, InjectionOutcome, InjectionRequest};
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{DefaultBodyLimit, Path, Request, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -338,13 +338,12 @@ struct ContextBody {
     canonical_path: String,
     session_id: String,
     prompt: String,
-    mode: String,
-    budget_tokens: Option<usize>,
 }
 
 /// Response of `POST /v1/context`.
 #[derive(Serialize)]
 struct ContextResponse {
+    mode: &'static str,
     context: Option<String>,
     tokens: usize,
     items: usize,
@@ -354,6 +353,7 @@ struct ContextResponse {
 impl From<InjectionOutcome> for ContextResponse {
     fn from(outcome: InjectionOutcome) -> Self {
         Self {
+            mode: outcome.mode.as_str(),
             context: outcome.block,
             tokens: outcome.tokens,
             items: outcome.items,
@@ -374,15 +374,10 @@ async fn prepare_context(
         Ok(Json(body)) => body,
         Err(rejection) => return json_rejection_to_api_error(rejection).into_response(),
     };
-    let Some(mode) = InjectionMode::parse(&body.mode) else {
-        return ApiError::BadRequest.into_response();
-    };
     let request = InjectionRequest {
         canonical_path: body.canonical_path,
         session_id: body.session_id,
         prompt: body.prompt,
-        mode,
-        budget_tokens: body.budget_tokens,
     };
     match run_blocking(move || context.prepare(request)).await {
         Ok(Ok(outcome)) => Json(ContextResponse::from(outcome)).into_response(),
