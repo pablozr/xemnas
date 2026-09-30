@@ -1,6 +1,15 @@
-//! OpenAI-compatible AI provider adapter.
+//! AI provider adapters: OpenAI-compatible endpoints (API key or local
+//! model), the ChatGPT plan and OpenCode (ADR-0004).
 
 #![warn(missing_docs)]
+
+pub mod catalog;
+pub mod chatgpt;
+pub mod opencode;
+
+pub use catalog::HttpModelCatalog;
+pub use chatgpt::{ChatGptExtractor, ChatGptSession, MANAGE_USAGE_URL, PLAN_SCOPE};
+pub use opencode::{OpenCodeExtractor, EXTRACTION_SESSION_TITLE};
 
 use std::fmt;
 use std::io::Read;
@@ -17,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 /// Maximum bytes read from a provider response.
-const MAX_RESPONSE_BYTES: usize = 512 * 1024;
+pub(crate) const MAX_RESPONSE_BYTES: usize = 512 * 1024;
 
 /// Maximum bytes of user content sent in one request.
 const MAX_INPUT_BYTES: usize = 64 * 1024;
@@ -35,7 +44,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(90);
 pub const KEYRING_SERVICE: &str = "xemnas.ai-profile";
 
 /// System prompt describing the strict JSON contract expected back.
-const SYSTEM_PROMPT: &str = "You extract durable engineering decisions from a capture. \
+pub(crate) const SYSTEM_PROMPT: &str = "You extract durable engineering decisions from a capture. \
 Reply with a single JSON object only, no prose, matching exactly: \
 {\"proposals\":[{\"question\":string,\"choice\":string,\"rationale\":string,\
 \"confidence\":number,\"confidence_reason\":string,\"evidence_refs\":[string],\
@@ -91,19 +100,66 @@ pub fn test_connection(
     run_connection_test(&extractor)
 }
 
-/// Builds [`OpenAiCompatibleExtractor`]s for the analysis job.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct OpenAiCompatibleFactory;
+/// Builds the extractor for any external profile kind; the ChatGPT plan
+/// shares the process-wide session so token refreshes never race.
+#[derive(Debug, Clone)]
+pub struct ProviderFactory {
+    chatgpt: Arc<ChatGptSession>,
+}
 
-impl ExtractorFactory for OpenAiCompatibleFactory {
-    type Extractor = OpenAiCompatibleExtractor;
+impl ProviderFactory {
+    /// Wraps the shared ChatGPT session.
+    pub fn new(chatgpt: Arc<ChatGptSession>) -> Self {
+        Self { chatgpt }
+    }
+}
+
+/// One of the external extractors.
+#[derive(Debug)]
+pub enum ProviderExtractor {
+    /// API key or local model.
+    OpenAiCompatible(OpenAiCompatibleExtractor),
+    /// The user's ChatGPT plan.
+    ChatGpt(ChatGptExtractor),
+    /// The user's OpenCode server.
+    OpenCode(OpenCodeExtractor),
+}
+
+impl CandidateExtractor for ProviderExtractor {
+    fn extract(
+        &self,
+        input: &DecisionEvidence,
+        signals: &[RelevanceSignal],
+    ) -> Result<Vec<CandidateProposal>, ExtractError> {
+        match self {
+            Self::OpenAiCompatible(extractor) => extractor.extract(input, signals),
+            Self::ChatGpt(extractor) => extractor.extract(input, signals),
+            Self::OpenCode(extractor) => extractor.extract(input, signals),
+        }
+    }
+}
+
+impl ExtractorFactory for ProviderFactory {
+    type Extractor = ProviderExtractor;
 
     fn external(
         &self,
         profile: &AiProfile,
         secret: String,
-    ) -> Result<OpenAiCompatibleExtractor, ExtractError> {
-        OpenAiCompatibleExtractor::new(profile, secret)
+    ) -> Result<ProviderExtractor, ExtractError> {
+        match profile.kind {
+            ProfileKind::OpenAiCompatible => OpenAiCompatibleExtractor::new(profile, secret)
+                .map(ProviderExtractor::OpenAiCompatible),
+            ProfileKind::ChatGptPlan => {
+                ChatGptExtractor::new(self.chatgpt.clone(), profile).map(ProviderExtractor::ChatGpt)
+            }
+            ProfileKind::OpenCode => {
+                OpenCodeExtractor::new(profile, secret).map(ProviderExtractor::OpenCode)
+            }
+            ProfileKind::Fake => Err(ExtractError::Extractor(
+                "a heurística local não usa provedor externo".to_string(),
+            )),
+        }
     }
 }
 
@@ -137,7 +193,8 @@ impl OpenAiCompatibleExtractor {
         profile
             .validate()
             .map_err(|_| ExtractError::Extractor("perfil de IA inválido".to_string()))?;
-        if secret.trim().is_empty() {
+        // A local model on loopback runs without a key (ADR-0004).
+        if secret.trim().is_empty() && profile.credential_required() {
             return Err(ExtractError::Extractor(
                 "a chave do provedor não está configurada".to_string(),
             ));
@@ -282,16 +339,64 @@ impl OpenAiCompatibleExtractor {
                 "resposta do provedor sem conteúdo".to_string(),
             ));
         };
-        match serde_json::from_str::<ModelEnvelope>(&content) {
-            Ok(model) => match model.into_proposals(signals) {
-                Ok(proposals) => Attempt::Success(proposals),
-                Err(error) => Attempt::Fatal(error),
-            },
-            Err(_) => Attempt::Fatal(ExtractError::Extractor(
-                "conteúdo do provedor inválido".to_string(),
-            )),
+        match parse_model_output(&content, signals) {
+            Ok(proposals) => Attempt::Success(proposals),
+            Err(error) => Attempt::Fatal(error),
         }
     }
+}
+
+/// Parses and bounds the model's JSON, the same way for every provider.
+pub(crate) fn parse_model_output(
+    content: &str,
+    signals: &[RelevanceSignal],
+) -> Result<Vec<CandidateProposal>, ExtractError> {
+    match serde_json::from_str::<ModelEnvelope>(content) {
+        Ok(model) => model.into_proposals(signals),
+        Err(_) => Err(ExtractError::Extractor(
+            "conteúdo do provedor inválido".to_string(),
+        )),
+    }
+}
+
+/// Strict JSON Schema of the model output, used as structured output by the
+/// Responses API (ChatGPT plan) and OpenCode. Mirrors [`ModelEnvelope`].
+pub(crate) fn output_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["proposals"],
+        "properties": {
+            "proposals": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                        "question", "choice", "rationale", "confidence",
+                        "confidence_reason", "evidence_refs", "diff_summary"
+                    ],
+                    "properties": {
+                        "question": { "type": "string" },
+                        "choice": { "type": "string" },
+                        "rationale": { "type": "string" },
+                        "confidence": { "type": "number" },
+                        "confidence_reason": { "type": "string" },
+                        "evidence_refs": { "type": "array", "items": { "type": "string" } },
+                        "diff_summary": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["files", "artifacts"],
+                            "properties": {
+                                "files": { "type": "array", "items": { "type": "string" } },
+                                "artifacts": { "type": "integer" }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    })
 }
 
 /// Maps a transport failure to a fixed, sanitized category.
@@ -307,7 +412,7 @@ fn sanitized_transport_error(error: reqwest::Error) -> ExtractError {
 }
 
 /// Builds the user content from signals and bounded artifact content.
-fn build_user_content(
+pub(crate) fn build_user_content(
     profile: &AiProfile,
     input: &DecisionEvidence,
     signals: &[RelevanceSignal],

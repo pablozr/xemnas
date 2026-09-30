@@ -97,6 +97,9 @@ fn main() {
     // inbox keeps working without any provider (MVP-SPEC §7 line 404).
     let ai_profile_path = paths.ai_profile.clone();
     let settings = ai_settings(&ai_profile_path);
+    // One ChatGPT session per process: Settings (sign-in, models) and the
+    // jobs worker (extraction) share it so token refreshes never race.
+    let chatgpt = std::sync::Arc::new(ai_provider::ChatGptSession::default());
     match settings.load_or_seed() {
         Ok(_) => tracing::info!(
             path = %ai_profile_path.display(),
@@ -119,7 +122,7 @@ fn main() {
             let analysis = application::analysis::AnalyzeCapture::new(
                 store.clone(),
                 settings.clone(),
-                ai_provider::OpenAiCompatibleFactory,
+                ai_provider::ProviderFactory::new(chatgpt.clone()),
             );
             move |record: &application::jobs::JobRecord| analyze_capture(&analysis, record)
         }),
@@ -428,7 +431,7 @@ type Analysis = application::analysis::AnalyzeCapture<
     SqliteStore,
     application::profile::FileProfileStore,
     ai_provider::KeyringSecretStore,
-    ai_provider::OpenAiCompatibleFactory,
+    ai_provider::ProviderFactory,
 >;
 
 /// Runs one capture analysis and logs only counts, codes and status.
