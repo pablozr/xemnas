@@ -1339,7 +1339,7 @@ fn raw_secrets_imported_from_the_outbox_are_redacted_before_persistence() {
 fn start_with_context(store: &SqliteStore, runtime_dir: PathBuf) -> RunningApi {
     let api: Arc<dyn CaptureApi> = Arc::new(CaptureIngest::new(store.clone()));
     let mut config = ApiServerConfig::new(api, runtime_dir);
-    config.context = Some(Arc::new(application::injection::ContextInjection::new(
+    config.services.context = Some(Arc::new(application::injection::ContextInjection::new(
         store.clone(),
     )));
     ApiServer::start(config).expect("start local api")
@@ -1542,5 +1542,161 @@ fn injected_context_blocks_never_become_evidence() {
     assert!(stored
         .iter()
         .all(|content| !content.contains("xemnas-context")));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+fn start_with_agent(store: &SqliteStore, runtime_dir: PathBuf) -> RunningApi {
+    let api: Arc<dyn CaptureApi> = Arc::new(CaptureIngest::new(store.clone()));
+    let mut config = ApiServerConfig::new(api, runtime_dir);
+    config.services.agent = Some(Arc::new(application::agent_access::AgentAccess::new(
+        store.clone(),
+    )));
+    ApiServer::start(config).expect("start local api")
+}
+
+/// Ingests the fixture capture and confirms one decision citing its first artifact.
+fn confirmed_decision(store: &SqliteStore, server: &RunningApi, location: &str) -> String {
+    use application::extract::{DecisionCandidateRecord, ExtractionStore};
+
+    let envelope = envelope_for(location);
+    let key = envelope_key(&envelope);
+    let (status, _) = post(
+        server,
+        "/v1/captures",
+        Some(server.token()),
+        Some(&key),
+        None,
+        &body_of(&envelope),
+    );
+    assert_eq!(status, 201);
+    let project = store
+        .find_by_location(location)
+        .expect("find")
+        .expect("project");
+    let artifact = envelope["artifacts"][0]["artifact_id"]
+        .as_str()
+        .expect("artifact id");
+    store
+        .insert_candidates(&[DecisionCandidateRecord {
+            id: "cand-agent".to_string(),
+            project_id: project.id,
+            capture_id: envelope["capture_id"]
+                .as_str()
+                .expect("capture")
+                .to_string(),
+            status: "pending".to_string(),
+            question: "Qual banco usar?".to_string(),
+            choice: "SQLite".to_string(),
+            rationale: "App local.".to_string(),
+            signals: "[\"public_contract\"]".to_string(),
+            confidence: 0.7,
+            confidence_reason: "sintético".to_string(),
+            evidence_refs: format!("[\"{artifact}\"]"),
+            diff_summary: "{\"files\":[],\"artifacts\":1}".to_string(),
+            dedup_hash: "dedup-agent".to_string(),
+            created_at: "2026-01-02T00:00:00Z".to_string(),
+            updated_at: "2026-01-02T00:00:00Z".to_string(),
+        }])
+        .expect("candidate");
+    let confirm_edits: Option<application::inbox::CandidateEdits> = None;
+    application::inbox::Inbox::new(store.clone())
+        .confirm("cand-agent", confirm_edits)
+        .expect("confirm")
+        .decision_id
+}
+
+fn post_json(server: &RunningApi, path: &str, value: &Value) -> (u16, Value) {
+    let (status, raw) = post(
+        server,
+        path,
+        Some(server.token()),
+        None,
+        None,
+        &body_of(value),
+    );
+    (status, serde_json::from_slice(&raw).unwrap_or(Value::Null))
+}
+
+#[test]
+fn agent_routes_open_references_and_search() {
+    let root = temporary_directory("agent");
+    let store = SqliteStore::open(root.join("app.db")).expect("open store");
+    let location = register_project(&store, &root);
+    let server = start_with_agent(&store, root.clone());
+    let decision = confirmed_decision(&store, &server, &location);
+    let reference = format!("D:{}", application::injection::short_ref(&decision));
+
+    let (_, raw) = get(&server, "/v1/capabilities", Some(server.token()), None);
+    let capabilities: Value = serde_json::from_slice(&raw).expect("json");
+    assert_eq!(capabilities["agent"], json!(true));
+    assert_eq!(capabilities["context"], json!(false));
+
+    let (status, body) = post_json(
+        &server,
+        "/v1/agent/decision",
+        &json!({ "canonical_path": location, "reference": reference }),
+    );
+    assert_eq!(status, 200, "{body}");
+    let text = body["text"].as_str().expect("text");
+    assert!(text.contains("pergunta: Qual banco usar?"));
+    assert!(text.contains("escolha: SQLite"));
+
+    let (status, body) = post_json(
+        &server,
+        "/v1/agent/search",
+        &json!({ "canonical_path": location, "query": "SECRET-MARKER-QUERY banco" }),
+    );
+    assert_eq!(status, 200);
+    assert!(body["text"]
+        .as_str()
+        .is_some_and(|text| text.contains("Qual banco usar? → SQLite")));
+    let (_, empty) = post_json(
+        &server,
+        "/v1/agent/search",
+        &json!({ "canonical_path": location, "query": "renderização" }),
+    );
+    assert_eq!(empty["text"], Value::Null);
+    assert!(!logged_text().contains("SECRET-MARKER-QUERY"));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn agent_routes_map_errors_and_require_auth() {
+    let root = temporary_directory("agent-errors");
+    let store = SqliteStore::open(root.join("app.db")).expect("open store");
+    let location = register_project(&store, &root);
+    let server = start_with_agent(&store, root.clone());
+    let elsewhere = root.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("dir");
+    let decision = |path: &str, reference: &str| {
+        post_json(
+            &server,
+            "/v1/agent/decision",
+            &json!({ "canonical_path": path, "reference": reference }),
+        )
+        .0
+    };
+
+    assert_eq!(decision(&location, "D:zzzzzzzz"), 404);
+    assert_eq!(decision(&location, "D:ab"), 400);
+    assert_eq!(decision(&elsewhere.to_string_lossy(), "D:zzzzzzzz"), 403);
+    assert_eq!(
+        post_json(
+            &server,
+            "/v1/agent/decision",
+            &json!({ "canonical_path": location, "reference": "D:zzzzzzzz", "extra": 1 }),
+        )
+        .0,
+        422
+    );
+    let (status, _) = post(
+        &server,
+        "/v1/agent/search",
+        None,
+        None,
+        None,
+        &body_of(&json!({ "canonical_path": location, "query": "x" })),
+    );
+    assert_eq!(status, 401);
     let _ = std::fs::remove_dir_all(&root);
 }

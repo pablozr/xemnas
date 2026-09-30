@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use application::agent_access::{AgentAccessError, AgentApi};
 use application::captures::{CaptureApi, IngestError, Receipt};
 use application::context::ContextError;
 use application::injection::{ContextApi, InjectionOutcome, InjectionRequest};
@@ -64,34 +65,48 @@ impl ApiConfig {
 #[derive(Clone)]
 struct AppState {
     api: Arc<dyn CaptureApi>,
-    context: Option<Arc<dyn ContextApi>>,
+    services: OptionalServices,
     config: ApiConfig,
+}
+
+/// Use cases whose routes exist only when they are set.
+#[derive(Clone, Default)]
+pub struct OptionalServices {
+    /// Context injection: `POST /v1/context`.
+    pub context: Option<Arc<dyn ContextApi>>,
+    /// Read-only agent access: `POST /v1/agent/decision` and `/v1/agent/search`.
+    pub agent: Option<Arc<dyn AgentApi>>,
 }
 
 /// Builds the router with the capture endpoints only.
 pub fn router(api: Arc<dyn CaptureApi>, config: ApiConfig) -> Router {
-    router_with_context(api, None, config)
+    router_with_services(api, OptionalServices::default(), config)
 }
 
-/// Builds the router; `POST /v1/context` exists only when `context` is set.
-pub fn router_with_context(
+/// Builds the router with the capture endpoints and the services that are set.
+pub fn router_with_services(
     api: Arc<dyn CaptureApi>,
-    context: Option<Arc<dyn ContextApi>>,
+    services: OptionalServices,
     config: ApiConfig,
 ) -> Router {
-    let state = AppState {
-        api,
-        context: context.clone(),
-        config: config.clone(),
-    };
     let mut routes = Router::new()
         .route("/v1/health", get(health))
         .route("/v1/capabilities", get(capabilities))
         .route("/v1/captures", post(create_capture))
         .route("/v1/captures/{id}", get(get_capture));
-    if context.is_some() {
+    if services.context.is_some() {
         routes = routes.route("/v1/context", post(prepare_context));
     }
+    if services.agent.is_some() {
+        routes = routes
+            .route("/v1/agent/decision", post(agent_decision))
+            .route("/v1/agent/search", post(agent_search));
+    }
+    let state = AppState {
+        api,
+        services,
+        config: config.clone(),
+    };
     routes
         .layer(middleware::from_fn_with_state(state.clone(), authorize))
         .layer(DefaultBodyLimit::max(config.max_body_bytes))
@@ -117,8 +132,8 @@ pub async fn serve(listener: tokio::net::TcpListener, router: Router) -> std::io
 pub struct ApiServerConfig {
     /// The use case the API exposes.
     pub api: Arc<dyn CaptureApi>,
-    /// Context injection use case; `None` keeps `/v1/context` off.
-    pub context: Option<Arc<dyn ContextApi>>,
+    /// Optional use cases; their routes exist only when set.
+    pub services: OptionalServices,
     /// Directory receiving `discovery.json` and `api-token`.
     pub runtime_dir: PathBuf,
     /// Protocol version advertised to adapters.
@@ -134,7 +149,7 @@ impl ApiServerConfig {
     pub fn new(api: Arc<dyn CaptureApi>, runtime_dir: impl Into<PathBuf>) -> Self {
         Self {
             api,
-            context: None,
+            services: OptionalServices::default(),
             runtime_dir: runtime_dir.into(),
             protocol_version: PROTOCOL_VERSION,
             max_body_bytes: DEFAULT_MAX_BODY_BYTES,
@@ -240,9 +255,9 @@ impl ApiServer {
             .map_err(|error| ApiServerError::Io(error.to_string()))?;
 
         let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel();
-        let router = router_with_context(
+        let router = router_with_services(
             config.api,
-            config.context,
+            config.services,
             ApiConfig {
                 protocol_version: config.protocol_version,
                 instance_id,
@@ -327,7 +342,8 @@ async fn capabilities(State(state): State<AppState>) -> Json<Value> {
         "protocol_version": state.config.protocol_version,
         "capture_schema_versions": [CAPTURE_ENVELOPE_SCHEMA_VERSION],
         "max_body_bytes": state.config.max_body_bytes,
-        "context": state.context.is_some(),
+        "context": state.services.context.is_some(),
+        "agent": state.services.agent.is_some(),
     }))
 }
 
@@ -367,7 +383,7 @@ async fn prepare_context(
     State(state): State<AppState>,
     payload: Result<Json<ContextBody>, JsonRejection>,
 ) -> Response {
-    let Some(context) = state.context.clone() else {
+    let Some(context) = state.services.context.clone() else {
         return ApiError::NotFound.into_response();
     };
     let body = match payload {
@@ -466,6 +482,81 @@ async fn get_capture(State(state): State<AppState>, Path(capture_id): Path<Strin
         Ok(Ok(receipt)) => Json(ReceiptBody::from(receipt)).into_response(),
         Ok(Err(error)) => ingest_error_response(error),
         Err(error) => error.into_response(),
+    }
+}
+
+/// Body of `POST /v1/agent/decision`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentDecisionBody {
+    canonical_path: String,
+    reference: String,
+}
+
+/// Body of `POST /v1/agent/search`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentSearchBody {
+    canonical_path: String,
+    query: String,
+    budget_tokens: Option<usize>,
+}
+
+/// `POST /v1/agent/decision`: the full decision behind a short reference.
+async fn agent_decision(
+    State(state): State<AppState>,
+    payload: Result<Json<AgentDecisionBody>, JsonRejection>,
+) -> Response {
+    let Some(agent) = state.services.agent.clone() else {
+        return ApiError::NotFound.into_response();
+    };
+    let body = match payload {
+        Ok(Json(body)) => body,
+        Err(rejection) => return json_rejection_to_api_error(rejection).into_response(),
+    };
+    match run_blocking(move || agent.decision(&body.canonical_path, &body.reference)).await {
+        Ok(Ok(text)) => Json(json!({ "text": text })).into_response(),
+        Ok(Err(error)) => agent_error_response(error),
+        Err(error) => error.into_response(),
+    }
+}
+
+/// `POST /v1/agent/search`: a compact block for an explicit query; the query is never logged.
+async fn agent_search(
+    State(state): State<AppState>,
+    payload: Result<Json<AgentSearchBody>, JsonRejection>,
+) -> Response {
+    let Some(agent) = state.services.agent.clone() else {
+        return ApiError::NotFound.into_response();
+    };
+    let body = match payload {
+        Ok(Json(body)) => body,
+        Err(rejection) => return json_rejection_to_api_error(rejection).into_response(),
+    };
+    let result =
+        run_blocking(move || agent.search(&body.canonical_path, &body.query, body.budget_tokens))
+            .await;
+    match result {
+        Ok(Ok(text)) => Json(json!({ "text": text })).into_response(),
+        Ok(Err(error)) => agent_error_response(error),
+        Err(error) => error.into_response(),
+    }
+}
+
+fn agent_error_response(error: AgentAccessError) -> Response {
+    match error {
+        AgentAccessError::NotFound => ApiError::NotFound.into_response(),
+        AgentAccessError::Ambiguous => ApiError::Conflict.into_response(),
+        AgentAccessError::ProjectNotFound => ApiError::Forbidden.into_response(),
+        AgentAccessError::InvalidRequest(_) => ApiError::BadRequest.into_response(),
+        AgentAccessError::Storage(_) => {
+            tracing::error!(
+                code = error.code(),
+                operation = "agent_access",
+                "agent read failed"
+            );
+            ApiError::Internal.into_response()
+        }
     }
 }
 

@@ -12,8 +12,8 @@ pub use discovery::{
     PROTOCOL_VERSION, TOKEN_FILE,
 };
 pub use server::{
-    bind_loopback, router, router_with_context, serve, ApiConfig, ApiServer, ApiServerConfig,
-    ApiServerError, RunningApi, DEFAULT_MAX_BODY_BYTES, DEFAULT_REQUEST_TIMEOUT,
+    bind_loopback, router, router_with_services, serve, ApiConfig, ApiServer, ApiServerConfig,
+    ApiServerError, OptionalServices, RunningApi, DEFAULT_MAX_BODY_BYTES, DEFAULT_REQUEST_TIMEOUT,
 };
 
 /// Returns a stable identifier for this crate, used by wiring smoke tests.
