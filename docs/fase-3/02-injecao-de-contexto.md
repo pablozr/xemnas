@@ -42,5 +42,5 @@
 
 - Confirmar o formato do hook `chat.message` na versão real do OpenCode (a doc oficial não pôde ser consultada neste ambiente; a implementação anexa ao texto da última parte de texto do usuário, sem criar partes novas).
 - A estimativa de tokens é aproximada (4 caracteres por token).
-- MCP enxuto (1–2 ferramentas, `get_decision` por referência curta) para aprofundar sob demanda.
+- MCP enxuto (1–2 ferramentas, `get_decision` por referência curta) para aprofundar sob demanda. O formato do bloco fica como está: a descrição da ferramenta explica a legenda (`D:<ref> vN` é a chave aceita por `get_decision`; `regra|premissa|objetivo:<ref>` são claims), sem custo extra no bloco nem edição do `AGENTS.md` de cada projeto.
 - Equivalente para Claude Code: hook `UserPromptSubmit` com `additionalContext` usando o mesmo endpoint.
