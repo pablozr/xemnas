@@ -14,7 +14,7 @@ use application::providers::ProviderError;
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Context, Div, Role, Toggled};
 
-use super::parts::{card, card_body, card_footer, field_row, icon_tile};
+use super::parts::{card, card_body, card_footer, field_row};
 use super::{as_kind, Action, Models, SettingsScreen, SignIn, FIELD_LABELS, KEY_DESCRIPTION};
 use crate::ui::controls::{button_foreground, ButtonKind};
 use crate::ui::icons::{icon, IconName};
@@ -736,7 +736,7 @@ impl SettingsScreen {
                 button_foreground(theme, ButtonKind::Ghost, true),
             ))
         });
-        card(theme, IconName::Key, title, description).child(
+        card(theme, title, description).child(
             card_body()
                 .child(
                     div()
@@ -866,12 +866,7 @@ impl SettingsScreen {
                         .items_center()
                         .gap(px(SpacingScale::S3))
                         .role(Role::Status)
-                        .child(icon_tile(
-                            theme,
-                            IconName::User,
-                            colors.text_secondary(),
-                            32.0,
-                        ))
+                        .child(icon(IconName::User, 16.0, colors.text_muted()))
                         .child(
                             div()
                                 .flex_1()
@@ -974,7 +969,6 @@ impl SettingsScreen {
         };
         card(
             theme,
-            IconName::User,
             "Conta ChatGPT",
             "O login acontece no navegador; a senha nunca passa pela xemnas.",
         )

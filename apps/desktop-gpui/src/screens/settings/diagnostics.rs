@@ -225,7 +225,13 @@ impl DiagnosticsPanel {
             .child(
                 div()
                     .flex()
-                    .gap(px(SpacingScale::S3))
+                    .gap(px(SpacingScale::S6))
+                    .px(px(SpacingScale::S5))
+                    .py(px(SpacingScale::S4))
+                    .rounded(px(10.0))
+                    .border_1()
+                    .border_color(colors.glass_border_card())
+                    .bg(colors.glass_fill_card())
                     .child(stat_tile(
                         theme,
                         "Captura → candidato",
@@ -288,7 +294,6 @@ impl DiagnosticsPanel {
         ];
         card(
             theme,
-            IconName::Activity,
             "Perdas",
             "Trabalho que não virou candidato. Zero em tudo é o esperado.",
         )
@@ -428,7 +433,6 @@ impl DiagnosticsPanel {
         };
         card(
             theme,
-            IconName::List,
             "Tarefas recentes",
             "As últimas análises de captura. Falhas podem ser reprocessadas.",
         )
@@ -468,7 +472,6 @@ impl DiagnosticsPanel {
         ];
         card(
             theme,
-            IconName::Export,
             "Exportar diagnóstico",
             "Um JSON com contagens, métricas e códigos de erro. Sem conversas, diffs, decisões \
              ou credenciais.",

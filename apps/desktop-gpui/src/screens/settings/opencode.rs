@@ -15,7 +15,7 @@ use application::outbox::retry_stalled;
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Context, Div, Render, Role, Window};
 
-use super::parts::{card, card_body, card_footer, icon_tile, kv_row, stat_tile, status_hero};
+use super::parts::{card, card_body, card_footer, kv_row, stat_tile, status_hero};
 use crate::screens::format::date_time;
 use crate::ui::controls::{action_button, ButtonKind};
 use crate::ui::icons::{icon, IconName};
@@ -173,9 +173,7 @@ impl OpenCodePanel {
                 theme,
                 "opencode-state",
                 theme.colors.status_success(),
-                IconName::CheckCircle,
                 "Recebendo capturas",
-                "Conectado",
                 format!(
                     "O OpenCode está enviando capturas para este app. A última chegou em {}.",
                     latest
@@ -187,9 +185,7 @@ impl OpenCodePanel {
                 theme,
                 "opencode-state",
                 theme.colors.status_info(),
-                IconName::Clock,
                 "Aguardando a primeira captura",
-                "Pronto",
                 "A API local está ativa. Conclua um turno no OpenCode, com o plugin do \
                  xemnas, dentro de um projeto cadastrado."
                     .into(),
@@ -198,9 +194,7 @@ impl OpenCodePanel {
                 theme,
                 "opencode-state",
                 theme.colors.status_danger(),
-                IconName::Activity,
                 "API local inativa",
-                "Offline",
                 "As capturas esperam na outbox e são importadas na próxima abertura do app. \
                  Reinicie o xemnas para reativar a API."
                     .into(),
@@ -269,7 +263,6 @@ impl OpenCodePanel {
             });
         card(
             theme,
-            IconName::Activity,
             "Teste de conexão",
             "O caminho que uma captura percorre do OpenCode até este app.",
         )
@@ -306,12 +299,7 @@ impl OpenCodePanel {
                         .when(index > 0, |row| {
                             row.border_t_1().border_color(colors.hairline_divider())
                         })
-                        .child(icon_tile(
-                            theme,
-                            IconName::Link,
-                            colors.text_secondary(),
-                            32.0,
-                        ))
+                        .child(icon(IconName::Link, 16.0, colors.text_muted()))
                         .child(
                             div()
                                 .flex_1()
@@ -362,7 +350,6 @@ impl OpenCodePanel {
         };
         card(
             theme,
-            IconName::Link,
             "Adapters",
             "Integrações que já entregaram capturas a este app.",
         )
@@ -386,7 +373,6 @@ impl OpenCodePanel {
         let stalled = outbox.stalled;
         card(
             theme,
-            IconName::Layers,
             "Fila de arquivos",
             "Onde o adapter guarda capturas enquanto o app está fechado.",
         )
@@ -447,13 +433,7 @@ impl OpenCodePanel {
     }
 
     fn render_connection(theme: &Theme, status: &IntegrationStatus) -> Div {
-        card(
-            theme,
-            IconName::Info,
-            "Conexão local",
-            "Como o adapter encontra este app.",
-        )
-        .child(
+        card(theme, "Conexão local", "Como o adapter encontra este app.").child(
             card_body()
                 .gap(px(0.0))
                 .child(kv_row(

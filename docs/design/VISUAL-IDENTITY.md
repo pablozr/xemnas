@@ -142,22 +142,26 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
 ## Configurações
 
 - Página do app (engrenagem na barra de título, paleta Ctrl K ou a linha de
-  estado da lateral) com navegação à esquerda: IA e privacidade, OpenCode e
-  Diagnóstico, cada uma com ícone, título e uma dica curta.
-- Cada seção abre com cabeçalho (ícone em bloco de 48 px, título, frase) e um
-  **status em destaque** tingido pela cor do estado, seguido de **cartões** por
-  assunto (ícone, título e propósito no topo; corpo; rodapé com dica e a ação
-  principal). As peças ficam em `screens/settings/parts.rs` (`status_hero`,
-  `card`, `card_body`, `card_footer`, `stat_tile`, `kv_row`, `icon_tile`,
-  `step`) e só valem para Configurações.
-- Opções exclusivas (extrator, modo de contexto) são cartões com ícone e marca
-  de selecionado; campos em grade quando cabem lado a lado. Consentimento é uma
-  sequência de passos numerados (dois ou três, conforme o provedor) que ficam
-  verdes quando concluídos.
-- Extrator em grade 2 × 2: Local, Modelo local ou API, Conta ChatGPT e
+  estado da lateral) com navegação à esquerda em linhas simples (glifo de
+  16 px e título; sem bloco de ícone nem dica), como Linear e Zed.
+- Cada seção abre com título (`HEADING_1`) e uma frase, sem ícone. O estado
+  vem logo abaixo como **linha de status**: ponto na cor do estado, título e
+  uma frase, sem caixa tingida (`status_hero`). Depois, **painéis** por
+  assunto: filete de 1 px, título e propósito no topo, corpo e rodapé com
+  dica e a ação principal. As peças ficam em `screens/settings/parts.rs`
+  (`status_hero`, `card`, `card_body`, `card_footer`, `stat_tile`, `kv_row`,
+  `step`) e só valem para Configurações. Nada de bloco de ícone
+  (`icon_tile` saiu): glifo só de 16 px, inline, em cor atenuada.
+- Opções exclusivas são **linhas de rádio** numa lista com filetes (glifo,
+  título, descrição, marca de rádio à direita; selecionada com
+  `mark_selected`), nunca cartões lado a lado. Números em destaque ficam
+  planos (`stat_tile`) dentro de um painel único. Requisitos antes do
+  consentimento são uma lista de verificação (círculo vazio → check verde).
+- Extrator em lista de rádio: Local, Modelo local ou API, Conta ChatGPT e
   OpenCode Zen ou Go (ADR-0004); no OpenCode o plano (Zen ou Go) é um par de
-  opções com `mark_selected` e a chave tem o atalho **Criar uma chave**. Cada provedor mostra só os campos que usa; trocar de
-  provedor não leva endereço nem modelo de um para outro.
+  opções com `mark_selected` e a chave tem o atalho **Criar uma chave**. Cada
+  provedor mostra só os campos que usa; trocar de provedor não leva endereço
+  nem modelo de um para outro.
 - **Seletor de modelo:** campo de texto sempre editável, com **Listar modelos**
   ao lado. A lista aparece abaixo como grupo de opções (`mark_selected`,
   rolagem própria) e clicar preenche o campo; carregando é esqueleto, falha e
@@ -168,7 +172,7 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   **Usando o plano do ChatGPT**, **Gerenciar uso** (ícone de seta para fora,
   abre o navegador) e Sair da conta. No primeiro login aparece uma vez o aviso
   "Você está usando o seu plano do ChatGPT" com **Entendi**.
-- Credencial do provedor (chave de API ou senha do OpenCode) é um cartão com
+- Credencial do provedor (chave de API ou chave do OpenCode) é um painel com
   selo de estado ("Guardada no cofre", "Opcional neste endereço", "Nenhuma chave")
   e o campo secreto; o valor guardado nunca volta para a tela.
 - OpenCode mostra o teste de conexão como lista de verificações com resultado

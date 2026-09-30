@@ -24,9 +24,7 @@ use gpui::{
 use super::format::{date_time, thousands};
 use crate::ui::controls::{action_button, button_foreground, ButtonKind};
 use crate::ui::icons::{icon, IconName};
-use crate::ui::patterns::{
-    error_banner, mark_selected, skeleton_list, status_pill, toast, TOAST_DURATION,
-};
+use crate::ui::patterns::{error_banner, mark_selected, skeleton_list, toast, TOAST_DURATION};
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{tint, SpacingScale, TypeScale};
@@ -170,7 +168,7 @@ mod providers;
 pub use diagnostics::{DiagnosticsBackend, DiagnosticsPanel, DiagnosticsService};
 pub use opencode::{IntegrationBackend, IntegrationService, OpenCodePanel};
 
-use parts::{card, card_body, card_footer, icon_tile, step};
+use parts::{card, card_body, card_footer, status_hero, step};
 
 /// Emitted when the user leaves the settings page.
 pub struct CloseSettings;
@@ -266,13 +264,6 @@ impl SettingsSection {
             Self::Ai => "IA e privacidade",
             Self::OpenCode => "OpenCode",
             Self::Diagnostics => "Diagnóstico",
-        }
-    }
-    fn hint(self) -> &'static str {
-        match self {
-            Self::Ai => "Extração, chave e envio",
-            Self::OpenCode => "Captura e conexão",
-            Self::Diagnostics => "Saúde, perdas e tarefas",
         }
     }
     fn subtitle(self) -> &'static str {
@@ -885,54 +876,37 @@ impl SettingsScreen {
                     theme,
                     selected,
                 )
-                .child(icon_tile(
-                    theme,
+                .child(icon(
                     section.glyph(),
+                    16.0,
                     if selected {
-                        colors.accent_hover()
+                        colors.text_primary()
                     } else {
-                        colors.text_secondary()
+                        colors.text_muted()
                     },
-                    28.0,
                 ))
                 .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .child(
-                            text_style(div(), TypeScale::ROW_TITLE)
-                                .text_color(if selected {
-                                    colors.text_primary()
-                                } else {
-                                    colors.text_secondary()
-                                })
-                                .child(section.title()),
-                        )
-                        .child(
-                            text_style(div(), TypeScale::META)
-                                .text_color(colors.text_muted())
-                                .child(section.hint()),
-                        ),
+                    text_style(div(), TypeScale::ROW_TITLE)
+                        .text_color(if selected {
+                            colors.text_primary()
+                        } else {
+                            colors.text_secondary()
+                        })
+                        .child(section.title()),
                 )
             }))
     }
 
     fn render_status(&self, theme: &Theme, stored: &AiProfile) -> Stateful<Div> {
-        let (color, glyph, pill, title, body): (_, _, _, &str, String) = match choose_extractor(
-            Some(stored),
-        ) {
+        let (color, title, body): (_, &str, String) = match choose_extractor(Some(stored)) {
             ExtractorChoice::OfflineFake => (
-                theme.colors.status_info(),
-                IconName::Cpu,
-                "Local",
+                theme.colors.text_muted(),
                 "Extração local, sem rede",
                 "Candidatos são extraídos nesta máquina. Nenhum conteúdo das capturas é enviado."
                     .into(),
             ),
             ExtractorChoice::ExternalEnabled => (
                 theme.colors.status_success(),
-                IconName::CheckCircle,
-                "Ativo",
                 "Provedor externo ativo",
                 format!(
                     "Capturas são analisadas {}, dentro dos limites da prévia.",
@@ -941,8 +915,6 @@ impl SettingsScreen {
             ),
             ExtractorChoice::ExternalBlocked => (
                 theme.colors.status_warning(),
-                IconName::Shield,
-                "Bloqueado",
                 "Provedor externo bloqueado",
                 format!(
                     "{} Até lá, nenhuma captura é enviada nem analisada.",
@@ -950,40 +922,7 @@ impl SettingsScreen {
                 ),
             ),
         };
-        div()
-            .id("settings-status")
-            .flex()
-            .items_center()
-            .gap(px(SpacingScale::S4))
-            .p(px(SpacingScale::S4))
-            .rounded(px(10.0))
-            .border_1()
-            .border_color(tint(color, 0.28))
-            .bg(tint(color, 0.07))
-            .role(Role::Status)
-            .aria_label(format!("{title}. {body}"))
-            .child(icon_tile(theme, glyph, color, 40.0))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.0))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(SpacingScale::S2))
-                            .child(text_style(div(), TypeScale::HEADING_3).child(title))
-                            .child(status_pill(theme, color, pill)),
-                    )
-                    .child(
-                        text_style(div(), TypeScale::BODY_SMALL)
-                            .text_color(theme.colors.text_secondary())
-                            .child(body),
-                    ),
-            )
+        status_hero(theme, "settings-status", color, title, body)
     }
 
     fn kind_option(
@@ -1007,102 +946,83 @@ impl SettingsScreen {
             .or_insert_with(|| cx.focus_handle().tab_stop(true))
             .clone();
         let colors = theme.colors;
-        div()
-            .id(id)
-            .relative()
-            .flex_1()
-            .min_w(px(0.0))
-            .flex()
-            .flex_col()
-            .gap(px(SpacingScale::S3))
-            .p(px(SpacingScale::S4))
-            .rounded(px(10.0))
-            .border_1()
-            .border_color(if selected {
-                colors.accent_default()
+        mark_selected(
+            div()
+                .id(id)
+                .relative()
+                .flex()
+                .items_center()
+                .gap(px(SpacingScale::S3))
+                .px(px(SpacingScale::S4))
+                .py(px(SpacingScale::S3))
+                .when(kind != ProfileKind::Fake, |row| {
+                    row.border_t_1().border_color(colors.hairline_divider())
+                })
+                .when(!selected, |row| {
+                    row.hover(move |style| style.bg(colors.glass_fill_medium()))
+                        .active(move |style| style.bg(colors.glass_fill_strong()))
+                })
+                .cursor_pointer()
+                .role(Role::RadioButton)
+                .aria_label(title)
+                .aria_toggled(if selected {
+                    Toggled::True
+                } else {
+                    Toggled::False
+                })
+                .track_focus(&focus)
+                .focus_visible(crate::ui::controls::focus_ring(&theme))
+                .on_click(cx.listener(move |this, _, _, cx| this.act(Action::Kind(kind), cx)))
+                .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                        this.act(Action::Kind(kind), cx);
+                        cx.stop_propagation();
+                    }
+                })),
+            &theme,
+            selected,
+        )
+        .child(icon(
+            glyph,
+            16.0,
+            if selected {
+                colors.text_primary()
             } else {
-                colors.glass_border_card()
-            })
-            .bg(if selected {
-                colors.selection()
-            } else {
-                colors.glass_fill_card()
-            })
-            .when(!selected, |option| {
-                option
-                    .hover(move |style| {
-                        style
-                            .bg(colors.glass_fill_medium())
-                            .border_color(colors.glass_border_card_hover())
-                    })
-                    .active(move |style| style.bg(colors.glass_fill_strong()))
-            })
-            .cursor_pointer()
-            .role(Role::RadioButton)
-            .aria_label(title)
-            .aria_toggled(if selected {
-                Toggled::True
-            } else {
-                Toggled::False
-            })
-            .track_focus(&focus)
-            .focus_visible(crate::ui::controls::focus_ring(&theme))
-            .on_click(cx.listener(move |this, _, _, cx| this.act(Action::Kind(kind), cx)))
-            .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
-                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                    this.act(Action::Kind(kind), cx);
-                    cx.stop_propagation();
-                }
-            }))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(icon_tile(
-                        &theme,
-                        glyph,
-                        if selected {
-                            colors.accent_hover()
-                        } else {
-                            colors.text_secondary()
-                        },
-                        32.0,
-                    ))
-                    .child(
-                        div()
-                            .size(px(18.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_full()
-                            .border_1()
-                            .border_color(if selected {
-                                colors.accent_hover()
-                            } else {
-                                colors.glass_border_control()
-                            })
-                            .when(selected, |mark| {
-                                mark.bg(colors.accent_hover()).child(icon(
-                                    IconName::Check,
-                                    12.0,
-                                    colors.accent_on_emphasis(),
-                                ))
-                            }),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.0))
-                    .child(text_style(div(), TypeScale::ROW_TITLE).child(title))
-                    .child(
-                        text_style(div(), TypeScale::BODY_SMALL)
-                            .text_color(colors.text_muted())
-                            .child(body),
-                    ),
-            )
+                colors.text_muted()
+            },
+        ))
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .child(text_style(div(), TypeScale::ROW_TITLE).child(title))
+                .child(
+                    text_style(div(), TypeScale::BODY_SMALL)
+                        .text_color(colors.text_muted())
+                        .child(body),
+                ),
+        )
+        .child(
+            div()
+                .size(px(16.0))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .border_1()
+                .border_color(if selected {
+                    colors.accent_hover()
+                } else {
+                    colors.glass_border_control()
+                })
+                .when(selected, |mark| {
+                    mark.child(div().size(px(8.0)).rounded_full().bg(colors.accent_hover()))
+                }),
+        )
     }
 
     fn render_extractor(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Div {
@@ -1185,7 +1105,6 @@ impl SettingsScreen {
         });
         card(
             theme,
-            IconName::Cpu,
             "Extrator",
             "Quem lê as capturas para propor candidatos a decisão.",
         )
@@ -1196,24 +1115,17 @@ impl SettingsScreen {
                         .id("settings-kind")
                         .w_full()
                         .flex()
-                        .gap(px(SpacingScale::S3))
                         .flex_col()
+                        .rounded(theme.radius.control())
+                        .border_1()
+                        .border_color(theme.colors.hairline_divider())
+                        .overflow_hidden()
                         .role(Role::RadioGroup)
                         .aria_label("Extrator")
-                        .child(
-                            div()
-                                .flex()
-                                .gap(px(SpacingScale::S3))
-                                .child(local)
-                                .child(remote),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .gap(px(SpacingScale::S3))
-                                .child(chatgpt)
-                                .child(opencode),
-                        ),
+                        .child(local)
+                        .child(remote)
+                        .child(chatgpt)
+                        .child(opencode),
                 )
                 .children(fields),
         )
@@ -1374,7 +1286,6 @@ impl SettingsScreen {
             };
         card(
             theme,
-            IconName::Eye,
             "O que sai da máquina",
             "Prévia exata do que o provedor pode receber. O consentimento fica ligado a ela.",
         )
@@ -1423,18 +1334,15 @@ impl SettingsScreen {
             );
         } else {
             let steps = providers::consent_steps(self.kind, saved, ready, &stored);
-            let count = steps.len();
             body =
                 body.child(
                     div()
                         .id("settings-consent-steps")
                         .flex()
-                        .items_start()
+                        .flex_col()
                         .role(Role::List)
                         .children(steps.into_iter().enumerate().map(
-                            |(index, (done, title, hint))| {
-                                step(theme, index, done, title, hint, index + 1 < count)
-                            },
+                            |(index, (done, title, hint))| step(theme, index, done, title, hint),
                         )),
                 );
         }
@@ -1518,7 +1426,6 @@ impl SettingsScreen {
         });
         card(
             theme,
-            IconName::Shield,
             "Consentimento",
             "Nada é enviado antes deste passo, e você pode revogar a qualquer momento.",
         )
@@ -1640,29 +1547,17 @@ impl Render for SettingsScreen {
                             .child(
                                 div()
                                     .flex()
-                                    .items_center()
-                                    .gap(px(SpacingScale::S4))
-                                    .mb(px(28.0))
-                                    .child(icon_tile(
-                                        &theme,
-                                        section.glyph(),
-                                        theme.colors.accent_hover(),
-                                        48.0,
-                                    ))
+                                    .flex_col()
+                                    .gap(px(SpacingScale::S1))
+                                    .mb(px(SpacingScale::S6))
                                     .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap(px(2.0))
-                                            .child(
-                                                text_style(div(), TypeScale::HEADING_1)
-                                                    .child(section.title()),
-                                            )
-                                            .child(
-                                                text_style(div(), TypeScale::BODY_SMALL)
-                                                    .text_color(theme.colors.text_muted())
-                                                    .child(section.subtitle()),
-                                            ),
+                                        text_style(div(), TypeScale::HEADING_1)
+                                            .child(section.title()),
+                                    )
+                                    .child(
+                                        text_style(div(), TypeScale::BODY_SMALL)
+                                            .text_color(theme.colors.text_muted())
+                                            .child(section.subtitle()),
                                     ),
                             )
                             .child(body),
