@@ -12,7 +12,7 @@ use std::sync::Arc;
 use application::profile::{
     build_preview, choose_extractor, consent_status, revoke_consent, AiProfile, AiSettings,
     ConsentPreview, ExtractorChoice, ProfileError, ProfileKind, ProfileStore, SecretStore,
-    SignedIn, OPENCODE_DEFAULT_ENDPOINT,
+    SignedIn, OPENCODE_GO_ENDPOINT, OPENCODE_ZEN_ENDPOINT,
 };
 use application::providers::{ModelCatalog, ModelInfo, PlanAccount};
 use gpui::prelude::*;
@@ -57,7 +57,7 @@ pub struct Credentials {
     pub api_key: bool,
     /// Refresh token of the ChatGPT account.
     pub chatgpt: bool,
-    /// Password of the OpenCode server.
+    /// API key of OpenCode Zen or Go.
     pub opencode: bool,
 }
 
@@ -186,6 +186,8 @@ enum Action {
     Close,
     Kind(ProfileKind),
     Preset(usize),
+    OpenCodePlan(bool),
+    OpenCodeConsole,
     ListModels,
     PickModel(usize),
     Save,
@@ -493,7 +495,7 @@ impl SettingsScreen {
             self.original.clone()
         } else {
             let endpoint = match kind {
-                ProfileKind::OpenCode => OPENCODE_DEFAULT_ENDPOINT.to_owned(),
+                ProfileKind::OpenCode => OPENCODE_ZEN_ENDPOINT.to_owned(),
                 _ => String::new(),
             };
             [endpoint, String::new(), limit]
@@ -504,7 +506,7 @@ impl SettingsScreen {
 
     fn key_placeholder(&mut self, cx: &mut Context<Self>) {
         let placeholder = if self.kind == ProfileKind::OpenCode {
-            "Senha do servidor do OpenCode"
+            "Chave de API do OpenCode"
         } else {
             "Chave de API do provedor"
         };
@@ -638,6 +640,16 @@ impl SettingsScreen {
                     self.models = Models::Idle;
                 }
             }
+            Action::OpenCodePlan(go) => {
+                let endpoint = if go {
+                    OPENCODE_GO_ENDPOINT
+                } else {
+                    OPENCODE_ZEN_ENDPOINT
+                };
+                self.fields[0].update(cx, |field, cx| field.set_value(endpoint, cx));
+                self.models = Models::Idle;
+            }
+            Action::OpenCodeConsole => cx.open_url(providers::OPENCODE_KEYS_URL),
             Action::ListModels => self.list_models(cx),
             Action::PickModel(index) => {
                 if let Models::Ready(models) = &self.models {
@@ -697,11 +709,7 @@ impl SettingsScreen {
                 }
                 let account = as_kind(stored, self.kind).credential_account();
                 let key = key.to_owned();
-                let notice = if self.kind == ProfileKind::OpenCode {
-                    "Senha guardada no cofre do sistema."
-                } else {
-                    "Chave guardada no cofre do sistema."
-                };
+                let notice = "Chave guardada no cofre do sistema.";
                 self.key_placeholder(cx);
                 self.keeping_form(
                     Box::new(move |backend| {
@@ -1124,8 +1132,8 @@ impl SettingsScreen {
         );
         let opencode = self.kind_option(
             ProfileKind::OpenCode,
-            "OpenCode",
-            "Usa um modelo já conectado no seu OpenCode.",
+            "OpenCode Zen ou Go",
+            "Cole a chave do OpenCode e escolha um modelo.",
             cx,
         );
         let save = self.button(

@@ -3,6 +3,8 @@
 **Status:** Implementada, conforme `docs/arquitetura/adr/0004-provedores-de-ia-conta-chatgpt-e-opencode.md`
 (backend, filtro de sessões no plugin do OpenCode e Configurações › IA). Fica
 pendente a verificação da assinatura do ID token, registrada no ADR.
+A opção 2 (servidor local do OpenCode) foi trocada pelo OpenCode Zen/Go com
+chave; ver a seção "OpenCode Zen e OpenCode Go" do ADR.
 
 Pesquisa de 30/09/2026. Parte do que está aqui vem de resumos de busca, porque
 `developers.openai.com`, `opencode.ai` e sites de notícia estavam bloqueados no

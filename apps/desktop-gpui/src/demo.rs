@@ -186,8 +186,9 @@ impl application::providers::ModelCatalog for SampleCatalog {
             ],
             ProfileKind::ChatGptPlan => &[("gpt-demo", "GPT (demonstração)")],
             ProfileKind::OpenCode => &[
-                ("anthropic/claude-demo", "Anthropic · Claude (demonstração)"),
-                ("openai/gpt-demo", "OpenAI · GPT (demonstração)"),
+                ("kimi-k3", "kimi-k3"),
+                ("deepseek-v4-pro", "deepseek-v4-pro"),
+                ("big-pickle", "big-pickle"),
             ],
         };
         Ok(sample

@@ -1,5 +1,5 @@
 //! AI provider adapters: OpenAI-compatible endpoints (API key or local
-//! model), the ChatGPT plan and OpenCode (ADR-0004).
+//! model), the ChatGPT plan and the OpenCode Zen/Go gateway (ADR-0004).
 
 #![warn(missing_docs)]
 
@@ -9,7 +9,7 @@ pub mod opencode;
 
 pub use catalog::HttpModelCatalog;
 pub use chatgpt::{ChatGptExtractor, ChatGptSession, MANAGE_USAGE_URL, PLAN_SCOPE};
-pub use opencode::{OpenCodeExtractor, EXTRACTION_SESSION_TITLE};
+pub use opencode::{opencode_wire, OpenCodeExtractor, Wire};
 
 use std::fmt;
 use std::io::Read;
@@ -82,7 +82,7 @@ impl RetryPolicy {
 }
 
 /// Result of one provider attempt.
-enum Attempt {
+pub(crate) enum Attempt {
     /// A validated batch came back.
     Success(Vec<CandidateProposal>),
     /// A transient failure worth retrying.
@@ -121,7 +121,7 @@ pub enum ProviderExtractor {
     OpenAiCompatible(OpenAiCompatibleExtractor),
     /// The user's ChatGPT plan.
     ChatGpt(ChatGptExtractor),
-    /// The user's OpenCode server.
+    /// OpenCode Zen or Go with the user's key.
     OpenCode(OpenCodeExtractor),
 }
 
@@ -400,7 +400,7 @@ pub(crate) fn output_schema() -> serde_json::Value {
 }
 
 /// Maps a transport failure to a fixed, sanitized category.
-fn sanitized_transport_error(error: reqwest::Error) -> ExtractError {
+pub(crate) fn sanitized_transport_error(error: reqwest::Error) -> ExtractError {
     let category = if error.is_timeout() {
         "tempo esgotado"
     } else if error.is_connect() {

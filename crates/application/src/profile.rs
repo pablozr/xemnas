@@ -18,8 +18,10 @@ pub const PREVIEW_CATEGORIES: &[&str] =
 /// Base URL of the OpenAI API used with a ChatGPT plan (ADR-0004).
 pub const CHATGPT_API_BASE: &str = "https://api.openai.com/v1";
 
-/// Default address of a local OpenCode server (`opencode serve`).
-pub const OPENCODE_DEFAULT_ENDPOINT: &str = "http://127.0.0.1:4096";
+/// OpenCode Zen: pay-as-you-go gateway of models curated by OpenCode.
+pub const OPENCODE_ZEN_ENDPOINT: &str = "https://opencode.ai/zen/v1";
+/// OpenCode Go: the monthly subscription over the same gateway.
+pub const OPENCODE_GO_ENDPOINT: &str = "https://opencode.ai/zen/go/v1";
 
 /// Which extractor a profile selects (ADR-0004).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,7 +34,8 @@ pub enum ProfileKind {
     OpenAiCompatible,
     /// The user's ChatGPT plan through Sign in with ChatGPT.
     ChatGptPlan,
-    /// A model configured in the user's local OpenCode server.
+    /// OpenCode Zen or OpenCode Go, the model gateway of OpenCode, with the
+    /// user's OpenCode API key.
     OpenCode,
 }
 
@@ -121,16 +124,11 @@ impl AiProfile {
                 Ok(())
             }
             ProfileKind::OpenCode => {
-                if !self.model.contains('/') || self.model.trim().starts_with('/') {
-                    return Err(ProfileError::Invalid(
-                        "escolha um modelo do OpenCode no formato provedor/modelo".to_string(),
-                    ));
-                }
+                require_model(&self.model)?;
                 let endpoint = self.endpoint.as_deref().unwrap_or_default();
-                validate_endpoint(endpoint)?;
-                if !is_loopback_endpoint(endpoint) {
+                if endpoint != OPENCODE_ZEN_ENDPOINT && endpoint != OPENCODE_GO_ENDPOINT {
                     return Err(ProfileError::Invalid(
-                        "o OpenCode precisa estar nesta máquina (endereço de loopback)".to_string(),
+                        "escolha o OpenCode Zen ou o OpenCode Go".to_string(),
                     ));
                 }
                 Ok(())
@@ -140,7 +138,7 @@ impl AiProfile {
 
     /// The account under which this profile's credential lives in the
     /// secret store: the API key, the ChatGPT refresh token or the OpenCode
-    /// server password. Separate names keep switching kinds from mixing them.
+    /// API key. Separate names keep switching kinds from mixing them.
     pub fn credential_account(&self) -> String {
         match self.kind {
             ProfileKind::Fake | ProfileKind::OpenAiCompatible => self.id.clone(),
@@ -150,10 +148,11 @@ impl AiProfile {
     }
 
     /// Whether extraction cannot run without a stored credential. A local
-    /// model on loopback and OpenCode (password optional) need none.
+    /// model on loopback needs none.
     pub fn credential_required(&self) -> bool {
         match self.kind {
-            ProfileKind::Fake | ProfileKind::OpenCode => false,
+            ProfileKind::Fake => false,
+            ProfileKind::OpenCode => true,
             ProfileKind::OpenAiCompatible => {
                 !self.endpoint.as_deref().is_some_and(is_loopback_endpoint)
             }
@@ -175,7 +174,7 @@ fn require_model(model: &str) -> Result<(), ProfileError> {
 }
 
 /// Whether `endpoint` is an http(s) URL on a loopback IP (local model or
-/// OpenCode on this machine).
+/// on this machine).
 pub fn is_loopback_endpoint(endpoint: &str) -> bool {
     let Ok(parsed) = url::Url::parse(endpoint) else {
         return false;
@@ -1183,18 +1182,21 @@ mod tests {
 
         let mut opencode = AiProfile {
             kind: ProfileKind::OpenCode,
-            model: "anthropic/claude-test".to_string(),
-            endpoint: Some(super::OPENCODE_DEFAULT_ENDPOINT.to_string()),
+            model: "kimi-k3".to_string(),
+            endpoint: Some(super::OPENCODE_GO_ENDPOINT.to_string()),
             ..external_profile()
         };
         assert!(opencode.validate().is_ok());
-        opencode.model = "no-provider".to_string();
+        assert!(opencode.credential_required(), "the gateway needs a key");
+        opencode.endpoint = Some(super::OPENCODE_ZEN_ENDPOINT.to_string());
+        assert!(opencode.validate().is_ok());
+        opencode.model = String::new();
         assert!(opencode.validate().is_err());
-        opencode.model = "anthropic/claude-test".to_string();
-        opencode.endpoint = Some("https://remote.example.test".to_string());
+        opencode.model = "kimi-k3".to_string();
+        opencode.endpoint = Some("https://elsewhere.example.test/v1".to_string());
         assert!(
             opencode.validate().is_err(),
-            "OpenCode must be on this machine"
+            "only the OpenCode gateway addresses"
         );
     }
 

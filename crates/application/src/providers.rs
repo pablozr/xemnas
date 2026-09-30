@@ -12,8 +12,7 @@ pub const CHATGPT_USAGE_URL: &str = "https://chatgpt.com/settings/usage";
 /// One model the configured destination offers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelInfo {
-    /// Identifier sent back as the profile's `model` (`provider/model` for
-    /// OpenCode).
+    /// Identifier sent back as the profile's `model`.
     pub id: String,
     /// Name shown in the picker.
     pub label: String,
@@ -63,7 +62,7 @@ impl std::error::Error for ProviderError {}
 /// it off the UI thread.
 pub trait ModelCatalog: Send + Sync {
     /// Models for `profile`. `secret` is the credential stored for the
-    /// profile's kind (API key or OpenCode password), when there is one.
+    /// profile's kind (API key), when there is one.
     fn list(
         &self,
         profile: &AiProfile,

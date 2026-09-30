@@ -88,8 +88,8 @@ where
                 Ok(AnalysisOutcome::Skipped)
             }
             ExtractorChoice::ExternalEnabled => {
-                // A local model on loopback and OpenCode run without a stored
-                // credential; they receive an empty secret.
+                // A local model on loopback runs without a stored credential;
+                // it receives an empty secret.
                 let secret = match self.settings.secret(&profile.credential_account()) {
                     Ok(Some(secret)) => secret,
                     Ok(None) if !profile.credential_required() => String::new(),

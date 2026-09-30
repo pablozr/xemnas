@@ -96,7 +96,6 @@ interface HarnessOptions {
   results?: PostResult[];
   overrides?: Partial<AdapterConfig>;
   directory?: string;
-  title?: string;
 }
 
 function buildHarness(options: HarnessOptions) {
@@ -104,7 +103,6 @@ function buildHarness(options: HarnessOptions) {
   const source = createFakeMessageSource({
     messages: { [sessionId]: options.messages },
     diffs: options.diffs,
-    titles: options.title === undefined ? {} : { [sessionId]: options.title },
   });
   const recording = createRecordingClient(options.results ?? []);
   const store = createCheckpointStore(checkpointPaths(stateDir));
@@ -145,28 +143,6 @@ test("a first reconciliation sends every new turn and advances the checkpoint", 
     harness.store.get(sessionId).last_capture_id,
     harness.seen[1].capture_id,
   );
-});
-
-test("an extraction session created by the desktop is never captured", async () => {
-  const harness = buildHarness({
-    messages: [user1, assistant1],
-    title: "xemnas · extração",
-  });
-  const outcome = await harness.adapter.reconcileSession(sessionId);
-
-  assert.equal(outcome.sent, 0);
-  assert.equal(harness.seen.length, 0);
-  assert.equal(harness.store.get(sessionId).last_message_id, null);
-});
-
-test("a regular session title does not stop the capture", async () => {
-  const harness = buildHarness({
-    messages: [user1, assistant1],
-    title: "Refatorar o parser",
-  });
-  const outcome = await harness.adapter.reconcileSession(sessionId);
-
-  assert.equal(outcome.sent, 1);
 });
 
 test("a second reconciliation with an up-to-date checkpoint sends nothing", async () => {

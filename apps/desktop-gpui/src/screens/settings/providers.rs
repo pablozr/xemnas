@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use application::profile::{
     build_preview, is_loopback_endpoint, AiProfile, ConsentPreview, ProfileKind, SignedIn,
+    OPENCODE_GO_ENDPOINT,
 };
 use application::providers::ProviderError;
 use gpui::prelude::*;
@@ -28,6 +29,15 @@ pub(super) const LOCAL_PRESETS: [(&str, &str); 2] = [
 ];
 const PRESET_IDS: [&str; 2] = ["settings-preset-ollama", "settings-preset-lmstudio"];
 
+/// Where the user creates an OpenCode API key (Zen and Go share it).
+pub(super) const OPENCODE_KEYS_URL: &str = "https://opencode.ai/auth";
+
+/// The two OpenCode plans: (is Go, title, one-line description).
+const OPENCODE_PLANS: [(bool, &str, &str); 2] = [
+    (false, "Zen", "Paga por uso; inclui modelos gratuitos."),
+    (true, "Go", "Assinatura mensal de modelos abertos."),
+];
+
 /// How long the browser sign-in may take before it gives up.
 const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
@@ -36,9 +46,9 @@ const ACCOUNT_DESCRIPTION: &str = "Entre com a sua conta para extrair com o seu 
                                    no cofre do sistema.";
 const PLAN_NOTICE: &str = "As análises da xemnas contam no uso do seu plano, como conversas \
                            no ChatGPT. Acompanhe em Gerenciar uso.";
-const OPENCODE_PASSWORD_DESCRIPTION: &str = "Só se o OpenCode roda com \
-                                             OPENCODE_SERVER_PASSWORD. Fica no cofre do \
-                                             sistema e não é exibida aqui.";
+const OPENCODE_KEY_DESCRIPTION: &str = "A mesma chave serve para o Zen e o Go. Fica no \
+                                        Gerenciador de Credenciais do sistema e não é \
+                                        exibida aqui.";
 const WAITING_BROWSER: &str =
     "Conclua o login no navegador. Esta tela atualiza sozinha quando você voltar.";
 
@@ -53,7 +63,7 @@ pub(super) fn analysed_by(profile: &AiProfile) -> String {
                 .unwrap_or_else(|| "provedor configurado".into())
         ),
         ProfileKind::ChatGptPlan => format!("pelo seu plano do ChatGPT ({})", profile.model),
-        ProfileKind::OpenCode => format!("pelo OpenCode com {}", profile.model),
+        ProfileKind::OpenCode => format!("pelo {} com {}", opencode_plan(profile), profile.model),
     }
 }
 
@@ -71,11 +81,7 @@ pub(super) fn destination(profile: &AiProfile, preview: &ConsentPreview) -> Opti
                 None => "OpenAI".to_owned(),
             },
         ),
-        ProfileKind::OpenCode => profile
-            .model
-            .split_once('/')
-            .map(|(provider, _)| format!("OpenCode · {provider}"))
-            .or_else(|| preview.endpoint_host.clone()),
+        ProfileKind::OpenCode => Some(opencode_plan(profile).to_owned()),
         _ => preview.endpoint_host.clone(),
     }
 }
@@ -100,9 +106,18 @@ pub(super) fn destination_note(profile: &AiProfile) -> Option<(IconName, &'stati
         )),
         ProfileKind::OpenCode => Some((
             IconName::Link,
-            "O OpenCode repassa os trechos ao provedor do modelo e apaga a sessão ao terminar.",
+            "O OpenCode repassa os trechos ao provedor do modelo escolhido.",
         )),
         _ => None,
+    }
+}
+
+/// "OpenCode Zen" or "OpenCode Go", from the profile's gateway address.
+fn opencode_plan(profile: &AiProfile) -> &'static str {
+    if profile.endpoint.as_deref() == Some(OPENCODE_GO_ENDPOINT) {
+        "OpenCode Go"
+    } else {
+        "OpenCode Zen"
     }
 }
 
@@ -134,10 +149,11 @@ pub(super) fn consent_steps(
             (ready, "Conta conectada", "Uso do plano permitido"),
             consent,
         ],
-        ProfileKind::OpenCode => {
-            let saved = (saved, "Configuração salva", "Endereço e modelo");
-            vec![saved, consent]
-        }
+        ProfileKind::OpenCode => vec![
+            (saved, "Configuração salva", "Plano e modelo"),
+            (ready, "Chave no cofre", "Guardada no sistema"),
+            consent,
+        ],
     }
 }
 
@@ -156,7 +172,7 @@ impl SettingsScreen {
                         .as_ref()
                         .is_some_and(|account| account.plan_usage)
             }
-            ProfileKind::OpenCode => true,
+            ProfileKind::OpenCode => self.credentials.opencode,
         }
     }
 
@@ -400,20 +416,19 @@ impl SettingsScreen {
                 )
                 .children(buttons)
         });
-        let endpoint = (kind != ProfileKind::ChatGptPlan).then(|| {
+        let endpoint = (kind == ProfileKind::OpenAiCompatible).then(|| {
             field_row(
                 theme,
-                if kind == ProfileKind::OpenCode {
-                    "Endereço do OpenCode"
-                } else {
-                    FIELD_LABELS[0]
-                },
+                FIELD_LABELS[0],
                 self.fields[0].clone().into_any_element(),
             )
         });
+        let plans = (kind == ProfileKind::OpenCode).then(|| self.render_plans(theme, cx));
         let loading = matches!(self.models, Models::Loading);
         let reachable = match kind {
             ProfileKind::ChatGptPlan => self.credentials.chatgpt,
+            // The gateway lists its models without a key.
+            ProfileKind::OpenCode => true,
             _ => !self.value(0, cx).is_empty(),
         };
         let list = self.catalog.is_some().then(|| {
@@ -437,6 +452,7 @@ impl SettingsScreen {
             .gap(px(SpacingScale::S4))
             .pt(px(SpacingScale::S2))
             .children(presets)
+            .children(plans)
             .children(endpoint)
             .child(
                 div()
@@ -447,7 +463,6 @@ impl SettingsScreen {
                         theme,
                         match kind {
                             ProfileKind::ChatGptPlan => "Modelo do plano",
-                            ProfileKind::OpenCode => "Modelo (provedor/modelo)",
                             _ => FIELD_LABELS[1],
                         },
                         self.fields[1].clone().into_any_element(),
@@ -460,6 +475,93 @@ impl SettingsScreen {
                     ))),
             )
             .children(models)
+    }
+
+    /// Zen or Go, as two options; the choice is the gateway address.
+    fn render_plans(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Div {
+        let go = self.value(0, cx) == OPENCODE_GO_ENDPOINT;
+        let colors = theme.colors;
+        let options: Vec<_> = OPENCODE_PLANS
+            .iter()
+            .map(|&(plan, title, body)| {
+                let selected = plan == go;
+                let id = if plan {
+                    "settings-opencode-go"
+                } else {
+                    "settings-opencode-zen"
+                };
+                let focus = self
+                    .focus
+                    .entry(id)
+                    .or_insert_with(|| cx.focus_handle().tab_stop(true))
+                    .clone();
+                mark_selected(
+                    div()
+                        .id(id)
+                        .relative()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.0))
+                        .px(px(SpacingScale::S3))
+                        .py(px(SpacingScale::S2))
+                        .rounded(theme.radius.control())
+                        .border_1()
+                        .border_color(colors.hairline_divider())
+                        .cursor_pointer()
+                        .role(Role::RadioButton)
+                        .aria_label(format!("OpenCode {title}"))
+                        .aria_toggled(if selected {
+                            Toggled::True
+                        } else {
+                            Toggled::False
+                        })
+                        .track_focus(&focus)
+                        .focus_visible(crate::ui::controls::focus_ring(theme))
+                        .when(!selected, |row| {
+                            row.hover(move |style| style.bg(colors.glass_fill_medium()))
+                        })
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.act(Action::OpenCodePlan(plan), cx)
+                        }))
+                        .on_key_down(cx.listener(
+                            move |this, event: &gpui::KeyDownEvent, _, cx| {
+                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                    this.act(Action::OpenCodePlan(plan), cx);
+                                    cx.stop_propagation();
+                                }
+                            },
+                        )),
+                    theme,
+                    selected,
+                )
+                .child(text_style(div(), TypeScale::ROW_TITLE).child(format!("OpenCode {title}")))
+                .child(
+                    text_style(div(), TypeScale::BODY_SMALL)
+                        .text_color(colors.text_muted())
+                        .child(body),
+                )
+            })
+            .collect();
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(SpacingScale::S2))
+            .child(
+                text_style(div(), TypeScale::LABEL)
+                    .text_color(colors.text_secondary())
+                    .child("Plano"),
+            )
+            .child(
+                div()
+                    .id("settings-opencode-plan")
+                    .flex()
+                    .gap(px(SpacingScale::S3))
+                    .role(Role::RadioGroup)
+                    .aria_label("Plano do OpenCode")
+                    .children(options),
+            )
     }
 
     fn render_model_list(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -586,7 +688,7 @@ impl SettingsScreen {
         )
     }
 
-    /// The API key (OpenAI-compatible) or server password (OpenCode) card.
+    /// The API key card of the OpenAI-compatible provider or OpenCode.
     pub(super) fn render_key(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Div {
         let opencode = self.kind == ProfileKind::OpenCode;
         let stored = self.credentials.stored(self.kind);
@@ -599,33 +701,51 @@ impl SettingsScreen {
             "settings-store-key",
             ButtonKind::Secondary,
             !self.busy && typed,
-            match (stored, opencode) {
-                (true, true) => "Substituir senha",
-                (true, false) => "Substituir chave",
-                _ => "Guardar no cofre",
+            if stored {
+                "Substituir chave"
+            } else {
+                "Guardar no cofre"
             },
             Action::StoreKey,
             cx,
         );
-        let (color, state) = match (stored, opencode, optional) {
-            (true, _, _) => (theme.colors.status_success(), "Guardada no cofre"),
-            (false, true, _) => (theme.colors.text_muted(), "Sem senha"),
-            (false, false, true) => (theme.colors.text_muted(), "Opcional neste endereço"),
-            (false, false, false) => (theme.colors.text_muted(), "Nenhuma chave"),
+        let (color, state) = match (stored, optional) {
+            (true, _) => (theme.colors.status_success(), "Guardada no cofre"),
+            (false, true) => (theme.colors.text_muted(), "Opcional neste endereço"),
+            (false, false) => (theme.colors.text_muted(), "Nenhuma chave"),
         };
         let (title, description) = if opencode {
-            ("Senha do servidor", OPENCODE_PASSWORD_DESCRIPTION)
+            ("Chave do OpenCode", OPENCODE_KEY_DESCRIPTION)
         } else {
             ("Chave do provedor", KEY_DESCRIPTION)
         };
+        let console = opencode.then(|| {
+            let label = "Criar uma chave";
+            self.button_frame(
+                "settings-opencode-console",
+                ButtonKind::Ghost,
+                true,
+                label.into(),
+                Action::OpenCodeConsole,
+                cx,
+            )
+            .child(label)
+            .child(icon(
+                IconName::ArrowUpRight,
+                14.0,
+                button_foreground(theme, ButtonKind::Ghost, true),
+            ))
+        });
         card(theme, IconName::Key, title, description).child(
             card_body()
                 .child(
                     div()
                         .flex()
                         .items_center()
+                        .justify_between()
                         .gap(px(SpacingScale::S2))
-                        .child(status_pill(theme, color, state)),
+                        .child(status_pill(theme, color, state))
+                        .children(console),
                 )
                 .child(
                     div()

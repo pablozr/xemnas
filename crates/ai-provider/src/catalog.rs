@@ -7,7 +7,7 @@ use application::profile::{AiProfile, ProfileKind, CHATGPT_API_BASE};
 use application::providers::{ModelCatalog, ModelInfo, ProviderError};
 
 use crate::chatgpt::ChatGptSession;
-use crate::opencode::OPENCODE_USER;
+use crate::opencode::opencode_wire;
 
 const TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -90,52 +90,6 @@ pub fn parse_openai_models(value: &serde_json::Value) -> Vec<ModelInfo> {
     models
 }
 
-/// OpenCode `GET /provider`: `{ all: [{ id, name, models: { key: { id?, name? } } }],
-/// connected: [id] }`. Only connected providers are offered; ids become
-/// `provider/model`.
-pub fn parse_opencode_providers(value: &serde_json::Value) -> Vec<ModelInfo> {
-    let providers = value
-        .get("all")
-        .or_else(|| value.get("providers"))
-        .and_then(|providers| providers.as_array());
-    let connected: Option<Vec<&str>> = value
-        .get("connected")
-        .and_then(|connected| connected.as_array())
-        .map(|ids| ids.iter().filter_map(|id| id.as_str()).collect());
-    let mut models = Vec::new();
-    for provider in providers.into_iter().flatten() {
-        let Some(provider_id) = provider.get("id").and_then(|id| id.as_str()) else {
-            continue;
-        };
-        if connected
-            .as_ref()
-            .is_some_and(|connected| !connected.contains(&provider_id))
-        {
-            continue;
-        }
-        let provider_name = provider
-            .get("name")
-            .and_then(|name| name.as_str())
-            .unwrap_or(provider_id);
-        let Some(map) = provider.get("models").and_then(|models| models.as_object()) else {
-            continue;
-        };
-        for (key, model) in map {
-            let model_id = model.get("id").and_then(|id| id.as_str()).unwrap_or(key);
-            let model_name = model
-                .get("name")
-                .and_then(|name| name.as_str())
-                .unwrap_or(model_id);
-            models.push(ModelInfo {
-                id: format!("{provider_id}/{model_id}"),
-                label: format!("{provider_name} · {model_name}"),
-            });
-        }
-    }
-    models.sort_by(|a, b| a.label.cmp(&b.label));
-    models
-}
-
 impl ModelCatalog for HttpModelCatalog {
     fn list(
         &self,
@@ -171,11 +125,15 @@ impl ModelCatalog for HttpModelCatalog {
                     .as_deref()
                     .ok_or(ProviderError::Unreachable)?
                     .trim_end_matches('/');
-                let mut request = client.get(format!("{endpoint}/provider"));
+                let mut request = client.get(format!("{endpoint}/models"));
                 if let Some(secret) = secret {
-                    request = request.basic_auth(OPENCODE_USER, Some(secret));
+                    request = request.bearer_auth(secret);
                 }
-                Ok(parse_opencode_providers(&fetch(request)?))
+                // Only the families xemnas can call are offered.
+                Ok(parse_openai_models(&fetch(request)?)
+                    .into_iter()
+                    .filter(|model| opencode_wire(endpoint, &model.id).is_some())
+                    .collect())
             }
         }
     }
@@ -207,24 +165,6 @@ mod tests {
             vec![ModelInfo {
                 id: "gpt-a".into(),
                 label: "GPT A".into()
-            }]
-        );
-    }
-
-    #[test]
-    fn opencode_lists_connected_providers_as_provider_slash_model() {
-        let value = json!({
-            "all": [
-                {"id": "anthropic", "name": "Anthropic", "models": {"claude-x": {"id": "claude-x", "name": "Claude X"}}},
-                {"id": "openai", "name": "OpenAI", "models": {"gpt-y": {"name": "GPT Y"}}}
-            ],
-            "connected": ["anthropic"]
-        });
-        assert_eq!(
-            parse_opencode_providers(&value),
-            vec![ModelInfo {
-                id: "anthropic/claude-x".into(),
-                label: "Anthropic · Claude X".into()
             }]
         );
     }

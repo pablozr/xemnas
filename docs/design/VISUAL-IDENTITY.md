@@ -155,7 +155,8 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   sequência de passos numerados (dois ou três, conforme o provedor) que ficam
   verdes quando concluídos.
 - Extrator em grade 2 × 2: Local, Modelo local ou API, Conta ChatGPT e
-  OpenCode (ADR-0004). Cada provedor mostra só os campos que usa; trocar de
+  OpenCode Zen ou Go (ADR-0004); no OpenCode o plano (Zen ou Go) é um par de
+  opções com `mark_selected` e a chave tem o atalho **Criar uma chave**. Cada provedor mostra só os campos que usa; trocar de
   provedor não leva endereço nem modelo de um para outro.
 - **Seletor de modelo:** campo de texto sempre editável, com **Listar modelos**
   ao lado. A lista aparece abaixo como grupo de opções (`mark_selected`,
@@ -168,7 +169,7 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   abre o navegador) e Sair da conta. No primeiro login aparece uma vez o aviso
   "Você está usando o seu plano do ChatGPT" com **Entendi**.
 - Credencial do provedor (chave de API ou senha do OpenCode) é um cartão com
-  selo de estado ("Guardada no cofre", "Opcional neste endereço", "Sem senha")
+  selo de estado ("Guardada no cofre", "Opcional neste endereço", "Nenhuma chave")
   e o campo secreto; o valor guardado nunca volta para a tela.
 - OpenCode mostra o teste de conexão como lista de verificações com resultado
   (OK, Atenção, Falha, Não se aplica) e as mensagens do backend; Diagnóstico

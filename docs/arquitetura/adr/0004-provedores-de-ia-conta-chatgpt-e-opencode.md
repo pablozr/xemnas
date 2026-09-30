@@ -13,18 +13,18 @@ O perfil de IA passa a ter quatro tipos (`ProfileKind`). Os dois existentes não
 | `fake` | Heurística local, padrão | nenhuma | nada sai da máquina |
 | `open_ai_compatible` | Chave de API **ou** modelo local (Ollama, LM Studio) | chave no cofre; **opcional** quando o endereço é loopback | o endereço configurado |
 | `chat_gpt_plan` | Conta ChatGPT, usando o plano do usuário | Sign in with ChatGPT (OAuth com PKCE) | `https://api.openai.com/v1`, na conta do usuário |
-| `open_code` | O que já está configurado no OpenCode do usuário | senha opcional do servidor do OpenCode, no cofre | o provedor/modelo que o usuário escolher no OpenCode |
+| `open_code` | OpenCode Zen (por uso) ou OpenCode Go (assinatura) | chave de API do OpenCode, no cofre | `https://opencode.ai/zen/v1` ou `https://opencode.ai/zen/go/v1`, que repassam ao provedor do modelo |
 
 ### Regras comuns (continuam as do §12)
 
 - Qualquer tipo diferente de `fake` só é usado depois do **consentimento** sobre a prévia do que sai da máquina. O hash da prévia inclui o tipo, o destino, o modelo e, na conta ChatGPT, a conta conectada. Trocar qualquer um deles pede novo consentimento.
 - A saída do modelo continua com esquema estrito e a mesma validação de lote; texto do modelo nunca vira SQL, caminho ou comando; falha do provedor não bloqueia a captura nem a UI; nada confirma decisão sozinho.
-- Segredos (chave, refresh token, senha do OpenCode) ficam só no cofre do sistema (Credential Manager no Windows). O domínio não conhece nomes de fornecedores.
+- Segredos (chaves de API e refresh token) ficam só no cofre do sistema (Credential Manager no Windows). O domínio não conhece nomes de fornecedores.
 - Toda chamada de rede de catálogo, login ou extração roda fora da thread de UI, com tempo limite.
 
 ### Catálogo de modelos
 
-Um port `ModelCatalog` lista os modelos do destino configurado: `GET {endpoint}/models` para compatíveis com OpenAI (formato `data[].id`); `GET /v1/models` com o token do plano para a conta ChatGPT (formato `models[]` com `slug`, `display_name` e `visibility`, mostrando só `visibility: "list"`); e `GET /provider` no OpenCode (provedores conectados e seus modelos, identificados como `provider/model`). Falha vira lista vazia com motivo; digitar o modelo à mão continua possível.
+Um port `ModelCatalog` lista os modelos do destino configurado: `GET {endpoint}/models` para compatíveis com OpenAI (formato `data[].id`); `GET /v1/models` com o token do plano para a conta ChatGPT (formato `models[]` com `slug`, `display_name` e `visibility`, mostrando só `visibility: "list"`); e `GET {gateway}/models` no OpenCode Zen ou Go (público, formato `data[].id`), mostrando só as famílias que o xemnas sabe chamar. Falha vira lista vazia com motivo; digitar o modelo à mão continua possível.
 
 ### Conta ChatGPT (Sign in with ChatGPT para apps open source)
 
@@ -39,17 +39,18 @@ Segue a documentação oficial (`developers.openai.com/siwc/token-sharing-open-s
 - **Sair:** revoga o refresh token no endpoint de revogação e apaga o token do cofre. Se a revogação falhar por rede, apaga localmente e avisa que dá para desconectar em ChatGPT › Configurações. O `client_id` emitido e o `ext_agent_host_id` ficam para um próximo login.
 - **Interface:** botão "Continue with ChatGPT", aviso "Using ChatGPT plan" perto do modelo, link "Manage usage" e, no primeiro login, o aviso de que o uso consome o plano, conforme as diretrizes de UI da OpenAI.
 
-### OpenCode como provedor (revisa o §12)
+### OpenCode Zen e OpenCode Go (revisa o §12)
 
-- O xemnas fala com o servidor HTTP do OpenCode no endereço configurado (padrão `http://127.0.0.1:4096`, só loopback), com autenticação básica quando o usuário define `OPENCODE_SERVER_PASSWORD`.
-- Cada extração cria uma sessão com título iniciado por `xemnas · extração`, envia um único prompt com `model: { providerID, modelID }`, sem ferramentas, e `format: { type: "json_schema", schema }`; lê `info.structured_output` e **apaga a sessão** no fim, com sucesso ou falha.
-- O plugin do xemnas no OpenCode **ignora** sessões com esse título, para que uma extração não vire captura e gere um ciclo.
-- A prévia de consentimento mostra o provedor e o modelo escolhidos no OpenCode; o xemnas não vê para onde o OpenCode envia os dados, e a tela diz isso.
+Revisado em 30/09/2026. A primeira versão falava com o servidor local do OpenCode (`opencode serve`, sessão descartável por extração e filtro no plugin). Na prática, "OpenCode" em outros apps é o **gateway de modelos** do OpenCode, configurado só com a chave, e é isso que o usuário espera. O modo de servidor local saiu, junto com o filtro de sessões no plugin.
+
+- O usuário cria a chave em `https://opencode.ai/auth`; a mesma chave serve para o Zen (`https://opencode.ai/zen/v1`, por uso, com modelos gratuitos) e o Go (`https://opencode.ai/zen/go/v1`, assinatura). O perfil só aceita esses dois endereços.
+- O gateway usa um protocolo por família de modelo (tabelas de `opencode.ai/docs/zen` e `opencode.ai/docs/go`, conferidas em 30/09/2026): GPT, Grok e Muse em `/responses` (com `store: false` e `json_schema` estrito); Claude em `/messages` (Anthropic, `x-api-key` e `anthropic-version`); os demais em `/chat/completions` com `response_format: json_object`. Exceções: Qwen vai por `/messages` (menos Qwen3.8 Max no Zen) e MiniMax por `/messages` no Go. Gemini e System One (endpoints próprios) ficam fora do catálogo. A regra está em `ai_provider::opencode_wire`; se a tabela mudar, é ali que se atualiza.
+- A prévia de consentimento mostra "OpenCode Zen" ou "OpenCode Go" e o modelo, e diz que o OpenCode repassa os trechos ao provedor do modelo escolhido.
 
 ## Consequências
 
-- `application::profile` ganha os dois tipos, campos opcionais da conta ChatGPT e do OpenCode (com `serde(default)` para ler arquivos antigos) e as regras de consentimento por tipo; `ai-provider` ganha o catálogo, o login ChatGPT, o extrator pela Responses API com streaming e o extrator pelo OpenCode.
-- O adapter do OpenCode muda (filtro de sessões de extração) e precisa ser reinstalado.
+- `application::profile` ganha os dois tipos, campos opcionais da conta ChatGPT e do OpenCode (com `serde(default)` para ler arquivos antigos) e as regras de consentimento por tipo; `ai-provider` ganha o catálogo, o login ChatGPT, o extrator pela Responses API com streaming e o extrator pelo gateway do OpenCode.
+- O adapter de captura do OpenCode não muda.
 - Configurações › IA ganha a escolha entre quatro provedores, a lista de modelos e o painel de login.
 - Entrar com a conta ChatGPT guarda a conta e o token sem trocar o tipo do perfil: o usuário escolhe um modelo do plano e salva para trocar, então um login nunca desliga outro provedor já consentido. Sair revoga o token na OpenAI e apaga o do cofre mesmo se a revogação não for confirmada; o consentimento só cai se o perfil usava a conta.
 - Cada execução continua registrando perfil, adapter, modelo e hashes (§12); o tipo novo aparece como adapter.

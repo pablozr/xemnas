@@ -1,57 +1,86 @@
-//! OpenCode as an extraction provider (ADR-0004).
+//! OpenCode Zen and OpenCode Go as an extraction provider (ADR-0004).
 //!
-//! Talks to the user's local OpenCode server: creates a session whose title
-//! starts with [`EXTRACTION_SESSION_TITLE`] (the xemnas plugin ignores those),
-//! sends one prompt with a JSON Schema `format`, reads
-//! `info.structured_output` and deletes the session whatever happens.
+//! Both are OpenCode's model gateway reached with the user's OpenCode API
+//! key: Zen charges per use, Go is a monthly subscription. The gateway speaks
+//! a different wire protocol per model family (OpenAI Responses, Anthropic
+//! Messages or OpenAI Chat Completions), so the request follows the model.
 
+use std::io::Read;
+use std::sync::Arc;
 use std::time::Duration;
 
 use application::extract::{
     CandidateExtractor, CandidateProposal, DecisionEvidence, ExtractError, RelevanceSignal,
 };
-use application::profile::{consent_status, AiProfile, ProfileKind};
+use application::profile::{consent_status, AiProfile, ProfileKind, OPENCODE_GO_ENDPOINT};
 use serde_json::json;
 
-use crate::{build_user_content, output_schema, parse_model_output, SYSTEM_PROMPT};
+use crate::{
+    build_user_content, output_schema, parse_model_output, sanitized_transport_error, Attempt,
+    RetryPolicy, MAX_RESPONSE_BYTES, SYSTEM_PROMPT,
+};
 
-/// Title prefix of the sessions xemnas creates; the OpenCode plugin skips
-/// sessions whose title starts with it, so an extraction never becomes a capture.
-pub const EXTRACTION_SESSION_TITLE: &str = "xemnas · extração";
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+/// Output budget for the Anthropic Messages protocol, which requires one.
+const MAX_OUTPUT_TOKENS: u32 = 8_192;
+const ANTHROPIC_VERSION: &str = "2023-06-01";
 
-/// User name OpenCode uses for basic auth when a server password is set.
-pub(crate) const OPENCODE_USER: &str = "opencode";
-
-/// OpenCode tools turned off for the extraction prompt: it must only answer.
-const DISABLED_TOOLS: &[&str] = &[
-    "bash",
-    "edit",
-    "write",
-    "read",
-    "grep",
-    "glob",
-    "list",
-    "patch",
-    "todowrite",
-    "todoread",
-    "webfetch",
-    "websearch",
-    "task",
-];
-
-const TIMEOUT: Duration = Duration::from_secs(240);
-
-/// Splits `provider/model` at the first slash.
-pub fn split_model(model: &str) -> Option<(&str, &str)> {
-    let (provider, model) = model.split_once('/')?;
-    (!provider.trim().is_empty() && !model.trim().is_empty()).then_some((provider, model))
+/// Wire protocol the gateway uses for a model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Wire {
+    /// `POST /chat/completions` (OpenAI-compatible).
+    ChatCompletions,
+    /// `POST /responses` (OpenAI Responses API).
+    Responses,
+    /// `POST /messages` (Anthropic Messages API).
+    Messages,
 }
 
-/// Extractor through the local OpenCode server.
+/// The protocol the OpenCode gateway at `endpoint` uses for `model`, or
+/// `None` for model families xemnas cannot call (Gemini, System One).
+///
+/// Mirrors the model tables of the Zen and Go documentation
+/// (opencode.ai/docs/zen, opencode.ai/docs/go, checked on 2026-09-30): GPT,
+/// Grok and Muse go through Responses, Claude through Messages, the rest
+/// through Chat Completions, except Qwen (Messages, but Qwen3.8 Max on Zen)
+/// and MiniMax (Messages on Go).
+pub fn opencode_wire(endpoint: &str, model: &str) -> Option<Wire> {
+    let go = endpoint.trim_end_matches('/') == OPENCODE_GO_ENDPOINT;
+    let model = model.trim().to_ascii_lowercase();
+    let starts = |prefix: &str| model.starts_with(prefix);
+    if starts("gemini-") || starts("jev-") {
+        return None;
+    }
+    Some(if starts("gpt-") || starts("grok-") || starts("muse-") {
+        Wire::Responses
+    } else if starts("claude-") {
+        Wire::Messages
+    } else if starts("qwen") {
+        if !go && starts("qwen3.8-max") {
+            Wire::ChatCompletions
+        } else {
+            Wire::Messages
+        }
+    } else if starts("minimax-") {
+        if go {
+            Wire::Messages
+        } else {
+            Wire::ChatCompletions
+        }
+    } else {
+        Wire::ChatCompletions
+    })
+}
+
+/// Extractor through OpenCode Zen or OpenCode Go.
 pub struct OpenCodeExtractor {
     profile: AiProfile,
-    password: String,
+    key: String,
+    wire: Wire,
     client: reqwest::blocking::Client,
+    retry: RetryPolicy,
+    sleep: Arc<dyn Fn(Duration) + Send + Sync>,
 }
 
 impl std::fmt::Debug for OpenCodeExtractor {
@@ -59,13 +88,14 @@ impl std::fmt::Debug for OpenCodeExtractor {
         formatter
             .debug_struct("OpenCodeExtractor")
             .field("model", &self.profile.model)
+            .field("wire", &self.wire)
             .finish_non_exhaustive()
     }
 }
 
 impl OpenCodeExtractor {
-    /// Builds the extractor; `password` is the optional server password.
-    pub fn new(profile: &AiProfile, password: String) -> Result<Self, ExtractError> {
+    /// Builds the extractor for a validated profile and the OpenCode API key.
+    pub fn new(profile: &AiProfile, key: String) -> Result<Self, ExtractError> {
         if profile.kind != ProfileKind::OpenCode {
             return Err(ExtractError::Extractor(
                 "o perfil não usa o OpenCode".to_string(),
@@ -74,105 +104,175 @@ impl OpenCodeExtractor {
         profile
             .validate()
             .map_err(|_| ExtractError::Extractor("perfil de IA inválido".to_string()))?;
+        if key.trim().is_empty() {
+            return Err(ExtractError::Extractor(
+                "a chave do OpenCode não está configurada".to_string(),
+            ));
+        }
+        let wire = opencode_wire(
+            profile.endpoint.as_deref().unwrap_or_default(),
+            &profile.model,
+        )
+        .ok_or_else(|| {
+            ExtractError::Extractor("esse modelo do OpenCode não é suportado".to_string())
+        })?;
         let client = reqwest::blocking::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(Duration::from_secs(5))
-            .timeout(TIMEOUT)
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(REQUEST_TIMEOUT)
             .build()
             .map_err(|_| {
                 ExtractError::Extractor("não foi possível preparar o cliente HTTP".to_string())
             })?;
         Ok(Self {
             profile: profile.clone(),
-            password,
+            key,
+            wire,
             client,
+            retry: RetryPolicy::default(),
+            sleep: Arc::new(|delay: Duration| std::thread::sleep(delay)),
         })
     }
 
-    fn base(&self) -> String {
+    fn base(&self) -> &str {
         self.profile
             .endpoint
             .as_deref()
             .unwrap_or_default()
             .trim_end_matches('/')
-            .to_string()
     }
 
-    fn request(&self, method: reqwest::Method, path: &str) -> reqwest::blocking::RequestBuilder {
-        let request = self
-            .client
-            .request(method, format!("{}{path}", self.base()));
-        if self.password.is_empty() {
-            request
-        } else {
-            request.basic_auth(OPENCODE_USER, Some(&self.password))
+    /// Request URL and body for the model's protocol.
+    fn request(&self, text: String) -> (String, serde_json::Value) {
+        let model = &self.profile.model;
+        match self.wire {
+            Wire::ChatCompletions => (
+                format!("{}/chat/completions", self.base()),
+                json!({
+                    "model": model,
+                    "response_format": { "type": "json_object" },
+                    "messages": [
+                        { "role": "system", "content": SYSTEM_PROMPT },
+                        { "role": "user", "content": text }
+                    ]
+                }),
+            ),
+            Wire::Responses => (
+                format!("{}/responses", self.base()),
+                json!({
+                    "model": model,
+                    "store": false,
+                    "instructions": SYSTEM_PROMPT,
+                    "input": [{
+                        "role": "user",
+                        "content": [{ "type": "input_text", "text": text }]
+                    }],
+                    "text": {
+                        "format": {
+                            "type": "json_schema",
+                            "name": "decision_candidates",
+                            "schema": output_schema(),
+                            "strict": true
+                        }
+                    }
+                }),
+            ),
+            Wire::Messages => (
+                format!("{}/messages", self.base()),
+                json!({
+                    "model": model,
+                    "max_tokens": MAX_OUTPUT_TOKENS,
+                    "system": SYSTEM_PROMPT,
+                    "messages": [{ "role": "user", "content": text }]
+                }),
+            ),
         }
     }
 
-    fn prompt(&self, session: &str, text: String) -> Result<String, ExtractError> {
-        let (provider, model) = split_model(&self.profile.model)
-            .ok_or_else(|| ExtractError::Extractor("modelo do OpenCode inválido".to_string()))?;
-        let tools: serde_json::Map<String, serde_json::Value> = DISABLED_TOOLS
-            .iter()
-            .map(|tool| ((*tool).to_string(), json!(false)))
-            .collect();
-        let response = self
-            .request(
-                reqwest::Method::POST,
-                &format!("/session/{session}/message"),
-            )
-            .json(&json!({
-                "model": { "providerID": provider, "modelID": model },
-                "system": SYSTEM_PROMPT,
-                "tools": tools,
-                "parts": [{ "type": "text", "text": text }],
-                "format": { "type": "json_schema", "schema": output_schema() },
-            }))
-            .send()
-            .map_err(transport)?;
+    fn attempt(&self, url: &str, body: &serde_json::Value, signals: &[RelevanceSignal]) -> Attempt {
+        let mut request = self.client.post(url).json(body).bearer_auth(&self.key);
+        if self.wire == Wire::Messages {
+            request = request
+                .header("x-api-key", &self.key)
+                .header("anthropic-version", ANTHROPIC_VERSION);
+        }
+        let response = match request.send() {
+            Ok(response) => response,
+            Err(error) if error.is_timeout() || error.is_connect() => return Attempt::Transient,
+            Err(error) => return Attempt::Fatal(sanitized_transport_error(error)),
+        };
         let status = response.status();
         if !status.is_success() {
-            return Err(ExtractError::Extractor(format!(
-                "o OpenCode respondeu {}",
-                status.as_u16()
-            )));
+            if status.as_u16() == 429 || status.is_server_error() {
+                return Attempt::Transient;
+            }
+            return Attempt::Fatal(ExtractError::Extractor(match status.as_u16() {
+                401 | 403 => "o OpenCode recusou a chave".to_string(),
+                code => format!("o OpenCode respondeu {code}"),
+            }));
         }
-        let value: serde_json::Value = response
-            .json()
-            .map_err(|_| ExtractError::Extractor("resposta do OpenCode inválida".to_string()))?;
-        structured_text(&value)
-            .ok_or_else(|| ExtractError::Extractor("o OpenCode não devolveu JSON".to_string()))
+        let mut buffer = Vec::new();
+        if response
+            .take(MAX_RESPONSE_BYTES as u64 + 1)
+            .read_to_end(&mut buffer)
+            .is_err()
+            || buffer.len() > MAX_RESPONSE_BYTES
+        {
+            return Attempt::Fatal(ExtractError::Extractor(
+                "falha ao ler a resposta do OpenCode".to_string(),
+            ));
+        }
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&buffer) else {
+            return Attempt::Fatal(ExtractError::Extractor(
+                "resposta do OpenCode inválida".to_string(),
+            ));
+        };
+        let Some(text) = response_text(self.wire, &value) else {
+            return Attempt::Fatal(ExtractError::Extractor(
+                "o OpenCode não devolveu texto".to_string(),
+            ));
+        };
+        match parse_model_output(json_object(&text), signals) {
+            Ok(proposals) => Attempt::Success(proposals),
+            Err(error) => Attempt::Fatal(error),
+        }
     }
 }
 
-fn transport(error: reqwest::Error) -> ExtractError {
-    ExtractError::Extractor(
-        if error.is_timeout() {
-            "o OpenCode demorou demais para responder"
-        } else if error.is_connect() {
-            "o OpenCode não está aberto nesse endereço"
-        } else {
-            "falha ao falar com o OpenCode"
-        }
-        .to_string(),
-    )
-}
-
-/// The model's JSON: `info.structured_output` first, then the text parts.
-fn structured_text(value: &serde_json::Value) -> Option<String> {
-    if let Some(structured) = value.pointer("/info/structured_output") {
-        if !structured.is_null() {
-            return serde_json::to_string(structured).ok();
-        }
-    }
-    let text: String = value
-        .get("parts")?
-        .as_array()?
-        .iter()
-        .filter(|part| part.get("type").and_then(|kind| kind.as_str()) == Some("text"))
-        .filter_map(|part| part.get("text")?.as_str())
-        .collect();
+/// The model's text in each protocol's response shape.
+fn response_text(wire: Wire, value: &serde_json::Value) -> Option<String> {
+    let text: String = match wire {
+        Wire::ChatCompletions => value
+            .pointer("/choices/0/message/content")?
+            .as_str()?
+            .to_string(),
+        Wire::Responses => value
+            .get("output")?
+            .as_array()?
+            .iter()
+            .filter(|item| item.get("type").and_then(|kind| kind.as_str()) == Some("message"))
+            .filter_map(|item| item.get("content")?.as_array())
+            .flatten()
+            .filter(|part| part.get("type").and_then(|kind| kind.as_str()) == Some("output_text"))
+            .filter_map(|part| part.get("text")?.as_str())
+            .collect(),
+        Wire::Messages => value
+            .get("content")?
+            .as_array()?
+            .iter()
+            .filter(|part| part.get("type").and_then(|kind| kind.as_str()) == Some("text"))
+            .filter_map(|part| part.get("text")?.as_str())
+            .collect(),
+    };
     (!text.trim().is_empty()).then_some(text)
+}
+
+/// The JSON object inside a reply that may wrap it in a code fence or prose.
+fn json_object(text: &str) -> &str {
+    match (text.find('{'), text.rfind('}')) {
+        (Some(start), Some(end)) if start < end => &text[start..=end],
+        _ => text,
+    }
 }
 
 impl CandidateExtractor for OpenCodeExtractor {
@@ -186,57 +286,82 @@ impl CandidateExtractor for OpenCodeExtractor {
                 "chamadas externas bloqueadas: {reason}"
             )));
         }
-        let session: serde_json::Value = self
-            .request(reqwest::Method::POST, "/session")
-            .json(&json!({ "title": EXTRACTION_SESSION_TITLE }))
-            .send()
-            .map_err(transport)?
-            .json()
-            .map_err(|_| ExtractError::Extractor("resposta do OpenCode inválida".to_string()))?;
-        let id = session
-            .get("id")
-            .and_then(|id| id.as_str())
-            .ok_or_else(|| ExtractError::Extractor("o OpenCode não criou a sessão".to_string()))?
-            .to_string();
-        let text = self.prompt(&id, build_user_content(&self.profile, input, signals));
-        // Always remove the session, even when the prompt failed.
-        let _ = self
-            .request(reqwest::Method::DELETE, &format!("/session/{id}"))
-            .send();
-        parse_model_output(&text?, signals)
+        let (url, body) = self.request(build_user_content(&self.profile, input, signals));
+        let mut attempt = 1u32;
+        loop {
+            match self.attempt(&url, &body, signals) {
+                Attempt::Success(proposals) => return Ok(proposals),
+                Attempt::Fatal(error) => return Err(error),
+                Attempt::Transient => {
+                    if attempt >= self.retry.max_attempts {
+                        return Err(ExtractError::Extractor(format!(
+                            "o OpenCode falhou após {attempt} tentativa(s)"
+                        )));
+                    }
+                    (self.sleep)(self.retry.delay_for(attempt));
+                    attempt += 1;
+                }
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use application::profile::OPENCODE_ZEN_ENDPOINT;
 
     #[test]
-    fn splits_provider_and_model_at_the_first_slash() {
+    fn routes_each_model_family_to_its_protocol() {
+        let zen = OPENCODE_ZEN_ENDPOINT;
+        let go = OPENCODE_GO_ENDPOINT;
+        assert_eq!(opencode_wire(zen, "gpt-5.5"), Some(Wire::Responses));
+        assert_eq!(opencode_wire(go, "grok-4.7"), Some(Wire::Responses));
         assert_eq!(
-            split_model("openrouter/anthropic/claude"),
-            Some(("openrouter", "anthropic/claude"))
+            opencode_wire(zen, "claude-sonnet-4-5"),
+            Some(Wire::Messages)
+        );
+        assert_eq!(opencode_wire(zen, "kimi-k3"), Some(Wire::ChatCompletions));
+        assert_eq!(
+            opencode_wire(go, "deepseek-v4-pro"),
+            Some(Wire::ChatCompletions)
         );
         assert_eq!(
-            split_model("anthropic/claude"),
-            Some(("anthropic", "claude"))
+            opencode_wire(zen, "qwen3.8-max"),
+            Some(Wire::ChatCompletions)
         );
-        assert_eq!(split_model("no-slash"), None);
-        assert_eq!(split_model("/model"), None);
+        assert_eq!(opencode_wire(go, "qwen3.8-max"), Some(Wire::Messages));
+        assert_eq!(opencode_wire(zen, "qwen3.7-plus"), Some(Wire::Messages));
+        assert_eq!(
+            opencode_wire(zen, "minimax-m3"),
+            Some(Wire::ChatCompletions)
+        );
+        assert_eq!(opencode_wire(go, "minimax-m3"), Some(Wire::Messages));
+        assert_eq!(opencode_wire(zen, "gemini-3-flash"), None);
+        assert_eq!(opencode_wire(zen, "jev-1.13"), None);
     }
 
     #[test]
-    fn prefers_structured_output_then_text_parts() {
-        let structured = json!({"info": {"structured_output": {"proposals": []}}, "parts": []});
+    fn reads_text_from_every_protocol() {
+        let chat = json!({"choices": [{"message": {"content": "{\"proposals\":[]}"}}]});
         assert_eq!(
-            structured_text(&structured).as_deref(),
+            response_text(Wire::ChatCompletions, &chat).as_deref(),
             Some("{\"proposals\":[]}")
         );
-        let text = json!({"info": {}, "parts": [{"type": "text", "text": "{\"proposals\":[]}"}]});
+        let responses = json!({"output": [
+            {"type": "reasoning", "summary": []},
+            {"type": "message", "content": [{"type": "output_text", "text": "{\"proposals\":[]}"}]}
+        ]});
         assert_eq!(
-            structured_text(&text).as_deref(),
+            response_text(Wire::Responses, &responses).as_deref(),
             Some("{\"proposals\":[]}")
         );
-        assert_eq!(structured_text(&json!({"info": {}, "parts": []})), None);
+        let messages = json!({"content": [
+            {"type": "thinking", "thinking": "…"},
+            {"type": "text", "text": "```json\n{\"proposals\":[]}\n```"}
+        ]});
+        let text = response_text(Wire::Messages, &messages).expect("text");
+        assert_eq!(json_object(&text), "{\"proposals\":[]}");
+        assert_eq!(response_text(Wire::Messages, &json!({"content": []})), None);
     }
 }

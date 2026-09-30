@@ -607,9 +607,17 @@ fn refused_connection_is_transient_and_retried() {
 }
 
 #[test]
-fn empty_secret_is_rejected_at_construction() {
+fn empty_secret_is_rejected_at_construction_unless_on_loopback() {
     let server = start_server("HTTP/1.1 200 OK", valid_body(1));
-    let profile = granted_profile(server.port, 64);
+    let local = granted_profile(server.port, 64);
+    assert!(
+        OpenAiCompatibleExtractor::new(&local, String::new()).is_ok(),
+        "a local model runs without a key (ADR-0004)"
+    );
+    let profile = AiProfile {
+        endpoint: Some("https://api.example.test/v1".to_string()),
+        ..local
+    };
     assert!(matches!(
         OpenAiCompatibleExtractor::new(&profile, String::new()),
         Err(ExtractError::Extractor(_))
