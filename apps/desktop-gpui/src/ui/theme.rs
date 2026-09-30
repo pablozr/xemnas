@@ -1,8 +1,8 @@
-//! The Quiet Glass theme: the single entry point views use to reach tokens.
+//! Themes: the single entry point views use to reach tokens.
 //!
 //! A [`Theme`] bundles the token groups so primitives receive one typed object
-//! instead of reaching for loose values. The only theme today is
-//! [`Theme::quiet_glass`].
+//! instead of reaching for loose values. Quiet Glass serves the review workspace;
+//! charcoal gives decision documents a quieter editorial surface.
 
 use gpui::Styled;
 
@@ -10,7 +10,7 @@ use crate::ui::tokens::{
     ColorTokens, MotionTokens, RadiusScale, SpacingScale, TypeScale, TypeToken,
 };
 
-/// The Quiet Glass theme.
+/// Shared theme tokens.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Theme {
     /// Color tokens.
@@ -39,11 +39,18 @@ impl Theme {
     /// Builds the approved Quiet Glass theme.
     pub const fn quiet_glass() -> Self {
         Self {
-            colors: ColorTokens,
+            colors: ColorTokens::quiet_glass(),
             type_scale: TypeScale,
             spacing: SpacingScale,
             radius: RadiusScale,
             motion: MotionTokens,
+        }
+    }
+    /// Editorial charcoal theme; shares typography, spacing and control geometry.
+    pub const fn charcoal() -> Self {
+        Self {
+            colors: ColorTokens::charcoal(),
+            ..Self::quiet_glass()
         }
     }
 }

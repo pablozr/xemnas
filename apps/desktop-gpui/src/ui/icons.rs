@@ -59,6 +59,60 @@ fn glyph(body: &str) -> String {
 pub struct Icon;
 
 impl Icon {
+    /// Temporal index of preserved documents.
+    pub fn list(theme: &Theme, size: f32) -> impl IntoElement {
+        render(
+            &glyph(r#"<path d="M8 6h12M8 12h12M8 18h12M3 6h1M3 12h1M3 18h1"/>"#),
+            size,
+            icon_color(theme, true),
+        )
+    }
+    /// Recorded provenance link.
+    pub fn link(theme: &Theme, size: f32) -> impl IntoElement {
+        render(
+            &glyph(
+                r#"<path d="m10 13 4-4M8 16l-1 1a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0M16 8l1-1a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0"/>"#,
+            ),
+            size,
+            icon_color(theme, true),
+        )
+    }
+    /// Expand the source reading viewport.
+    pub fn expand(theme: &Theme, size: f32) -> impl IntoElement {
+        render(
+            &glyph(r#"<path d="M9 3H3v6m12-6h6v6M3 15v6h6m12-6v6h-6"/>"#),
+            size,
+            icon_color(theme, false),
+        )
+    }
+    /// Disclosure chevron with its actual open state.
+    pub fn disclosure(theme: &Theme, size: f32, open: bool) -> impl IntoElement {
+        render(
+            &glyph(if open {
+                r#"<path d="m6 9 6 6 6-6"/>"#
+            } else {
+                r#"<path d="m9 6 6 6-6 6"/>"#
+            }),
+            size,
+            icon_color(theme, true),
+        )
+    }
+    /// Context fields stored alongside a decision.
+    pub fn layers(theme: &Theme, size: f32) -> impl IntoElement {
+        render(
+            &glyph(r#"<path d="m12 3 10 5-10 5L2 8l10-5ZM2 12l10 5 10-5M2 16l10 5 10-5"/>"#),
+            size,
+            icon_color(theme, true),
+        )
+    }
+    /// Change the list's status filter.
+    pub fn filter(theme: &Theme, size: f32) -> impl IntoElement {
+        render(
+            &glyph(r#"<path d="M3 6h18M6 12h12M9 18h6"/>"#),
+            size,
+            icon_color(theme, true),
+        )
+    }
     /// Export a document to a user-chosen file.
     pub fn export(theme: &Theme, size: f32) -> impl IntoElement {
         render(
@@ -82,7 +136,7 @@ impl Icon {
         render(
             &glyph(r#"<path d="m15 4 5 5-11 11H4v-5L15 4Zm-2 2 5 5"/>"#),
             size,
-            icon_color(theme, false),
+            theme.colors.accent_on_emphasis().into(),
         )
     }
     /// A source file, beside its name in the evidence tab strip.

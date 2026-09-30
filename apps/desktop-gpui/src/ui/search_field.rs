@@ -104,6 +104,10 @@ impl SearchField {
         self.width = width;
         self.show_shortcut = false;
     }
+    /// Uses the material palette of the surrounding destination.
+    pub fn set_theme(&mut self, theme: Theme) {
+        self.theme = theme;
+    }
 
     /// Uses the parent's width when composing a labelled editing form.
     pub fn stretch(&mut self) {

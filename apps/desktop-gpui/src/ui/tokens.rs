@@ -17,28 +17,38 @@ use gpui::{px, rgb, rgba, Pixels, Rgba};
 /// Each method returns the token's [`Rgba`] value. `rgba(0xRRGGBBFF)` builds an
 /// opaque color and [`Rgba::alpha`] applies the documented alpha.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct ColorTokens;
+pub struct ColorTokens {
+    charcoal: bool,
+}
 
 impl ColorTokens {
+    /// Original Quiet Glass palette.
+    pub const fn quiet_glass() -> Self {
+        Self { charcoal: false }
+    }
+    /// Neutral charcoal materials for the editorial Decisions workspace.
+    pub const fn charcoal() -> Self {
+        Self { charcoal: true }
+    }
     /// Graphite document canvas used by the Decisions destination.
     pub fn decision_canvas(&self) -> Rgba {
-        rgb(0x17171B)
+        rgb(0x202024)
     }
     /// Quiet index rail.
     pub fn decision_rail(&self) -> Rgba {
-        rgb(0x111114)
+        rgb(0x1B1B1F)
     }
     /// Auxiliary document layer.
     pub fn decision_layer(&self) -> Rgba {
-        rgb(0x1D1D23)
+        rgb(0x26262C)
     }
     /// Selected index item and compact active tab.
     pub fn decision_selected(&self) -> Rgba {
-        rgb(0x24222D)
+        rgb(0x302B39)
     }
     /// Neutral separator.
     pub fn decision_line(&self) -> Rgba {
-        rgb(0x2A2A32)
+        rgb(0x35353D)
     }
     /// Mineral lavender document marker.
     pub fn decision_accent(&self) -> Rgba {
@@ -50,26 +60,41 @@ impl ColorTokens {
     }
     /// `color.canvas` — main continuous background.
     pub fn canvas(&self) -> Rgba {
+        if self.charcoal {
+            return self.decision_canvas();
+        }
         rgb(0x0D111A)
     }
 
     /// `color.canvas-raised` — regions with slight elevation.
     pub fn canvas_raised(&self) -> Rgba {
+        if self.charcoal {
+            return self.decision_layer();
+        }
         rgb(0x111622)
     }
 
     /// `color.canvas-deep` — rail and recessed areas.
     pub fn canvas_deep(&self) -> Rgba {
+        if self.charcoal {
+            return self.decision_rail();
+        }
         rgb(0x090D15)
     }
 
     /// `color.surface` — auxiliary solid surface.
     pub fn surface(&self) -> Rgba {
+        if self.charcoal {
+            return self.decision_layer();
+        }
         rgb(0x181E2A)
     }
 
     /// `color.surface-hover` — hover without glass.
     pub fn surface_hover(&self) -> Rgba {
+        if self.charcoal {
+            return self.decision_selected();
+        }
         rgb(0x202634)
     }
 
@@ -127,11 +152,17 @@ impl ColorTokens {
     /// `glass.surface-lavender` — controlled opaque base for featured panes.
     /// Avoids the teal cast observed on the previous translucent controls.
     pub fn glass_surface_lavender(&self) -> Rgba {
+        if self.charcoal {
+            return self.decision_layer();
+        }
         rgb(0x1C1A28)
     }
 
     /// `glass.edge-lavender` — mineral-lavender edge over the dark base.
     pub fn glass_edge_lavender(&self) -> Rgba {
+        if self.charcoal {
+            return rgb(0x49434F);
+        }
         rgb(0x514A63)
     }
 
@@ -172,16 +203,25 @@ impl ColorTokens {
 
     /// `text.primary` — titles and primary content.
     pub fn text_primary(&self) -> Rgba {
+        if self.charcoal {
+            return rgb(0xEDEDF0);
+        }
         rgb(0xECEEF4)
     }
 
     /// `text.secondary` — descriptions and secondary body.
     pub fn text_secondary(&self) -> Rgba {
+        if self.charcoal {
+            return rgb(0xC0C0CA);
+        }
         rgb(0xBEC3D0)
     }
 
     /// `text.muted` — metadata.
     pub fn text_muted(&self) -> Rgba {
+        if self.charcoal {
+            return rgb(0xA09FAB);
+        }
         rgb(0x858C9D)
     }
 
@@ -207,6 +247,9 @@ impl ColorTokens {
 
     /// `status.danger` — rejection and error.
     pub fn status_danger(&self) -> Rgba {
+        if self.charcoal {
+            return rgb(0xE27F8D);
+        }
         rgb(0xD96776)
     }
 
@@ -252,6 +295,9 @@ impl ColorTokens {
     /// Sits between `color.canvas-deep` (#090D15) and `color.canvas` (#0D111A):
     /// it recedes the rail without reading as a stain on the window.
     pub fn rail(&self) -> Rgba {
+        if self.charcoal {
+            return self.decision_rail();
+        }
         rgb(0x0A0E17)
     }
 
@@ -260,6 +306,9 @@ impl ColorTokens {
     /// `glass.border` at 13% is too loud for a full-length rule; internal
     /// separators (rail edge, header, status bar) use this quieter 10%.
     pub fn hairline_divider(&self) -> Rgba {
+        if self.charcoal {
+            return self.decision_line();
+        }
         rgba(0xCDC7DCFF).alpha(0.10)
     }
 
@@ -296,6 +345,9 @@ impl ColorTokens {
     /// Windows 11's `LayerFillColorDefaultBrush`: a low-opacity solid that lets
     /// the material behind it read through while keeping text on an even base.
     pub fn layer_fill(&self) -> Rgba {
+        if self.charcoal {
+            return self.decision_canvas();
+        }
         rgba(0x0D111AFF).alpha(0.72)
     }
 
@@ -545,92 +597,93 @@ mod tests {
 
     #[test]
     fn rendered_text_surfaces_meet_wcag_aa() {
-        let colors = ColorTokens;
-        let canvas = colors.canvas();
+        for colors in [ColorTokens::quiet_glass(), ColorTokens::charcoal()] {
+            let canvas = colors.canvas();
 
-        // Every text/surface pair the gallery (and the primitives) actually
-        // render. Surfaces are alpha-composited onto `color.canvas`, which is
-        // what the window paints behind them.
-        let text_pairs: [(&str, Opaque, Opaque); 11] = [
-            (
-                "text.primary / color.canvas",
-                opaque(colors.text_primary()),
-                opaque(canvas),
-            ),
-            (
-                "text.secondary / color.canvas",
-                opaque(colors.text_secondary()),
-                opaque(canvas),
-            ),
-            (
-                "text.muted / color.canvas",
-                opaque(colors.text_muted()),
-                opaque(canvas),
-            ),
-            (
-                "text.secondary / color.surface-hover",
-                opaque(colors.text_secondary()),
-                opaque(colors.surface_hover()),
-            ),
-            (
-                "text.primary / glass.fill-low",
-                opaque(colors.text_primary()),
-                composite_over(colors.glass_fill_low(), canvas),
-            ),
-            (
-                "text.secondary / glass.fill-low",
-                opaque(colors.text_secondary()),
-                composite_over(colors.glass_fill_low(), canvas),
-            ),
-            (
-                "text.muted / glass.fill-low",
-                opaque(colors.text_muted()),
-                composite_over(colors.glass_fill_low(), canvas),
-            ),
-            (
-                "status.danger / glass.fill-low",
+            // Every text/surface pair the gallery (and the primitives) actually
+            // render. Surfaces are alpha-composited onto `color.canvas`, which is
+            // what the window paints behind them.
+            let text_pairs: [(&str, Opaque, Opaque); 11] = [
+                (
+                    "text.primary / color.canvas",
+                    opaque(colors.text_primary()),
+                    opaque(canvas),
+                ),
+                (
+                    "text.secondary / color.canvas",
+                    opaque(colors.text_secondary()),
+                    opaque(canvas),
+                ),
+                (
+                    "text.muted / color.canvas",
+                    opaque(colors.text_muted()),
+                    opaque(canvas),
+                ),
+                (
+                    "text.secondary / color.surface-hover",
+                    opaque(colors.text_secondary()),
+                    opaque(colors.surface_hover()),
+                ),
+                (
+                    "text.primary / glass.fill-low",
+                    opaque(colors.text_primary()),
+                    composite_over(colors.glass_fill_low(), canvas),
+                ),
+                (
+                    "text.secondary / glass.fill-low",
+                    opaque(colors.text_secondary()),
+                    composite_over(colors.glass_fill_low(), canvas),
+                ),
+                (
+                    "text.muted / glass.fill-low",
+                    opaque(colors.text_muted()),
+                    composite_over(colors.glass_fill_low(), canvas),
+                ),
+                (
+                    "status.danger / glass.fill-low",
+                    opaque(colors.status_danger()),
+                    composite_over(colors.glass_fill_low(), canvas),
+                ),
+                (
+                    "text.primary / glass.fill-medium",
+                    opaque(colors.text_primary()),
+                    composite_over(colors.glass_fill_medium(), canvas),
+                ),
+                (
+                    "text.muted / glass.fill-medium",
+                    opaque(colors.text_muted()),
+                    composite_over(colors.glass_fill_medium(), canvas),
+                ),
+                (
+                    "accent.on-emphasis / glass.fill-emphasis",
+                    opaque(colors.accent_on_emphasis()),
+                    composite_over(colors.glass_fill_emphasis(), canvas),
+                ),
+            ];
+
+            for (name, foreground, background) in text_pairs {
+                let ratio = contrast_ratio(foreground, background);
+                eprintln!("WCAG {name} = {ratio:.2}:1");
+                assert!(
+                    ratio >= 4.5,
+                    "{name} is {ratio:.2}:1, below the WCAG AA text minimum of 4.5:1"
+                );
+            }
+
+            // Essential icons only need 3:1; `status.danger` is used as an icon on
+            // the quiet danger action, never as text over the hover tint.
+            let icon_ratio = contrast_ratio(
                 opaque(colors.status_danger()),
-                composite_over(colors.glass_fill_low(), canvas),
-            ),
-            (
-                "text.primary / glass.fill-medium",
-                opaque(colors.text_primary()),
-                composite_over(colors.glass_fill_medium(), canvas),
-            ),
-            (
-                "text.muted / glass.fill-medium",
-                opaque(colors.text_muted()),
-                composite_over(colors.glass_fill_medium(), canvas),
-            ),
-            (
-                "accent.on-emphasis / glass.fill-emphasis",
-                opaque(colors.accent_on_emphasis()),
-                composite_over(colors.glass_fill_emphasis(), canvas),
-            ),
-        ];
-
-        for (name, foreground, background) in text_pairs {
-            let ratio = contrast_ratio(foreground, background);
-            eprintln!("WCAG {name} = {ratio:.2}:1");
-            assert!(
-                ratio >= 4.5,
-                "{name} is {ratio:.2}:1, below the WCAG AA text minimum of 4.5:1"
+                opaque(colors.surface_hover()),
             );
+            eprintln!("WCAG status.danger icon / color.surface-hover = {icon_ratio:.2}:1");
+            assert!(
+                icon_ratio >= 3.0,
+                "status.danger icon over color.surface-hover is {icon_ratio:.2}:1, below 3:1"
+            );
+
+            // text.disabled is intentionally not asserted: WCAG 1.4.3 exempts
+            // inactive user-interface components from the contrast minimum.
         }
-
-        // Essential icons only need 3:1; `status.danger` is used as an icon on
-        // the quiet danger action, never as text over the hover tint.
-        let icon_ratio = contrast_ratio(
-            opaque(colors.status_danger()),
-            opaque(colors.surface_hover()),
-        );
-        eprintln!("WCAG status.danger icon / color.surface-hover = {icon_ratio:.2}:1");
-        assert!(
-            icon_ratio >= 3.0,
-            "status.danger icon over color.surface-hover is {icon_ratio:.2}:1, below 3:1"
-        );
-
-        // text.disabled is intentionally not asserted: WCAG 1.4.3 exempts
-        // inactive user-interface components from the contrast minimum.
     }
 }
