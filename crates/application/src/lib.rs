@@ -5,6 +5,7 @@ pub mod analysis;
 pub mod captures;
 pub mod claims;
 mod clock;
+pub mod context;
 pub mod decisions;
 pub mod diagnostics;
 pub mod export;
@@ -25,6 +26,10 @@ pub use captures::{
     CaptureReceiptRecord, CaptureRepository, CaptureWrite, IngestError, IngestOutcome, Receipt,
 };
 pub use claims::{ClaimRecord, ClaimStore, Claims, ClaimsError, NewClaim};
+pub use context::{
+    ContextError, ContextPack, ContextPacks, ContextProvider, ContextRequest, ContextStore,
+    PackClaim, PackDecision,
+};
 pub use decisions::{
     sanitize_match_query, DecisionDetail, DecisionEdits, DecisionFilter, DecisionPage,
     DecisionRevision, DecisionSearchHit, DecisionStatus, DecisionSummary, Decisions,
