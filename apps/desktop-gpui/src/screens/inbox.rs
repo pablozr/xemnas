@@ -18,8 +18,9 @@ use crate::ui::controls::{action_button, ButtonKind};
 use crate::ui::glass::focus_ring;
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
-    action_footer, count_chip, fade_in, hover_tint, mark_selected, panel_title, reading_title,
-    section_label, status_pill, track_hover, word_wrapped, READING_WIDTH,
+    action_footer, count_chip, error_banner, fade_in, hover_tint, mark_selected, panel_title,
+    reading_title, section_label, status_pill, toast, track_hover, word_wrapped, READING_WIDTH,
+    TOAST_DURATION,
 };
 use crate::ui::search_field::SearchField;
 use crate::ui::theme::{text_style, Theme};
@@ -66,6 +67,8 @@ pub struct InboxScreen<S: InboxStore + Send + 'static> {
     editor_subscription: Option<Subscription>,
     action_focus: [FocusHandle; 4],
     notice: Option<&'static str>,
+    /// Notice whose dismissal timer is already running.
+    notice_scheduled: Option<&'static str>,
 }
 
 impl<S: InboxStore + Send + 'static> InboxScreen<S> {
@@ -96,6 +99,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             editor_subscription: None,
             action_focus: std::array::from_fn(|_| cx.focus_handle().tab_stop(true)),
             notice: None,
+            notice_scheduled: None,
         }
     }
 
@@ -740,11 +744,30 @@ impl<S: InboxStore + Send + 'static> Render for InboxScreen<S> {
             .iter()
             .filter(|row| matches_query(row, &self.query))
             .collect();
-        div().size_full().flex().flex_col()
-            .children(self.notice.map(|message| text_style(div(), TypeScale::BODY_SMALL).id("review-notice").p(px(SpacingScale::S3))
-                .role(Role::Status).text_color(theme.colors.text_secondary()).child(message)))
-            .children(self.error.map(|message| text_style(div(), TypeScale::BODY_SMALL).id("inbox-error").p(px(SpacingScale::S3))
-                .role(Role::Status).text_color(theme.colors.status_danger()).child(message)))
+        if self.notice.is_some() && self.notice != self.notice_scheduled {
+            self.notice_scheduled = self.notice;
+            let shown = self.notice;
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(TOAST_DURATION).await;
+                let _ = this.update(cx, |screen, cx| {
+                    if screen.notice == shown {
+                        screen.notice = None;
+                        screen.notice_scheduled = None;
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
+        let retry = self.error.map(|_| {
+            action_button(&theme, "inbox-retry", ButtonKind::Secondary, !self.busy)
+                .aria_label("Tentar novamente")
+                .on_click(cx.listener(|this, _, _, cx| this.page(false, cx)))
+                .child("Tentar novamente")
+        });
+        div().size_full().relative().flex().flex_col()
+            .children(self.error.map(|message| error_banner(&theme, message).id("inbox-error").role(Role::Alert).children(retry)))
+            .children(self.notice.map(|message| toast(&theme, message, 72.0)))
             .child(div().flex_1().min_h(px(0.0)).flex()
                 .child(div().w(px(320.0)).flex_none().h_full().flex().flex_col().bg(theme.colors.rail())
                     .border_r_1().border_color(theme.colors.hairline_divider())

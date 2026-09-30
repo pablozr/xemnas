@@ -384,6 +384,11 @@ impl ColorTokens {
         rgb(0x9790AC).alpha(0.22)
     }
 
+    /// `status.danger-tint` — background of an error banner.
+    pub fn danger_tint(&self) -> Rgba {
+        self.status_danger().alpha(0.10)
+    }
+
     /// `diff.added` — row tint behind an added line in a diff hunk.
     pub fn diff_added(&self) -> Rgba {
         rgb(0x83C59A).alpha(0.10)

@@ -7,10 +7,11 @@
 
 use gpui::prelude::*;
 use gpui::{
-    div, px, Animation, AnimationElement, AnimationExt, AnyElement, Div, ElementId, Rgba,
+    deferred, div, px, Animation, AnimationElement, AnimationExt, AnyElement, Div, ElementId, Rgba,
     SharedString, SpringAnimation, Stateful,
 };
 
+use crate::ui::icons::{icon, IconName};
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{MotionTokens, SpacingScale, TypeScale, TypeToken};
 
@@ -138,6 +139,87 @@ pub fn action_footer(theme: &Theme, message: Option<(&str, bool)>) -> Div {
                     })
                     .child(message.to_owned())
                 }),
+        )
+}
+
+/// How long a confirmation toast stays on screen.
+pub const TOAST_DURATION: std::time::Duration = std::time::Duration::from_millis(3500);
+
+/// A confirmation that floats over the bottom of a surface and leaves on its
+/// own. The parent must be `relative()`; `bottom` clears its action footer.
+pub fn toast(theme: &Theme, message: &str, bottom: f32) -> AnyElement {
+    let pill = div()
+        .flex()
+        .items_center()
+        .gap(px(SpacingScale::S2))
+        .px(px(SpacingScale::S4))
+        .py(px(SpacingScale::S2))
+        .rounded(theme.radius.surface())
+        .border_1()
+        .border_color(theme.colors.hairline_divider())
+        .bg(theme.colors.surface())
+        .shadow(vec![gpui::BoxShadow::new(
+            px(0.0),
+            px(8.0),
+            theme.colors.shadow_emphasis().into(),
+        )
+        .blur_radius(px(24.0))])
+        .child(icon(
+            IconName::CheckCircle,
+            14.0,
+            theme.colors.status_success(),
+        ))
+        .child(
+            text_style(div(), TypeScale::BODY_SMALL)
+                .text_color(theme.colors.text_primary())
+                .child(message.to_owned()),
+        );
+    deferred(
+        div()
+            .id("toast")
+            .absolute()
+            .left_0()
+            .right_0()
+            .bottom(px(bottom))
+            .flex()
+            .justify_center()
+            .role(gpui::Role::Status)
+            .aria_label(message.to_owned())
+            .child(fade_in(
+                pill,
+                ElementId::Name(format!("toast-{message}").into()),
+            )),
+    )
+    .with_priority(2)
+    .into_any_element()
+}
+
+/// A recoverable failure pinned to the top of a surface. The caller appends
+/// its retry action; the message is product language, never the raw error.
+pub fn error_banner(theme: &Theme, message: &str) -> Div {
+    div()
+        .flex_none()
+        .px(px(SpacingScale::S4))
+        .py(px(SpacingScale::S2))
+        .flex()
+        .items_center()
+        .gap(px(SpacingScale::S3))
+        .bg(theme.colors.danger_tint())
+        .border_b_1()
+        .border_color(theme.colors.hairline_divider())
+        .child(
+            div()
+                .size(px(6.0))
+                .flex_none()
+                .rounded_full()
+                .bg(theme.colors.status_danger()),
+        )
+        .child(
+            text_style(div(), TypeScale::BODY_SMALL)
+                .flex_1()
+                .min_w(px(0.0))
+                .text_color(theme.colors.text_primary())
+                .child(message.to_owned()),
         )
 }
 

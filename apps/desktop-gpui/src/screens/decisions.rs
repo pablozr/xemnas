@@ -9,8 +9,9 @@ use crate::ui::{
     glass::focus_ring,
     icons::{icon, IconName},
     patterns::{
-        count_chip, fade_in, hover_tint, mark_selected, panel_title, reading_title, section_label,
-        status_pill, track_hover, word_wrapped, READING_WIDTH,
+        count_chip, error_banner, fade_in, hover_tint, mark_selected, panel_title, reading_title,
+        section_label, status_pill, toast, track_hover, word_wrapped, READING_WIDTH,
+        TOAST_DURATION,
     },
     search_field::{SearchChanged, SearchField},
     theme::{text_style, Theme},
@@ -100,6 +101,8 @@ pub struct DecisionsScreen<S: DecisionStore + InboxStore + Send + 'static> {
     overwrite: Option<PathBuf>,
     error: Option<String>,
     notice: Option<String>,
+    /// Notice whose dismissal timer is already running.
+    notice_scheduled: Option<String>,
     focus: BTreeMap<String, FocusHandle>,
     reader_focus: FocusHandle,
     restore_focus: bool,
@@ -167,6 +170,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
             overwrite: None,
             error: None,
             notice: None,
+            notice_scheduled: None,
             focus: BTreeMap::new(),
             reader_focus: cx.focus_handle(),
             restore_focus: false,
@@ -1337,39 +1341,36 @@ impl<S: DecisionStore + InboxStore + Send + 'static> Render for DecisionsScreen<
             .flex_col()
             .bg(t.colors.canvas());
         if let Some(error) = self.error.clone() {
-            reader = reader.child(
-                div()
-                    .p(px(12.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(12.0))
-                    .border_b_1()
-                    .border_color(t.colors.hairline_divider())
-                    .child(
-                        text_style(div(), TypeScale::BODY_SMALL)
-                            .flex_1()
-                            .text_color(t.colors.status_danger())
-                            .child(error),
-                    )
-                    .when(self.editor.is_none() && self.preview.is_none(), |bar| {
-                        bar.child(self.button(
-                            "decisions-retry".into(),
-                            "Tentar novamente".into(),
-                            Action::Retry,
-                            false,
-                            cx,
-                        ))
-                    }),
-            );
+            reader = reader.child(error_banner(&t, &error).when(
+                self.editor.is_none() && self.preview.is_none(),
+                |bar| {
+                    bar.child(self.button(
+                        "decisions-retry".into(),
+                        "Tentar novamente".into(),
+                        Action::Retry,
+                        false,
+                        cx,
+                    ))
+                },
+            ));
+        }
+        if self.notice.is_some() && self.notice != self.notice_scheduled {
+            self.notice_scheduled = self.notice.clone();
+            let shown = self.notice.clone();
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(TOAST_DURATION).await;
+                let _ = this.update(cx, |screen, cx| {
+                    if screen.notice == shown {
+                        screen.notice = None;
+                        screen.notice_scheduled = None;
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
         }
         if let Some(notice) = &self.notice {
-            reader = reader.child(
-                text_style(div(), TypeScale::BODY_SMALL)
-                    .px(px(24.0))
-                    .py(px(10.0))
-                    .bg(t.colors.surface())
-                    .child(notice.clone()),
-            );
+            reader = reader.relative().child(toast(&t, notice, SpacingScale::S6));
         }
         reader = reader.child(div().flex_1().min_h(px(0.0)).child(content));
         div()
