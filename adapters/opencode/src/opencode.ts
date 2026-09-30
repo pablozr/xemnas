@@ -33,6 +33,13 @@ export interface OpenCodePart {
   tool?: string;
   /** Tool state subset; only `status` is read (never tool output). */
   state?: { status?: string };
+  /**
+   * Unified patch a completed edit tool recorded in `state.metadata.diff`
+   * (`edit`, `apply_patch`), with the file it touched. The session diff route
+   * is filled by OpenCode before the model edits anything, so for the current
+   * turn this is the only reliable source of what changed.
+   */
+  patch?: { file: string; diff: string };
 }
 
 /** Normalized view of one OpenCode message. */
@@ -167,8 +174,42 @@ function toPart(value: unknown): OpenCodePart | null {
     const state = record.state as Record<string, unknown>;
     part.state =
       typeof state.status === "string" ? { status: state.status } : {};
+    const patch = toolPatch(state);
+    if (patch !== null) {
+      part.patch = patch;
+    }
   }
   return part;
+}
+
+/** The patch of a completed edit tool, read from its documented metadata. */
+function toolPatch(state: Record<string, unknown>): { file: string; diff: string } | null {
+  if (state.status !== "completed") {
+    return null;
+  }
+  const metadata = state.metadata;
+  if (typeof metadata !== "object" || metadata === null) {
+    return null;
+  }
+  const meta = metadata as Record<string, unknown>;
+  if (typeof meta.diff !== "string" || meta.diff.trim().length === 0) {
+    return null;
+  }
+  const filediff =
+    typeof meta.filediff === "object" && meta.filediff !== null
+      ? (meta.filediff as Record<string, unknown>)
+      : {};
+  const input =
+    typeof state.input === "object" && state.input !== null
+      ? (state.input as Record<string, unknown>)
+      : {};
+  const file =
+    typeof filediff.file === "string"
+      ? filediff.file
+      : typeof input.filePath === "string"
+        ? input.filePath
+        : "";
+  return { file, diff: meta.diff };
 }
 
 /**

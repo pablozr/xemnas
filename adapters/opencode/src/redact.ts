@@ -287,6 +287,50 @@ export function buildDiffHunks(before: string, after: string): string {
   return formatHunks(ops);
 }
 
+/** `file` relative to `directory`, with forward slashes. */
+export function relativePath(file: string, directory: string): string {
+  const normalized = file.replace(/\\/g, "/");
+  const base = directory.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (base.length > 0 && normalized.toLowerCase().startsWith(`${base.toLowerCase()}/`)) {
+    return normalized.slice(base.length + 1);
+  }
+  return normalized.replace(/^\/+/, "");
+}
+
+/**
+ * Reduces the unified patches of edit tools to bounded `diff --git` blocks.
+ *
+ * Keeps the hunks (from the first `@@`) under a `diff --git a/<file> b/<file>`
+ * header, so the app reads file paths the same way as for session diffs.
+ * Redaction and truncation are the same as [`reduceDiffs`].
+ */
+export function reducePatches(
+  patches: Array<{ file: string; diff: string }>,
+  directory: string,
+  maxBytes: number,
+): Array<{ file: string; content: string }> {
+  const reduced: Array<{ file: string; content: string }> = [];
+  let remaining = maxBytes;
+  for (const patch of patches) {
+    if (remaining <= 0) {
+      break;
+    }
+    const start = patch.diff.indexOf("@@");
+    if (start < 0) {
+      continue;
+    }
+    const file = relativePath(patch.file, directory) || "unknown";
+    const header = `diff --git a/${file} b/${file}\n`;
+    const block = boundContent(`${header}${patch.diff.slice(start)}`, remaining);
+    if (block.length === 0) {
+      continue;
+    }
+    reduced.push({ file, content: block });
+    remaining -= Buffer.byteLength(block, "utf8");
+  }
+  return reduced;
+}
+
 /**
  * Reduces diffs to bounded hunks.
  *

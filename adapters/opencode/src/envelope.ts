@@ -25,6 +25,7 @@ import {
   collectText,
   omitReasoningParts,
   reduceDiffs,
+  reducePatches,
 } from "./redact.js";
 
 /** The only capture contract version this adapter emits. */
@@ -159,7 +160,16 @@ export function buildEnvelope(input: BuildEnvelopeInput): CaptureEnvelope | null
     {},
   );
 
-  const reducedDiffs = reduceDiffs(input.diffs, input.limits.maxDiffBytes);
+  // The session diff route is normally empty for the turn just finished
+  // (OpenCode computes it before the model edits); the edit tools' own
+  // patches are the fallback.
+  const patches = assistantParts.flatMap((part) =>
+    part.patch === undefined ? [] : [part.patch],
+  );
+  const reducedDiffs =
+    input.diffs.length > 0
+      ? reduceDiffs(input.diffs, input.limits.maxDiffBytes)
+      : reducePatches(patches, input.directory, input.limits.maxDiffBytes);
   for (const reduced of reducedDiffs) {
     pushArtifact("diff_hunk", reduced.content, { file: reduced.file });
   }
@@ -183,7 +193,11 @@ export function buildEnvelope(input: BuildEnvelopeInput): CaptureEnvelope | null
     return null;
   }
 
-  const diffHash = sha256Hex(assembleRawDiff(input.diffs));
+  const diffHash = sha256Hex(
+    input.diffs.length > 0
+      ? assembleRawDiff(input.diffs)
+      : patches.map((patch) => `${patch.file}\u0000${patch.diff}`).join("\u0001"),
+  );
   const observedAt = (input.now ?? new Date()).toISOString();
 
   return {

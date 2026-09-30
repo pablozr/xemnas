@@ -412,6 +412,68 @@ test("an oversized diff is bounded and reduced to hunks", async () => {
   assert.equal(validateEnvelope(harness.seen[0]).valid, true);
 });
 
+/** A completed `edit` tool part carrying OpenCode's documented metadata. */
+function editPart(messageId: string, file: string, diff: string): unknown {
+  return {
+    id: `${messageId}-edit`,
+    sessionID: sessionId,
+    messageID: messageId,
+    type: "tool",
+    callID: `${messageId}-edit-call`,
+    tool: "edit",
+    state: {
+      status: "completed",
+      input: { filePath: file },
+      metadata: { diff, filediff: { file, patch: diff, additions: 1, deletions: 1 } },
+    },
+  };
+}
+
+const EDIT_PATCH =
+  "Index: src/parser.ts\n===================================================================\n" +
+  "--- src/parser.ts\n+++ src/parser.ts\n@@ -1,1 +1,1 @@\n" +
+  "-const a = 1;\n+const token = \"sk-test-abcdefghijklmnopqrstuv\";\n";
+
+test("edit tool patches become diff hunks when the session diff is empty", async () => {
+  const editing = rawMessage(
+    "msg-0002",
+    "assistant",
+    [textPart("msg-0002", "Done."), editPart("msg-0002", `${directory}/src/parser.ts`, EDIT_PATCH)],
+    sessionId,
+  );
+  const harness = buildHarness({ messages: [user1, editing] });
+  await harness.adapter.reconcileSession(sessionId);
+
+  const hunks = harness.seen[0].artifacts.filter((artifact) => artifact.kind === "diff_hunk");
+  assert.equal(hunks.length, 1, "the edit becomes one diff hunk");
+  assert.ok(
+    hunks[0].content.startsWith("diff --git a/src/parser.ts b/src/parser.ts\n@@"),
+    "relative path header, then the hunks",
+  );
+  assert.ok(!hunks[0].content.includes("sk-test-abcdefghijklmnopqrstuv"), "secrets are redacted");
+  assert.equal(validateEnvelope(harness.seen[0]).valid, true);
+});
+
+test("the session diff wins over edit tool patches when present", async () => {
+  const editing = rawMessage(
+    "msg-0002",
+    "assistant",
+    [editPart("msg-0002", `${directory}/src/parser.ts`, EDIT_PATCH)],
+    sessionId,
+  );
+  const harness = buildHarness({
+    messages: [user1, editing],
+    diffs: {
+      [diffKey("msg-0001")]: [rawDiff("src/other.ts", "a\n", "b\n")],
+    },
+  });
+  await harness.adapter.reconcileSession(sessionId);
+
+  const hunks = harness.seen[0].artifacts.filter((artifact) => artifact.kind === "diff_hunk");
+  assert.equal(hunks.length, 1);
+  assert.ok(hunks[0].content.startsWith("diff --git a/src/other.ts"));
+});
+
 test("a turn with no capturable artifacts is not sent", async () => {
   const harness = buildHarness({
     messages: [
