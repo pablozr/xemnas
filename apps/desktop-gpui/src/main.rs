@@ -369,8 +369,12 @@ fn start_local_api(
     store: SqliteStore,
     runtime_dir: &std::path::Path,
 ) -> Result<local_api::RunningApi, local_api::ApiServerError> {
-    let use_case = std::sync::Arc::new(application::captures::CaptureIngest::new(store));
-    local_api::ApiServer::start(local_api::ApiServerConfig::new(use_case, runtime_dir))
+    let use_case = std::sync::Arc::new(application::captures::CaptureIngest::new(store.clone()));
+    let mut config = local_api::ApiServerConfig::new(use_case, runtime_dir);
+    config.context = Some(std::sync::Arc::new(
+        application::injection::ContextInjection::new(store),
+    ));
+    local_api::ApiServer::start(config)
 }
 
 #[cfg(test)]

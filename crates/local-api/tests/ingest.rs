@@ -1335,3 +1335,153 @@ fn raw_secrets_imported_from_the_outbox_are_redacted_before_persistence() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+fn start_with_context(store: &SqliteStore, runtime_dir: PathBuf) -> RunningApi {
+    let api: Arc<dyn CaptureApi> = Arc::new(CaptureIngest::new(store.clone()));
+    let mut config = ApiServerConfig::new(api, runtime_dir);
+    config.context = Some(Arc::new(application::injection::ContextInjection::new(
+        store.clone(),
+    )));
+    ApiServer::start(config).expect("start local api")
+}
+
+fn seed_convention(store: &SqliteStore, location: &str) {
+    let project = store
+        .find_by_location(location)
+        .expect("find project")
+        .expect("registered project");
+    application::claims::Claims::new(store.clone())
+        .create(application::claims::NewClaim {
+            project_id: project.id,
+            kind: domain::claims::ClaimKind::Convention,
+            statement: "Mensagens de erro em português".to_string(),
+            valid_from: Some("2020-01-01".to_string()),
+            valid_until: None,
+            source_decision_id: None,
+        })
+        .expect("seed claim");
+}
+
+fn context_body(location: &str, session: &str, prompt: &str, mode: &str) -> Vec<u8> {
+    body_of(&json!({
+        "canonical_path": location,
+        "session_id": session,
+        "prompt": prompt,
+        "mode": mode,
+    }))
+}
+
+fn post_context(server: &RunningApi, token: Option<&str>, body: &[u8]) -> (u16, Value) {
+    let (status, raw) = post(server, "/v1/context", token, None, None, body);
+    let value = serde_json::from_slice(&raw).unwrap_or(Value::Null);
+    (status, value)
+}
+
+#[test]
+fn context_endpoint_returns_the_compact_block_once_per_session() {
+    let root = temporary_directory("context");
+    let store = SqliteStore::open(root.join("app.db")).expect("open store");
+    let location = register_project(&store, &root);
+    seed_convention(&store, &location);
+    let server = start_with_context(&store, root.clone());
+
+    let (status, capabilities) = {
+        let (status, raw) = get(&server, "/v1/capabilities", Some(server.token()), None);
+        (status, serde_json::from_slice::<Value>(&raw).expect("json"))
+    };
+    assert_eq!(status, 200);
+    assert_eq!(capabilities["context"], json!(true));
+
+    let body = context_body(
+        &location,
+        "s1",
+        "SECRET-MARKER-PROMPT corrigir a tela",
+        "inject",
+    );
+    let (status, first) = post_context(&server, Some(server.token()), &body);
+    assert_eq!(status, 200, "{first}");
+    let block = first["context"].as_str().expect("block");
+    assert!(block.contains("regra:"));
+    assert!(block.contains("Mensagens de erro em português"));
+    assert_eq!(first["items"], json!(1));
+    assert!(first["tokens"]
+        .as_u64()
+        .is_some_and(|tokens| tokens > 0 && tokens < 60));
+
+    let (_, second) = post_context(&server, Some(server.token()), &body);
+    assert_eq!(second["context"], Value::Null);
+    assert_eq!(second["tokens"], json!(0));
+
+    let (status, shadow) = post_context(
+        &server,
+        Some(server.token()),
+        &context_body(&location, "s2", "tela", "shadow"),
+    );
+    assert_eq!(status, 200);
+    assert_eq!(shadow["context"], Value::Null);
+    assert_eq!(shadow["items"], json!(1));
+
+    assert!(
+        !logged_text().contains("SECRET-MARKER-PROMPT"),
+        "the prompt never reaches a log"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn context_endpoint_enforces_auth_and_a_strict_body() {
+    let root = temporary_directory("context-strict");
+    let store = SqliteStore::open(root.join("app.db")).expect("open store");
+    let location = register_project(&store, &root);
+    let server = start_with_context(&store, root.clone());
+    let body = context_body(&location, "s1", "tela", "inject");
+
+    assert_eq!(post_context(&server, None, &body).0, 401);
+    assert_eq!(
+        post_context(
+            &server,
+            Some(server.token()),
+            &context_body(&location, "s1", "tela", "always")
+        )
+        .0,
+        400
+    );
+    let extra = body_of(&json!({
+        "canonical_path": location, "session_id": "s1", "prompt": "tela",
+        "mode": "inject", "unexpected": true
+    }));
+    assert_eq!(post_context(&server, Some(server.token()), &extra).0, 422);
+    assert_eq!(
+        post_context(
+            &server,
+            Some(server.token()),
+            &context_body(&location, " ", "tela", "inject")
+        )
+        .0,
+        400
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn context_endpoint_is_absent_unless_enabled() {
+    let root = temporary_directory("context-off");
+    let store = SqliteStore::open(root.join("app.db")).expect("open store");
+    let location = register_project(&store, &root);
+    let server = start(
+        &store,
+        local_api::DEFAULT_MAX_BODY_BYTES,
+        Duration::from_secs(5),
+        root.clone(),
+    );
+    let (_, raw) = get(&server, "/v1/capabilities", Some(server.token()), None);
+    let capabilities: Value = serde_json::from_slice(&raw).expect("json");
+    assert_eq!(capabilities["context"], json!(false));
+    let (status, _) = post_context(
+        &server,
+        Some(server.token()),
+        &context_body(&location, "s1", "tela", "inject"),
+    );
+    assert_eq!(status, 404);
+    let _ = std::fs::remove_dir_all(&root);
+}

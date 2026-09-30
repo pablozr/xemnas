@@ -6,6 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use application::captures::{CaptureApi, IngestError, Receipt};
+use application::context::ContextError;
+use application::injection::{ContextApi, InjectionMode, InjectionOutcome, InjectionRequest};
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{DefaultBodyLimit, Path, Request, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -14,7 +16,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use integration_contracts::capture::{CaptureEnvelope, CAPTURE_ENVELOPE_SCHEMA_VERSION};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::auth::constant_time_eq;
@@ -62,20 +64,35 @@ impl ApiConfig {
 #[derive(Clone)]
 struct AppState {
     api: Arc<dyn CaptureApi>,
+    context: Option<Arc<dyn ContextApi>>,
     config: ApiConfig,
 }
 
-/// Builds the router with the four MVP endpoints.
+/// Builds the router with the capture endpoints only.
 pub fn router(api: Arc<dyn CaptureApi>, config: ApiConfig) -> Router {
+    router_with_context(api, None, config)
+}
+
+/// Builds the router; `POST /v1/context` exists only when `context` is set.
+pub fn router_with_context(
+    api: Arc<dyn CaptureApi>,
+    context: Option<Arc<dyn ContextApi>>,
+    config: ApiConfig,
+) -> Router {
     let state = AppState {
         api,
+        context: context.clone(),
         config: config.clone(),
     };
-    Router::new()
+    let mut routes = Router::new()
         .route("/v1/health", get(health))
         .route("/v1/capabilities", get(capabilities))
         .route("/v1/captures", post(create_capture))
-        .route("/v1/captures/{id}", get(get_capture))
+        .route("/v1/captures/{id}", get(get_capture));
+    if context.is_some() {
+        routes = routes.route("/v1/context", post(prepare_context));
+    }
+    routes
         .layer(middleware::from_fn_with_state(state.clone(), authorize))
         .layer(DefaultBodyLimit::max(config.max_body_bytes))
         .layer(middleware::from_fn_with_state(
@@ -100,6 +117,8 @@ pub async fn serve(listener: tokio::net::TcpListener, router: Router) -> std::io
 pub struct ApiServerConfig {
     /// The use case the API exposes.
     pub api: Arc<dyn CaptureApi>,
+    /// Context injection use case; `None` keeps `/v1/context` off.
+    pub context: Option<Arc<dyn ContextApi>>,
     /// Directory receiving `discovery.json` and `api-token`.
     pub runtime_dir: PathBuf,
     /// Protocol version advertised to adapters.
@@ -115,6 +134,7 @@ impl ApiServerConfig {
     pub fn new(api: Arc<dyn CaptureApi>, runtime_dir: impl Into<PathBuf>) -> Self {
         Self {
             api,
+            context: None,
             runtime_dir: runtime_dir.into(),
             protocol_version: PROTOCOL_VERSION,
             max_body_bytes: DEFAULT_MAX_BODY_BYTES,
@@ -220,8 +240,9 @@ impl ApiServer {
             .map_err(|error| ApiServerError::Io(error.to_string()))?;
 
         let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel();
-        let router = router(
+        let router = router_with_context(
             config.api,
+            config.context,
             ApiConfig {
                 protocol_version: config.protocol_version,
                 instance_id,
@@ -306,7 +327,76 @@ async fn capabilities(State(state): State<AppState>) -> Json<Value> {
         "protocol_version": state.config.protocol_version,
         "capture_schema_versions": [CAPTURE_ENVELOPE_SCHEMA_VERSION],
         "max_body_bytes": state.config.max_body_bytes,
+        "context": state.context.is_some(),
     }))
+}
+
+/// Body of `POST /v1/context`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ContextBody {
+    canonical_path: String,
+    session_id: String,
+    prompt: String,
+    mode: String,
+    budget_tokens: Option<usize>,
+}
+
+/// Response of `POST /v1/context`.
+#[derive(Serialize)]
+struct ContextResponse {
+    context: Option<String>,
+    tokens: usize,
+    items: usize,
+    omitted: usize,
+}
+
+impl From<InjectionOutcome> for ContextResponse {
+    fn from(outcome: InjectionOutcome) -> Self {
+        Self {
+            context: outcome.block,
+            tokens: outcome.tokens,
+            items: outcome.items,
+            omitted: outcome.omitted,
+        }
+    }
+}
+
+/// `POST /v1/context`: the compact block for one agent turn; the prompt is never logged.
+async fn prepare_context(
+    State(state): State<AppState>,
+    payload: Result<Json<ContextBody>, JsonRejection>,
+) -> Response {
+    let Some(context) = state.context.clone() else {
+        return ApiError::NotFound.into_response();
+    };
+    let body = match payload {
+        Ok(Json(body)) => body,
+        Err(rejection) => return json_rejection_to_api_error(rejection).into_response(),
+    };
+    let Some(mode) = InjectionMode::parse(&body.mode) else {
+        return ApiError::BadRequest.into_response();
+    };
+    let request = InjectionRequest {
+        canonical_path: body.canonical_path,
+        session_id: body.session_id,
+        prompt: body.prompt,
+        mode,
+        budget_tokens: body.budget_tokens,
+    };
+    match run_blocking(move || context.prepare(request)).await {
+        Ok(Ok(outcome)) => Json(ContextResponse::from(outcome)).into_response(),
+        Ok(Err(ContextError::InvalidRequest(_))) => ApiError::BadRequest.into_response(),
+        Ok(Err(error)) => {
+            tracing::error!(
+                code = error.code(),
+                operation = "prepare_context",
+                "context injection failed"
+            );
+            ApiError::Internal.into_response()
+        }
+        Err(error) => error.into_response(),
+    }
 }
 
 /// `POST /v1/captures`: the eight ingest steps of MVP-SPEC §7.3.

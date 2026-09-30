@@ -257,6 +257,29 @@ where
     }
 }
 
+/// Object-safe entry point for the local API.
+pub trait ContextApi: Send + Sync {
+    /// See [`ContextInjection::prepare`].
+    fn prepare(&self, request: InjectionRequest) -> Result<InjectionOutcome, ContextError>;
+}
+
+impl<S> ContextApi for ContextInjection<S>
+where
+    S: InjectionStore
+        + ContextStore
+        + DecisionStore
+        + RelationStore
+        + ClaimStore
+        + ProjectRepository
+        + Clone
+        + Send
+        + Sync,
+{
+    fn prepare(&self, request: InjectionRequest) -> Result<InjectionOutcome, ContextError> {
+        ContextInjection::prepare(self, request)
+    }
+}
+
 /// Rough token estimate: one token per four characters, rounded up.
 pub fn estimate_tokens(text: &str) -> usize {
     text.chars().count().div_ceil(4)
