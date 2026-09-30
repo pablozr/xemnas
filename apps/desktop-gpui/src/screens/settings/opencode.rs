@@ -576,7 +576,10 @@ fn check_row(theme: &Theme, index: usize, check: &IntegrationCheck) -> Div {
                 .child(
                     text_style(div(), TypeScale::BODY_SMALL)
                         .text_color(colors.text_secondary())
-                        .child(check.message.clone()),
+                        .child(match &check.at {
+                            Some(at) => format!("{} Última em {}.", check.message, date_time(at)),
+                            None => check.message.clone(),
+                        }),
                 ),
         )
 }

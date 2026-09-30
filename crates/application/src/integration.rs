@@ -205,8 +205,13 @@ pub struct IntegrationCheck {
     pub kind: CheckKind,
     /// Result.
     pub outcome: CheckOutcome,
-    /// Product-language message built from fixed text, counts and timestamps.
+    /// Product-language message built from fixed text and counts. Never
+    /// carries a raw timestamp: the moment it refers to is in [`Self::at`].
     pub message: String,
+    /// RFC 3339 moment the message refers to (the last capture), for the UI to
+    /// format in its own date style.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
 }
 
 /// Settings → OpenCode use case over an [`IntegrationStore`].
@@ -299,11 +304,14 @@ impl<S: IntegrationStore> Integration<S> {
         checks.push(outbox_check(&status.outbox));
 
         checks.push(match status.adapters.first() {
-            Some(latest) => check(
-                CheckKind::Captures,
-                CheckOutcome::Ok,
-                format!("Última captura recebida em {}.", latest.last_received_at),
-            ),
+            Some(latest) => IntegrationCheck {
+                at: Some(latest.last_received_at.clone()),
+                ..check(
+                    CheckKind::Captures,
+                    CheckOutcome::Ok,
+                    "Capturas chegando do OpenCode.".to_string(),
+                )
+            },
             None => check(
                 CheckKind::Captures,
                 CheckOutcome::Warning,
@@ -322,6 +330,7 @@ fn check(kind: CheckKind, outcome: CheckOutcome, message: String) -> Integration
         kind,
         outcome,
         message,
+        at: None,
     }
 }
 
@@ -608,6 +617,15 @@ mod tests {
             ]
         );
         assert!(checks.iter().all(|check| check.outcome == CheckOutcome::Ok));
+        let captures = checks
+            .iter()
+            .find(|check| check.kind == CheckKind::Captures)
+            .expect("captures check");
+        assert_eq!(captures.at.as_deref(), Some("2026-01-01T00:00:01Z"));
+        assert!(
+            !captures.message.contains("2026"),
+            "no raw timestamp in the copy"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
