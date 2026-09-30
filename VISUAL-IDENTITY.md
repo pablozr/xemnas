@@ -25,6 +25,19 @@ mas `docs/` é ignorado pelo Git: este arquivo é a regra versionável.
   2 px (`mark_selected`). Foco visível é um anel inset que não desloca o layout.
 - Cada paleta (Quiet Glass e Carvão) é uma tabela `Palette` em `tokens.rs`;
   toda cor nova precisa existir nas duas.
+- Glass é o material do Windows (Mica Alt por padrão; `XEMNAS_BACKDROP=acrylic`,
+  `mica` ou `none`) aparecendo atrás de `color.chrome` na barra de título e na
+  lateral, só com o sistema em modo escuro. Superfícies de leitura, painéis e
+  diálogos são sólidos: o GPUI não tem blur por elemento.
+- Feedback: confirmações são toasts que saem sozinhos; erros recuperáveis são
+  uma faixa no topo com a ação real de repetir; listas carregando mostram
+  esqueleto; superfícies vazias usam `empty_panel` (marca, rótulo, título, o que
+  as faz encher).
+- Teclado: Ctrl K abre a paleta de comandos (só o que está carregado e ações
+  reais); Ctrl 1/2 trocam de destino; J/K percorrem listas; C, R, S e A agem
+  sobre o candidato, com a tecla visível no botão; Ctrl Enter salva editores.
+  Atalhos de uma tecla não disparam com um campo de texto em foco. Controles
+  só de ícone têm tooltip.
 - Mica pode compor o fundo da janela no Windows; isso **não** garante backdrop
   blur por componente. Superfícies internas precisam funcionar sem blur.
 - Cada informação tem um lugar: contagem na lista lateral, título da seção na
@@ -55,7 +68,9 @@ mas `docs/` é ignorado pelo Git: este arquivo é a regra versionável.
 - A barra da janela (40 px) contém marca, selo de demonstração quando houver,
   tema e controles nativos. Abaixo dela, uma única barra de projeto de 44 px leva
   o nome do projeto como trilha (abre o painel do projeto) e as abas Revisão e
-  Decisões; o caminho fica na lista lateral e no painel. Não há barra de status.
+  Decisões; o caminho fica na lista lateral e no painel. Não há barra de status:
+  o rodapé da lateral mostra só estados reais (captura ativa, indisponível ou
+  demonstração; jobs extraindo; falhas).
 - Em Decisões não há segunda fileira de abas: estado, versão, o acesso ao
   histórico ("Versões") e as ações Exportar/Revisar ficam na linha de metadados
   do documento. Linhas de lista e abas têm hover com mola criticamente amortecida.
@@ -65,7 +80,7 @@ mas `docs/` é ignorado pelo Git: este arquivo é a regra versionável.
   A badge da aba conta toda a fila do projeto; a lista informa carregados e
   visíveis separadamente. A busca filtra esses itens;
   fica dentro da lista; paginação explícita permite carregar mais sem sugerir
-  uma busca global. Ctrl K abre Revisão e foca o campo.
+  uma busca global. Ctrl F foca a busca do destino atual.
 - Leitura ocupa o restante da janela numa coluna de 760 px com a mesma gramática
   do documento de Decisões: escolha destacada, rótulos de seção em versalete,
   motivação, evidências, confiança da extração e origem. Confiança é uma estimativa do extrator, não uma avaliação humana.
