@@ -12,7 +12,7 @@ use gpui::{div, px, Div, ElementId, Rgba, Role, Stateful};
 
 use crate::ui::glass::{focus_ring as glass_focus_ring, GlassSurface, GlassVariant};
 use crate::ui::theme::{text_style, Theme};
-use crate::ui::tokens::{RadiusScale, SpacingScale, TypeScale};
+use crate::ui::tokens::{ControlSize, RadiusScale, SpacingScale, TypeScale};
 
 /// The keyboard focus ring, re-exported so views can apply it to a control they
 /// build themselves.
@@ -46,6 +46,88 @@ impl ControlState {
     pub fn is_interactive(&self) -> bool {
         !matches!(self, Self::Disabled | Self::Loading)
     }
+}
+
+/// The three product button weights.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ButtonKind {
+    /// The one real primary action in a region: solid lavender.
+    Primary,
+    /// A peer action that needs an edge to read as a control.
+    Secondary,
+    /// Toolbar and inline actions: no container until hovered or selected.
+    Ghost,
+}
+
+/// The product button recipe shared by every screen.
+///
+/// Screens attach focus, handlers and children; height, radius, colours,
+/// hover and the focus ring come from here so a toolbar mixing kinds keeps
+/// one baseline. `enabled == false` keeps the control focusable but greys its
+/// content, which is how the screens already signal a running operation.
+pub fn action_button(
+    theme: &Theme,
+    id: impl Into<ElementId>,
+    kind: ButtonKind,
+    enabled: bool,
+) -> Stateful<Div> {
+    let colors = theme.colors;
+    let button = text_style(div(), TypeScale::BODY_SMALL)
+        .id(id)
+        .h(px(ControlSize::MD))
+        .px(px(SpacingScale::S3))
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(6.0))
+        .rounded(theme.radius.control())
+        .role(Role::Button)
+        .focus_visible(focus_ring(theme))
+        .cursor_pointer();
+    let button = match kind {
+        ButtonKind::Primary if enabled => button
+            .bg(colors.accent_emphasis())
+            .text_color(colors.accent_on_emphasis())
+            .hover(move |style| style.bg(colors.accent_hover())),
+        ButtonKind::Primary => button
+            .bg(colors.decision_layer())
+            .text_color(colors.text_disabled()),
+        ButtonKind::Secondary => button
+            .border_1()
+            .border_color(colors.decision_line())
+            .text_color(colors.text_primary())
+            .hover(move |style| style.bg(colors.hover_veil())),
+        ButtonKind::Ghost => button
+            .text_color(colors.text_secondary())
+            .hover(move |style| {
+                style
+                    .bg(colors.hover_veil())
+                    .text_color(colors.text_primary())
+            }),
+    };
+    if enabled || kind == ButtonKind::Primary {
+        button
+    } else {
+        button.text_color(colors.text_disabled())
+    }
+}
+
+/// A square icon-only ghost action (`control.sm`), for title and list headers.
+pub fn icon_action(theme: &Theme, id: impl Into<ElementId>, aria_label: &str) -> Stateful<Div> {
+    let hover = theme.colors.hover_veil();
+    div()
+        .id(id)
+        .size(px(ControlSize::SM))
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .rounded(theme.radius.control())
+        .hover(move |style| style.bg(hover))
+        .role(Role::Button)
+        .aria_label(aria_label.to_string())
+        .focus_visible(focus_ring(theme))
+        .cursor_pointer()
 }
 
 /// A 16 px outline icon placeholder.

@@ -67,7 +67,7 @@ impl ColorTokens {
     }
     /// Mineral lavender document marker.
     pub fn decision_accent(&self) -> Rgba {
-        rgb(0xB3A5CB)
+        self.accent_hover()
     }
     /// Confirmed decision indicator.
     pub fn decision_confirmed(&self) -> Rgba {
@@ -209,6 +209,12 @@ impl ColorTokens {
     /// `accent.emphasis` — primary action and strong focus.
     pub fn accent_emphasis(&self) -> Rgba {
         rgb(0xA89EBA)
+    }
+
+    /// `accent.hover` — the primary action under the pointer: one step lighter,
+    /// never a translucent fill that lets the canvas bleed through.
+    pub fn accent_hover(&self) -> Rgba {
+        rgb(0xB3A5CB)
     }
 
     /// `accent.on-emphasis` — text over light lavender.
@@ -490,13 +496,26 @@ impl SpacingScale {
     pub const S16: f32 = 64.0;
 }
 
+/// Control heights. Every button, tab and field picks one of these instead of
+/// a local literal, so rows of mixed controls share a baseline.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ControlSize;
+
+impl ControlSize {
+    /// `control.sm` = 28: title-bar and inline icon actions.
+    pub const SM: f32 = 28.0;
+    /// `control.md` = 32: tabs, toolbar buttons, fields and review actions.
+    pub const MD: f32 = 32.0;
+}
+
 /// Corner radii (`radius.control` … `radius.round`).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RadiusScale;
 
 impl RadiusScale {
-    /// `radius.control` = 8.
-    pub const CONTROL: f32 = 8.0;
+    /// `radius.control` = 6. Matches the 28–32 px control heights; 8 px read as
+    /// a pill at that size and diverged from the 6 px the Decisions surface used.
+    pub const CONTROL: f32 = 6.0;
     /// `radius.surface` = 10.
     pub const SURFACE: f32 = 10.0;
     /// `radius.dialog` = 12.

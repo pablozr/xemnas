@@ -19,7 +19,7 @@ use crate::ui::glass::focus_ring;
 use crate::ui::icons::Icon;
 use crate::ui::search_edit::SearchEdit;
 use crate::ui::theme::{text_style, Theme};
-use crate::ui::tokens::{SpacingScale, TypeScale};
+use crate::ui::tokens::{ControlSize, SpacingScale, TypeScale};
 
 actions!(
     search_field,
@@ -808,12 +808,12 @@ impl Render for SearchField {
             .id("title-search")
             .w(px(self.width))
             .when(self.fill_width, |field| field.w_full())
-            .h(px(self.multiline_height.unwrap_or(32.0)))
+            .h(px(self.multiline_height.unwrap_or(ControlSize::MD)))
             .px(px(SpacingScale::S3))
             .flex()
             .items_center()
             .gap(px(SpacingScale::S2))
-            .rounded(px(8.0))
+            .rounded(theme.radius.control())
             .border_1()
             .border_color(if focused {
                 theme.colors.accent_subtle()

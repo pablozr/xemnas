@@ -198,8 +198,11 @@ impl GlassSurface {
 
 /// Focus-visible ring: 2 px `accent.emphasis`.
 ///
-/// GPUI resolves focus through a border rather than an offset outline, so the
-/// documented 2 px offset is recorded as a fidelity limitation in the ticket.
+/// Drawn as an inset shadow rather than a border: a `border_2` grew every
+/// borderless row and tab by 2 px on each side, so content jumped when focus
+/// arrived. The shadow follows the element's corner radius and leaves layout
+/// untouched. GPUI has no offset outline, so the documented 2 px offset
+/// remains a recorded fidelity limitation.
 #[derive(Clone, Copy, Debug)]
 pub struct FocusRing;
 
@@ -219,5 +222,9 @@ impl FocusRing {
 /// aesthetics (design system rule).
 pub fn focus_ring(theme: &Theme) -> impl FnOnce(StyleRefinement) -> StyleRefinement {
     let color = FocusRing::color(theme);
-    move |style: StyleRefinement| style.border_2().border_color(color)
+    move |style: StyleRefinement| {
+        style.shadow(vec![BoxShadow::new(px(0.0), px(0.0), color.into())
+            .spread_radius(px(FocusRing::WIDTH))
+            .inset()])
+    }
 }
