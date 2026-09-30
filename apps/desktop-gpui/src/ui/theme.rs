@@ -1,10 +1,44 @@
 //! Themes: the single entry point views use to reach tokens.
 //!
 //! A [`Theme`] bundles the token groups so primitives receive one typed object
-//! instead of reaching for loose values. Quiet Glass serves the review workspace;
-//! charcoal gives decision documents a quieter editorial surface.
+//! instead of reaching for loose values. Both palettes apply to every screen;
+//! navigation never changes the user's selected mode.
 
-use gpui::Styled;
+use gpui::{App, Global, Styled};
+
+/// One palette for the entire application, independent of navigation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ThemeMode {
+    #[default]
+    /// Original blue graphite palette.
+    QuietGlass,
+    /// Neutral charcoal palette.
+    Charcoal,
+}
+impl Global for ThemeMode {}
+impl ThemeMode {
+    /// Selects the other supported palette.
+    pub fn toggled(self) -> Self {
+        match self {
+            Self::QuietGlass => Self::Charcoal,
+            Self::Charcoal => Self::QuietGlass,
+        }
+    }
+    /// Label shown in the global theme control.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::QuietGlass => "Quiet Glass",
+            Self::Charcoal => "Carvão",
+        }
+    }
+    /// Resolves the complete token set for this mode.
+    pub fn theme(self) -> Theme {
+        match self {
+            Self::QuietGlass => Theme::quiet_glass(),
+            Self::Charcoal => Theme::charcoal(),
+        }
+    }
+}
 
 use crate::ui::tokens::{
     ColorTokens, MotionTokens, RadiusScale, SpacingScale, TypeScale, TypeToken,
@@ -26,6 +60,13 @@ pub struct Theme {
 }
 
 impl Theme {
+    /// Reads the palette selected by the global theme control.
+    pub fn current(cx: &App) -> Self {
+        cx.try_global::<ThemeMode>()
+            .copied()
+            .unwrap_or_default()
+            .theme()
+    }
     /// Interface font family registered from the embedded Inter Variable file.
     ///
     /// If registration fails, the GPUI/OS text system resolves a fallback on

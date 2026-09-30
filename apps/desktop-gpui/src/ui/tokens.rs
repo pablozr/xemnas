@@ -32,22 +32,37 @@ impl ColorTokens {
     }
     /// Graphite document canvas used by the Decisions destination.
     pub fn decision_canvas(&self) -> Rgba {
+        if !self.charcoal {
+            return self.canvas();
+        }
         rgb(0x202024)
     }
     /// Quiet index rail.
     pub fn decision_rail(&self) -> Rgba {
+        if !self.charcoal {
+            return self.rail();
+        }
         rgb(0x1B1B1F)
     }
     /// Auxiliary document layer.
     pub fn decision_layer(&self) -> Rgba {
+        if !self.charcoal {
+            return self.surface();
+        }
         rgb(0x26262C)
     }
     /// Selected index item and compact active tab.
     pub fn decision_selected(&self) -> Rgba {
+        if !self.charcoal {
+            return self.glass_surface_lavender();
+        }
         rgb(0x302B39)
     }
     /// Neutral separator.
     pub fn decision_line(&self) -> Rgba {
+        if !self.charcoal {
+            return self.hairline_divider();
+        }
         rgb(0x35353D)
     }
     /// Mineral lavender document marker.
