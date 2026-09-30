@@ -1,7 +1,3 @@
-# Local product direction, specifications, research, and execution tickets.
-# These artifacts are intentionally kept only in this MVP planning workspace.
-/docs/
-
 # Rust build output and editor backups.
 /target/
 /dist/
