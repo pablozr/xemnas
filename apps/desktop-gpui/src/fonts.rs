@@ -31,7 +31,8 @@ const JETBRAINS_MONO: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-Vari
 /// named instances (opsz 14, weights 200–800) rather than setting axes.
 const BRICOLAGE: &[u8] = include_bytes!("../assets/fonts/BricolageGrotesque-Variable.ttf");
 
-/// The app mark: the glass tile with the X aperture, supplied by the product.
+/// The app mark: a decision crossing (chosen path unbroken, the alternative
+/// interrupted) on a charcoal tile. Source: `assets/brand/xemnas-mark.svg`.
 ///
 /// 256 px is the size the mark is drawn at. Every consumer scales it down, and
 /// down-scaling a raster keeps the inner highlight intact where up-scaling
@@ -71,7 +72,13 @@ pub fn register_embedded(cx: &App) {
 /// content, PRIV-001); the image then simply does not appear, which is a
 /// degraded title bar rather than a failed frame.
 fn app_icon_path() -> PathBuf {
-    let path = std::env::temp_dir().join("xemnas-app-icon.png");
+    // Named after the bytes, so a new mark never reuses a stale cached file.
+    let digest = APP_ICON
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
+        });
+    let path = std::env::temp_dir().join(format!("xemnas-mark-{digest:016x}.png"));
     if !path.exists() {
         if let Err(error) = std::fs::write(&path, APP_ICON) {
             tracing::error!(

@@ -28,6 +28,18 @@ use xemnas_desktop::ui::search_field::{
 
 mod demo;
 
+// Windows resources (icon ID 1 + version info) compiled once by
+// tools/brand-icon.ps1 and handed straight to the linker: no build script runs,
+// which this machine's Application Control policy would block on every rebuild.
+// Cargo runs rustc from the workspace root, so the path is relative to it.
+#[cfg(all(target_os = "windows", target_env = "msvc"))]
+#[link(
+    name = "apps/desktop-gpui/assets/brand/xemnas.res",
+    kind = "static",
+    modifiers = "+verbatim,-bundle"
+)]
+extern "C" {}
+
 fn main() {
     if let Err(error) = telemetry::init() {
         eprintln!("telemetry init failed: {error}");

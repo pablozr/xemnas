@@ -47,6 +47,18 @@ mas `docs/` é ignorado pelo Git: este arquivo é a regra versionável.
 - Cada informação tem um lugar: contagem na lista lateral, título da seção na
   própria seção; não repetir a mesma informação no título e no rodapé.
 
+## Marca
+
+- Símbolo: cruzamento de decisão. Dois traços em X; o escolhido (lavanda)
+  atravessa inteiro, a alternativa (clara, mais apagada) é interrompida no
+  cruzamento. Bloco carvão com leve viés lavanda, borda interna de 1 px, sem
+  brilho. Fonte única: `apps/desktop-gpui/assets/brand/xemnas-mark.svg`.
+- PNGs do app e o `xemnas.ico` são renderizados do SVG em cada tamanho (16 a
+  512 px), nunca reduzidos de um só bitmap. `tools/brand-icon.ps1` compila
+  `xemnas.rc` em `xemnas.res`, ligado ao executável pelo `main.rs` (ícone ID 1
+  e versão), sem build script.
+- Wordmark: "xemnas" em Bricolage Grotesque, minúsculo, ao lado do símbolo.
+
 ## Projetos — superfície atual
 
 - Lista persistente de projetos de 248 px (linhas de 48 px com nome e caminho) e
