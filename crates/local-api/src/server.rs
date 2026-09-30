@@ -100,7 +100,8 @@ pub fn router_with_services(
     if services.agent.is_some() {
         routes = routes
             .route("/v1/agent/decision", post(agent_decision))
-            .route("/v1/agent/search", post(agent_search));
+            .route("/v1/agent/search", post(agent_search))
+            .route("/v1/agent/file", post(agent_file));
     }
     let state = AppState {
         api,
@@ -500,6 +501,17 @@ struct AgentSearchBody {
     canonical_path: String,
     query: String,
     budget_tokens: Option<usize>,
+    /// A file the task touches; what the project map ties to it comes first.
+    path: Option<String>,
+}
+
+/// Body of `POST /v1/agent/file`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentFileBody {
+    canonical_path: String,
+    path: String,
+    budget_tokens: Option<usize>,
 }
 
 /// `POST /v1/agent/decision`: the full decision behind a short reference.
@@ -533,9 +545,38 @@ async fn agent_search(
         Ok(Json(body)) => body,
         Err(rejection) => return json_rejection_to_api_error(rejection).into_response(),
     };
-    let result =
-        run_blocking(move || agent.search(&body.canonical_path, &body.query, body.budget_tokens))
-            .await;
+    let result = run_blocking(move || {
+        agent.search(
+            &body.canonical_path,
+            &body.query,
+            body.budget_tokens,
+            body.path.as_deref(),
+        )
+    })
+    .await;
+    match result {
+        Ok(Ok(text)) => Json(json!({ "text": text })).into_response(),
+        Ok(Err(error)) => agent_error_response(error),
+        Err(error) => error.into_response(),
+    }
+}
+
+/// `POST /v1/agent/file`: what holds for one file (ADR-0005); the path is never logged.
+async fn agent_file(
+    State(state): State<AppState>,
+    payload: Result<Json<AgentFileBody>, JsonRejection>,
+) -> Response {
+    let Some(agent) = state.services.agent.clone() else {
+        return ApiError::NotFound.into_response();
+    };
+    let body = match payload {
+        Ok(Json(body)) => body,
+        Err(rejection) => return json_rejection_to_api_error(rejection).into_response(),
+    };
+    let result = run_blocking(move || {
+        agent.file_context(&body.canonical_path, &body.path, body.budget_tokens)
+    })
+    .await;
     match result {
         Ok(Ok(text)) => Json(json!({ "text": text })).into_response(),
         Ok(Err(error)) => agent_error_response(error),

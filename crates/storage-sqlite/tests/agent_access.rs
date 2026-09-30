@@ -96,13 +96,13 @@ fn errors_are_explicit() {
     );
     assert_eq!(
         access
-            .search(&path, "  ", None)
+            .search(&path, "  ", None, None)
             .map_err(|error| error.code()),
         Err("invalid_request")
     );
     assert_eq!(
         access
-            .search(&path, "banco", Some(10))
+            .search(&path, "banco", Some(10), None)
             .map_err(|error| error.code()),
         Err("invalid_request")
     );
@@ -116,17 +116,19 @@ fn search_returns_the_compact_block_every_time() {
     let access = AgentAccess::new(test.store.clone());
 
     let first = access
-        .search(&path, "banco", None)
+        .search(&path, "banco", None, None)
         .expect("search")
         .expect("block");
     assert!(first.contains("Qual banco usar? → SQLite"));
     let again = access
-        .search(&path, "banco", None)
+        .search(&path, "banco", None, None)
         .expect("search")
         .expect("block");
     assert_eq!(first, again, "explicit searches are not deduplicated");
     assert_eq!(
-        access.search(&path, "renderização", None).expect("search"),
+        access
+            .search(&path, "renderização", None, None)
+            .expect("search"),
         None
     );
     let recorded: i64 = Connection::open(test.root.join("app.db"))
@@ -136,4 +138,63 @@ fn search_returns_the_compact_block_every_time() {
         })
         .expect("count");
     assert_eq!(recorded, 0, "agent reads are not injections");
+}
+
+#[test]
+fn file_context_follows_the_project_map() {
+    use application::graph::{KnowledgeGraph, LinkRequest, NewEntity};
+    use domain::entities::{EdgeKind, EntityKind, NodeKind};
+
+    let test = support::open("agent-file", &["p1"]);
+    let path = register_directory(&test);
+    let decision = support::decision(&test.store, "p1", "db", "Qual banco usar?", "SQLite");
+    support::decision(&test.store, "p1", "ui", "Qual toolkit?", "GPUI");
+    let graph = KnowledgeGraph::new(test.store.clone());
+    let storage = graph
+        .create_entity(NewEntity {
+            project_id: "p1".into(),
+            kind: Some(EntityKind::Component),
+            name: "storage".into(),
+            patterns: vec!["crates/storage-sqlite/**".into()],
+            ..NewEntity::default()
+        })
+        .expect("component")
+        .entity_id;
+    graph
+        .link(LinkRequest {
+            kind: EdgeKind::Affects,
+            source_kind: NodeKind::Decision,
+            source_id: decision,
+            entity_id: storage,
+        })
+        .expect("link");
+    let access = AgentAccess::new(test.store.clone());
+
+    // The file names no word of the decision; only the map ties them.
+    let block = access
+        .file_context(&path, "crates/storage-sqlite/src/store.rs", None)
+        .expect("file context")
+        .expect("block");
+    assert!(block.contains("Qual banco usar? → SQLite"));
+    assert!(
+        !block.contains("GPUI"),
+        "only what the map ties to the file"
+    );
+    let absolute = format!("{path}/crates/storage-sqlite/src/store.rs");
+    assert!(access
+        .file_context(&path, &absolute, None)
+        .expect("absolute path")
+        .is_some_and(|text| text.contains("SQLite")));
+    assert_eq!(
+        access
+            .file_context(&path, "apps/desktop/src/main.rs", None)
+            .expect("unmapped"),
+        None
+    );
+    assert_eq!(
+        access
+            .file_context(&path, "  ", None)
+            .map_err(|error| error.code()),
+        Err("invalid_request")
+    );
 }

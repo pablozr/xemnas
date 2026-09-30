@@ -65,10 +65,19 @@ impl Backend for HttpBackend {
             .ok_or(BackendError::Failed)
     }
 
-    fn search(&self, query: &str) -> Result<Option<String>, BackendError> {
+    fn search(&self, query: &str, path: Option<&str>) -> Result<Option<String>, BackendError> {
+        let mut request = json!({ "canonical_path": self.directory, "query": query });
+        if let Some(path) = path {
+            request["path"] = json!(path);
+        }
+        let body = self.post("/v1/agent/search", request)?;
+        Ok(body["text"].as_str().map(str::to_string))
+    }
+
+    fn file(&self, path: &str) -> Result<Option<String>, BackendError> {
         let body = self.post(
-            "/v1/agent/search",
-            json!({ "canonical_path": self.directory, "query": query }),
+            "/v1/agent/file",
+            json!({ "canonical_path": self.directory, "path": path }),
         )?;
         Ok(body["text"].as_str().map(str::to_string))
     }

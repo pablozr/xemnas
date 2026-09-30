@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::claims::{ClaimRecord, ClaimStore, ClaimsError};
 use crate::clock::now_rfc3339;
 use crate::decisions::{DecisionStore, DecisionsError, StoredDecision};
+use crate::graph::{GraphError, GraphStore, KnowledgeGraph};
 use crate::projects::ProjectRepository;
 use crate::relations::{RelationRow, RelationStore};
 
@@ -92,7 +93,14 @@ pub struct ContextRequest {
     pub as_of: Option<String>,
     /// Size budget in characters; [`DEFAULT_BUDGET_CHARS`] when `None`.
     pub budget_chars: Option<usize>,
+    /// Files the task touches, relative to the project: what the project map
+    /// ties to their components comes first (ADR-0005). With files, the task
+    /// text may be empty.
+    pub files: Vec<String>,
 }
+
+/// Most files one request may name.
+pub const MAX_FILES: usize = 20;
 
 /// One decision in a pack.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -197,11 +205,18 @@ impl<S> ContextPacks<S> {
 
 impl<S> ContextProvider for ContextPacks<S>
 where
-    S: ContextStore + DecisionStore + RelationStore + ClaimStore + ProjectRepository,
+    S: ContextStore
+        + DecisionStore
+        + RelationStore
+        + ClaimStore
+        + ProjectRepository
+        + GraphStore
+        + Clone,
 {
     fn build_pack(&self, request: ContextRequest) -> Result<ContextPack, ContextError> {
         let task = request.task.trim().to_string();
-        if task.is_empty() || task.chars().count() > MAX_TASK_CHARS {
+        let files: Vec<String> = request.files.iter().take(MAX_FILES).cloned().collect();
+        if (task.is_empty() && files.is_empty()) || task.chars().count() > MAX_TASK_CHARS {
             return Err(ContextError::InvalidRequest(
                 "descreva a tarefa em até 2.000 caracteres".into(),
             ));
@@ -222,19 +237,24 @@ where
             .ok_or(ContextError::ProjectNotFound)?;
 
         let relations = self.store.project_relations(&request.project_id)?;
+        let (by_file_decisions, by_file_claims) = KnowledgeGraph::new(self.store.clone())
+            .context_for_files(&request.project_id, &files, Some(as_of.as_str()))
+            .map_err(graph_error)?;
         let query = match_any_query(&task);
-        let ranked_decisions = match &query {
+        let lexical_decisions = match &query {
             Some(query) => self
                 .store
                 .rank_decisions(&request.project_id, query, MAX_RANKED)?,
             None => Vec::new(),
         };
-        let ranked_claims = match &query {
+        let lexical_claims = match &query {
             Some(query) => self
                 .store
                 .rank_claims(&request.project_id, query, MAX_RANKED)?,
             None => Vec::new(),
         };
+        let ranked_decisions = first_unique(by_file_decisions, lexical_decisions);
+        let ranked_claims = first_unique(by_file_claims, lexical_claims);
 
         let mut selection = Selection::new(budget);
         let claims = self.store.project_claims(&request.project_id)?;
@@ -365,6 +385,24 @@ impl Selection {
 }
 
 /// Whether the decision was confirmed by `as_of` and not superseded by then.
+/// `first` then the items of `then` not already in it.
+fn first_unique(mut first: Vec<String>, then: Vec<String>) -> Vec<String> {
+    for item in then {
+        if !first.contains(&item) {
+            first.push(item);
+        }
+    }
+    first
+}
+
+fn graph_error(error: GraphError) -> ContextError {
+    match error {
+        GraphError::ProjectNotFound => ContextError::ProjectNotFound,
+        GraphError::InvalidRequest(message) => ContextError::InvalidRequest(message),
+        other => ContextError::Storage(other.to_string()),
+    }
+}
+
 fn in_force(decision: &StoredDecision, relations: &[RelationRow], as_of: &Timestamp) -> bool {
     let confirmed = Timestamp::parse(&decision.confirmed_at).is_some_and(|at| at <= *as_of);
     let superseded = relations.iter().any(|row| {

@@ -21,6 +21,7 @@ use application::decisions::{
     DecisionFilter, DecisionStatus, DecisionStore, DecisionSummary, Decisions,
 };
 use application::export::{preview_pack, write_pack, ExportFormat};
+use application::graph::GraphStore;
 use application::injection::{DEFAULT_BUDGET_TOKENS, MAX_BUDGET_TOKENS, MIN_BUDGET_TOKENS};
 use application::projects::ProjectRepository;
 use application::relations::RelationStore;
@@ -50,6 +51,7 @@ pub trait ContextStores:
     + ContextStore
     + RelationStore
     + ContextSettingsStore
+    + GraphStore
     + Clone
     + Send
     + 'static
@@ -63,6 +65,7 @@ impl<T> ContextStores for T where
         + ContextStore
         + RelationStore
         + ContextSettingsStore
+        + GraphStore
         + Clone
         + Send
         + 'static
@@ -374,6 +377,7 @@ impl<S: ContextStores> ContextScreen<S> {
                         task,
                         as_of: None,
                         budget_chars: None,
+                        files: Vec::new(),
                     })
                     .map(Box::new)
                     .map_err(|error| {

@@ -105,7 +105,7 @@ covered in [docs/operacao/operacao-e-referencia.md](docs/operacao/operacao-e-ref
 | | |
 | --- | --- |
 | **OpenCode** | Plugin in [`adapters/opencode`](adapters/opencode): captures on idle, validates the envelope and sends it to the app or the outbox. No domain rules, never calls a model. [Setup](docs/operacao/operacao-e-referencia.md#integração-com-o-opencode) |
-| **MCP** | `xemnas-mcp` ([`apps/mcp-server`](apps/mcp-server)): read-only `get_decision` and `search_context` over stdio. Works with OpenCode and Claude Code. [Setup](docs/roadmap/fase-5/01-mcp-leitura.md) |
+| **MCP** | `xemnas-mcp` ([`apps/mcp-server`](apps/mcp-server)): read-only `get_decision`, `search_context` and `file_context` (what the project map ties to a file) over stdio. Works with OpenCode and Claude Code. [Setup](docs/roadmap/fase-5/01-mcp-leitura.md) |
 | **Context Pack** | Decisions in force and rules valid at a date, with citations and a size budget. [Details](docs/roadmap/fase-3/01-context-pack-manual.md) |
 
 ## Privacy

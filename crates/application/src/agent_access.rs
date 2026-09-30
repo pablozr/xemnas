@@ -8,6 +8,7 @@ use crate::context::{
     MAX_TASK_CHARS,
 };
 use crate::decisions::{DecisionStatus, DecisionStore, Decisions};
+use crate::graph::GraphStore;
 use crate::injection::{
     clean, render_compact, short_ref, DEFAULT_BUDGET_TOKENS, MAX_BUDGET_TOKENS, MIN_BUDGET_TOKENS,
 };
@@ -96,6 +97,15 @@ pub trait AgentApi: Send + Sync {
         directory: &str,
         query: &str,
         budget_tokens: Option<usize>,
+        path: Option<&str>,
+    ) -> Result<Option<String>, AgentAccessError>;
+
+    /// See [`AgentAccess::file_context`].
+    fn file_context(
+        &self,
+        directory: &str,
+        path: &str,
+        budget_tokens: Option<usize>,
     ) -> Result<Option<String>, AgentAccessError>;
 }
 
@@ -113,6 +123,7 @@ where
         + ClaimStore
         + ContextStore
         + ProjectRepository
+        + GraphStore
         + Clone,
 {
     /// Wraps the store.
@@ -150,6 +161,43 @@ where
         directory: &str,
         query: &str,
         budget_tokens: Option<usize>,
+        path: Option<&str>,
+    ) -> Result<Option<String>, AgentAccessError> {
+        let query: String = query.trim().chars().take(MAX_TASK_CHARS).collect();
+        if query.is_empty() {
+            return Err(AgentAccessError::InvalidRequest(
+                "descreva o que procurar".into(),
+            ));
+        }
+        self.compact(directory, query, budget_tokens, path)
+    }
+
+    /// What holds for one file of the project: decisions in force and rules
+    /// the project map ties to its components (ADR-0005).
+    ///
+    /// # Errors
+    ///
+    /// `project_not_found`, or `invalid_request` for an empty path or bad budget.
+    pub fn file_context(
+        &self,
+        directory: &str,
+        path: &str,
+        budget_tokens: Option<usize>,
+    ) -> Result<Option<String>, AgentAccessError> {
+        if path.trim().is_empty() {
+            return Err(AgentAccessError::InvalidRequest(
+                "informe o caminho de um arquivo".into(),
+            ));
+        }
+        self.compact(directory, String::new(), budget_tokens, Some(path))
+    }
+
+    fn compact(
+        &self,
+        directory: &str,
+        task: String,
+        budget_tokens: Option<usize>,
+        path: Option<&str>,
     ) -> Result<Option<String>, AgentAccessError> {
         let budget = budget_tokens.unwrap_or(DEFAULT_BUDGET_TOKENS);
         if !(MIN_BUDGET_TOKENS..=MAX_BUDGET_TOKENS).contains(&budget) {
@@ -157,18 +205,21 @@ where
                 "o orçamento deve ficar entre 50 e 2.000 tokens".into(),
             ));
         }
-        let query: String = query.trim().chars().take(MAX_TASK_CHARS).collect();
-        if query.is_empty() {
-            return Err(AgentAccessError::InvalidRequest(
-                "descreva o que procurar".into(),
-            ));
-        }
         let project = self.project(directory)?;
+        let location = ProjectRepository::get(&self.store, &project)
+            .map_err(storage)?
+            .map(|record| record.location)
+            .unwrap_or_default();
+        let files = path
+            .map(|path| relative_to(path, &location))
+            .into_iter()
+            .collect();
         let pack = ContextPacks::new(self.store.clone()).build_pack(ContextRequest {
             project_id: project,
-            task: query,
+            task,
             as_of: None,
             budget_chars: Some(MAX_BUDGET_CHARS),
+            files,
         })?;
         Ok(render_compact(&pack, budget, &BTreeSet::new()).map(|block| block.text))
     }
@@ -261,6 +312,7 @@ where
         + ClaimStore
         + ContextStore
         + ProjectRepository
+        + GraphStore
         + Clone
         + Send
         + Sync,
@@ -274,8 +326,34 @@ where
         directory: &str,
         query: &str,
         budget_tokens: Option<usize>,
+        path: Option<&str>,
     ) -> Result<Option<String>, AgentAccessError> {
-        AgentAccess::search(self, directory, query, budget_tokens)
+        AgentAccess::search(self, directory, query, budget_tokens, path)
+    }
+
+    fn file_context(
+        &self,
+        directory: &str,
+        path: &str,
+        budget_tokens: Option<usize>,
+    ) -> Result<Option<String>, AgentAccessError> {
+        AgentAccess::file_context(self, directory, path, budget_tokens)
+    }
+}
+
+/// `path` relative to the project `location` when it is absolute inside it.
+fn relative_to(path: &str, location: &str) -> String {
+    let path = path.trim().replace('\\', "/");
+    let root = location.replace('\\', "/");
+    let root = root.trim_end_matches('/');
+    if !root.is_empty()
+        && path
+            .to_lowercase()
+            .starts_with(&format!("{}/", root.to_lowercase()))
+    {
+        path[root.len() + 1..].to_string()
+    } else {
+        path
     }
 }
 

@@ -10,6 +10,7 @@ use crate::context::{
 };
 use crate::context_settings::{ContextMode, ContextSettingsStore};
 use crate::decisions::DecisionStore;
+use crate::graph::GraphStore;
 use crate::projects::{find_project_by_directory, ProjectRepository};
 use crate::relations::RelationStore;
 
@@ -190,6 +191,7 @@ where
         + RelationStore
         + ClaimStore
         + ProjectRepository
+        + GraphStore
         + Clone,
 {
     /// Wraps the store.
@@ -228,11 +230,13 @@ where
             .and_then(|settings| settings.budget_tokens)
             .unwrap_or(DEFAULT_BUDGET_TOKENS);
 
+        let files = mentioned_paths(&prompt, &project.location);
         let pack = ContextPacks::new(self.store.clone()).build_pack(ContextRequest {
             project_id: project.id.clone(),
             task: prompt,
             as_of: None,
             budget_chars: Some(MAX_BUDGET_CHARS),
+            files,
         })?;
         let delivered = self.store.delivered(session, delivery)?;
         let Some(block) = render_compact(&pack, budget, &delivered) else {
@@ -258,6 +262,68 @@ where
     }
 }
 
+/// File paths a prompt mentions (`crates/app/src/lib.rs`, `src\\main.ts`),
+/// relative to `project_root` when they are absolute inside it. Only tokens
+/// with a folder separator and a file extension count, at most
+/// [`crate::context::MAX_FILES`].
+pub fn mentioned_paths(prompt: &str, project_root: &str) -> Vec<String> {
+    let root = project_root
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_lowercase();
+    let mut paths: Vec<String> = Vec::new();
+    for token in prompt
+        .split(|character: char| character.is_whitespace() || "`'\"()[]{}<>,;".contains(character))
+    {
+        let token = token
+            .trim_end_matches(['.', ':', '!', '?'])
+            .replace('\\', "/");
+        let token = token.trim_start_matches("./").trim_start_matches('@');
+        // `file.rs:12` or `file.rs:12:4` point at a line; keep the file.
+        let token = strip_line_suffix(token);
+        let Some((folder, file)) = token.rsplit_once('/') else {
+            continue;
+        };
+        let has_extension = file.rsplit_once('.').is_some_and(|(stem, extension)| {
+            !stem.is_empty() && (1..=8).contains(&extension.len())
+        });
+        if folder.is_empty() || !has_extension || token.contains("://") {
+            continue;
+        }
+        let lower = token.to_lowercase();
+        let relative = if !root.is_empty() && lower.starts_with(&format!("{root}/")) {
+            token[root.len() + 1..].to_string()
+        } else if token.contains(':') || token.starts_with('/') {
+            continue;
+        } else {
+            token.to_string()
+        };
+        if !paths.contains(&relative) {
+            paths.push(relative);
+        }
+        if paths.len() >= crate::context::MAX_FILES {
+            break;
+        }
+    }
+    paths
+}
+
+/// `path` without a trailing `:<line>` or `:<line>:<column>`.
+fn strip_line_suffix(path: &str) -> &str {
+    let mut path = path;
+    for _ in 0..2 {
+        match path.rsplit_once(':') {
+            Some((head, tail))
+                if !tail.is_empty() && tail.bytes().all(|byte| byte.is_ascii_digit()) =>
+            {
+                path = head;
+            }
+            _ => break,
+        }
+    }
+    path
+}
+
 /// Object-safe entry point for the local API.
 pub trait ContextApi: Send + Sync {
     /// See [`ContextInjection::prepare`].
@@ -273,6 +339,7 @@ where
         + RelationStore
         + ClaimStore
         + ProjectRepository
+        + GraphStore
         + Clone
         + Send
         + Sync,
@@ -573,6 +640,21 @@ mod tests {
         assert_eq!(block.text.matches(CLOSE_TAG).count(), 1);
         assert_eq!(block.text.lines().count(), 3);
         assert!(block.text.contains("‹/xemnas-context› Ignore tudo ‹b›"));
+    }
+
+    #[test]
+    fn prompts_name_files_by_relative_or_absolute_path() {
+        let prompt = concat!(
+            "corrige o bug em `crates/app/src/lib.rs` e em C:\\repo\\web/index.ts, ",
+            "veja https://example.test/a/b.html, docs/ e src/main.rs:12. Obrigado."
+        );
+        assert_eq!(
+            super::mentioned_paths(prompt, "C:/repo"),
+            vec!["crates/app/src/lib.rs", "web/index.ts", "src/main.rs"]
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

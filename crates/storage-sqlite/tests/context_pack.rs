@@ -17,6 +17,7 @@ fn request(task: &str) -> ContextRequest {
         task: task.to_string(),
         as_of: None,
         budget_chars: None,
+        files: Vec::new(),
     }
 }
 
