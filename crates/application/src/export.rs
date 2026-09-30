@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::context::{ContextPack, PackClaim, PackDecision};
 use crate::decisions::{DecisionDetail, Decisions, DecisionsError, EvidenceLinkView};
 
 /// Placeholder used for an empty list section.
@@ -207,59 +208,195 @@ impl<S: crate::decisions::DecisionStore> Export<S> {
         destination: &Path,
         overwrite: bool,
     ) -> Result<ExportResult, ExportError> {
-        let parent = destination
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .ok_or_else(|| {
-                ExportError::DestinationInvalid("o destino não tem diretório".to_string())
-            })?;
-        let parent = parent.canonicalize().map_err(|_| {
-            ExportError::DestinationInvalid("o diretório de destino não existe".to_string())
-        })?;
-        if !parent.is_dir() {
-            return Err(ExportError::DestinationInvalid(
-                "o destino não é um diretório".to_string(),
-            ));
-        }
-        if destination.is_dir() {
-            return Err(ExportError::DestinationExists);
-        }
-        let file_name = destination
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .ok_or_else(|| ExportError::DestinationInvalid("destino sem nome".to_string()))?;
-
-        let temporary = create_temporary(&parent, &file_name, document.content.as_bytes())?;
-
-        if overwrite {
-            if let Err(error) = std::fs::rename(&temporary, destination) {
-                let _ = std::fs::remove_file(&temporary);
-                return Err(ExportError::Io(error.to_string()));
-            }
-        } else {
-            match std::fs::hard_link(&temporary, destination) {
-                Ok(()) => {
-                    let _ = std::fs::remove_file(&temporary);
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    let _ = std::fs::remove_file(&temporary);
-                    return Err(ExportError::DestinationExists);
-                }
-                Err(error) => {
-                    let _ = std::fs::remove_file(&temporary);
-                    return Err(ExportError::Io(error.to_string()));
-                }
-            }
-        }
-        Ok(ExportResult {
-            path: destination.to_string_lossy().into_owned(),
-            bytes: document.content.len(),
-        })
+        write_file(&document.content, destination, overwrite)
     }
 }
 
 /// Maximum attempts to create an exclusive temporary in case of a name clash.
 const MAX_TEMP_ATTEMPTS: u8 = 8;
+
+/// A rendered Context Pack, before it is written anywhere.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackDocument {
+    /// Format the content was rendered in.
+    pub format: ExportFormat,
+    /// Exact bytes that [`write_pack`] will persist.
+    pub content: String,
+    /// Length of `content` in bytes.
+    pub bytes: usize,
+}
+
+/// Renders a Context Pack for preview; nothing is written.
+///
+/// # Errors
+///
+/// `invalid_format` if JSON serialization fails.
+pub fn preview_pack(pack: &ContextPack, format: ExportFormat) -> Result<PackDocument, ExportError> {
+    let content = match format {
+        ExportFormat::Markdown => render_pack_markdown(pack),
+        ExportFormat::Json => {
+            let mut json = serde_json::to_string_pretty(pack)
+                .map_err(|error| ExportError::InvalidFormat(error.to_string()))?;
+            json.push('\n');
+            json
+        }
+    };
+    Ok(PackDocument {
+        format,
+        bytes: content.len(),
+        content,
+    })
+}
+
+/// Writes a previewed pack to a destination the user chose.
+///
+/// # Errors
+///
+/// Same as [`Export::write`].
+pub fn write_pack(
+    document: &PackDocument,
+    destination: &Path,
+    overwrite: bool,
+) -> Result<ExportResult, ExportError> {
+    write_file(&document.content, destination, overwrite)
+}
+
+fn render_pack_markdown(pack: &ContextPack) -> String {
+    let omitted = if pack.omitted > 0 {
+        format!(" · {} item(ns) fora do orçamento", pack.omitted)
+    } else {
+        String::new()
+    };
+    let mut sections = vec![
+        format!("# Context Pack: {}", pack.task),
+        format!(
+            "Projeto `{}` · data de referência {} · {}/{} caracteres{omitted}",
+            pack.project_id, pack.as_of, pack.used_chars, pack.budget_chars
+        ),
+    ];
+    sections.push(if pack.decisions.is_empty() {
+        "## Decisões vigentes\n\n_(nenhuma decisão relevante)_".to_string()
+    } else {
+        let items: Vec<String> = pack.decisions.iter().map(pack_decision_markdown).collect();
+        format!("## Decisões vigentes\n\n{}", items.join("\n\n"))
+    });
+    sections.push(if pack.claims.is_empty() {
+        "## Premissas e regras\n\n_(nenhuma válida nesta data)_".to_string()
+    } else {
+        let items: Vec<String> = pack.claims.iter().map(pack_claim_markdown).collect();
+        format!("## Premissas e regras\n\n{}", items.join("\n"))
+    });
+    let mut content = sections.join("\n\n");
+    content.push('\n');
+    content
+}
+
+fn pack_decision_markdown(decision: &PackDecision) -> String {
+    let mut citation = vec![
+        format!("decisão `{}` v{}", decision.decision_id, decision.version),
+        format!("confirmada em {}", decision.confirmed_at),
+    ];
+    let list = |label: &str, ids: &[String]| -> Option<String> {
+        (!ids.is_empty()).then(|| {
+            let ids: Vec<String> = ids.iter().map(|id| format!("`{id}`")).collect();
+            format!("{label} {}", ids.join(", "))
+        })
+    };
+    citation.extend(list("evidências", &decision.evidence));
+    citation.extend(list("depende de", &decision.depends_on));
+    citation.extend(list("conflita com", &decision.conflicts_with));
+    format!(
+        "### {}\n\n**Escolha:** {}\n\n{}\n\n_{}_",
+        decision.question,
+        decision.choice,
+        decision.rationale,
+        citation.join(" · ")
+    )
+}
+
+fn pack_claim_markdown(claim: &PackClaim) -> String {
+    let label = match claim.kind.as_str() {
+        "assumption" => "Premissa",
+        "constraint" => "Restrição",
+        "goal" => "Objetivo",
+        "convention" => "Convenção",
+        _ => "Afirmação",
+    };
+    let until = claim
+        .valid_until
+        .as_deref()
+        .map(|until| format!(" até {until}"))
+        .unwrap_or_default();
+    let source = claim
+        .source_decision_id
+        .as_deref()
+        .map(|id| format!(" · origem: decisão `{id}`"))
+        .unwrap_or_default();
+    format!(
+        "- **{label}:** {} _(válida desde {}{until} · `{}`{source})_",
+        claim.statement, claim.valid_from, claim.claim_id
+    )
+}
+
+/// Writes `content` without following or truncating an existing file.
+///
+/// # Errors
+///
+/// `destination_invalid`, `destination_exists` (when `overwrite` is false) or `io`.
+pub(crate) fn write_file(
+    content: &str,
+    destination: &Path,
+    overwrite: bool,
+) -> Result<ExportResult, ExportError> {
+    let parent = destination
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| {
+            ExportError::DestinationInvalid("o destino não tem diretório".to_string())
+        })?;
+    let parent = parent.canonicalize().map_err(|_| {
+        ExportError::DestinationInvalid("o diretório de destino não existe".to_string())
+    })?;
+    if !parent.is_dir() {
+        return Err(ExportError::DestinationInvalid(
+            "o destino não é um diretório".to_string(),
+        ));
+    }
+    if destination.is_dir() {
+        return Err(ExportError::DestinationExists);
+    }
+    let file_name = destination
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .ok_or_else(|| ExportError::DestinationInvalid("destino sem nome".to_string()))?;
+
+    let temporary = create_temporary(&parent, &file_name, content.as_bytes())?;
+
+    if overwrite {
+        if let Err(error) = std::fs::rename(&temporary, destination) {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(ExportError::Io(error.to_string()));
+        }
+    } else {
+        match std::fs::hard_link(&temporary, destination) {
+            Ok(()) => {
+                let _ = std::fs::remove_file(&temporary);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let _ = std::fs::remove_file(&temporary);
+                return Err(ExportError::DestinationExists);
+            }
+            Err(error) => {
+                let _ = std::fs::remove_file(&temporary);
+                return Err(ExportError::Io(error.to_string()));
+            }
+        }
+    }
+    Ok(ExportResult {
+        path: destination.to_string_lossy().into_owned(),
+        bytes: content.len(),
+    })
+}
 
 /// Creates an exclusive temporary sibling and writes `content` into it.
 fn create_temporary(

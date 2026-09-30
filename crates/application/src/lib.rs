@@ -40,7 +40,10 @@ pub use diagnostics::{
     DiagnosticsError, DiagnosticsMetrics, Distribution, JobDiagnostic, LossMetrics, NoiseMetrics,
     OutboxCounts, ReceiptDiagnostic, RuntimeDiagnostic, SchemaInfo,
 };
-pub use export::{Export, ExportDocument, ExportError, ExportFormat, ExportResult};
+pub use export::{
+    preview_pack, write_pack, Export, ExportDocument, ExportError, ExportFormat, ExportResult,
+    PackDocument,
+};
 pub use extract::{
     connection_test_evidence, fail_provider_setup, filter_relevant, input_hash, policy_snapshot,
     record_skipped_assessment, run_connection_test, run_extraction, truncate_content,
