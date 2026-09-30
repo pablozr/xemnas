@@ -21,7 +21,10 @@ import {
 import {
   createChatMessageHook,
   createContextClient,
+  createToolAfterHook,
+  RecentFiles,
   type ChatMessageHook,
+  type ToolAfterHook,
 } from "./context.js";
 import { buildEnvelope, validateEnvelope } from "./envelope.js";
 import {
@@ -100,6 +103,13 @@ export interface OpenCodePluginEventInput {
 export interface OpenCodePluginHooks {
   event?: (input: OpenCodePluginEventInput) => Promise<void> | void;
   "chat.message"?: ChatMessageHook;
+  "tool.execute.after"?: ToolAfterHook;
+}
+
+/** Context hooks for one plugin instance, sharing the recent-edits memory. */
+export interface ContextHooks {
+  chat?: ChatMessageHook;
+  toolAfter?: ToolAfterHook;
 }
 
 /** The OpenCode plugin signature. */
@@ -420,7 +430,7 @@ export function createAdapter(deps: AdapterDeps): Adapter {
  */
 export function createOpenCodePlugin(
   buildAdapter: (directory: string, input: OpenCodePluginInput) => Adapter,
-  buildChatHook?: (directory: string) => ChatMessageHook,
+  buildHooks?: (directory: string) => ContextHooks | ChatMessageHook,
 ): OpenCodePlugin {
   return async (input: OpenCodePluginInput): Promise<OpenCodePluginHooks> => {
     const directory =
@@ -431,8 +441,16 @@ export function createOpenCodePlugin(
         adapter.handleEvent(event);
       },
     };
-    if (buildChatHook !== undefined) {
-      hooks["chat.message"] = buildChatHook(directory);
+    if (buildHooks !== undefined) {
+      const built = buildHooks(directory);
+      const context: ContextHooks =
+        typeof built === "function" ? { chat: built } : built;
+      if (context.chat !== undefined) {
+        hooks["chat.message"] = context.chat;
+      }
+      if (context.toolAfter !== undefined) {
+        hooks["tool.execute.after"] = context.toolAfter;
+      }
     }
     return hooks;
   };
@@ -471,18 +489,23 @@ function buildDefaultAdapter(
   });
 }
 
-function buildDefaultChatHook(
+function buildDefaultContextHooks(
   config: AdapterConfig,
   directory: string,
-): ChatMessageHook {
-  return createChatMessageHook({
+): ContextHooks {
+  const deps = {
     directory,
     client: createContextClient({
       resolveEndpoint: createLocalApiEndpointResolver(config),
       timeoutMs: config.contextTimeoutMs,
     }),
     log: createStderrLog(),
-  });
+    recent: new RecentFiles(),
+  };
+  return {
+    chat: createChatMessageHook(deps),
+    toolAfter: createToolAfterHook(deps),
+  };
 }
 
 /** OpenCode plugin entry point. */
@@ -491,6 +514,6 @@ export const XemnasOpenCodeAdapter: OpenCodePlugin = (input) => {
   return createOpenCodePlugin(
     (directory, pluginInput) =>
       buildDefaultAdapter(config, directory, pluginInput.client),
-    (directory) => buildDefaultChatHook(config, directory),
+    (directory) => buildDefaultContextHooks(config, directory),
   )(input);
 };

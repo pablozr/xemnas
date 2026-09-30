@@ -1700,3 +1700,36 @@ fn agent_routes_map_errors_and_require_auth() {
     assert_eq!(status, 401);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn context_endpoint_accepts_edits_and_rejects_unknown_triggers() {
+    use application::context_settings::ContextMode;
+
+    let root = temporary_directory("context-edit");
+    let store = SqliteStore::open(root.join("app.db")).expect("open store");
+    let location = register_project(&store, &root);
+    seed_convention(&store, &location);
+    set_context_mode(&store, &location, ContextMode::Inject);
+    let server = start_with_context(&store, root.clone());
+
+    // An edit of a file no component covers brings nothing, not even the
+    // standing convention.
+    let edit = body_of(&json!({
+        "canonical_path": location,
+        "session_id": "s-edit",
+        "files": ["src/ui.rs"],
+        "trigger": "edit",
+    }));
+    let (status, answer) = post_context(&server, Some(server.token()), &edit);
+    assert_eq!(status, 200, "{answer}");
+    assert_eq!(answer["context"], Value::Null);
+
+    let unknown = body_of(&json!({
+        "canonical_path": location,
+        "session_id": "s-edit",
+        "prompt": "x",
+        "trigger": "read",
+    }));
+    let (status, _) = post_context(&server, Some(server.token()), &unknown);
+    assert_eq!(status, 400);
+}

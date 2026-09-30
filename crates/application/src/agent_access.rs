@@ -211,7 +211,7 @@ where
             .map(|record| record.location)
             .unwrap_or_default();
         let files = path
-            .map(|path| relative_to(path, &location))
+            .map(|path| crate::injection::relative_file(path, &location))
             .into_iter()
             .collect();
         let pack = ContextPacks::new(self.store.clone()).build_pack(ContextRequest {
@@ -338,22 +338,6 @@ where
         budget_tokens: Option<usize>,
     ) -> Result<Option<String>, AgentAccessError> {
         AgentAccess::file_context(self, directory, path, budget_tokens)
-    }
-}
-
-/// `path` relative to the project `location` when it is absolute inside it.
-fn relative_to(path: &str, location: &str) -> String {
-    let path = path.trim().replace('\\', "/");
-    let root = location.replace('\\', "/");
-    let root = root.trim_end_matches('/');
-    if !root.is_empty()
-        && path
-            .to_lowercase()
-            .starts_with(&format!("{}/", root.to_lowercase()))
-    {
-        path[root.len() + 1..].to_string()
-    } else {
-        path
     }
 }
 

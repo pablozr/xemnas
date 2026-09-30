@@ -31,6 +31,7 @@ fn request(path: &str, session: &str, prompt: &str) -> InjectionRequest {
         canonical_path: path.to_string(),
         session_id: session.to_string(),
         prompt: prompt.to_string(),
+        ..InjectionRequest::default()
     }
 }
 
@@ -202,4 +203,74 @@ fn unknown_directories_and_empty_prompts_cost_nothing() {
             .map_err(|error| error.code()),
         Err("invalid_request")
     );
+}
+
+#[test]
+fn an_edit_brings_what_the_map_ties_to_the_file_once_per_session() {
+    use application::graph::{KnowledgeGraph, LinkRequest, NewEntity};
+    use application::injection::InjectionTrigger;
+    use domain::entities::{EdgeKind, EntityKind, NodeKind};
+
+    let test = support::open("inject-edit", &["p1"]);
+    let path = register_directory(&test);
+    seed(&test);
+    set_mode(&test, ContextMode::Inject, None);
+    let decision = support::decision(&test.store, "p1", "db", "Qual banco usar?", "SQLite");
+    let graph = KnowledgeGraph::new(test.store.clone());
+    let storage = graph
+        .create_entity(NewEntity {
+            project_id: "p1".into(),
+            kind: Some(EntityKind::Component),
+            name: "storage".into(),
+            patterns: vec!["crates/storage/**".into()],
+            ..NewEntity::default()
+        })
+        .expect("component")
+        .entity_id;
+    graph
+        .link(LinkRequest {
+            kind: EdgeKind::Affects,
+            source_kind: NodeKind::Decision,
+            source_id: decision,
+            entity_id: storage,
+        })
+        .expect("link");
+    let injection = ContextInjection::new(test.store.clone());
+    let edit = |file: &str| InjectionRequest {
+        canonical_path: path.clone(),
+        session_id: "s-edit".into(),
+        files: vec![file.to_string()],
+        trigger: InjectionTrigger::Edit,
+        ..InjectionRequest::default()
+    };
+
+    let unrelated = injection.prepare(edit("web/app.ts")).expect("unrelated");
+    assert_eq!(unrelated.block, None, "no map tie, nothing injected");
+
+    let absolute = format!("{path}/crates/storage/src/db.rs");
+    let first = injection.prepare(edit(&absolute)).expect("first edit");
+    let block = first.block.expect("block on the first edit");
+    assert!(block.contains("Qual banco usar? → SQLite"));
+    assert!(
+        !block.contains("Mensagens de erro"),
+        "an edit carries only what the map ties to the file"
+    );
+    let again = injection
+        .prepare(edit("crates/storage/src/other.rs"))
+        .expect("second edit");
+    assert_eq!(again.block, None, "delivered once per session");
+
+    // A later prompt that names nothing still gets what the session edited.
+    let follow = injection
+        .prepare(InjectionRequest {
+            canonical_path: path.clone(),
+            session_id: "s-follow".into(),
+            prompt: "agora ajusta aquilo".into(),
+            files: vec!["crates/storage/src/db.rs".into()],
+            ..InjectionRequest::default()
+        })
+        .expect("follow-up");
+    assert!(follow
+        .block
+        .is_some_and(|text| text.contains("Qual banco usar?")));
 }

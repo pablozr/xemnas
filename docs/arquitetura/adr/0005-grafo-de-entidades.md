@@ -45,6 +45,9 @@ Todas aceitam `as_of`. Uma aresta vale em `t` quando foi confirmada até `t` e n
 
 ## Uso pelo agente
 
+- **Na edição (principal):** o plugin do OpenCode usa o gancho `tool.execute.after` nas ferramentas que mudam arquivos (`edit`, `write`, `multiedit`, `patch`, `apply_patch`) e pede `POST /v1/context` com `trigger: "edit"` e os arquivos editados. O app devolve só as decisões e regras que o mapa liga aos componentes desses arquivos, e o plugin as acrescenta ao resultado da ferramenta, que o agente lê. Cada item vem uma vez por sessão (a deduplicação da injeção), nada vem para arquivos fora de componentes, e o modo do projeto vale (Medir só registra). Leituras (`read`) não disparam: o agente lê muito mais do que edita.
+- **No prompt:** o plugin lembra os arquivos que a sessão editou por último e os envia junto do prompt, então um pedido de continuação ("agora ajusta aquilo") recebe o que vale para eles; caminhos citados no prompt também contam.
+
 - O Context Pack aceita arquivos: decisões e claims ligados aos componentes desses arquivos entram antes da busca lexical, dentro do mesmo orçamento.
 - O MCP ganha `file_context` (lente de arquivo) e `search_context` aceita `path`, ambos somente leitura, pela API local.
 

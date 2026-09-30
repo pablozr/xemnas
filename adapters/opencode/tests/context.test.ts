@@ -10,6 +10,9 @@ import { resolveConfig } from "../src/config.js";
 import {
   createChatMessageHook,
   createContextClient,
+  createToolAfterHook,
+  editedFiles,
+  RecentFiles,
   promptText,
   stripContextBlocks,
   type ChatMessageOutput,
@@ -181,4 +184,71 @@ test("the plugin has no mode or budget settings, only a timeout", () => {
   assert.equal("contextBudgetTokens" in config, false);
   assert.equal(config.contextTimeoutMs, 300);
   assert.equal(resolveConfig({ XEMNAS_CONTEXT_TIMEOUT_MS: "150" }).contextTimeoutMs, 150);
+});
+
+test("edit tools name the files they changed; other tools name none", () => {
+  assert.deepEqual(editedFiles("edit", { filePath: "C:/p/src/a.rs", oldString: "x" }), [
+    "C:/p/src/a.rs",
+  ]);
+  assert.deepEqual(editedFiles("read", { filePath: "C:/p/src/a.rs" }), []);
+  assert.deepEqual(editedFiles("bash", { command: "rm -rf x" }), []);
+  const patch = [
+    "*** Begin Patch",
+    "*** Update File: src/db.rs",
+    "@@",
+    "-a",
+    "+b",
+    "*** Add File: src/new.rs",
+    "*** Delete File: src/old.rs",
+    "*** End Patch",
+  ].join("\n");
+  assert.deepEqual(editedFiles("apply_patch", { patchText: patch }), ["src/db.rs", "src/new.rs"]);
+});
+
+test("an edit appends the mapped block to the tool result and remembers the file", async () => {
+  const { client, seen } = scriptedClient(answer("inject", BLOCK));
+  const recording = createRecordingLog();
+  const recent = new RecentFiles();
+  const hook = createToolAfterHook({ client, directory: "C:/projeto", log: recording.log, recent });
+  const out = { title: "edit", output: "Edit applied successfully.", metadata: {} };
+  await hook({ tool: "edit", sessionID: "s1", args: { filePath: "C:/projeto/src/db.rs" } }, out);
+
+  assert.equal(out.output, `Edit applied successfully.\n\n${BLOCK}`);
+  assert.deepEqual(seen[0], {
+    canonical_path: "C:/projeto",
+    session_id: "s1",
+    prompt: "",
+    files: ["C:/projeto/src/db.rs"],
+    trigger: "edit",
+  });
+  assert.deepEqual(recent.get("s1"), ["C:/projeto/src/db.rs"]);
+
+  // A follow-up prompt carries the session's recent edits.
+  const chat = createChatMessageHook({ client, directory: "C:/projeto", log: recording.log, recent });
+  await chat({ sessionID: "s1" }, output("agora ajusta aquilo"));
+  assert.deepEqual(seen[1]?.files, ["C:/projeto/src/db.rs"]);
+});
+
+test("reads, shadow answers and failures leave the tool result untouched", async () => {
+  const recording = createRecordingLog();
+  const shadow = scriptedClient(answer("shadow", null));
+  const hook = createToolAfterHook({ client: shadow.client, directory: "C:/p", log: recording.log });
+  const read = { output: "file text" };
+  await hook({ tool: "read", sessionID: "s1", args: { filePath: "C:/p/a.rs" } }, read);
+  assert.equal(read.output, "file text");
+  assert.equal(shadow.seen.length, 0, "reads never ask the app");
+
+  const edited = { output: "ok" };
+  await hook({ tool: "write", sessionID: "s1", args: { filePath: "C:/p/a.rs" } }, edited);
+  assert.equal(edited.output, "ok", "shadow mode only measures");
+
+  const failing: ContextClient = {
+    async prepare() {
+      throw new Error("boom");
+    },
+  };
+  const broken = createToolAfterHook({ client: failing, directory: "C:/p", log: recording.log });
+  const out = { output: "ok" };
+  await broken({ tool: "edit", sessionID: "s1", args: { filePath: "C:/p/a.rs" } }, out);
+  assert.equal(out.output, "ok");
 });

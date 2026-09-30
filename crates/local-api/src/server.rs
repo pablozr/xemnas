@@ -8,7 +8,7 @@ use std::time::Duration;
 use application::agent_access::{AgentAccessError, AgentApi};
 use application::captures::{CaptureApi, IngestError, Receipt};
 use application::context::ContextError;
-use application::injection::{ContextApi, InjectionOutcome, InjectionRequest};
+use application::injection::{ContextApi, InjectionOutcome, InjectionRequest, InjectionTrigger};
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{DefaultBodyLimit, Path, Request, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -348,13 +348,24 @@ async fn capabilities(State(state): State<AppState>) -> Json<Value> {
     }))
 }
 
+/// Most files one `POST /v1/context` may name.
+const MAX_CONTEXT_FILES: usize = 50;
+
 /// Body of `POST /v1/context`.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ContextBody {
     canonical_path: String,
     session_id: String,
+    /// The user's prompt; may be empty for an edit.
+    #[serde(default)]
     prompt: String,
+    /// Files involved: cited, recently edited or just edited (ADR-0005).
+    #[serde(default)]
+    files: Vec<String>,
+    /// `prompt` (default) or `edit`.
+    #[serde(default)]
+    trigger: Option<String>,
 }
 
 /// Response of `POST /v1/context`.
@@ -391,10 +402,22 @@ async fn prepare_context(
         Ok(Json(body)) => body,
         Err(rejection) => return json_rejection_to_api_error(rejection).into_response(),
     };
+    let trigger = match body.trigger.as_deref() {
+        None => InjectionTrigger::Prompt,
+        Some(value) => match InjectionTrigger::parse(value) {
+            Some(trigger) => trigger,
+            None => return ApiError::BadRequest.into_response(),
+        },
+    };
+    if body.files.len() > MAX_CONTEXT_FILES {
+        return ApiError::BadRequest.into_response();
+    }
     let request = InjectionRequest {
         canonical_path: body.canonical_path,
         session_id: body.session_id,
         prompt: body.prompt,
+        files: body.files,
+        trigger,
     };
     match run_blocking(move || context.prepare(request)).await {
         Ok(Ok(outcome)) => Json(ContextResponse::from(outcome)).into_response(),

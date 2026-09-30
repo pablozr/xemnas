@@ -10,7 +10,7 @@ use crate::context::{
 };
 use crate::context_settings::{ContextMode, ContextSettingsStore};
 use crate::decisions::DecisionStore;
-use crate::graph::GraphStore;
+use crate::graph::{GraphStore, KnowledgeGraph};
 use crate::projects::{find_project_by_directory, ProjectRepository};
 use crate::relations::RelationStore;
 
@@ -138,15 +138,42 @@ pub trait InjectionStore {
 /// Longest accepted agent session identifier.
 pub const MAX_SESSION_ID_CHARS: usize = 200;
 
-/// What the adapter asks for on each agent turn.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// What made the adapter ask for context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InjectionTrigger {
+    /// A user turn: the prompt, the files it cites and the files the session
+    /// edited recently.
+    #[default]
+    Prompt,
+    /// The agent just edited `files`: only what the project map ties to
+    /// their components (ADR-0005), nothing from lexical matching.
+    Edit,
+}
+
+impl InjectionTrigger {
+    /// Parses the wire literal.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "prompt" => Some(Self::Prompt),
+            "edit" => Some(Self::Edit),
+            _ => None,
+        }
+    }
+}
+
+/// What the adapter asks for on each agent turn or edit.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct InjectionRequest {
     /// Directory the agent works in.
     pub canonical_path: String,
     /// Agent session identifier.
     pub session_id: String,
-    /// User prompt; used only for matching and never stored.
+    /// User prompt; used only for matching and never stored. Empty for edits.
     pub prompt: String,
+    /// Files involved (absolute inside the project or relative to it).
+    pub files: Vec<String>,
+    /// Why context is asked for.
+    pub trigger: InjectionTrigger,
 }
 
 /// Result of one turn.
@@ -211,7 +238,8 @@ where
             return Err(ContextError::InvalidRequest("sessão inválida".into()));
         }
         let prompt: String = request.prompt.trim().chars().take(MAX_TASK_CHARS).collect();
-        if prompt.is_empty() {
+        let edit = request.trigger == InjectionTrigger::Edit;
+        if (edit && request.files.is_empty()) || (!edit && prompt.is_empty()) {
             return Ok(InjectionOutcome::empty(ContextMode::Off));
         }
         let Some(project) = find_project_by_directory(&self.store, &request.canonical_path)
@@ -230,14 +258,41 @@ where
             .and_then(|settings| settings.budget_tokens)
             .unwrap_or(DEFAULT_BUDGET_TOKENS);
 
-        let files = mentioned_paths(&prompt, &project.location);
-        let pack = ContextPacks::new(self.store.clone()).build_pack(ContextRequest {
+        let mut files: Vec<String> = request
+            .files
+            .iter()
+            .map(|file| relative_file(file, &project.location))
+            .filter(|file| !file.is_empty())
+            .collect();
+        if !edit {
+            files.extend(mentioned_paths(&prompt, &project.location));
+        }
+        files.dedup();
+        files.truncate(crate::context::MAX_FILES);
+        // An edit only brings what the map ties to the edited files.
+        let tied = if edit {
+            let (decisions, claims) = KnowledgeGraph::new(self.store.clone())
+                .context_for_files(&project.id, &files, None)
+                .map_err(|error| ContextError::Storage(error.to_string()))?;
+            if decisions.is_empty() && claims.is_empty() {
+                return Ok(InjectionOutcome::empty(mode));
+            }
+            Some((decisions, claims))
+        } else {
+            None
+        };
+        let mut pack = ContextPacks::new(self.store.clone()).build_pack(ContextRequest {
             project_id: project.id.clone(),
-            task: prompt,
+            task: if edit { String::new() } else { prompt },
             as_of: None,
             budget_chars: Some(MAX_BUDGET_CHARS),
             files,
         })?;
+        if let Some((decisions, claims)) = &tied {
+            pack.decisions
+                .retain(|decision| decisions.contains(&decision.decision_id));
+            pack.claims.retain(|claim| claims.contains(&claim.claim_id));
+        }
         let delivered = self.store.delivered(session, delivery)?;
         let Some(block) = render_compact(&pack, budget, &delivered) else {
             return Ok(InjectionOutcome::empty(mode));
@@ -306,6 +361,23 @@ pub fn mentioned_paths(prompt: &str, project_root: &str) -> Vec<String> {
         }
     }
     paths
+}
+
+/// `path` relative to the project `location` when it is absolute inside it,
+/// with forward slashes.
+pub(crate) fn relative_file(path: &str, location: &str) -> String {
+    let path = path.trim().replace('\\', "/");
+    let root = location.replace('\\', "/");
+    let root = root.trim_end_matches('/');
+    if !root.is_empty()
+        && path
+            .to_lowercase()
+            .starts_with(&format!("{}/", root.to_lowercase()))
+    {
+        path[root.len() + 1..].to_string()
+    } else {
+        path
+    }
 }
 
 /// `path` without a trailing `:<line>` or `:<line>:<column>`.

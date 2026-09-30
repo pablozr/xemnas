@@ -58,7 +58,7 @@ npm test                      # testes de contrato e captura automática
 npm run send-fixture          # envia fixture pela outbox (modo CLI)
 ```
 
-Variáveis relevantes: `XEMNAS_DATA_DIR`, `XEMNAS_OUTBOX_DIR` e `OPENCODE_URL` (override **legado** da fonte HTTP de diagnóstico; padrão `http://127.0.0.1:4096`). A injeção de contexto é ligada por projeto no app (desligada, medir ou ativa); o plugin só aceita `XEMNAS_CONTEXT_TIMEOUT_MS` como ajuste opcional (ver [`docs/roadmap/fase-3/02-injecao-de-contexto.md`](docs/roadmap/fase-3/02-injecao-de-contexto.md)).
+Variáveis relevantes: `XEMNAS_DATA_DIR`, `XEMNAS_OUTBOX_DIR` e `OPENCODE_URL` (override **legado** da fonte HTTP de diagnóstico; padrão `http://127.0.0.1:4096`). A injeção de contexto é ligada por projeto no app (desligada, medir ou ativa) e acontece em dois momentos: no prompt e logo depois de cada edição de arquivo, com o que o mapa do projeto liga àquele arquivo (ADR-0005); o plugin só aceita `XEMNAS_CONTEXT_TIMEOUT_MS` como ajuste opcional (ver [`docs/roadmap/fase-3/02-injecao-de-contexto.md`](docs/roadmap/fase-3/02-injecao-de-contexto.md)).
 
 **Ativação (uma vez, sem publicar):** o OpenCode carrega plugins de arquivos locais — crie `~/.config/opencode/plugins/xemnas.ts` reexportando o build (`export { XemnasOpenCodeAdapter as Xemnas } from "<repo>/adapters/opencode/dist/src/index.js"`; caminho relativo a partir de `plugins/` é `../../../orca/projects/xemnas/...`). O wrapper deve ter **um único export** (o factory), para o OpenCode não registrar os exports utilitários do módulo. Reinicie a sessão do OpenCode após criar o arquivo.
 
