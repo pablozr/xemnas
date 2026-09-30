@@ -320,6 +320,21 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
             });
         }).detach();
     }
+    /// Loaded decisions for the command palette: id and question.
+    pub fn palette_rows(&self) -> Vec<(String, String)> {
+        self.rows
+            .iter()
+            .map(|row| (row.decision_id.clone(), row.question.clone()))
+            .collect()
+    }
+
+    /// Opens a loaded decision from the command palette.
+    pub fn open_decision(&mut self, id: String, cx: &mut Context<Self>) {
+        self.history = false;
+        self.version = None;
+        self.select(id, cx);
+    }
+
     /// Moves the index selection (loaded rows, or search hits while searching).
     pub fn move_selection(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
         if self.editor.is_some() || self.preview.is_some() {

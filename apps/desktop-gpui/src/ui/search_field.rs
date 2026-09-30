@@ -928,7 +928,7 @@ impl Render for SearchField {
                     field.child(
                         text_style(div(), TypeScale::META)
                             .text_color(theme.colors.text_muted())
-                            .child(if focused { "Esc · limpar" } else { "Ctrl K" }),
+                            .child(if focused { "Esc · limpar" } else { "Ctrl F" }),
                     )
                 },
             )

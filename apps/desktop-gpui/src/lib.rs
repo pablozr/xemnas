@@ -8,5 +8,6 @@
 
 pub mod app;
 pub mod fonts;
+pub mod palette;
 pub mod screens;
 pub mod ui;

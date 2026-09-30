@@ -11,6 +11,7 @@ use gpui::{
 };
 
 use crate::fonts::{app_icon, wordmark};
+use crate::palette::{self, PaletteItem};
 use crate::screens::decisions::DecisionsScreen;
 use crate::screens::inbox::InboxScreen;
 use crate::screens::projects::{ProjectChanged, ProjectsScreen};
@@ -18,7 +19,7 @@ use crate::ui::controls::icon_action;
 use crate::ui::feedback::error_state;
 use crate::ui::glass::focus_ring;
 use crate::ui::icons::{icon, IconName};
-use crate::ui::patterns::{count_chip, fade_in, track_hover};
+use crate::ui::patterns::{count_chip, fade_in, kbd, section_label, track_hover};
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Backdrop, Theme, ThemeMode};
 use crate::ui::tokens::MotionTokens;
@@ -51,7 +52,17 @@ actions!(
         /// Opens Revisão.
         GoReview,
         /// Opens Decisões.
-        GoDecisions
+        GoDecisions,
+        /// Opens or closes the command palette.
+        TogglePalette,
+        /// Moves the palette highlight down.
+        PaletteDown,
+        /// Moves the palette highlight up.
+        PaletteUp,
+        /// Runs the highlighted palette item.
+        PaletteRun,
+        /// Closes the palette.
+        PaletteClose
     ]
 );
 
@@ -59,6 +70,28 @@ actions!(
 const TITLE_BAR_HEIGHT: f32 = 40.0;
 /// Height of the project bar that carries the breadcrumb and destinations.
 const PROJECT_BAR_HEIGHT: f32 = 44.0;
+
+/// What a palette item does.
+#[derive(Clone, Debug)]
+enum Command {
+    Go(Destination),
+    Project(String),
+    Candidate(String),
+    Decision(String),
+    ProjectPanel,
+    OpenFolder,
+    ToggleTheme,
+}
+
+/// The open palette: its query field and highlighted row.
+struct Palette {
+    field: Entity<SearchField>,
+    highlighted: usize,
+    _subscription: Subscription,
+}
+
+/// Rows shown at once before the palette scrolls.
+const PALETTE_MAX_HEIGHT: f32 = 380.0;
 
 /// Clicks that land on the breadcrumb within this window of a dismissal are
 /// the same gesture that dismissed the panel, not a request to reopen it.
@@ -123,6 +156,7 @@ pub struct Shell<R: ProjectRepository + InboxStore + DecisionStore + Send + 'sta
     project_panel: bool,
     panel_dismissed_at: Option<std::time::Instant>,
     demo: bool,
+    palette: Option<Palette>,
     /// Whether the window was opened over a system material (Mica/Acrylic).
     backdrop: bool,
 }
@@ -223,6 +257,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
             project_panel: false,
             panel_dismissed_at: None,
             demo: false,
+            palette: None,
             backdrop: false,
         }
     }
@@ -273,6 +308,336 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
             self.switch_to(Destination::Review, window, cx);
         }
         window.focus(&self.search.read(cx).focus_handle(cx), cx);
+    }
+
+    fn toggle_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.palette.take().is_some() {
+            window.focus(&self.focus, cx);
+            cx.notify();
+            return;
+        }
+        self.project_panel = false;
+        let field = cx.new(|cx| {
+            let mut field = SearchField::new(cx);
+            field.stretch();
+            field.set_context("Ir para projeto, candidato, decisão ou ação…", cx);
+            field
+        });
+        let subscription = cx.subscribe(&field, |shell, _, _: &SearchChanged, cx| {
+            if let Some(palette) = &mut shell.palette {
+                palette.highlighted = 0;
+            }
+            cx.notify();
+        });
+        window.focus(&field.read(cx).focus_handle(cx), cx);
+        self.palette = Some(Palette {
+            field,
+            highlighted: 0,
+            _subscription: subscription,
+        });
+        cx.notify();
+    }
+
+    /// Everything the palette can reach right now, from data already loaded.
+    fn palette_items(&self, cx: &App) -> Vec<PaletteItem<Command>> {
+        let mut items = Vec::new();
+        let selected = self
+            .projects
+            .as_ref()
+            .and_then(|screen| screen.read(cx).selected_project());
+        if selected.is_some() {
+            for destination in [Destination::Review, Destination::Decisions] {
+                items.push(PaletteItem {
+                    group: "Ir para",
+                    label: destination.label().to_owned(),
+                    detail: None,
+                    glyph: match destination {
+                        Destination::Review => IconName::List,
+                        Destination::Decisions => IconName::File,
+                    },
+                    shortcut: Some(destination.shortcut()),
+                    command: Command::Go(destination),
+                });
+            }
+        }
+        if let Some(inbox) = &self.inbox {
+            for (id, question) in inbox.read(cx).palette_rows() {
+                items.push(PaletteItem {
+                    group: "Candidatos",
+                    label: question,
+                    detail: None,
+                    glyph: IconName::List,
+                    shortcut: None,
+                    command: Command::Candidate(id),
+                });
+            }
+        }
+        if let Some(decisions) = &self.decisions {
+            for (id, question) in decisions.read(cx).palette_rows() {
+                items.push(PaletteItem {
+                    group: "Decisões",
+                    label: question,
+                    detail: None,
+                    glyph: IconName::File,
+                    shortcut: None,
+                    command: Command::Decision(id),
+                });
+            }
+        }
+        if let Some(projects) = &self.projects {
+            for (id, name, location) in projects.read(cx).palette_projects() {
+                items.push(PaletteItem {
+                    group: "Projetos",
+                    label: name,
+                    detail: Some(location),
+                    glyph: IconName::Folder,
+                    shortcut: None,
+                    command: Command::Project(id),
+                });
+            }
+        }
+        if selected.is_some() {
+            items.push(PaletteItem {
+                group: "Ações",
+                label: "Propriedades do projeto".into(),
+                detail: None,
+                glyph: IconName::Info,
+                shortcut: None,
+                command: Command::ProjectPanel,
+            });
+        }
+        items.push(PaletteItem {
+            group: "Ações",
+            label: "Abrir pasta…".into(),
+            detail: Some("Acompanhar um novo projeto".into()),
+            glyph: IconName::FolderPlus,
+            shortcut: None,
+            command: Command::OpenFolder,
+        });
+        let mode = cx.try_global::<ThemeMode>().copied().unwrap_or_default();
+        items.push(PaletteItem {
+            group: "Ações",
+            label: format!("Usar tema {}", mode.toggled().label()),
+            detail: None,
+            glyph: IconName::Contrast,
+            shortcut: None,
+            command: Command::ToggleTheme,
+        });
+        items
+    }
+
+    fn visible_palette_items(&self, cx: &App) -> Vec<PaletteItem<Command>> {
+        let query = self
+            .palette
+            .as_ref()
+            .map(|palette| palette.field.read(cx).value().to_owned())
+            .unwrap_or_default();
+        palette::filter(&self.palette_items(cx), &query)
+    }
+
+    fn move_palette(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let count = self.visible_palette_items(cx).len();
+        if let Some(palette) = &mut self.palette {
+            if count > 0 {
+                palette.highlighted =
+                    (palette.highlighted as isize + delta).rem_euclid(count as isize) as usize;
+            }
+            cx.notify();
+        }
+    }
+
+    fn run_palette(&mut self, index: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
+        let items = self.visible_palette_items(cx);
+        let Some(palette) = self.palette.take() else {
+            return;
+        };
+        let Some(item) = items.get(index.unwrap_or(palette.highlighted)).cloned() else {
+            self.palette = Some(palette);
+            return;
+        };
+        window.focus(&self.focus, cx);
+        match item.command {
+            Command::Go(destination) => self.switch_to(destination, window, cx),
+            Command::Project(id) => {
+                if let Some(projects) = &self.projects {
+                    projects.update(cx, |screen, cx| screen.select_project(id, window, cx));
+                }
+            }
+            Command::Candidate(id) => {
+                self.switch_to(Destination::Review, window, cx);
+                if let Some(inbox) = &self.inbox {
+                    inbox.update(cx, |screen, cx| screen.open_candidate(id, window, cx));
+                }
+            }
+            Command::Decision(id) => {
+                self.switch_to(Destination::Decisions, window, cx);
+                if let Some(decisions) = &self.decisions {
+                    decisions.update(cx, |screen, cx| screen.open_decision(id, cx));
+                }
+            }
+            Command::ProjectPanel => {
+                self.project_panel = false;
+                self.panel_dismissed_at = None;
+                self.toggle_project_panel(window, cx);
+            }
+            Command::OpenFolder => {
+                if let Some(projects) = &self.projects {
+                    projects.update(cx, |screen, cx| screen.open_folder_dialog(cx));
+                }
+            }
+            Command::ToggleTheme => self.toggle_theme(window, cx),
+        }
+        cx.notify();
+    }
+
+    /// The palette overlay: a dimmed window and a centred list under a field.
+    fn render_palette(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let theme = self.theme;
+        let field = self.palette.as_ref()?.field.clone();
+        let highlighted = self.palette.as_ref()?.highlighted;
+        let items = self.visible_palette_items(cx);
+        let mut list = div()
+            .id("palette-list")
+            .max_h(px(PALETTE_MAX_HEIGHT))
+            .overflow_y_scroll()
+            .py(px(SpacingScale::S1));
+        let mut group = "";
+        for (index, item) in items.iter().enumerate() {
+            if item.group != group {
+                group = item.group;
+                list = list.child(
+                    section_label(&theme, group)
+                        .px(px(SpacingScale::S4))
+                        .pt(px(SpacingScale::S3))
+                        .pb(px(SpacingScale::S1)),
+                );
+            }
+            let active = index == highlighted;
+            let foreground = if active {
+                theme.colors.text_primary()
+            } else {
+                theme.colors.text_secondary()
+            };
+            list = list.child(
+                text_style(div(), TypeScale::BODY_SMALL)
+                    .id(("palette-item", index))
+                    .mx(px(SpacingScale::S2))
+                    .h(px(ControlSize::MD + 4.0))
+                    .px(px(SpacingScale::S2))
+                    .flex()
+                    .items_center()
+                    .gap(px(SpacingScale::S2))
+                    .rounded(theme.radius.control())
+                    .when(active, |row| row.bg(theme.colors.selection()))
+                    .text_color(foreground)
+                    .cursor_pointer()
+                    .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                        if let Some(palette) = &mut this.palette {
+                            if palette.highlighted != index {
+                                palette.highlighted = index;
+                                cx.notify();
+                            }
+                        }
+                    }))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.run_palette(Some(index), window, cx)
+                    }))
+                    .child(icon(item.glyph, 14.0, foreground))
+                    .child(div().min_w(px(0.0)).truncate().child(item.label.clone()))
+                    .children(item.detail.clone().map(|detail| {
+                        text_style(div(), TypeScale::META)
+                            .min_w(px(0.0))
+                            .flex_1()
+                            .truncate()
+                            .text_color(theme.colors.text_muted())
+                            .child(detail)
+                    }))
+                    .when(item.detail.is_none(), |row| row.child(div().flex_1()))
+                    .children(item.shortcut.map(|key| kbd(theme.colors.text_muted(), key))),
+            );
+        }
+        if items.is_empty() {
+            list = list.child(
+                text_style(div(), TypeScale::BODY_SMALL)
+                    .px(px(SpacingScale::S4))
+                    .py(px(SpacingScale::S4))
+                    .text_color(theme.colors.text_muted())
+                    .child("Nada corresponde. A paleta procura no que já está carregado."),
+            );
+        }
+        let panel = div()
+            .id("palette")
+            .key_context("Palette")
+            .w(px(560.0))
+            .max_w(gpui::relative(0.9))
+            .mt(gpui::relative(0.12))
+            .flex()
+            .flex_col()
+            .rounded(theme.radius.dialog())
+            .border_1()
+            .border_color(theme.colors.hairline_divider())
+            .bg(theme.colors.surface())
+            .shadow(vec![BoxShadow::new(
+                px(0.0),
+                px(24.0),
+                theme.colors.shadow_emphasis().into(),
+            )
+            .blur_radius(px(48.0))])
+            .occlude()
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_action(cx.listener(|this, _: &PaletteDown, _, cx| this.move_palette(1, cx)))
+            .on_action(cx.listener(|this, _: &PaletteUp, _, cx| this.move_palette(-1, cx)))
+            .on_action(
+                cx.listener(|this, _: &PaletteRun, window, cx| this.run_palette(None, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &PaletteClose, window, cx| this.toggle_palette(window, cx)),
+            )
+            .child(
+                div()
+                    .p(px(SpacingScale::S2))
+                    .border_b_1()
+                    .border_color(theme.colors.hairline_divider())
+                    .child(field),
+            )
+            .child(list)
+            .child(
+                text_style(div(), TypeScale::META)
+                    .px(px(SpacingScale::S4))
+                    .py(px(SpacingScale::S2))
+                    .flex()
+                    .gap(px(SpacingScale::S3))
+                    .border_t_1()
+                    .border_color(theme.colors.hairline_divider())
+                    .text_color(theme.colors.text_muted())
+                    .child("↑↓ navegar")
+                    .child("Enter abrir")
+                    .child("Esc fechar"),
+            );
+        Some(
+            deferred(
+                div()
+                    .id("palette-scrim")
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .justify_center()
+                    .items_start()
+                    .bg(theme.colors.scrim())
+                    .occlude()
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            if this.palette.is_some() {
+                                this.toggle_palette(window, cx);
+                            }
+                        }),
+                    )
+                    .child(fade_in(div().child(panel), "palette-in")),
+            )
+            .with_priority(3)
+            .into_any_element(),
+        )
     }
 
     fn on_move(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
@@ -684,6 +1049,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
             .into_any_element()
         };
 
+        let palette = self.render_palette(cx);
         div()
             .id("xemnas-shell")
             .role(Role::Application)
@@ -701,6 +1067,9 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
             .on_action(cx.listener(Self::on_tab_next))
             .on_action(cx.listener(Self::on_tab_prev))
             .on_action(cx.listener(Self::on_focus_search))
+            .on_action(
+                cx.listener(|this, _: &TogglePalette, window, cx| this.toggle_palette(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &GoReview, window, cx| {
                 this.switch_to(Destination::Review, window, cx)
             }))
@@ -727,8 +1096,10 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
                     cx.stop_propagation();
                 }
             }))
+            .relative()
             .child(title)
             .child(div().flex_1().min_h(px(0.0)).overflow_hidden().child(body))
+            .children(palette)
     }
 }
 

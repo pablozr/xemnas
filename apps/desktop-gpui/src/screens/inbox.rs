@@ -294,6 +294,25 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
         .detach();
     }
 
+    /// Loaded candidates for the command palette: id and question.
+    pub fn palette_rows(&self) -> Vec<(String, String)> {
+        self.rows
+            .iter()
+            .map(|row| (row.id.clone(), row.question.clone()))
+            .collect()
+    }
+
+    /// Opens a loaded candidate from the command palette.
+    pub fn open_candidate(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(index) = self.rows.iter().position(|row| row.id == id) {
+            self.list_scroll.scroll_to_item(index);
+        }
+        if let Some((_, focus)) = self.row_focus.iter().find(|(key, _)| *key == id) {
+            window.focus(focus, cx);
+        }
+        self.select(id, cx);
+    }
+
     /// Moves the selection through the visible queue and keeps it in view.
     pub fn move_selection(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
         if self.editor.is_some() {

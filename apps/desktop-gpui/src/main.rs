@@ -16,8 +16,9 @@ use gpui_platform::application;
 use storage_sqlite::{default_data_dir, default_db_path, SqliteStore};
 
 use xemnas_desktop::app::{
-    AdjustItem, ConfirmItem, FocusSearch, GoDecisions, GoReview, NextItem, PrevItem, RejectItem,
-    SaveEditor, Shell, SnoozeItem, TabNext, TabPrev,
+    AdjustItem, ConfirmItem, FocusSearch, GoDecisions, GoReview, NextItem, PaletteClose,
+    PaletteDown, PaletteRun, PaletteUp, PrevItem, RejectItem, SaveEditor, Shell, SnoozeItem,
+    TabNext, TabPrev, TogglePalette,
 };
 use xemnas_desktop::ui::search_field::{
     Backspace, Clear, Copy, Cut, Delete, End, Home, Left, Paste, Right, SelectAll, SelectLeft,
@@ -191,7 +192,8 @@ fn run_shell_mode(store: Result<SqliteStore, String>, demo: bool) {
         cx.bind_keys([
             KeyBinding::new("tab", TabNext, None),
             KeyBinding::new("shift-tab", TabPrev, None),
-            KeyBinding::new("ctrl-k", FocusSearch, Some("xemnas")),
+            KeyBinding::new("ctrl-k", TogglePalette, Some("xemnas")),
+            KeyBinding::new("ctrl-f", FocusSearch, Some("xemnas")),
             // Single-key shortcuts never fire while a text field has focus.
             KeyBinding::new("j", NextItem, Some("xemnas && !SearchField")),
             KeyBinding::new("down", NextItem, Some("xemnas && !SearchField")),
@@ -217,6 +219,12 @@ fn run_shell_mode(store: Result<SqliteStore, String>, demo: bool) {
             KeyBinding::new("home", Home, Some("SearchField")),
             KeyBinding::new("end", End, Some("SearchField")),
             KeyBinding::new("escape", Clear, Some("SearchField")),
+            // Declared after Clear so the palette closes instead of clearing.
+            KeyBinding::new("escape", PaletteClose, Some("Palette > SearchField")),
+            KeyBinding::new("escape", PaletteClose, Some("Palette")),
+            KeyBinding::new("down", PaletteDown, Some("Palette")),
+            KeyBinding::new("up", PaletteUp, Some("Palette")),
+            KeyBinding::new("enter", PaletteRun, Some("Palette")),
         ]);
 
         let compact = demo && std::env::args().any(|argument| argument == "--compact");

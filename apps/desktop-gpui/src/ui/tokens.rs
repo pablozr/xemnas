@@ -384,6 +384,11 @@ impl ColorTokens {
         rgb(0x9790AC).alpha(0.22)
     }
 
+    /// `scrim` — dims the window behind a modal surface.
+    pub fn scrim(&self) -> Rgba {
+        rgb(0x000000).alpha(0.40)
+    }
+
     /// `status.danger-tint` — background of an error banner.
     pub fn danger_tint(&self) -> Rgba {
         self.status_danger().alpha(0.10)

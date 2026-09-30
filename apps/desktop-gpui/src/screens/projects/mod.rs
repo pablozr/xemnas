@@ -671,6 +671,33 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
         sidebar.into_any_element()
     }
 
+    /// Projects for the command palette: id, name and location.
+    pub fn palette_projects(&self) -> Vec<(String, String, String)> {
+        match &self.list {
+            ListState::Ready(list) => list
+                .iter()
+                .map(|project| {
+                    (
+                        project.id().as_str().to_owned(),
+                        project.name().to_owned(),
+                        project.location().to_string(),
+                    )
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Selects a project from the command palette.
+    pub fn select_project(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.select(id, window, cx);
+    }
+
+    /// Opens the system folder picker from the command palette.
+    pub fn open_folder_dialog(&mut self, cx: &mut Context<Self>) {
+        self.open_folder(cx);
+    }
+
     /// Focus target when the project panel opens: its first action.
     pub fn panel_focus(&self) -> FocusHandle {
         self.remove_focus.clone()
