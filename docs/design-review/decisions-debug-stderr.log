@@ -1,0 +1,289 @@
+
+thread 'main' (42944) panicked at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\core\src\slice\index.rs:1009:51:
+range end index 12 out of range for slice of length 0
+stack backtrace:
+   0: std::panicking::panic_handler
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\std\src\panicking.rs:679
+   1: core::panicking::panic_fmt
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\core\src\panicking.rs:80
+   2: core::slice::index::slice_index_fail
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\core\src\panic.rs:177
+   3: core::slice::index::into_slice_range
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\core\src\slice\index.rs:1020
+   4: core::slice::index::range
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\core\src\slice\index.rs:901
+   5: alloc::string::String::replace_range<core::ops::range::Range<usize> >
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\alloc\src\string.rs:2085
+   6: xemnas_desktop::ui::search_edit::SearchEdit::replace
+             at .\apps\desktop-gpui\src\ui\search_edit.rs:28
+   7: xemnas_desktop::ui::search_field::SearchField::paste
+             at .\apps\desktop-gpui\src\ui\search_field.rs:243
+   8: core::ops::function::Fn::call
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\core\src\ops\function.rs:79
+   9: gpui::app::context::impl$2::listener::closure$0::closure$0<xemnas_desktop::ui::search_field::SearchField,xemnas_desktop::ui::search_field::Paste,void (*)(ref_mut$<xemnas_desktop::ui::search_field::SearchField>,ref$<xemnas_desktop::ui::search_field::Paste>,
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app\context.rs:253
+  10: gpui::app::context::invoke_listener::closure$0
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app\context.rs:958
+  11: gpui::app::impl$11::update_entity::closure$0
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app.rs:3014
+  12: core::ops::function::FnOnce::call_once
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\core\src\ops\function.rs:250
+  13: core::ops::function::FnOnce::call_once<gpui::app::impl$11::update_entity::closure_env$0<xemnas_desktop::ui::search_field::SearchField,tuple$<>,gpui::app::context::invoke_listener::closure_env$0<xemnas_desktop::ui::search_field::SearchField> >,tuple$<ref_mu
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app.rs:3014
+  14: gpui::app::impl$10::update_entity_erased::closure$0
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app.rs:2951
+  15: gpui::app::App::update
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app.rs:1163
+  16: gpui::app::App::update_entity_erased
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app.rs:2949
+  17: gpui::app::entity_map::WeakEntity<xemnas_desktop::ui::search_field::SearchField>::update
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app\entity_map.rs:808
+  18: gpui::app::context::invoke_listener<xemnas_desktop::ui::search_field::SearchField>
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app\context.rs:958
+  19: gpui::app::context::impl$2::listener::closure$0
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app\context.rs:252
+  20: gpui::elements::div::impl$1::on_action::closure$0<xemnas_desktop::ui::search_field::Paste,gpui::app::context::impl$2::listener::closure_env$0<xemnas_desktop::ui::search_field::SearchField,xemnas_desktop::ui::search_field::Paste,void (*)(ref_mut$<xemnas_des
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\elements\div.rs:464
+  21: gpui::window::Window::dispatch_action_on_node_inner
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\window.rs:6382
+  22: gpui::window::Window::dispatch_action_on_node
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\window.rs:6297
+  23: gpui::window::Window::dispatch_key_event
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\window.rs:5971
+  24: gpui::window::Window::dispatch_event
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\window.rs:5548
+  25: gpui::window::impl$29::new::closure$20::closure$0
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\window.rs:1942
+  26: gpui::app::impl$10::update_window_id::closure$0<gpui::window::DispatchEventResult,gpui::window::impl$29::new::closure$20::closure_env$0>
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app.rs:1996
+  27: gpui::app::impl$10::update_window_erased::closure$0
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app.rs:2896
+  28: gpui::app::App::update
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app.rs:1163
+  29: gpui::app::App::update_window_erased
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app.rs:2887
+  30: gpui::app::App::update_window_id
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app.rs:1994
+  31: gpui::app::impl$11::update_window<gpui::window::DispatchEventResult,gpui::window::impl$29::new::closure$20::closure_env$0>
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app.rs:3043
+  32: gpui::app::async_context::impl$1::update_window
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app\async_context.rs:97
+  33: gpui::window::AnyWindowHandle::update<gpui::app::async_context::AsyncApp,gpui::window::DispatchEventResult,gpui::window::impl$29::new::closure$20::closure_env$0>
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\window.rs:7371
+  34: gpui::window::impl$29::new::closure$20
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\window.rs:1942
+  35: alloc::boxed::impl$32::call_mut
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\alloc\src\boxed.rs:2326
+  36: gpui_windows::window::WindowsWindowInner::handle_keydown_msg
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui_windows\src\events.rs:453
+  37: gpui_windows::window::WindowsWindowInner::handle_msg
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui_windows\src\events.rs:154
+  38: gpui_windows::window::window_procedure
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui_windows\src\window.rs:1468
+  39: CallWindowProcW
+  40: SendMessageW
+  41: SendMessageW
+  42: SendMessageW
+  43: windows::Win32::UI::WindowsAndMessaging::SendMessageW
+             at C:\Users\Pablo\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.62.2\src\Windows\Win32\UI\WindowsAndMessaging\mod.rs:2046
+  44: gpui_windows::platform::translate_accelerator
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui_windows\src\platform.rs:419
+  45: gpui_windows::platform::impl$5::run
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui_windows\src\platform.rs:517
+  46: gpui::app::Application::run<xemnas::run_shell_mode::closure_env$0>
+             at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app.rs:243
+  47: xemnas::run_shell_mode
+             at .\apps\desktop-gpui\src\main.rs:172
+  48: xemnas::main
+             at .\apps\desktop-gpui\src\main.rs:35
+  49: core::ops::function::FnOnce::call_once
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\core\src\ops\function.rs:250
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+thread 'main' (42944) panicked at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\core\src\panicking.rs:225:5:
+panic in a function that cannot unwind
+stack backtrace:
+   0:     0x7ff64cc6ddb9 - std::backtrace_rs::backtrace::win64::trace
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\std\src\..\..\backtrace\src\backtrace\win64.rs:85
+   1:     0x7ff64cc6ddb9 - std::backtrace_rs::backtrace::trace_unsynchronized
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\std\src\..\..\backtrace\src\backtrace\mod.rs:66
+   2:     0x7ff64cc6ddb9 - std::sys::backtrace::_print_fmt
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\std\src\sys\backtrace.rs:74
+   3:     0x7ff64cc6ddb9 - std::sys::backtrace::impl$0::print::impl$0::fmt
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\std\src\sys\backtrace.rs:44
+   4:     0x7ff64cc82e21 - core::fmt::write
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\core\src\fmt\mod.rs:0
+   5:     0x7ff64cc73164 - std::io::default_write_fmt
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\std\src\io\mod.rs:626
+   6:     0x7ff64cc73164 - std::io::Write::write_fmt<std::sys::stdio::windows::Stderr>
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\std\src\io\mod.rs:1730
+   7:     0x7ff64cc52015 - std::sys::backtrace::BacktraceLock::print
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\std\src\sys\backtrace.rs:47
+   8:     0x7ff64cc52015 - std::panicking::default_hook::closure$0
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\std\src\panicking.rs:292
+   9:     0x7ff64cc655e8 - std::panicking::default_hook
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\std\src\panicking.rs:319
+  10:     0x7ff64cc65a04 - std::panicking::panic_with_hook
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\std\src\panicking.rs:823
+  11:     0x7ff64cc52124 - std::panicking::panic_handler::closure$0
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\std\src\panicking.rs:681
+  12:     0x7ff64cc4fb3f - std::sys::backtrace::__rust_end_short_backtrace<std::panicking::panic_handler::closure_env$0,never$>
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\std\src\sys\backtrace.rs:182
+  13:     0x7ff64cc52a4e - std::panicking::panic_handler
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\std\src\panicking.rs:679
+  14:     0x7ff64cdbf9d7 - core::panicking::panic_nounwind_fmt
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\core\src\intrinsics\mod.rs:2458
+  15:     0x7ff64cdbf951 - core::panicking::panic_nounwind
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\core\src\panicking.rs:225
+  16:     0x7ff64cdbfb0a - core::panicking::panic_cannot_unwind
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\core\src\panicking.rs:337
+  17:     0x7ff64c49919d - gpui_windows::window::window_procedure
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui_windows\src\window.rs:1435
+  18:     0x7ffe29bcbb00 - _CxxFrameHandler3
+  19:     0x7ffe29bb3a9d - is_exception_typeof
+  20:     0x7ffe29bcae8d - _C_specific_handler
+  21:     0x7ffe29bb2ce2 - is_exception_typeof
+  22:     0x7ffe29bcb8f8 - _CxxFrameHandler3
+  23:     0x7ffe4712557f - _chkstk
+  24:     0x7ffe46fd3680 - RtlUnwindEx
+  25:     0x7ffe29bcb3d6 - _C_specific_handler
+  26:     0x7ffe29bb1c20 - is_exception_typeof
+  27:     0x7ffe29bb2dd8 - is_exception_typeof
+  28:     0x7ffe29bcb8f8 - _CxxFrameHandler3
+  29:     0x7ffe471254ff - _chkstk
+  30:     0x7ffe4708bd25 - RtlWow64GetCurrentMachine
+  31:     0x7ffe46fcf88d - RtlRaiseException
+  32:     0x7ffe443b41ca - RaiseException
+  33:     0x7ffe29bb55a9 - CxxThrowException
+  34:     0x7ff64cc734bd - panic_unwind::imp::throw_exception
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\panic_unwind\src\seh.rs:368
+  35:     0x7ff64cc73395 - panic_unwind::imp::panic
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\panic_unwind\src\seh.rs:302
+  36:     0x7ff64cc73395 - panic_unwind::__rust_start_panic
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\panic_unwind\src\lib.rs:103
+  37:     0x7ff64cc527ff - std::panicking::rust_panic
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\std\src\panicking.rs:887
+  38:     0x7ff64cc65a3e - std::panicking::panic_with_hook
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\std\src\panicking.rs:840
+  39:     0x7ff64cc520ee - std::panicking::panic_handler::closure$0
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\std\src\panicking.rs:688
+  40:     0x7ff64cc4fb3f - std::sys::backtrace::__rust_end_short_backtrace<std::panicking::panic_handler::closure_env$0,never$>
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\std\src\sys\backtrace.rs:182
+  41:     0x7ff64cc52a4e - std::panicking::panic_handler
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\std\src\panicking.rs:679
+  42:     0x7ff64cdbfbfd - core::panicking::panic_fmt
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\core\src\panicking.rs:80
+  43:     0x7ff64cdbfcfb - core::slice::index::slice_index_fail
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\core\src\panic.rs:177
+  44:     0x7ff64cbd2f28 - core::slice::index::into_slice_range
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\core\src\slice\index.rs:1020
+  45:     0x7ff64cbd2f28 - core::slice::index::range
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\core\src\slice\index.rs:901
+  46:     0x7ff64cbd2f28 - alloc::string::String::replace_range<core::ops::range::Range<usize> >
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\alloc\src\string.rs:2085
+  47:     0x7ff64c1369a8 - xemnas_desktop::ui::search_edit::SearchEdit::replace
+                               at C:\Users\Pablo\orca\projects\xemnas\apps\desktop-gpui\src\ui\search_edit.rs:28
+  48:     0x7ff64c10aa58 - xemnas_desktop::ui::search_field::SearchField::paste
+                               at C:\Users\Pablo\orca\projects\xemnas\apps\desktop-gpui\src\ui\search_field.rs:243
+  49:     0x7ff64c10aa58 - core::ops::function::Fn::call
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\core\src\ops\function.rs:79
+  50:     0x7ff64c10aa58 - gpui::app::context::impl$2::listener::closure$0::closure$0<xemnas_desktop::ui::search_field::SearchField,xemnas_desktop::ui::search_field::Paste,void (*)(ref_mut$<xemnas_desktop::ui::search_field::SearchField>,ref$<xemnas_desktop::ui::search_field::Paste>,
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app\context.rs:253
+  51:     0x7ff64c133461 - gpui::app::context::invoke_listener::closure$0
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app\context.rs:958
+  52:     0x7ff64c133461 - gpui::app::impl$11::update_entity::closure$0
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app.rs:3014
+  53:     0x7ff64c133461 - core::ops::function::FnOnce::call_once
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\core\src\ops\function.rs:250
+  54:     0x7ff64c133461 - core::ops::function::FnOnce::call_once<gpui::app::impl$11::update_entity::closure_env$0<xemnas_desktop::ui::search_field::SearchField,tuple$<>,gpui::app::context::invoke_listener::closure_env$0<xemnas_desktop::ui::search_field::SearchField> >,tuple$<ref_mu
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app.rs:3014
+  55:     0x7ff64c5329b7 - gpui::app::impl$10::update_entity_erased::closure$0
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app.rs:2951
+  56:     0x7ff64c5329b7 - gpui::app::App::update
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app.rs:1163
+  57:     0x7ff64c5329b7 - gpui::app::App::update_entity_erased
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app.rs:2949
+  58:     0x7ff64c132c96 - gpui::app::entity_map::WeakEntity<xemnas_desktop::ui::search_field::SearchField>::update
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app\entity_map.rs:808
+  59:     0x7ff64c132c96 - gpui::app::context::invoke_listener<xemnas_desktop::ui::search_field::SearchField>
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app\context.rs:958
+  60:     0x7ff64c109a14 - gpui::app::context::impl$2::listener::closure$0
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app\context.rs:252
+  61:     0x7ff64c109a14 - gpui::elements::div::impl$1::on_action::closure$0<xemnas_desktop::ui::search_field::Paste,gpui::app::context::impl$2::listener::closure_env$0<xemnas_desktop::ui::search_field::SearchField,xemnas_desktop::ui::search_field::Paste,void (*)(ref_mut$<xemnas_des
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\elements\div.rs:464
+  62:     0x7ff64c5c322d - gpui::window::Window::dispatch_action_on_node_inner
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\window.rs:6382
+  63:     0x7ff64c5c322d - gpui::window::Window::dispatch_action_on_node
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\window.rs:6297
+  64:     0x7ff64c5bb792 - gpui::window::Window::dispatch_key_event
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\window.rs:5971
+  65:     0x7ff64c5bb792 - gpui::window::Window::dispatch_event
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\window.rs:5548
+  66:     0x7ff64c51fbcd - gpui::window::impl$29::new::closure$20::closure$0
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\window.rs:1942
+  67:     0x7ff64c51fbcd - gpui::app::impl$10::update_window_id::closure$0<gpui::window::DispatchEventResult,gpui::window::impl$29::new::closure$20::closure_env$0>
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app.rs:1996
+  68:     0x7ff64c532c7b - gpui::app::impl$10::update_window_erased::closure$0
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app.rs:2896
+  69:     0x7ff64c532c7b - gpui::app::App::update
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app.rs:1163
+  70:     0x7ff64c532c7b - gpui::app::App::update_window_erased
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app.rs:2887
+  71:     0x7ff64c51ec26 - gpui::app::App::update_window_id
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app.rs:1994
+  72:     0x7ff64c51ec26 - gpui::app::impl$11::update_window<gpui::window::DispatchEventResult,gpui::window::impl$29::new::closure$20::closure_env$0>
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app.rs:3043
+  73:     0x7ff64c56fe44 - gpui::app::async_context::impl$1::update_window
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app\async_context.rs:97
+  74:     0x7ff64c56fe44 - gpui::window::AnyWindowHandle::update<gpui::app::async_context::AsyncApp,gpui::window::DispatchEventResult,gpui::window::impl$29::new::closure$20::closure_env$0>
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\window.rs:7371
+  75:     0x7ff64c5a3a8e - gpui::window::impl$29::new::closure$20
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\window.rs:1942
+  76:     0x7ff64c490b75 - alloc::boxed::impl$32::call_mut
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\alloc\src\boxed.rs:2326
+  77:     0x7ff64c490b75 - gpui_windows::window::WindowsWindowInner::handle_keydown_msg
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui_windows\src\events.rs:453
+  78:     0x7ff64c4982aa - gpui_windows::window::WindowsWindowInner::handle_msg
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui_windows\src\events.rs:154
+  79:     0x7ff64c4982aa - gpui_windows::window::window_procedure
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui_windows\src\window.rs:1468
+  80:     0x7ffe461c52c6 - CallWindowProcW
+  81:     0x7ffe461c7035 - SendMessageW
+  82:     0x7ffe461c6a04 - SendMessageW
+  83:     0x7ffe461c67ef - SendMessageW
+  84:     0x7ff64c40c32a - windows::Win32::UI::WindowsAndMessaging::SendMessageW
+                               at C:\Users\Pablo\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.62.2\src\Windows\Win32\UI\WindowsAndMessaging\mod.rs:2046
+  85:     0x7ff64c40c32a - gpui_windows::platform::translate_accelerator
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui_windows\src\platform.rs:419
+  86:     0x7ff64c40c32a - gpui_windows::platform::impl$5::run
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui_windows\src\platform.rs:517
+  87:     0x7ff64beca029 - gpui::app::Application::run<xemnas::run_shell_mode::closure_env$0>
+                               at C:\Users\Pablo\.cargo\git\checkouts\zed-a70e2ad075855582\2440236\crates\gpui\src\app.rs:243
+  88:     0x7ff64beaccf7 - xemnas::run_shell_mode
+                               at C:\Users\Pablo\orca\projects\xemnas\apps\desktop-gpui\src\main.rs:172
+  89:     0x7ff64beaccf7 - xemnas::main
+                               at C:\Users\Pablo\orca\projects\xemnas\apps\desktop-gpui\src\main.rs:35
+  90:     0x7ff64bf2a476 - core::ops::function::FnOnce::call_once
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\core\src\ops\function.rs:250
+  91:     0x7ff64bf2a476 - std::sys::backtrace::__rust_begin_short_backtrace<void (*)(),tuple$<> >
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\std\src\sys\backtrace.rs:166
+  92:     0x7ff64be9a4bc - std::rt::lang_start::closure$0<tuple$<> >
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\std\src\rt.rs:206
+  93:     0x7ff64cc63980 - std::rt::lang_start_internal::closure$0
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\std\src\rt.rs:175
+  94:     0x7ff64cc63980 - std::panicking::catch_unwind::do_call
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\std\src\panicking.rs:576
+  95:     0x7ff64cc63980 - std::panicking::catch_unwind
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\std\src\panicking.rs:544
+  96:     0x7ff64cc63980 - std::panic::catch_unwind
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\std\src\panic.rs:359
+  97:     0x7ff64cc63980 - std::rt::lang_start_internal
+                               at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\std\src\rt.rs:171
+  98:     0x7ff64beaff2c - main
+  99:     0x7ff64cd670dc - invoke_main
+                               at D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_common.inl:78
+ 100:     0x7ff64cd670dc - __scrt_common_main_seh
+                               at D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_common.inl:288
+ 101:     0x7ffe4560cd87 - BaseThreadInitThunk
+ 102:     0x7ffe4706caec - RtlUserThreadStart
+thread caused non-unwinding panic. aborting.

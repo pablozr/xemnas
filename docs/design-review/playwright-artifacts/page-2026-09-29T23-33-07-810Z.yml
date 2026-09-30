@@ -1,0 +1,113 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e3]: X
+    - text: xemnas
+    - generic [aria-hidden] [ref=e4]: − □ ×
+  - generic [ref=e5]:
+    - complementary [ref=e6]:
+      - generic [ref=e7]:
+        - text: Projetos
+        - button "Adicionar projeto (estudo)" [disabled] [ref=e8] [cursor=pointer]
+      - textbox "Buscar projetos" [disabled] [ref=e16]
+      - paragraph [ref=e17]: 2 projetos acompanhados
+      - generic [ref=e21]:
+        - generic [ref=e22]: xemnas
+        - generic [ref=e23]: C:/Projects/xemnas
+      - generic [ref=e27]:
+        - generic [ref=e28]: kpi-front
+        - generic [ref=e29]: C:/Projects/kpi-front
+    - main [ref=e30]:
+      - generic [ref=e31]:
+        - heading "xemnas" [level=1] [ref=e32]
+        - paragraph [ref=e33]: C:/Projects/xemnas
+        - navigation "Workspace" [ref=e34]:
+          - generic [ref=e35]: Revisão 5
+          - generic [ref=e36]: Decisões
+          - generic [ref=e37]: Detalhes
+      - generic [ref=e38]:
+        - complementary [ref=e39]:
+          - generic [ref=e40]:
+            - heading "Decisões do projeto" [level=2] [ref=e41]
+            - textbox "Buscar decisões do projeto" [ref=e46]
+            - generic [ref=e47]:
+              - combobox "Estado" [ref=e48]:
+                - option "Confirmada" [selected]
+                - option "Todas"
+                - option "Substituída"
+              - generic [ref=e49]: Recentes
+            - paragraph [ref=e50]: Mais recentes primeiro · carregamento por página
+          - button "v3 · 29 set 2026 Confirmada Como garantir uma única decisão por captura? Confirmar candidatos em uma transação com validação de versão." [pressed] [ref=e51] [cursor=pointer]:
+            - generic [ref=e52]:
+              - generic [ref=e53]: v3 · 29 set 2026
+              - generic [ref=e54]: Confirmada
+            - strong [ref=e55]: Como garantir uma única decisão por captura?
+            - generic [ref=e56]: Confirmar candidatos em uma transação com validação de versão.
+          - button "v2 · 28 set 2026 Confirmada Onde armazenar credenciais do provedor? Guardar a chave no cofre de credenciais do sistema." [ref=e57] [cursor=pointer]:
+            - generic [ref=e58]:
+              - generic [ref=e59]: v2 · 28 set 2026
+              - generic [ref=e60]: Confirmada
+            - strong [ref=e61]: Onde armazenar credenciais do provedor?
+            - generic [ref=e62]: Guardar a chave no cofre de credenciais do sistema.
+          - button "v1 · 27 set 2026 Confirmada Como recuperar jobs interrompidos? Reenfileirar apenas tarefas idempotentes após uma interrupção." [ref=e63] [cursor=pointer]:
+            - generic [ref=e64]:
+              - generic [ref=e65]: v1 · 27 set 2026
+              - generic [ref=e66]: Confirmada
+            - strong [ref=e67]: Como recuperar jobs interrompidos?
+            - generic [ref=e68]: Reenfileirar apenas tarefas idempotentes após uma interrupção.
+        - article [ref=e69]:
+          - generic [ref=e70]:
+            - generic [ref=e71]:
+              - generic [ref=e72]: Confirmada
+              - text: v3
+            - generic [ref=e73]:
+              - button "Exportar…" [ref=e74] [cursor=pointer]
+              - button "Revisar" [ref=e75] [cursor=pointer]
+          - generic [ref=e76]:
+            - navigation "Leitura" [ref=e77]:
+              - button "Documento" [ref=e78] [cursor=pointer]
+              - button "Histórico 3" [ref=e79] [cursor=pointer]:
+                - text: Histórico
+                - generic [ref=e80]: "3"
+            - generic [ref=e81]:
+              - generic [ref=e82]: 29 set 2026 · v3 · revisão atual
+              - heading "Como garantir uma única decisão por captura?" [level=2] [ref=e83]
+              - generic [ref=e84]:
+                - heading "Escolha" [level=3] [ref=e85]
+                - paragraph [ref=e86]: Confirmar candidatos em uma transação com validação de versão.
+              - generic [ref=e87]:
+                - heading "Justificativa" [level=3] [ref=e88]
+                - paragraph [ref=e89]: A validação impede decisões duplicadas quando duas revisões acontecem ao mesmo tempo. A confirmação grava a decisão e avança o estado do candidato na mesma transação.
+              - group [ref=e90]:
+                - generic "Escopo +" [ref=e91] [cursor=pointer]
+              - group [ref=e92]:
+                - generic "Premissas +" [ref=e93] [cursor=pointer]
+              - group [ref=e94]:
+                - generic "Consequências +" [ref=e95] [cursor=pointer]
+              - group [ref=e96]:
+                - generic "Reconsiderar quando +" [ref=e97] [cursor=pointer]
+              - generic [ref=e98]:
+                - heading "Evidências" [level=3] [ref=e99]
+                - generic [ref=e100]:
+                  - generic [ref=e101]:
+                    - button "inbox.rs" [ref=e102] [cursor=pointer]
+                    - button "captura.txt" [ref=e106] [cursor=pointer]
+                  - generic [ref=e110]:
+                    - strong [ref=e111]: src/inbox.rs
+                    - text: Trecho de alteração · linhas da fonte
+                  - generic [ref=e112]:
+                    - generic [ref=e113]: "24"
+                    - text: transaction.begin();
+                    - generic [ref=e114]: "25"
+                    - text: validate_version(candidate);
+                    - generic [ref=e115]: "26"
+                    - text: persist_decision(candidate);
+                    - generic [ref=e116]: "27"
+                    - text: transaction.commit();
+                - generic [ref=e117]: "Origem: captura local · sessão opencode-demo-42"
+  - contentinfo [ref=e118]:
+    - generic [ref=e119]: Estudo de layout · dados fictícios · sem persistência
+    - generic [ref=e120]: A · Lista + documento · recomendado
+  - generic "Alternar estudos" [ref=e121]:
+    - button "Estudo anterior" [ref=e122] [cursor=pointer]: ←
+    - generic [ref=e123]: A — Lista + documento · recomendado
+    - button "Próximo estudo" [ref=e124] [cursor=pointer]: →
