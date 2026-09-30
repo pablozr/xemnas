@@ -565,7 +565,11 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
 
 impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
     /// Persistent project navigation, shared by all project destinations.
-    pub fn render_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    pub fn render_sidebar(
+        &mut self,
+        footer: Option<AnyElement>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let theme = Theme::current(cx);
         let visible = self.visible_rows();
         let total = match &self.list {
@@ -666,7 +670,8 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                     .min_h(px(0.0))
                     .overflow_y_scroll()
                     .children(rows),
-            );
+            )
+            .children(footer);
 
         sidebar.into_any_element()
     }
@@ -833,7 +838,7 @@ impl<R: ProjectRepository + Send + 'static> Render for ProjectsScreen<R> {
             .size_full()
             .flex()
             .overflow_hidden()
-            .child(self.render_sidebar(cx))
+            .child(self.render_sidebar(None, cx))
             .child(
                 div()
                     .flex_1()

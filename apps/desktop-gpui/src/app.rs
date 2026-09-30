@@ -3,12 +3,14 @@
 use application::decisions::{DecisionStore, Decisions};
 use application::export::Export;
 use application::inbox::{Inbox, InboxStore};
+use application::jobs::JobSummary;
 use application::projects::{ProjectRepository, Projects};
 use gpui::prelude::*;
 use gpui::{
     actions, deferred, div, px, AnimationExt, App, BoxShadow, Context, ElementId, Entity,
     FocusHandle, Focusable, Render, Role, SpringAnimation, Subscription, Window, WindowControlArea,
 };
+use std::sync::Arc;
 
 use crate::fonts::{app_icon, wordmark};
 use crate::palette::{self, PaletteItem};
@@ -70,6 +72,23 @@ actions!(
 const TITLE_BAR_HEIGHT: f32 = 40.0;
 /// Height of the project bar that carries the breadcrumb and destinations.
 const PROJECT_BAR_HEIGHT: f32 = 44.0;
+
+/// Whether captures from the OpenCode adapter can reach this app right now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaptureStatus {
+    /// The loopback API is listening.
+    Listening,
+    /// The API could not start; captures wait in the adapter's outbox.
+    Unavailable,
+    /// Sample data: no integrations run.
+    Demo,
+}
+
+/// Reads the current background work. Called off the UI thread.
+pub type ActivitySource = Arc<dyn Fn() -> Option<JobSummary> + Send + Sync>;
+
+/// How often the status line re-reads the jobs table.
+const ACTIVITY_POLL: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// What a palette item does.
 #[derive(Clone, Debug)]
@@ -157,6 +176,8 @@ pub struct Shell<R: ProjectRepository + InboxStore + DecisionStore + Send + 'sta
     panel_dismissed_at: Option<std::time::Instant>,
     demo: bool,
     palette: Option<Palette>,
+    capture: Option<CaptureStatus>,
+    activity: Option<JobSummary>,
     /// Whether the window was opened over a system material (Mica/Acrylic).
     backdrop: bool,
 }
@@ -258,8 +279,102 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
             panel_dismissed_at: None,
             demo: false,
             palette: None,
+            capture: None,
+            activity: None,
             backdrop: false,
         }
+    }
+
+    /// Shows capture and background-job status under the project list and
+    /// keeps it current by re-reading `source` every few seconds.
+    pub fn set_activity(
+        &mut self,
+        capture: CaptureStatus,
+        source: Option<ActivitySource>,
+        cx: &mut Context<Self>,
+    ) {
+        self.capture = Some(capture);
+        let Some(source) = source else {
+            return;
+        };
+        cx.spawn(async move |this, cx| loop {
+            let read = source.clone();
+            let summary = cx.background_executor().spawn(async move { read() }).await;
+            if this
+                .update(cx, |shell, cx| {
+                    if shell.activity != summary {
+                        shell.activity = summary;
+                        cx.notify();
+                    }
+                })
+                .is_err()
+            {
+                break;
+            }
+            cx.background_executor().timer(ACTIVITY_POLL).await;
+        })
+        .detach();
+    }
+
+    /// The status line at the foot of the sidebar: whether captures arrive
+    /// and what the extractor is doing. Only real states, never a guess.
+    fn status_line(&self) -> Option<gpui::AnyElement> {
+        let theme = self.theme;
+        let capture = self.capture?;
+        let (dot, label, hint) = match capture {
+            CaptureStatus::Listening => (
+                theme.colors.status_success(),
+                "Captura ativa",
+                "O app recebe capturas do OpenCode pela API local.",
+            ),
+            CaptureStatus::Unavailable => (
+                theme.colors.status_warning(),
+                "Captura indisponível",
+                "A API local não iniciou; as capturas aguardam na outbox do adapter.",
+            ),
+            CaptureStatus::Demo => (
+                theme.colors.status_info(),
+                "Demonstração",
+                "Dados fictícios em memória; nenhuma integração roda.",
+            ),
+        };
+        let summary = self.activity.unwrap_or_default();
+        let working = summary.queued + summary.running;
+        Some(
+            text_style(div(), TypeScale::META)
+                .id("activity-status")
+                .flex_none()
+                .px(px(SpacingScale::S4))
+                .py(px(SpacingScale::S3))
+                .flex()
+                .items_center()
+                .gap(px(SpacingScale::S2))
+                .border_t_1()
+                .border_color(theme.colors.hairline_divider())
+                .text_color(theme.colors.text_muted())
+                .role(Role::Status)
+                .aria_label(label)
+                .tooltip(tooltip(hint, None))
+                .child(div().size(px(6.0)).flex_none().rounded_full().bg(dot))
+                .child(div().flex_1().truncate().child(label))
+                .when(working > 0, |line| {
+                    line.child(icon(
+                        IconName::Activity,
+                        12.0,
+                        theme.colors.accent_default(),
+                    ))
+                    .child(format!("Extraindo {working}"))
+                })
+                .when(summary.failed > 0, |line| {
+                    line.child(div().text_color(theme.colors.status_danger()).child(
+                        match summary.failed {
+                            1 => "1 falha".to_string(),
+                            n => format!("{n} falhas"),
+                        },
+                    ))
+                })
+                .into_any_element(),
+        )
     }
 
     /// Records that the window has a system material behind it.
@@ -933,7 +1048,8 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
             .as_ref()
             .and_then(|screen| screen.read(cx).selected_project());
         let body: gpui::AnyElement = if let Some(projects) = self.projects.clone() {
-            let sidebar = projects.update(cx, |screen, cx| screen.render_sidebar(cx));
+            let status = self.status_line();
+            let sidebar = projects.update(cx, |screen, cx| screen.render_sidebar(status, cx));
             let mut panel = if self.project_panel {
                 projects.update(cx, |screen, cx| screen.render_project_panel(cx))
             } else {

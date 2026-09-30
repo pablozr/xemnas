@@ -15,10 +15,11 @@ use gpui::{
 use gpui_platform::application;
 use storage_sqlite::{default_data_dir, default_db_path, SqliteStore};
 
+use std::sync::Arc;
 use xemnas_desktop::app::{
-    AdjustItem, ConfirmItem, FocusSearch, GoDecisions, GoReview, NextItem, PaletteClose,
-    PaletteDown, PaletteRun, PaletteUp, PrevItem, RejectItem, SaveEditor, Shell, SnoozeItem,
-    TabNext, TabPrev, TogglePalette,
+    ActivitySource, AdjustItem, CaptureStatus, ConfirmItem, FocusSearch, GoDecisions, GoReview,
+    NextItem, PaletteClose, PaletteDown, PaletteRun, PaletteUp, PrevItem, RejectItem, SaveEditor,
+    Shell, SnoozeItem, TabNext, TabPrev, TogglePalette,
 };
 use xemnas_desktop::ui::search_field::{
     Backspace, Clear, Copy, Cut, Delete, End, Home, Left, Paste, Right, SelectAll, SelectLeft,
@@ -36,7 +37,11 @@ fn main() {
     application::jobs::install_panic_sanitizer();
 
     if std::env::args().any(|argument| argument == "--demo") {
-        run_shell_mode(demo::store().map_err(|error| error.to_string()), true);
+        run_shell_mode(
+            demo::store().map_err(|error| error.to_string()),
+            true,
+            CaptureStatus::Demo,
+        );
         return;
     }
 
@@ -45,7 +50,7 @@ fn main() {
         Err(error) => {
             // The shell logs the technical detail through `tracing` and paints a
             // product-language error state; the raw error never reaches the UI.
-            run_shell(Err(error.to_string()));
+            run_shell(Err(error.to_string()), CaptureStatus::Unavailable);
             return;
         }
     };
@@ -148,7 +153,12 @@ fn main() {
         }
     };
 
-    run_shell(Ok(store));
+    let capture = if api.is_some() {
+        CaptureStatus::Listening
+    } else {
+        CaptureStatus::Unavailable
+    };
+    run_shell(Ok(store), capture);
 
     // Graceful shutdown mirrors startup: stop the API first so the discovery
     // and per-session token files are removed, then stop the jobs worker.
@@ -168,8 +178,8 @@ fn main() {
 }
 
 /// Composes the desktop use cases from the ready store, or a startup failure.
-fn run_shell(store: Result<SqliteStore, String>) {
-    run_shell_mode(store, false);
+fn run_shell(store: Result<SqliteStore, String>, capture: CaptureStatus) {
+    run_shell_mode(store, false, capture);
 }
 
 /// The window material. Mica Alt by default: it tints and blurs the wallpaper
@@ -185,8 +195,17 @@ fn backdrop_from_env() -> WindowBackgroundAppearance {
     }
 }
 
-fn run_shell_mode(store: Result<SqliteStore, String>, demo: bool) {
+fn run_shell_mode(store: Result<SqliteStore, String>, demo: bool, capture: CaptureStatus) {
     let backdrop = backdrop_from_env();
+    // The status line reads the jobs table through the application port.
+    let activity: Option<ActivitySource> = store.as_ref().ok().map(|store| {
+        let store = store.clone();
+        Arc::new(move || {
+            application::jobs::JobRepository::list(&store)
+                .ok()
+                .map(|records| application::jobs::JobSummary::from_records(&records))
+        }) as ActivitySource
+    });
     application().run(move |cx: &mut App| {
         xemnas_desktop::fonts::register_embedded(cx);
         cx.bind_keys([
@@ -249,6 +268,7 @@ fn run_shell_mode(store: Result<SqliteStore, String>, demo: bool) {
             let mut shell = Shell::<SqliteStore>::new(cx, projects, inbox, decisions);
             shell.set_demo(demo);
             shell.set_backdrop(backdrop != WindowBackgroundAppearance::Opaque);
+            shell.set_activity(capture, activity, cx);
             shell
         });
         let focus = view.read(cx).initial_focus(cx);
