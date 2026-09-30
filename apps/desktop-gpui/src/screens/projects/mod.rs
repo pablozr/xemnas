@@ -15,14 +15,15 @@ use application::projects::{ProjectError, ProjectRepository, Projects};
 use domain::projects::ProjectSummary;
 use gpui::prelude::*;
 use gpui::{
-    div, px, AnyElement, BoxShadow, Context, Div, ElementId, Entity, EventEmitter, FocusHandle,
+    div, px, AnyElement, Context, Div, ElementId, Entity, EventEmitter, FocusHandle,
     PathPromptOptions, Render, Role, Stateful, Subscription, Window,
 };
 
-use crate::ui::feedback::{error_state, status_dot, StatusKind};
 use crate::ui::controls::{action_button, icon_action, ButtonKind};
+use crate::ui::feedback::{error_state, status_dot, StatusKind};
 use crate::ui::glass::focus_ring;
 use crate::ui::icons::Icon;
+use crate::ui::patterns::{count_chip, mark_selected, panel_title, section_label};
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{SpacingScale, TypeScale};
@@ -431,9 +432,6 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             .child(Icon::plus(theme, 16.0))
             .child("Abrir pasta…");
 
-        let light = BoxShadow::new(px(0.0), px(0.0), theme.colors.glow_lavender().into())
-            .blur_radius(px(48.0))
-            .spread_radius(px(8.0));
         div()
             .id("projects-empty")
             .size_full()
@@ -445,32 +443,37 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             .child(
                 div()
                     .w_full()
-                    .max_w(px(560.0))
-                    .p(px(SpacingScale::S8))
-                    .rounded(px(12.0))
-                    .border_1()
-                    .border_color(theme.colors.glass_edge_lavender())
-                    .bg(theme.colors.glass_surface_lavender())
-                    .shadow(vec![light])
+                    .max_w(px(420.0))
+                    .px(px(SpacingScale::S6))
                     .flex()
                     .flex_col()
                     .items_start()
-                    .gap(px(SpacingScale::S4))
-                    .child(div().size(px(64.0)).rounded(px(10.0))
-                        .border_1().border_color(theme.colors.glass_edge_lavender())
-                        .bg(theme.colors.glass_fill_medium())
-                        .flex().items_center().justify_center()
-                        .child(Icon::folder(theme, 28.0, false)))
-                    .child(text_style(div(), TypeScale::META)
-                        .text_color(theme.colors.accent_default())
-                        .child("PRIMEIRO PROJETO"))
-                    .child(text_style(div(), TypeScale::HEADING_1)
-                        .text_color(theme.colors.text_primary())
-                        .child("Comece por uma pasta"))
-                    .child(text_style(div(), TypeScale::BODY)
-                        .text_color(theme.colors.text_secondary())
-                        .child("Escolha uma pasta existente para acompanhar. Seus arquivos permanecem no lugar."))
-                    .child(div().mt(px(SpacingScale::S2)).child(button)),
+                    .gap(px(SpacingScale::S3))
+                    .child(
+                        div()
+                            .size(px(40.0))
+                            .mb(px(SpacingScale::S2))
+                            .rounded(theme.radius.surface())
+                            .border_1()
+                            .border_color(theme.colors.hairline_divider())
+                            .bg(theme.colors.surface())
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(Icon::folder(theme, 20.0, false)),
+                    )
+                    .child(section_label(theme, "Primeiro projeto"))
+                    .child(
+                        text_style(div(), TypeScale::HEADING_1)
+                            .text_color(theme.colors.text_primary())
+                            .child("Comece por uma pasta"),
+                    )
+                    .child(
+                        text_style(div(), TypeScale::BODY)
+                            .text_color(theme.colors.text_secondary())
+                            .child("Escolha uma pasta existente para acompanhar. Seus arquivos permanecem no lugar."),
+                    )
+                    .child(div().mt(px(SpacingScale::S3)).child(button)),
             )
     }
 
@@ -492,30 +495,17 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             .map(|(_, handle)| handle.clone())
             .unwrap_or_else(|| self.confirm_focus.clone());
         // Hover must not erase the persistent selection state.
-        let hover = if selected {
-            theme.colors.glass_fill_medium()
-        } else {
-            theme.colors.hover_veil()
-        };
-        div()
+        let hover = theme.colors.hover_veil();
+        let row = div()
             .id((ElementId::from("project-entry"), id.clone()))
-            .h(px(68.0))
+            .relative()
+            .h(px(48.0))
             .px(px(SpacingScale::S4))
             .flex()
             .items_center()
             .gap(px(SpacingScale::S3))
-            .bg(if selected {
-                theme.colors.glass_fill_medium()
-            } else {
-                theme.colors.rail()
-            })
-            .border_l_2()
-            .border_color(if selected {
-                theme.colors.accent_subtle()
-            } else {
-                theme.colors.rail()
-            })
-            .hover(move |style| style.bg(hover))
+            .when(!selected, |row| row.hover(move |style| style.bg(hover)));
+        mark_selected(row, theme, selected)
             .role(Role::Button)
             .aria_label(format!("Selecionar {}", summary.name()))
             .aria_selected(selected)
@@ -531,16 +521,15 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                     }
                 }),
             )
-            .child(Icon::folder(theme, 18.0, !selected))
+            .child(Icon::folder(theme, 16.0, !selected))
             .child(
                 div()
                     .flex_1()
                     .min_w(px(0.0))
                     .flex()
                     .flex_col()
-                    .gap(px(SpacingScale::S1))
                     .child(
-                        text_style(div(), TypeScale::HEADING_3)
+                        text_style(div(), TypeScale::ROW_TITLE)
                             .text_color(theme.colors.text_primary())
                             .truncate()
                             .child(summary.name().to_string()),
@@ -548,7 +537,9 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                     .child(
                         text_style(div(), TypeScale::META)
                             .text_color(theme.colors.text_muted())
-                            .truncate()
+                            .text_ellipsis_start()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
                             .child(summary.location().to_string()),
                     ),
             )
@@ -573,16 +564,20 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                     .into_any_element()
             })
             .collect();
-        let open = icon_action(&theme, "projects-open-folder", "Abrir pasta no seletor do sistema")
-            .track_focus(&self.register_focus)
-            .on_click(cx.listener(|this, _, _, cx| this.open_folder(cx)))
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                    this.open_folder(cx);
-                    cx.stop_propagation();
-                }
-            }))
-            .child(Icon::folder_plus(&theme, 16.0));
+        let open = icon_action(
+            &theme,
+            "projects-open-folder",
+            "Abrir pasta no seletor do sistema",
+        )
+        .track_focus(&self.register_focus)
+        .on_click(cx.listener(|this, _, _, cx| this.open_folder(cx)))
+        .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                this.open_folder(cx);
+                cx.stop_propagation();
+            }
+        }))
+        .child(Icon::folder_plus(&theme, 16.0));
 
         let sidebar = div()
             .id("projects-sidebar")
@@ -596,20 +591,27 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             .border_color(theme.colors.hairline_divider())
             .child(
                 div()
-                    .p(px(SpacingScale::S5))
+                    .px(px(SpacingScale::S4))
+                    .pt(px(SpacingScale::S3))
+                    .pb(px(SpacingScale::S3))
                     .flex()
                     .flex_col()
-                    .gap(px(SpacingScale::S4))
+                    .gap(px(SpacingScale::S3))
                     .child(
                         div()
                             .flex()
                             .items_center()
-                            .justify_between()
-                            .child(
-                                text_style(div(), TypeScale::HEADING_2)
-                                    .text_color(theme.colors.text_primary())
-                                    .child("Projetos"),
-                            )
+                            .gap(px(SpacingScale::S2))
+                            .child(panel_title(&theme, "Projetos"))
+                            .child(count_chip(
+                                &theme,
+                                if self.query.is_empty() {
+                                    total.to_string()
+                                } else {
+                                    format!("{} de {total}", visible.len())
+                                },
+                            ))
+                            .child(div().flex_1())
                             .child(open),
                     )
                     .child(self.search.clone())
@@ -617,18 +619,6 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                         self.inline_error
                             .as_ref()
                             .map(|message| inline_alert(&theme, "projects-inline-error", message)),
-                    )
-                    .child(
-                        text_style(div(), TypeScale::META)
-                            .text_color(theme.colors.text_muted())
-                            .child(if self.query.is_empty() {
-                                match total {
-                                    1 => "1 projeto acompanhado".to_string(),
-                                    n => format!("{n} projetos acompanhados"),
-                                }
-                            } else {
-                                format!("{} de {total} projetos", visible.len())
-                            }),
                     ),
             )
             .child(
@@ -716,14 +706,11 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                             div()
                                 .w_full()
                                 .px(px(SpacingScale::S8))
-                                .py(px(SpacingScale::S6))
+                                .py(px(SpacingScale::S8))
                                 .flex()
                                 .flex_col()
-                                .child(
-                                    text_style(div(), TypeScale::HEADING_3)
-                                        .text_color(theme.colors.text_secondary())
-                                        .child("Detalhes"),
-                                )
+                                .max_w(px(760.0))
+                                .child(section_label(&theme, "Propriedades"))
                                 .child(detail_line(
                                     &theme,
                                     "Localização",
@@ -793,7 +780,7 @@ fn detail_line(theme: &Theme, label: &'static str, value: String) -> Div {
         .w_full()
         .py(px(SpacingScale::S3))
         .flex()
-        .items_start()
+        .items_baseline()
         .gap(px(SpacingScale::S4))
         .child(
             text_style(div(), TypeScale::LABEL)
@@ -803,7 +790,7 @@ fn detail_line(theme: &Theme, label: &'static str, value: String) -> Div {
                 .child(label),
         )
         .child(
-            text_style(div(), TypeScale::BODY)
+            text_style(div(), TypeScale::BODY_SMALL)
                 .flex_1()
                 .min_w(px(0.0))
                 .text_color(theme.colors.text_primary())
