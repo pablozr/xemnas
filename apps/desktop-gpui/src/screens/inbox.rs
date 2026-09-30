@@ -16,13 +16,16 @@ use super::review_editor::{EditorEvent, ReviewEditor};
 use crate::ui::controls::{action_button, ButtonKind};
 use crate::ui::glass::focus_ring;
 use crate::ui::icons::Icon;
+use crate::ui::patterns::{
+    count_chip, fade_in, mark_selected, panel_title, section_label, status_pill,
+};
 use crate::ui::search_field::SearchField;
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{SpacingScale, TypeScale};
 
 enum Outcome {
     Page(Result<(InboxPage, usize), InboxError>, bool),
-    Detail(Result<CandidateDetail, InboxError>),
+    Detail(Result<Box<CandidateDetail>, InboxError>),
     Action(Result<(), InboxError>, &'static str),
 }
 
@@ -60,6 +63,9 @@ pub struct InboxScreen<S: InboxStore + Send + 'static> {
     action_focus: [FocusHandle; 4],
     notice: Option<&'static str>,
 }
+
+/// The reading column shared with the Decisions document.
+const READING_WIDTH: f32 = 760.0;
 
 impl<S: InboxStore + Send + 'static> InboxScreen<S> {
     /// Composes the application use case without opening storage in the view.
@@ -170,7 +176,9 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
         self.source_focus.clear();
         self.editor = None;
         self.editor_subscription = None;
-        self.run(cx, move |inbox| Outcome::Detail(inbox.detail(&id)));
+        self.run(cx, move |inbox| {
+            Outcome::Detail(inbox.detail(&id).map(Box::new))
+        });
     }
 
     fn run(
@@ -257,7 +265,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                             .iter()
                             .map(|_| cx.focus_handle().tab_stop(true))
                             .collect();
-                        this.detail = Some(detail);
+                        this.detail = Some(*detail);
                     }
                     Outcome::Action(Ok(()), notice) => {
                         this.editor = None;
@@ -389,8 +397,8 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             .border_t_1()
             .border_color(theme.colors.hairline_divider())
             .px(px(SpacingScale::S8))
-            .py(px(SpacingScale::S4))
-            .bg(theme.colors.layer_fill())
+            .py(px(SpacingScale::S3))
+            .bg(theme.colors.canvas())
             .flex()
             .flex_wrap()
             .justify_end()
@@ -436,38 +444,16 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
         let selected = self.selected.as_deref() == Some(&row.id);
         let id = row.id.clone();
         let key_id = id.clone();
-        let mut element = div()
+        let hover = theme.colors.hover_veil();
+        let element = div()
             .id((ElementId::from("candidate"), row.id.clone()))
-            .p(px(SpacingScale::S4))
+            .relative()
+            .px(px(SpacingScale::S4))
+            .py(px(SpacingScale::S3))
             .flex()
             .flex_col()
-            .gap(px(SpacingScale::S2))
-            .relative()
-            .border_b_1()
-            .border_color(theme.colors.hairline_divider())
-            .bg(if selected {
-                theme.colors.glass_surface_lavender()
-            } else {
-                theme.colors.rail()
-            })
-            .hover(move |style| {
-                style.bg(if selected {
-                    theme.colors.glass_surface_lavender()
-                } else {
-                    theme.colors.hover_veil()
-                })
-            })
-            .when(selected, |row| {
-                row.child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .top_0()
-                        .bottom_0()
-                        .w(px(2.0))
-                        .bg(theme.colors.accent_subtle()),
-                )
-            })
+            .gap(px(SpacingScale::S1))
+            .when(!selected, |row| row.hover(move |style| style.bg(hover)))
             .role(Role::Button)
             .aria_label(row.question.clone())
             .aria_selected(selected)
@@ -498,12 +484,19 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                     )
                     .child(status_badge(row.status, theme)),
             )
-            .child(text_style(div(), TypeScale::HEADING_3).child(row.question.clone()))
+            .child(
+                text_style(div(), TypeScale::ROW_TITLE)
+                    .text_color(theme.colors.text_primary())
+                    .line_clamp(2)
+                    .child(row.question.clone()),
+            )
             .child(
                 text_style(div(), TypeScale::BODY_SMALL)
-                    .text_color(theme.colors.text_secondary())
+                    .text_color(theme.colors.text_muted())
+                    .line_clamp(2)
                     .child(row.choice.clone()),
             );
+        let mut element = mark_selected(element, &theme, selected);
         if let Some((_, focus)) = self.row_focus.iter().find(|(id, _)| *id == row.id) {
             element = element.track_focus(focus);
         }
@@ -548,7 +541,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                 .items_center()
                 .justify_center()
                 .child(
-                    text_style(div(), TypeScale::BODY)
+                    text_style(div(), TypeScale::BODY_SMALL)
                         .text_color(theme.colors.text_muted())
                         .child(if self.busy {
                             "Carregando…"
@@ -558,11 +551,68 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                 )
                 .into_any_element();
         };
-        div()
-            .id("inbox-reading")
-            .size_full()
-            .overflow_y_scroll()
-            .p(px(SpacingScale::S8))
+        let evidence_block = if detail.artifacts.is_empty() {
+            text_style(div(), TypeScale::BODY_SMALL)
+                .text_color(theme.colors.text_muted())
+                .child("Nenhuma fonte disponível para este candidato.")
+                .into_any_element()
+        } else {
+            let tabs = evidence::tab_strip(&theme, "evidence-tabs").children(
+                detail
+                    .artifacts
+                    .iter()
+                    .enumerate()
+                    .map(|(index, artifact)| {
+                        evidence::tab(
+                            &theme,
+                            ("source", index),
+                            artifact,
+                            index == self.source_index,
+                        )
+                        .track_focus(&self.source_focus[index])
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.source_index = index;
+                            window.focus(&this.source_focus[index], cx);
+                            cx.notify();
+                        }))
+                        .on_key_down(cx.listener(
+                            move |this, event: &gpui::KeyDownEvent, _, cx| {
+                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                    this.source_index = index;
+                                    cx.notify();
+                                    cx.stop_propagation();
+                                }
+                            },
+                        ))
+                    }),
+            );
+            evidence::frame(&theme)
+                .child(tabs)
+                .children(
+                    detail
+                        .artifacts
+                        .get(self.source_index)
+                        .zip(self.source_lines.get(self.source_index))
+                        .map(|(artifact, lines)| {
+                            div()
+                                .flex()
+                                .flex_col()
+                                .child(evidence::caption_row(&theme, artifact, lines))
+                                .child(evidence::body(
+                                    artifact,
+                                    format!("{}-{}", detail.summary.id, self.source_index),
+                                    lines,
+                                    280.0,
+                                    theme,
+                                ))
+                        }),
+                )
+                .into_any_element()
+        };
+        let column = div()
+            .w_full()
+            .max_w(px(READING_WIDTH))
+            .mx_auto()
             .flex()
             .flex_col()
             .gap(px(SpacingScale::S6))
@@ -578,144 +628,106 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                             .child(short_date(&detail.summary.received_at)),
                     ),
             )
-            .child(text_style(div(), TypeScale::HEADING_1).child(detail.summary.question.clone()))
-            .child(section(theme, "Escolha sugerida", &detail.summary.choice))
+            .child(
+                text_style(div(), TypeScale::DISPLAY)
+                    .text_color(theme.colors.text_primary())
+                    .child(detail.summary.question.clone()),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S2))
+                    .border_l_2()
+                    .border_color(theme.colors.accent_hover())
+                    .pl(px(SpacingScale::S4))
+                    .child(
+                        section_label(&theme, "Escolha sugerida")
+                            .text_color(theme.colors.accent_hover()),
+                    )
+                    .child(
+                        text_style(div(), TypeScale::HEADING_2)
+                            .text_color(theme.colors.text_primary())
+                            .child(detail.summary.choice.clone()),
+                    ),
+            )
             .child(section(theme, "Motivo", &detail.rationale))
             .child(
-                text_style(div(), TypeScale::HEADING_2)
+                div()
+                    .pt(px(SpacingScale::S2))
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S3))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(SpacingScale::S2))
+                            .child(Icon::link(&theme, 14.0))
+                            .child(
+                                text_style(div(), TypeScale::HEADING_3)
+                                    .flex_1()
+                                    .child("Evidências"),
+                            )
+                            .child(count_chip(
+                                &theme,
+                                match detail.artifacts.len() {
+                                    1 => "1 fonte".to_string(),
+                                    n => format!("{n} fontes"),
+                                },
+                            )),
+                    )
+                    .child(evidence_block),
+            )
+            .child(
+                div()
+                    .pt(px(SpacingScale::S5))
                     .border_t_1()
                     .border_color(theme.colors.hairline_divider())
-                    .pt(px(SpacingScale::S4))
-                    .child(format!("Evidências · {} fontes", detail.artifacts.len())),
-            )
-            .when(!detail.artifacts.is_empty(), |pane| {
-                pane.child(
-                    div()
-                        .w_full()
-                        .min_w(px(0.0))
-                        .flex_none()
-                        .flex()
-                        .flex_col()
-                        .rounded(theme.radius.control())
-                        .border_1()
-                        .border_color(theme.colors.glass_border())
-                        .bg(theme.colors.rail())
-                        .overflow_hidden()
-                        .child(
-                            div()
-                                .id("evidence-tabs")
-                                .w_full()
-                                .min_w(px(0.0))
-                                .flex()
-                                .overflow_x_scroll()
-                                .gap(px(SpacingScale::S1))
-                                .p(px(SpacingScale::S2))
-                                .border_b_1()
-                                .border_color(theme.colors.hairline_divider())
-                                .children(detail.artifacts.iter().enumerate().map(
-                                    |(index, artifact)| {
-                                        let selected = index == self.source_index;
-                                        text_style(div(), TypeScale::BODY_SMALL)
-                                            .id(("source", index))
-                                            .flex_none()
-                                            .flex()
-                                            .items_center()
-                                            .gap(px(SpacingScale::S2))
-                                            .p(px(SpacingScale::S2))
-                                            .rounded(theme.radius.control())
-                                            .border_1()
-                                            .border_color(if selected {
-                                                theme.colors.accent_subtle()
-                                            } else {
-                                                theme.colors.hairline_divider()
-                                            })
-                                            .role(Role::Button)
-                                            .aria_label(format!(
-                                                "Fonte {}: {}",
-                                                index + 1,
-                                                evidence::label(artifact)
-                                            ))
-                                            .aria_selected(selected)
-                                            .track_focus(&self.source_focus[index])
-                                            .focus_visible(focus_ring(&theme))
-                                            .cursor_pointer()
-                                            .bg(if selected {
-                                                theme.colors.glass_surface_lavender()
-                                            } else {
-                                                theme.colors.layer_fill()
-                                            })
-                                            .on_click(cx.listener(move |this, _, window, cx| {
-                                                this.source_index = index;
-                                                window.focus(&this.source_focus[index], cx);
-                                                cx.notify();
-                                            }))
-                                            .on_key_down(cx.listener(
-                                                move |this, event: &gpui::KeyDownEvent, _, cx| {
-                                                    if matches!(
-                                                        event.keystroke.key.as_str(),
-                                                        "enter" | "space"
-                                                    ) {
-                                                        this.source_index = index;
-                                                        cx.notify();
-                                                        cx.stop_propagation();
-                                                    }
-                                                },
-                                            ))
-                                            .child(Icon::file(&theme, 14.0, !selected))
-                                            .child(
-                                                div()
-                                                    .max_w(px(200.0))
-                                                    .truncate()
-                                                    .child(evidence::label(artifact)),
-                                            )
-                                    },
-                                )),
+                    .flex()
+                    .flex_wrap()
+                    .gap(px(SpacingScale::S8))
+                    .child(
+                        section(
+                            theme,
+                            "Confiança da extração",
+                            &format!(
+                                "{:.0}% · {}",
+                                detail.summary.confidence * 100.0,
+                                detail.summary.confidence_reason
+                            ),
                         )
-                        .children(
-                            detail
-                                .artifacts
-                                .get(self.source_index)
-                                .zip(self.source_lines.get(self.source_index))
-                                .map(|(artifact, lines)| {
-                                    evidence::snippet(
-                                        artifact,
-                                        format!("{}-{}", detail.summary.id, self.source_index),
-                                        lines,
-                                        theme,
-                                    )
-                                }),
-                        ),
-                )
-            })
-            .when(detail.artifacts.is_empty(), |pane| {
-                pane.child(section(
-                    theme,
-                    "Fontes",
-                    "Nenhuma fonte disponível para este candidato.",
-                ))
-            })
-            .child(section(
-                theme,
-                "Confiança da extração",
-                &format!(
-                    "{:.0}% · {}",
-                    detail.summary.confidence * 100.0,
-                    detail.summary.confidence_reason
-                ),
-            ))
-            .child(section(
-                theme,
-                "Origem",
-                &format!(
-                    "{}\nSessão: {}\nRecebido: {}",
-                    detail.summary.project_location,
-                    detail
-                        .summary
-                        .session_id
-                        .as_deref()
-                        .unwrap_or("não informada"),
-                    detail.summary.received_at
-                ),
+                        .flex_1()
+                        .min_w(px(220.0)),
+                    )
+                    .child(
+                        section(
+                            theme,
+                            "Origem",
+                            &format!(
+                                "{}\nSessão: {}\nRecebido: {}",
+                                detail.summary.project_location,
+                                detail
+                                    .summary
+                                    .session_id
+                                    .as_deref()
+                                    .unwrap_or("não informada"),
+                                short_date(&detail.summary.received_at)
+                            ),
+                        )
+                        .flex_1()
+                        .min_w(px(220.0)),
+                    ),
+            );
+        div()
+            .id("inbox-reading")
+            .size_full()
+            .overflow_y_scroll()
+            .px(px(SpacingScale::S8))
+            .py(px(SpacingScale::S8))
+            .child(fade_in(
+                column,
+                ElementId::Name(format!("reading-{}", detail.summary.id).into()),
             ))
             .into_any_element()
     }
@@ -737,12 +749,16 @@ impl<S: InboxStore + Send + 'static> Render for InboxScreen<S> {
             .child(div().flex_1().min_h(px(0.0)).flex()
                 .child(div().w(px(320.0)).flex_none().h_full().flex().flex_col().bg(theme.colors.rail())
                     .border_r_1().border_color(theme.colors.hairline_divider())
-                    .child(div().p(px(SpacingScale::S4)).flex().items_center().justify_between()
-                        .child(text_style(div(), TypeScale::HEADING_2).child("Aguardando revisão"))
+                    .child(div().px(px(SpacingScale::S4)).pt(px(SpacingScale::S3)).pb(px(SpacingScale::S2)).flex().items_center().gap(px(SpacingScale::S2))
+                        .child(panel_title(&theme, "Aguardando revisão"))
+                        .child(count_chip(&theme, if self.rows.len() == visible.len() {
+                            visible.len().to_string()
+                        } else {
+                            format!("{} de {}", visible.len(), self.rows.len())
+                        }))
+                        .child(div().flex_1())
                         .child(self.button("inbox-refresh", "Atualizar", false, cx)))
                     .child(div().px(px(SpacingScale::S4)).pb(px(SpacingScale::S3)).children(self.search.clone()))
-                    .child(text_style(div(), TypeScale::META).px(px(SpacingScale::S4)).pb(px(SpacingScale::S3)).text_color(theme.colors.text_muted())
-                        .child(format!("{} carregados · {} visíveis", self.rows.len(), visible.len())))
                     .child(div().id("inbox-list").flex_1().min_h(px(0.0)).overflow_y_scroll()
                         .children(visible.iter().map(|row| self.row(row, cx)))
                         .when(visible.is_empty(), |list| list.child(text_style(div(), TypeScale::BODY_SMALL).p(px(SpacingScale::S6))
@@ -750,7 +766,11 @@ impl<S: InboxStore + Send + 'static> Render for InboxScreen<S> {
                             else if !self.loaded { "Atualize para carregar os candidatos." }
                             else if self.rows.is_empty() { "Nenhum candidato aguardando revisão. Novas capturas aparecerão aqui após a extração." }
                             else { "Nenhum candidato carregado corresponde à busca." }))))
-                    .when(self.cursor.is_some(), |rail| rail.child(self.button("inbox-more", "Carregar mais", true, cx))))
+                    .child(text_style(div(), TypeScale::META).flex_none().px(px(SpacingScale::S4)).py(px(SpacingScale::S2))
+                        .flex().items_center().justify_between()
+                        .border_t_1().border_color(theme.colors.hairline_divider()).text_color(theme.colors.text_muted())
+                        .child(format!("{} carregados · {} visíveis", self.rows.len(), visible.len()))
+                        .when(self.cursor.is_some(), |footer| footer.child(self.button("inbox-more", "Carregar mais", true, cx)))))
                 .child(div().flex_1().min_w(px(0.0)).h_full().flex().flex_col()
                     .child(div().flex_1().min_h(px(0.0)).child(if let Some(editor) = self.editor.as_ref().filter(|_| self.detail.as_ref().is_some_and(|detail| matches_query(&detail.summary, &self.query))) { editor.clone().into_any_element() } else { self.reading_pane(cx) }))
                     .when(self.editor.is_none(), |pane| pane.child(self.review_actions(cx)))))
@@ -762,10 +782,7 @@ fn section(theme: Theme, label: &'static str, content: &str) -> Div {
         .flex()
         .flex_col()
         .gap(px(SpacingScale::S2))
-        .border_t_1()
-        .border_color(theme.colors.hairline_divider())
-        .pt(px(SpacingScale::S4))
-        .child(text_style(div(), TypeScale::HEADING_3).child(label))
+        .child(section_label(&theme, label))
         .child(
             text_style(div(), TypeScale::BODY)
                 .text_color(theme.colors.text_secondary())
@@ -810,20 +827,7 @@ fn status_badge(status: CandidateStatus, theme: Theme) -> Div {
         }
         CandidateStatus::Dismissed => ("Rejeitado", theme.colors.status_danger()),
     };
-    text_style(div(), TypeScale::META)
-        .flex_none()
-        .flex()
-        .items_center()
-        .gap(px(6.0))
-        .px(px(SpacingScale::S2))
-        .py(px(SpacingScale::S1))
-        .rounded(theme.radius.control())
-        .border_1()
-        .border_color(theme.colors.hairline_divider())
-        .bg(theme.colors.layer_fill())
-        .text_color(theme.colors.text_secondary())
-        .child(div().size(px(6.0)).flex_none().rounded_full().bg(color))
-        .child(label)
+    status_pill(&theme, color, label)
 }
 
 fn matches_query(row: &CandidateSummary, query: &str) -> bool {

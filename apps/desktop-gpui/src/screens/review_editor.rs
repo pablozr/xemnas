@@ -5,9 +5,7 @@ use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{SpacingScale, TypeScale};
 use application::inbox::CandidateEdits;
 use gpui::prelude::*;
-use gpui::{
-    div, px, App, Context, Entity, EventEmitter, FocusHandle, Focusable, Render, Window,
-};
+use gpui::{div, px, App, Context, Entity, EventEmitter, FocusHandle, Focusable, Render, Window};
 
 pub(super) enum EditorEvent {
     Cancel,
