@@ -17,9 +17,9 @@ use storage_sqlite::SqliteStore;
 
 use std::sync::Arc;
 use xemnas_desktop::app::{
-    ActivitySource, AdjustItem, CaptureStatus, ConfirmItem, FocusSearch, GoDecisions, GoReview,
-    NextItem, PaletteClose, PaletteDown, PaletteRun, PaletteUp, PrevItem, RejectItem, SaveEditor,
-    Shell, SnoozeItem, TabNext, TabPrev, TogglePalette,
+    ActivitySource, AdjustItem, CaptureStatus, ConfirmItem, FocusSearch, GoContext, GoDecisions,
+    GoReview, NextItem, PaletteClose, PaletteDown, PaletteRun, PaletteUp, PrevItem, RejectItem,
+    SaveEditor, Shell, SnoozeItem, TabNext, TabPrev, TogglePalette,
 };
 use xemnas_desktop::screens::settings::SettingsServices;
 use xemnas_desktop::ui::search_field::{
@@ -328,6 +328,7 @@ fn run_shell_mode(
             KeyBinding::new("ctrl-enter", SaveEditor, Some("Editor")),
             KeyBinding::new("ctrl-1", GoReview, Some("xemnas")),
             KeyBinding::new("ctrl-2", GoDecisions, Some("xemnas")),
+            KeyBinding::new("ctrl-3", GoContext, Some("xemnas")),
             KeyBinding::new("backspace", Backspace, Some("SearchField")),
             KeyBinding::new("delete", Delete, Some("SearchField")),
             KeyBinding::new("left", Left, Some("SearchField")),
@@ -356,20 +357,26 @@ fn run_shell_mode(
             size(px(1440.0), px(1024.0))
         };
         let bounds = Bounds::centered(None, dimensions, cx);
-        let (projects, inbox, decisions) = match store {
+        let (projects, inbox, decisions, context) = match store {
             Ok(store) => (
                 Ok(application::projects::Projects::new(store.clone())),
                 Some(application::inbox::Inbox::new(store.clone())),
                 Some((
                     application::decisions::Decisions::new(store.clone()),
-                    application::export::Export::new(store),
+                    application::export::Export::new(store.clone()),
                 )),
+                Some(xemnas_desktop::screens::context::ContextServices {
+                    decisions: application::decisions::Decisions::new(store.clone()),
+                    claims: application::claims::Claims::new(store.clone()),
+                    settings: application::context_settings::ContextSettings::new(store.clone()),
+                    packs: application::context::ContextPacks::new(store),
+                }),
             ),
-            Err(error) => (Err(error), None, None),
+            Err(error) => (Err(error), None, None, None),
         };
         let view = cx.new(|cx| {
             let mut shell =
-                Shell::<SqliteStore>::new(cx, projects, inbox, decisions, Some(settings));
+                Shell::<SqliteStore>::new(cx, projects, inbox, decisions, context, Some(settings));
             shell.set_demo(demo);
             shell.set_backdrop(backdrop != WindowBackgroundAppearance::Opaque);
             shell.set_activity(capture, activity, cx);

@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use crate::fonts::{app_icon, wordmark};
 use crate::palette::{self, PaletteItem};
+use crate::screens::context::{ContextScreen, ContextServices, ContextStores, OpenDecision};
 use crate::screens::decisions::DecisionsScreen;
 use crate::screens::inbox::InboxScreen;
 use crate::screens::projects::{ProjectChanged, ProjectsScreen};
@@ -56,6 +57,8 @@ actions!(
         GoReview,
         /// Opens Decisões.
         GoDecisions,
+        /// Opens Contexto.
+        GoContext,
         /// Opens or closes the command palette.
         TogglePalette,
         /// Moves the palette highlight down.
@@ -125,6 +128,7 @@ const PANEL_REOPEN_GUARD: std::time::Duration = std::time::Duration::from_millis
 enum Destination {
     Review,
     Decisions,
+    Context,
 }
 
 impl Destination {
@@ -132,6 +136,7 @@ impl Destination {
         match self {
             Self::Review => 0,
             Self::Decisions => 1,
+            Self::Context => 2,
         }
     }
 
@@ -139,6 +144,7 @@ impl Destination {
         match self {
             Self::Review => "nav-inbox",
             Self::Decisions => "nav-decisions",
+            Self::Context => "nav-context",
         }
     }
 
@@ -146,6 +152,15 @@ impl Destination {
         match self {
             Self::Review => "Revisão",
             Self::Decisions => "Decisões",
+            Self::Context => "Contexto",
+        }
+    }
+
+    fn glyph(self) -> IconName {
+        match self {
+            Self::Review => IconName::List,
+            Self::Decisions => IconName::File,
+            Self::Context => IconName::Layers,
         }
     }
 
@@ -153,12 +168,13 @@ impl Destination {
         match self {
             Self::Review => "Ctrl 1",
             Self::Decisions => "Ctrl 2",
+            Self::Context => "Ctrl 3",
         }
     }
 }
 
 /// Persistent product screens with contextual search and native window controls.
-pub struct Shell<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> {
+pub struct Shell<R: ProjectRepository + InboxStore + DecisionStore + ContextStores> {
     theme: Theme,
     focus: FocusHandle,
     search: Entity<SearchField>,
@@ -173,7 +189,9 @@ pub struct Shell<R: ProjectRepository + InboxStore + DecisionStore + Send + 'sta
     settings_open: bool,
     settings_focus: FocusHandle,
     destination: Destination,
-    destination_focus: [FocusHandle; 2],
+    destination_focus: [FocusHandle; 3],
+    context: Option<Entity<ContextScreen<R>>>,
+    _context_subscription: Option<Subscription>,
     /// Destination tab under the pointer, driving the hover spring.
     hovered_tab: Option<Destination>,
     theme_focus: FocusHandle,
@@ -189,13 +207,14 @@ pub struct Shell<R: ProjectRepository + InboxStore + DecisionStore + Send + 'sta
     backdrop: bool,
 }
 
-impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R> {
+impl<R: ProjectRepository + InboxStore + DecisionStore + ContextStores> Shell<R> {
     /// Mounts both use cases once, retaining their state across navigation.
     pub fn new(
         cx: &mut Context<Self>,
         projects: Result<Projects<R>, String>,
         inbox: Option<Inbox<R>>,
         decisions: Option<(Decisions<R>, Export<R>)>,
+        context: Option<ContextServices<R>>,
         settings: Option<SettingsServices>,
     ) -> Self {
         let screen = match projects {
@@ -233,6 +252,13 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
                         );
                     });
                 }
+                if let Some(context) = &shell.context {
+                    let project = event
+                        .0
+                        .as_ref()
+                        .map(|project| project.id().as_str().to_owned());
+                    context.update(cx, |screen, cx| screen.set_project(project, cx));
+                }
                 if let Some(decisions) = &shell.decisions {
                     decisions.update(cx, |screen, cx| {
                         screen.set_project(
@@ -265,6 +291,12 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
             .map(|screen| cx.observe(screen, |_, _, cx| cx.notify()));
         let decisions = decisions
             .map(|(decisions, export)| cx.new(|cx| DecisionsScreen::new(cx, decisions, export)));
+        let context = context.map(|services| cx.new(|cx| ContextScreen::new(cx, services)));
+        let context_subscription = context.as_ref().map(|screen| {
+            cx.subscribe(screen, |shell, _, event: &OpenDecision, cx| {
+                shell.show_decision(event.0.clone(), cx)
+            })
+        });
         let settings = settings.map(|services| {
             cx.new(|cx| {
                 SettingsScreen::new(cx, services.ai, services.integration, services.diagnostics)
@@ -294,7 +326,10 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
             destination_focus: [
                 cx.focus_handle().tab_stop(true),
                 cx.focus_handle().tab_stop(true),
+                cx.focus_handle().tab_stop(true),
             ],
+            context,
+            _context_subscription: context_subscription,
             hovered_tab: None,
             theme_focus: cx.focus_handle().tab_stop(true),
             project_focus: cx.focus_handle().tab_stop(true),
@@ -500,15 +535,16 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
             .as_ref()
             .and_then(|screen| screen.read(cx).selected_project());
         if selected.is_some() {
-            for destination in [Destination::Review, Destination::Decisions] {
+            for destination in [
+                Destination::Review,
+                Destination::Decisions,
+                Destination::Context,
+            ] {
                 items.push(PaletteItem {
                     group: "Ir para",
                     label: destination.label().to_owned(),
                     detail: None,
-                    glyph: match destination {
-                        Destination::Review => IconName::List,
-                        Destination::Decisions => IconName::File,
-                    },
+                    glyph: destination.glyph(),
                     shortcut: Some(destination.shortcut()),
                     command: Command::Go(destination),
                 });
@@ -849,6 +885,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
                     screen.update(cx, |screen, cx| screen.move_selection(delta, window, cx));
                 }
             }
+            Destination::Context => {}
         }
     }
 
@@ -859,6 +896,15 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
         if let Some(screen) = &self.inbox {
             screen.update(cx, |screen, cx| screen.run_shortcut(action, window, cx));
         }
+    }
+
+    /// Opens a decision in Decisões from another destination (Contexto).
+    fn show_decision(&mut self, id: String, cx: &mut Context<Self>) {
+        self.destination = Destination::Decisions;
+        if let Some(decisions) = &self.decisions {
+            decisions.update(cx, |screen, cx| screen.open_decision(id, cx));
+        }
+        cx.notify();
     }
 
     fn switch_to(&mut self, destination: Destination, window: &mut Window, cx: &mut Context<Self>) {
@@ -875,6 +921,11 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
             }
             Destination::Decisions => {
                 if let Some(screen) = &self.decisions {
+                    screen.update(cx, |screen, cx| screen.refresh(cx));
+                }
+            }
+            Destination::Context => {
+                if let Some(screen) = &self.context {
                     screen.update(cx, |screen, cx| screen.refresh(cx));
                 }
             }
@@ -950,14 +1001,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
         } else {
             theme.colors.text_muted()
         };
-        let glyph = icon(
-            match destination {
-                Destination::Review => IconName::List,
-                Destination::Decisions => IconName::File,
-            },
-            14.0,
-            foreground,
-        );
+        let glyph = icon(destination.glyph(), 14.0, foreground);
         let count = (destination == Destination::Review).then(|| {
             self.inbox
                 .as_ref()
@@ -1129,7 +1173,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
     }
 }
 
-impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render for Shell<R> {
+impl<R: ProjectRepository + InboxStore + DecisionStore + ContextStores> Render for Shell<R> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The material follows the system appearance; in a light theme it
         // turns pale under a dark palette, so the chrome stays opaque there.
@@ -1220,7 +1264,12 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
             } else {
                 None
             };
-            let content = if selected.is_some() && self.destination == Destination::Decisions {
+            let content = if selected.is_some() && self.destination == Destination::Context {
+                self.context
+                    .as_ref()
+                    .map(|screen| screen.clone().into_any_element())
+                    .unwrap_or_else(|| div().into_any_element())
+            } else if selected.is_some() && self.destination == Destination::Decisions {
                 self.decisions
                     .as_ref()
                     .map(|screen| screen.clone().into_any_element())
@@ -1298,7 +1347,8 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
                                         .gap(px(SpacingScale::S1))
                                         .role(Role::TabList)
                                         .child(self.nav_tab(Destination::Review, cx))
-                                        .child(self.nav_tab(Destination::Decisions, cx)),
+                                        .child(self.nav_tab(Destination::Decisions, cx))
+                                        .child(self.nav_tab(Destination::Context, cx)),
                                 )
                                 .children(panel.take().map(|panel| {
                                     deferred(
@@ -1384,6 +1434,9 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
             )
             .on_action(cx.listener(|this, _: &GoReview, window, cx| {
                 this.switch_to(Destination::Review, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &GoContext, window, cx| {
+                this.switch_to(Destination::Context, window, cx)
             }))
             .on_action(cx.listener(|this, _: &GoDecisions, window, cx| {
                 this.switch_to(Destination::Decisions, window, cx)

@@ -4,6 +4,7 @@
 //! Quiet Glass primitives. Screen-specific components live beside their screen
 //! (for example [`projects`]) instead of in [`crate::ui`].
 
+pub mod context;
 mod decision_editor;
 pub mod decisions;
 mod evidence;

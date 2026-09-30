@@ -103,7 +103,10 @@ impl DiagnosticsPanel {
 
     /// Reloads the document; called each time the section opens.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
-        self.run(|backend| Outcome::Loaded(backend.document().map(Box::new)), cx);
+        self.run(
+            |backend| Outcome::Loaded(backend.document().map(Box::new)),
+            cx,
+        );
     }
 
     fn run(

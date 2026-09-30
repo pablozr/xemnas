@@ -17,7 +17,7 @@ use gpui::{
     SharedString, Stateful, Subscription, Toggled, Window,
 };
 
-use super::format::date_time;
+use super::format::{date_time, thousands};
 use crate::ui::controls::{action_button, button_foreground, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{mark_selected, status_pill};
@@ -1490,32 +1490,10 @@ fn category_label(kind: &str) -> &'static str {
     }
 }
 
-/// `8192` → `8.192`.
-fn thousands(value: usize) -> String {
-    let digits = value.to_string();
-    let mut out = String::new();
-    for (index, digit) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index).is_multiple_of(3) {
-            out.push('.');
-        }
-        out.push(digit);
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{capitalize, category_label, thousands};
+    use super::{capitalize, category_label};
     use application::profile::PREVIEW_CATEGORIES;
-
-    #[test]
-    fn formats_counts_with_thousands_separators() {
-        assert_eq!(thousands(0), "0");
-        assert_eq!(thousands(999), "999");
-        assert_eq!(thousands(8_192), "8.192");
-        assert_eq!(thousands(32_768), "32.768");
-        assert_eq!(thousands(1_000_000), "1.000.000");
-    }
 
     #[test]
     fn every_preview_category_has_product_copy() {

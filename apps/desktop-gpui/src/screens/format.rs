@@ -38,6 +38,19 @@ pub(super) fn date_time(value: &str) -> String {
         .unwrap_or_else(|| value.to_owned())
 }
 
+/// `8192` → `8.192`.
+pub(super) fn thousands(value: usize) -> String {
+    let digits = value.to_string();
+    let mut out = String::new();
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            out.push('.');
+        }
+        out.push(digit);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -60,5 +73,13 @@ mod tests {
         assert!(date_time(value).starts_with(&short_date(value)));
         assert_eq!(short_date("short"), "short");
         assert_eq!(date_time("short"), "short");
+    }
+
+    #[test]
+    fn formats_counts_with_thousands_separators() {
+        assert_eq!(thousands(0), "0");
+        assert_eq!(thousands(999), "999");
+        assert_eq!(thousands(8_192), "8.192");
+        assert_eq!(thousands(1_000_000), "1.000.000");
     }
 }
