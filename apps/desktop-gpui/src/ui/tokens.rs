@@ -10,190 +10,253 @@
 
 use std::time::Duration;
 
-use gpui::{px, rgb, rgba, Pixels, Rgba};
+use gpui::{px, rgb, Pixels, Rgba};
+
+/// A colour as written in the design system: `0xRRGGBB` plus an alpha.
+///
+/// Keeping hex and alpha apart avoids the `rgba(0xRRGGBB)` trap: GPUI's
+/// `rgba` reads eight hex digits, so a six-digit white silently became cyan.
+#[derive(Clone, Copy, Debug)]
+struct Tone(u32, f32);
+
+impl Tone {
+    const fn solid(hex: u32) -> Self {
+        Self(hex, 1.0)
+    }
+
+    fn rgba(self) -> Rgba {
+        rgb(self.0).alpha(self.1)
+    }
+}
+
+/// The tokens that differ between palettes. Everything else is shared.
+#[derive(Debug)]
+struct Palette {
+    canvas: Tone,
+    canvas_raised: Tone,
+    canvas_deep: Tone,
+    rail: Tone,
+    surface: Tone,
+    surface_hover: Tone,
+    selection: Tone,
+    glass_surface_lavender: Tone,
+    glass_edge_lavender: Tone,
+    hairline_divider: Tone,
+    layer_fill: Tone,
+    text_primary: Tone,
+    text_secondary: Tone,
+    text_muted: Tone,
+    status_danger: Tone,
+}
+
+/// Blue graphite: the original Quiet Glass palette.
+const QUIET_GLASS: Palette = Palette {
+    canvas: Tone::solid(0x0D111A),
+    canvas_raised: Tone::solid(0x111622),
+    canvas_deep: Tone::solid(0x090D15),
+    rail: Tone::solid(0x0A0E17),
+    surface: Tone::solid(0x181E2A),
+    surface_hover: Tone::solid(0x202634),
+    selection: Tone::solid(0x1C1A28),
+    glass_surface_lavender: Tone::solid(0x1C1A28),
+    glass_edge_lavender: Tone::solid(0x514A63),
+    hairline_divider: Tone(0xCDC7DC, 0.10),
+    layer_fill: Tone(0x0D111A, 0.72),
+    text_primary: Tone::solid(0xECEEF4),
+    text_secondary: Tone::solid(0xBEC3D0),
+    text_muted: Tone::solid(0x858C9D),
+    status_danger: Tone::solid(0xD96776),
+};
+
+/// Neutral charcoal: the editorial palette.
+const CHARCOAL: Palette = Palette {
+    canvas: Tone::solid(0x202024),
+    canvas_raised: Tone::solid(0x26262C),
+    canvas_deep: Tone::solid(0x1B1B1F),
+    rail: Tone::solid(0x1B1B1F),
+    surface: Tone::solid(0x26262C),
+    surface_hover: Tone::solid(0x302B39),
+    selection: Tone::solid(0x302B39),
+    glass_surface_lavender: Tone::solid(0x26262C),
+    glass_edge_lavender: Tone::solid(0x49434F),
+    hairline_divider: Tone::solid(0x35353D),
+    layer_fill: Tone::solid(0x202024),
+    text_primary: Tone::solid(0xEDEDF0),
+    text_secondary: Tone::solid(0xC0C0CA),
+    text_muted: Tone::solid(0xA09FAB),
+    status_danger: Tone::solid(0xE27F8D),
+};
 
 /// Color tokens from the Quiet Glass design system.
 ///
-/// Each method returns the token's [`Rgba`] value. `rgba(0xRRGGBBFF)` builds an
-/// opaque color and [`Rgba::alpha`] applies the documented alpha.
-#[derive(Clone, Copy, Debug, Default)]
+/// Palette-specific values live in one [`Palette`] table per theme; the
+/// methods below are the only way views read them.
+#[derive(Clone, Copy, Debug)]
 pub struct ColorTokens {
-    charcoal: bool,
+    palette: &'static Palette,
+}
+
+impl Default for ColorTokens {
+    fn default() -> Self {
+        Self::quiet_glass()
+    }
 }
 
 impl ColorTokens {
     /// Original Quiet Glass palette.
     pub const fn quiet_glass() -> Self {
-        Self { charcoal: false }
+        Self {
+            palette: &QUIET_GLASS,
+        }
     }
-    /// Neutral charcoal materials for the editorial Decisions workspace.
+
+    /// Neutral charcoal palette.
     pub const fn charcoal() -> Self {
-        Self { charcoal: true }
+        Self { palette: &CHARCOAL }
     }
-    /// Graphite document canvas used by the Decisions destination.
-    pub fn decision_canvas(&self) -> Rgba {
-        if !self.charcoal {
-            return self.canvas();
-        }
-        rgb(0x202024)
-    }
-    /// Quiet index rail.
-    pub fn decision_rail(&self) -> Rgba {
-        if !self.charcoal {
-            return self.rail();
-        }
-        rgb(0x1B1B1F)
-    }
-    /// Auxiliary document layer.
-    pub fn decision_layer(&self) -> Rgba {
-        if !self.charcoal {
-            return self.surface();
-        }
-        rgb(0x26262C)
-    }
-    /// Selected index item and compact active tab.
-    pub fn decision_selected(&self) -> Rgba {
-        if !self.charcoal {
-            return self.glass_surface_lavender();
-        }
-        rgb(0x302B39)
-    }
-    /// Neutral separator.
-    pub fn decision_line(&self) -> Rgba {
-        if !self.charcoal {
-            return self.hairline_divider();
-        }
-        rgb(0x35353D)
-    }
-    /// Mineral lavender document marker.
-    pub fn decision_accent(&self) -> Rgba {
-        self.accent_hover()
-    }
-    /// Confirmed decision indicator.
-    pub fn decision_confirmed(&self) -> Rgba {
-        rgb(0x8CB69A)
-    }
+
     /// `color.canvas` — main continuous background.
     pub fn canvas(&self) -> Rgba {
-        if self.charcoal {
-            return self.decision_canvas();
-        }
-        rgb(0x0D111A)
+        self.palette.canvas.rgba()
     }
 
     /// `color.canvas-raised` — regions with slight elevation.
     pub fn canvas_raised(&self) -> Rgba {
-        if self.charcoal {
-            return self.decision_layer();
-        }
-        rgb(0x111622)
+        self.palette.canvas_raised.rgba()
     }
 
-    /// `color.canvas-deep` — rail and recessed areas.
+    /// `color.canvas-deep` — recessed areas such as code wells.
     pub fn canvas_deep(&self) -> Rgba {
-        if self.charcoal {
-            return self.decision_rail();
-        }
-        rgb(0x090D15)
+        self.palette.canvas_deep.rgba()
     }
 
-    /// `color.surface` — auxiliary solid surface.
+    /// `color.rail` — side lists, one step behind the canvas.
+    pub fn rail(&self) -> Rgba {
+        self.palette.rail.rgba()
+    }
+
+    /// `color.surface` — auxiliary solid surface: chips, counters, layers.
     pub fn surface(&self) -> Rgba {
-        if self.charcoal {
-            return self.decision_layer();
-        }
-        rgb(0x181E2A)
+        self.palette.surface.rgba()
     }
 
     /// `color.surface-hover` — hover without glass.
     pub fn surface_hover(&self) -> Rgba {
-        if self.charcoal {
-            return self.decision_selected();
-        }
-        rgb(0x202634)
+        self.palette.surface_hover.rgba()
     }
 
-    /// `glass.fill-low` — rail and wide surfaces.
-    pub fn glass_fill_low(&self) -> Rgba {
-        rgba(0x9790ACFF).alpha(0.055)
-    }
-
-    /// `glass.fill-medium` — selection and proposal surface.
-    pub fn glass_fill_medium(&self) -> Rgba {
-        rgba(0x9790ACFF).alpha(0.095)
-    }
-
-    /// `glass.fill-strong` — primary control.
-    pub fn glass_fill_strong(&self) -> Rgba {
-        rgba(0xA69EBBFF).alpha(0.16)
-    }
-
-    /// `glass.fill-emphasis` — the saturated fill of a small primary control.
-    ///
-    /// This is a **button** fill, not a surface. It used to be a near-opaque
-    /// lilac, and using it as a 440 px card is what made the Home screen read
-    /// as a lilac slab: a large area of high-alpha lavender dominates every
-    /// other surface and flattens the hierarchy. Reference systems keep large
-    /// surfaces at `rgba(255, 255, 255, 0.02)`-`0.05` and reserve saturation
-    /// for the one small element that is the primary action.
-    ///
-    /// Kept at 0.64: still the brightest thing on the canvas, still carrying
-    /// `accent.on-emphasis` above WCAG AA (the contrast test locks this in),
-    /// but a 40 px control rather than a full card.
-    pub fn glass_fill_emphasis(&self) -> Rgba {
-        rgba(0xC3BADDFF).alpha(0.64)
-    }
-
-    /// `glass.fill-card` — the fill of a large surface: a card, a panel.
-    ///
-    /// New in this pass. The old stack had no token for "a big quiet
-    /// rectangle", so the only available recipe was Emphasis, and every large
-    /// surface inherited a saturated fill. This is the Linear/Notion value:
-    /// white at 3% over the canvas, which lifts the surface without tinting it.
-    pub fn glass_fill_card(&self) -> Rgba {
-        rgba(0xFFFFFF).alpha(0.030)
-    }
-
-    /// `glass.fill-card-hover` — the same surface under the pointer.
-    pub fn glass_fill_card_hover(&self) -> Rgba {
-        rgba(0xFFFFFF).alpha(0.055)
-    }
-
-    /// `glass.surface-raised` — a card sitting above another card.
-    pub fn glass_surface_raised(&self) -> Rgba {
-        rgba(0xFFFFFF).alpha(0.045)
+    /// `color.selection` — the selected row, tab or index item.
+    pub fn selection(&self) -> Rgba {
+        self.palette.selection.rgba()
     }
 
     /// `glass.surface-lavender` — controlled opaque base for featured panes.
-    /// Avoids the teal cast observed on the previous translucent controls.
     pub fn glass_surface_lavender(&self) -> Rgba {
-        if self.charcoal {
-            return self.decision_layer();
-        }
-        rgb(0x1C1A28)
+        self.palette.glass_surface_lavender.rgba()
     }
 
     /// `glass.edge-lavender` — mineral-lavender edge over the dark base.
     pub fn glass_edge_lavender(&self) -> Rgba {
-        if self.charcoal {
-            return rgb(0x49434F);
-        }
-        rgb(0x514A63)
+        self.palette.glass_edge_lavender.rgba()
+    }
+
+    /// `hairline.divider` — 1 px separation inside a continuous surface.
+    pub fn hairline_divider(&self) -> Rgba {
+        self.palette.hairline_divider.rgba()
+    }
+
+    /// `layer.fill` — the content layer painted on top of a Mica backdrop.
+    pub fn layer_fill(&self) -> Rgba {
+        self.palette.layer_fill.rgba()
+    }
+
+    /// `text.primary` — titles and primary content.
+    pub fn text_primary(&self) -> Rgba {
+        self.palette.text_primary.rgba()
+    }
+
+    /// `text.secondary` — descriptions and secondary body.
+    pub fn text_secondary(&self) -> Rgba {
+        self.palette.text_secondary.rgba()
+    }
+
+    /// `text.muted` — metadata.
+    pub fn text_muted(&self) -> Rgba {
+        self.palette.text_muted.rgba()
+    }
+
+    /// `status.danger` — rejection and error.
+    pub fn status_danger(&self) -> Rgba {
+        self.palette.status_danger.rgba()
+    }
+
+    // --- shared by both palettes ---
+
+    /// `glass.fill-low` — rail and wide surfaces.
+    pub fn glass_fill_low(&self) -> Rgba {
+        rgb(0x9790AC).alpha(0.055)
+    }
+
+    /// `glass.fill-medium` — selection and proposal surface.
+    pub fn glass_fill_medium(&self) -> Rgba {
+        rgb(0x9790AC).alpha(0.095)
+    }
+
+    /// `glass.fill-strong` — primary control.
+    pub fn glass_fill_strong(&self) -> Rgba {
+        rgb(0xA69EBB).alpha(0.16)
+    }
+
+    /// `glass.fill-emphasis` — the saturated fill of a small primary control,
+    /// never a large surface.
+    pub fn glass_fill_emphasis(&self) -> Rgba {
+        rgb(0xC3BADD).alpha(0.64)
+    }
+
+    /// `glass.fill-card` — white at 3% over the canvas: lifts a large surface
+    /// without tinting it.
+    pub fn glass_fill_card(&self) -> Rgba {
+        rgb(0xFFFFFF).alpha(0.030)
+    }
+
+    /// `glass.fill-card-hover` — the same surface under the pointer.
+    pub fn glass_fill_card_hover(&self) -> Rgba {
+        rgb(0xFFFFFF).alpha(0.055)
+    }
+
+    /// `glass.surface-raised` — a card sitting above another card.
+    pub fn glass_surface_raised(&self) -> Rgba {
+        rgb(0xFFFFFF).alpha(0.045)
     }
 
     /// `glass.border` — general outline.
     pub fn glass_border(&self) -> Rgba {
-        rgba(0xCDC7DCFF).alpha(0.13)
+        rgb(0xCDC7DC).alpha(0.13)
     }
 
     /// `glass.border-top` — inner top highlight.
     pub fn glass_border_top(&self) -> Rgba {
-        rgba(0xEAE6F1FF).alpha(0.20)
+        rgb(0xEAE6F1).alpha(0.20)
     }
 
     /// `glass.border-bottom` — bottom depth.
     pub fn glass_border_bottom(&self) -> Rgba {
-        rgba(0x474354FF).alpha(0.28)
+        rgb(0x474354).alpha(0.28)
+    }
+
+    /// `glass.border-card` — the outline of a large surface.
+    pub fn glass_border_card(&self) -> Rgba {
+        rgb(0xFFFFFF).alpha(0.09)
+    }
+
+    /// `glass.border-card-hover` — a card outline under the pointer.
+    pub fn glass_border_card_hover(&self) -> Rgba {
+        rgb(0xFFFFFF).alpha(0.16)
+    }
+
+    /// `glass.border-control` — the outline of a field or control at rest.
+    pub fn glass_border_control(&self) -> Rgba {
+        rgb(0xFFFFFF).alpha(0.10)
     }
 
     /// `accent.subtle` — selection indicator and edge.
@@ -211,8 +274,8 @@ impl ColorTokens {
         rgb(0xA89EBA)
     }
 
-    /// `accent.hover` — the primary action under the pointer: one step lighter,
-    /// never a translucent fill that lets the canvas bleed through.
+    /// `accent.hover` — the primary action under the pointer and the document
+    /// marker: one step lighter than `accent.emphasis`.
     pub fn accent_hover(&self) -> Rgba {
         rgb(0xB3A5CB)
     }
@@ -220,30 +283,6 @@ impl ColorTokens {
     /// `accent.on-emphasis` — text over light lavender.
     pub fn accent_on_emphasis(&self) -> Rgba {
         rgb(0x15141B)
-    }
-
-    /// `text.primary` — titles and primary content.
-    pub fn text_primary(&self) -> Rgba {
-        if self.charcoal {
-            return rgb(0xEDEDF0);
-        }
-        rgb(0xECEEF4)
-    }
-
-    /// `text.secondary` — descriptions and secondary body.
-    pub fn text_secondary(&self) -> Rgba {
-        if self.charcoal {
-            return rgb(0xC0C0CA);
-        }
-        rgb(0xBEC3D0)
-    }
-
-    /// `text.muted` — metadata.
-    pub fn text_muted(&self) -> Rgba {
-        if self.charcoal {
-            return rgb(0xA09FAB);
-        }
-        rgb(0x858C9D)
     }
 
     /// `text.disabled` — unavailable state.
@@ -266,32 +305,24 @@ impl ColorTokens {
         rgb(0xD4B56E)
     }
 
-    /// `status.danger` — rejection and error.
-    pub fn status_danger(&self) -> Rgba {
-        if self.charcoal {
-            return rgb(0xE27F8D);
-        }
-        rgb(0xD96776)
-    }
-
     /// `status.info` — neutral information.
     pub fn status_info(&self) -> Rgba {
         rgb(0x839BBE)
     }
 
-    /// Shadow color of `Glass Low`: `rgba(0, 0, 0, 0.16)`.
+    /// Shadow color of `Glass Low`.
     pub fn shadow_low(&self) -> Rgba {
-        rgba(0x000000FF).alpha(0.16)
+        rgb(0x000000).alpha(0.16)
     }
 
-    /// Shadow color of `Glass Selected`: `rgba(0, 0, 0, 0.18)`.
+    /// Shadow color of `Glass Selected`.
     pub fn shadow_selected(&self) -> Rgba {
-        rgba(0x000000FF).alpha(0.18)
+        rgb(0x000000).alpha(0.18)
     }
 
-    /// Shadow color of `Glass Emphasis`: `rgba(0, 0, 0, 0.22)`.
+    /// Shadow color of `Glass Emphasis`.
     pub fn shadow_emphasis(&self) -> Rgba {
-        rgba(0x000000FF).alpha(0.22)
+        rgb(0x000000).alpha(0.22)
     }
 
     /// Inner highlight of `Glass Emphasis`: white at 16%.
@@ -306,104 +337,37 @@ impl ColorTokens {
 
     /// A stronger translucent fill used by the solid (non-blur) fallback.
     pub fn glass_fallback(&self) -> Rgba {
-        rgba(0x181E2AFF).alpha(0.98)
+        rgb(0x181E2A).alpha(0.98)
     }
 
-    // --- additions required by the window shell (ticket: densidade + material) ---
-
-    /// `color.rail` — the navigation rail, one step behind the canvas.
-    ///
-    /// Sits between `color.canvas-deep` (#090D15) and `color.canvas` (#0D111A):
-    /// it recedes the rail without reading as a stain on the window.
-    pub fn rail(&self) -> Rgba {
-        if self.charcoal {
-            return self.decision_rail();
-        }
-        rgb(0x0A0E17)
-    }
-
-    /// `hairline.divider` — 1 px separation inside a continuous surface.
-    ///
-    /// `glass.border` at 13% is too loud for a full-length rule; internal
-    /// separators (rail edge, header, status bar) use this quieter 10%.
-    pub fn hairline_divider(&self) -> Rgba {
-        if self.charcoal {
-            return self.decision_line();
-        }
-        rgba(0xCDC7DCFF).alpha(0.10)
-    }
-
-    /// `glass.border-card` — the outline of a large surface.
-    ///
-    /// `glass.border` (13%) was doing two jobs: a full-length divider and a
-    /// card outline. At 13% a 1400 px rule reads as a hard line, while a card
-    /// needs a visible edge to exist at all. These are now separate tokens —
-    /// 8% for rules, 9% for card outlines — so each can be tuned on its own.
-    pub fn glass_border_card(&self) -> Rgba {
-        rgba(0xFFFFFF).alpha(0.09)
-    }
-
-    /// `glass.border-card-hover` — a card outline under the pointer.
-    pub fn glass_border_card_hover(&self) -> Rgba {
-        rgba(0xFFFFFF).alpha(0.16)
-    }
-
-    /// `glass.border-control` — the outline of a control at rest.
-    pub fn glass_border_control(&self) -> Rgba {
-        rgba(0xFFFFFF).alpha(0.10)
-    }
-
-    /// `color.hover-veil` — hover for rows and rail items.
-    ///
-    /// Lighter than `color.surface-hover` (#202634, an opaque solid) because it
-    /// is a large-area tint that must not compete with the content on top of it.
+    /// `color.hover-veil` — hover for rows, tabs and ghost controls.
     pub fn hover_veil(&self) -> Rgba {
-        rgba(0x9790ACFF).alpha(0.045)
+        rgb(0x9790AC).alpha(0.07)
     }
 
-    /// `layer.fill` — the content layer painted on top of a Mica backdrop.
-    ///
-    /// Windows 11's `LayerFillColorDefaultBrush`: a low-opacity solid that lets
-    /// the material behind it read through while keeping text on an even base.
-    pub fn layer_fill(&self) -> Rgba {
-        if self.charcoal {
-            return self.decision_canvas();
-        }
-        rgba(0x0D111AFF).alpha(0.72)
-    }
-
-    /// `scrollbar.thumb` — the scroll indicator, visible only while scrolling.
+    /// `scrollbar.thumb` — the scroll indicator.
     pub fn scrollbar_thumb(&self) -> Rgba {
-        rgba(0x9790ACFF).alpha(0.22)
+        rgb(0x9790AC).alpha(0.22)
     }
 
     /// `glow.warm` — a wide, very low-alpha aura behind a featured surface.
-    ///
-    /// Borrowed from the reference systems' "warm glow" (`rgba(215, 201, 175,
-    /// 0.05)`, 20 px blur). It is what stops a dark card from reading as a hole
-    /// cut in the canvas: the surface has a faint light of its own instead of
-    /// only a border. Deliberately almost invisible — it is felt, not seen.
     pub fn glow_warm(&self) -> Rgba {
-        rgba(0xD7C9AF).alpha(0.05)
+        rgb(0xD7C9AF).alpha(0.05)
     }
 
     /// `glow.lavender` — diffuse edge light, never a saturated fill.
     pub fn glow_lavender(&self) -> Rgba {
-        rgba(0xA89EBAFF).alpha(0.08)
+        rgb(0xA89EBA).alpha(0.08)
     }
 
     /// The inner top highlight, as an inset shadow colour.
-    ///
-    /// Replaces the hand-placed absolute `div` the glass used to draw its top
-    /// edge: an inset shadow follows the rounded corner on all four sides, so
-    /// the highlight reads as a lit rim instead of a straight line between arcs.
     pub fn inset_highlight(&self) -> Rgba {
-        rgba(0xEAE6F1FF).alpha(0.20)
+        rgb(0xEAE6F1).alpha(0.20)
     }
 
     /// The inner bottom depth, as an inset shadow colour.
     pub fn inset_depth(&self) -> Rgba {
-        rgba(0x474354FF).alpha(0.28)
+        rgb(0x474354).alpha(0.28)
     }
 }
 

@@ -127,7 +127,7 @@ impl Render for DecisionEditor {
         let valid = edits.validate().is_ok();
         let _ = &self.subscriptions;
         div().size_full().flex().flex_col()
-            .child(div().h(px(60.0)).flex_none().px(px(28.0)).flex().items_center().gap(px(8.0)).border_b_1().border_color(t.colors.decision_line())
+            .child(div().h(px(60.0)).flex_none().px(px(28.0)).flex().items_center().gap(px(8.0)).border_b_1().border_color(t.colors.hairline_divider())
                 .child(text_style(div(),TypeScale::HEADING_3).flex_1().child("Revisar decisão"))
                 .children([false,true].into_iter().enumerate().map(|(i,save)|{
                     let enabled=!self.busy&&(!save||valid);

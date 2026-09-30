@@ -90,11 +90,11 @@ pub fn action_button(
             .text_color(colors.accent_on_emphasis())
             .hover(move |style| style.bg(colors.accent_hover())),
         ButtonKind::Primary => button
-            .bg(colors.decision_layer())
+            .bg(colors.surface())
             .text_color(colors.text_disabled()),
         ButtonKind::Secondary => button
             .border_1()
-            .border_color(colors.decision_line())
+            .border_color(colors.hairline_divider())
             .text_color(colors.text_primary())
             .hover(move |style| style.bg(colors.hover_veil())),
         ButtonKind::Ghost => button

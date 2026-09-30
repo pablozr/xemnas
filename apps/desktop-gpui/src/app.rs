@@ -283,7 +283,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
             } else {
                 theme.colors.text_muted()
             })
-            .when(selected, |tab| tab.bg(theme.colors.decision_selected()))
+            .when(selected, |tab| tab.bg(theme.colors.selection()))
             .when(!selected, |tab| {
                 tab.hover(move |style| {
                     style
@@ -431,7 +431,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
                                 .border_b_1()
                                 .border_color(theme.colors.hairline_divider())
                                 .when(self.destination == Destination::Decisions, |header| {
-                                    header.bg(theme.colors.decision_canvas())
+                                    header.bg(theme.colors.canvas())
                                 })
                                 .child(
                                     text_style(div(), TypeScale::HEADING_2)

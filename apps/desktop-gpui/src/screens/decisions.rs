@@ -498,7 +498,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
         action_button(&t, id, kind, !self.busy)
             .when(selected && kind == ButtonKind::Ghost, |button| {
                 button
-                    .bg(t.colors.decision_selected())
+                    .bg(t.colors.selection())
                     .text_color(t.colors.text_primary())
             })
             .aria_label(label.clone())
@@ -519,7 +519,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                 text_style(div(), TypeScale::META)
                     .px(px(5.0))
                     .rounded(px(4.0))
-                    .bg(t.colors.decision_layer())
+                    .bg(t.colors.surface())
                     .text_color(t.colors.text_muted())
                     .child(count)
             }))
@@ -622,13 +622,13 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                     .border_color(if active {
                         t.colors.glass_edge_lavender()
                     } else {
-                        t.colors.decision_rail()
+                        t.colors.rail()
                     })
                     .rounded(px(7.0))
                     .bg(if active {
-                        t.colors.decision_selected()
+                        t.colors.selection()
                     } else {
-                        t.colors.decision_rail()
+                        t.colors.rail()
                     })
                     .flex()
                     .flex_col()
@@ -642,14 +642,14 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                     .hover(move |style| {
                         style
                             .bg(if active {
-                                t.colors.decision_selected()
+                                t.colors.selection()
                             } else {
-                                t.colors.decision_layer()
+                                t.colors.surface()
                             })
                             .border_color(if active {
                                 t.colors.glass_edge_lavender()
                             } else {
-                                t.colors.decision_line()
+                                t.colors.hairline_divider()
                             })
                     })
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -672,7 +672,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                                 .bottom(px(15.0))
                                 .w(px(2.0))
                                 .rounded_full()
-                                .bg(t.colors.decision_accent()),
+                                .bg(t.colors.accent_hover()),
                         )
                     })
                     .children(status.map(|status| {
@@ -682,7 +682,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                             .gap(px(6.0))
                             .child(div().size(px(5.0)).rounded_full().bg(
                                 if status == DecisionStatus::Accepted {
-                                    t.colors.decision_confirmed()
+                                    t.colors.status_success()
                                 } else {
                                     t.colors.text_muted()
                                 },
@@ -701,8 +701,8 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                                 text_style(div(), TypeScale::META)
                                     .px(px(5.0))
                                     .rounded(px(4.0))
-                                    .bg(t.colors.decision_layer())
-                                    .text_color(t.colors.decision_accent())
+                                    .bg(t.colors.surface())
+                                    .text_color(t.colors.accent_hover())
                                     .child(format!("v{version}"))
                             }))
                     }))
@@ -755,9 +755,9 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
             .h_full()
             .flex()
             .flex_col()
-            .bg(t.colors.decision_rail())
+            .bg(t.colors.rail())
             .border_l_1()
-            .border_color(t.colors.decision_line())
+            .border_color(t.colors.hairline_divider())
             .child(
                 div()
                     .p(px(20.0))
@@ -780,7 +780,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                                     .px(px(6.0))
                                     .py(px(2.0))
                                     .rounded(px(4.0))
-                                    .bg(t.colors.decision_layer())
+                                    .bg(t.colors.surface())
                                     .text_color(t.colors.text_muted())
                                     .child(count.to_string()),
                             ),
@@ -825,7 +825,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                     .flex_none()
                     .p(px(16.0))
                     .border_t_1()
-                    .border_color(t.colors.decision_line())
+                    .border_color(t.colors.hairline_divider())
                     .child(
                         text_style(div(), TypeScale::META)
                             .text_color(t.colors.text_muted())
@@ -852,7 +852,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                     div()
                         .p(px(16.0))
                         .border_1()
-                        .border_color(t.colors.decision_line())
+                        .border_color(t.colors.hairline_divider())
                         .rounded(px(8.0))
                         .child(self.button(
                             format!("version-{}", revision.version),
@@ -910,10 +910,10 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
             .rounded(px(5.0))
             .px(px(8.0))
             .py(px(4.0))
-            .bg(t.colors.decision_layer())
+            .bg(t.colors.surface())
             .child(div().size(px(6.0)).rounded_full().bg(
                 if detail.summary.status == DecisionStatus::Accepted {
-                    t.colors.decision_confirmed()
+                    t.colors.status_success()
                 } else {
                     t.colors.text_muted()
                 },
@@ -926,11 +926,11 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                 },
             ));
         let mut document=div().w_full().max_w(px(740.0)).mx_auto().flex().flex_col().gap(px(24.0))
-            .when(!current,|view|view.child(text_style(div(),TypeScale::BODY_SMALL).p(px(12.0)).rounded(px(6.0)).bg(t.colors.decision_selected()).child("Versão histórica · somente leitura. Volte a Documento para revisar ou exportar a versão atual.")))
+            .when(!current,|view|view.child(text_style(div(),TypeScale::BODY_SMALL).p(px(12.0)).rounded(px(6.0)).bg(t.colors.selection()).child("Versão histórica · somente leitura. Volte a Documento para revisar ou exportar a versão atual.")))
             .child(div().flex().items_center().gap(px(10.0)).child(badge).child(text_style(div(),TypeScale::META).text_color(t.colors.text_muted()).child(format!("v{} · {}",detail.summary.version,short_date(&detail.summary.updated_at)))))
             .child(text_style(div(),TypeScale::HEADING_1).text_size(px(28.0)).line_height(px(37.0)).font_weight(gpui::FontWeight::MEDIUM).child(detail.summary.question.clone()))
-            .child(div().flex().flex_col().gap(px(9.0)).border_l_2().border_color(t.colors.decision_accent()).pl(px(18.0))
-                .child(text_style(div(),TypeScale::META).text_color(t.colors.decision_accent()).child("ESCOLHA CONFIRMADA"))
+            .child(div().flex().flex_col().gap(px(9.0)).border_l_2().border_color(t.colors.accent_hover()).pl(px(18.0))
+                .child(text_style(div(),TypeScale::META).text_color(t.colors.accent_hover()).child("ESCOLHA CONFIRMADA"))
                 .child(text_style(div(),TypeScale::HEADING_2).child(detail.summary.choice.clone())))
             .child(div().flex().flex_col().gap(px(10.0)).child(text_style(div(),TypeScale::META).text_color(t.colors.text_muted()).child("JUSTIFICATIVA"))
                 .child(text_style(div(),TypeScale::BODY_SMALL).line_height(px(24.0)).text_color(t.colors.text_secondary()).child(detail.rationale.clone())));
@@ -939,7 +939,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
             .flex_wrap()
             .gap(px(16.0))
             .border_t_1()
-            .border_color(t.colors.decision_line())
+            .border_color(t.colors.hairline_divider())
             .pt(px(20.0));
         for (index, (label, items)) in [
             ("Escopo", &detail.scope),
@@ -984,7 +984,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
             .child(
                 div()
                     .border_t_1()
-                    .border_color(t.colors.decision_line())
+                    .border_color(t.colors.hairline_divider())
                     .pt(px(18.0))
                     .flex()
                     .flex_col()
@@ -1006,7 +1006,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
         document = document.child(
             div()
                 .border_t_1()
-                .border_color(t.colors.decision_line())
+                .border_color(t.colors.hairline_divider())
                 .pt(px(16.0))
                 .flex()
                 .flex_col()
@@ -1050,7 +1050,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
             .flex_col()
             .gap(px(12.0))
             .border_t_1()
-            .border_color(t.colors.decision_line())
+            .border_color(t.colors.hairline_divider())
             .pt(px(20.0))
             .child(
                 div()
@@ -1068,7 +1068,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                             .px(px(7.0))
                             .py(px(3.0))
                             .rounded(px(5.0))
-                            .bg(t.colors.decision_layer())
+                            .bg(t.colors.surface())
                             .text_color(t.colors.text_muted())
                             .child(format!(
                                 "{} {}",
@@ -1096,8 +1096,8 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
             .gap(px(2.0))
             .overflow_x_scroll()
             .border_b_1()
-            .border_color(t.colors.decision_line())
-            .bg(t.colors.decision_layer());
+            .border_color(t.colors.hairline_divider())
+            .bg(t.colors.surface());
         for index in 0..self.sources.len() {
             let source = &self.sources[index];
             let label = source
@@ -1114,9 +1114,9 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                     .pl(px(8.0))
                     .border_b_2()
                     .border_color(if self.source == index {
-                        t.colors.decision_accent()
+                        t.colors.accent_hover()
                     } else {
-                        t.colors.decision_layer()
+                        t.colors.surface()
                     })
                     .child(Icon::file(&t, 14.0, self.source != index))
                     .child(self.button(
@@ -1132,7 +1132,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
             .min_w(px(0.0))
             .rounded(px(7.0))
             .border_1()
-            .border_color(t.colors.decision_line())
+            .border_color(t.colors.hairline_divider())
             .overflow_hidden()
             .child(tabs);
         if let Some(artifact) = self
@@ -1153,8 +1153,8 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                     .p(px(8.0))
                     .items_center()
                     .border_b_1()
-                    .border_color(t.colors.decision_line())
-                    .bg(t.colors.decision_rail())
+                    .border_color(t.colors.hairline_divider())
+                    .bg(t.colors.rail())
                     .children(caption.map(|(path, description)| {
                         div()
                             .flex_1()
@@ -1231,7 +1231,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                 .items_center()
                 .gap(px(8.0))
                 .border_b_1()
-                .border_color(t.colors.decision_line())
+                .border_color(t.colors.hairline_divider())
                 .child(
                     text_style(div(), TypeScale::HEADING_3)
                         .flex_1()
@@ -1288,7 +1288,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                 panel.child(
                     div()
                         .p(px(16.0))
-                        .bg(t.colors.decision_selected())
+                        .bg(t.colors.selection())
                         .child(text_style(div(), TypeScale::BODY_SMALL).mb(px(10.0)).child(
                             format!(
                                 "O arquivo {} já existe. Substituir seu conteúdo?",
@@ -1359,7 +1359,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> Render for DecisionsScreen<
                 .items_center()
                 .gap(px(6.0))
                 .border_b_1()
-                .border_color(t.colors.decision_line())
+                .border_color(t.colors.hairline_divider())
                 .child(self.button(
                     "document-tab".into(),
                     "Documento".into(),
@@ -1426,7 +1426,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> Render for DecisionsScreen<
             .h_full()
             .flex()
             .flex_col()
-            .bg(t.colors.decision_canvas());
+            .bg(t.colors.canvas());
         if let Some(error) = self.error.clone() {
             reader = reader.child(
                 div()
@@ -1435,7 +1435,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> Render for DecisionsScreen<
                     .items_center()
                     .gap(px(12.0))
                     .border_b_1()
-                    .border_color(t.colors.decision_line())
+                    .border_color(t.colors.hairline_divider())
                     .child(
                         text_style(div(), TypeScale::BODY_SMALL)
                             .flex_1()
@@ -1458,7 +1458,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> Render for DecisionsScreen<
                 text_style(div(), TypeScale::BODY_SMALL)
                     .px(px(24.0))
                     .py(px(10.0))
-                    .bg(t.colors.decision_layer())
+                    .bg(t.colors.surface())
                     .child(notice.clone()),
             );
         }
@@ -1468,7 +1468,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> Render for DecisionsScreen<
             .track_focus(&self.reader_focus)
             .size_full()
             .flex()
-            .bg(t.colors.decision_canvas())
+            .bg(t.colors.canvas())
             .child(reader)
             .child(self.index(compact, cx))
     }
