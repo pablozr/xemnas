@@ -1,11 +1,6 @@
 //! Bearer token generation and constant-time comparison.
-//!
-//! The token is random per session and never logged (PRIV-001).
 
 /// Generates a fresh session token from 32 random bytes, hex encoded.
-///
-/// The RNG is `getrandom`, already present in the workspace lock; a failure to
-/// read entropy is returned rather than panicking (RUST-001).
 pub fn generate_token() -> std::io::Result<String> {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes)
@@ -14,9 +9,6 @@ pub fn generate_token() -> std::io::Result<String> {
 }
 
 /// Compares two byte slices without early exit.
-///
-/// A length mismatch returns `false` immediately; the token length is fixed and
-/// public, so this does not leak a secret.
 pub fn constant_time_eq(candidate: &[u8], expected: &[u8]) -> bool {
     if candidate.len() != expected.len() {
         return false;

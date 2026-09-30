@@ -1,9 +1,4 @@
 //! Axum router, authentication middleware, timeouts and the four MVP endpoints.
-//!
-//! The router is generic over the [`CaptureApi`] trait so `local-api` never
-//! depends on storage at runtime; the composition root (or a test) mounts the
-//! concrete use case. Blocking use-case calls always run on `spawn_blocking`
-//! with a timeout, so the async runtime is never blocked (ASYNC-001).
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -71,11 +66,6 @@ struct AppState {
 }
 
 /// Builds the router with the four MVP endpoints.
-///
-/// Every route requires the bearer token, including `GET /v1/health`
-/// (ticket 09 decision 5). A request carrying `Origin` is rejected with 403
-/// before any handler runs (§13 browser threat). The whole-request timeout is
-/// the outermost layer, so it also covers reading the body.
 pub fn router(api: Arc<dyn CaptureApi>, config: ApiConfig) -> Router {
     let state = AppState {
         api,
@@ -290,10 +280,6 @@ async fn authorize(State(state): State<AppState>, request: Request, next: Next) 
 }
 
 /// Applies the whole-request timeout around the inner service.
-///
-/// Because this wraps `next.run`, the deadline also covers body extraction: a
-/// client that stalls mid-body is cut off with 504 instead of holding the
-/// connection forever.
 async fn with_request_timeout(
     State(state): State<AppState>,
     request: Request,
@@ -343,9 +329,6 @@ async fn create_capture(
     };
 
     if let Err(error) = integration_contracts::capture::validate_envelope(&value) {
-        // Never log the validation Display: it includes `instance()`, which is
-        // client content (prompts, diffs, credentials). Only schema-defined
-        // keywords and counts are safe (PRIV-001, §13, §19.9).
         tracing::warn!(
             operation = "validate_capture",
             error_count = error.error_count(),
@@ -358,7 +341,6 @@ async fn create_capture(
     let envelope: CaptureEnvelope = match serde_json::from_value(value) {
         Ok(envelope) => envelope,
         Err(error) => {
-            // Serde errors can quote offending scalars; log only the position.
             tracing::warn!(
                 operation = "deserialize_capture",
                 line = error.line(),
@@ -375,8 +357,6 @@ async fn create_capture(
 
     let api = state.api.clone();
     let key_for_call = idempotency_key.clone();
-    // The whole-request timeout layer already bounds this call; the blocking
-    // SQLite work runs on the blocking pool so the runtime stays responsive.
     let outcome = run_blocking(move || api.ingest(&envelope, &key_for_call)).await;
 
     match outcome {
@@ -432,9 +412,6 @@ fn json_rejection_to_api_error(rejection: JsonRejection) -> ApiError {
 }
 
 /// Runs a blocking use-case call on the blocking pool.
-///
-/// The deadline is enforced by the whole-request timeout layer, not here, so it
-/// also covers body extraction.
 async fn run_blocking<T, F>(task: F) -> Result<T, ApiError>
 where
     F: FnOnce() -> T + Send + 'static,

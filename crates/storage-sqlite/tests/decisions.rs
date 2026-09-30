@@ -133,7 +133,6 @@ fn migration_0008_applies_on_fresh_and_upgraded_databases() {
         assert!(table_exists(&connection, "decision_revisions"));
         assert!(table_exists(&connection, "evidence_links"));
         assert!(table_exists(&connection, "decisions_fts"));
-        // Simulate a version-6 database (no 0007 exists).
         connection
             .execute_batch(
                 "DROP TABLE decisions_fts; DROP TABLE evidence_links; \
@@ -307,8 +306,6 @@ fn promote_rolls_back_completely_on_failure() {
         .confirm("cand-1", None)
         .expect("confirm first");
 
-    // Reuse the existing decision id: the INSERT fails and the whole
-    // transaction must roll back, leaving cand-2 pending.
     let colliding = DecisionSeed {
         decision_id: first.decision_id.clone(),
         project_id: "project-1".to_string(),
@@ -390,7 +387,6 @@ fn revise_updates_the_index_and_keeps_the_history() {
         2
     );
 
-    // The index follows the live version: the new term matches, the old does not.
     let hits = decisions
         .search(&SearchQuery {
             query: "gamma".to_string(),
@@ -464,7 +460,6 @@ fn revision_content_is_reconstructible_in_full() {
     assert_eq!(live.scope, vec!["escopo ç"]);
     assert_eq!(live.consequences, vec!["consequência ç"]);
 
-    // Raw table proof that the arrays are stored as JSON and survive intact.
     let connection = Connection::open(root.join("app.db")).expect("raw");
     let (question, assumptions): (String, String) = connection
         .query_row(

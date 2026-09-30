@@ -1,7 +1,4 @@
 //! Versioned contracts exchanged with external adapters (for example OpenCode).
-//!
-//! Per ARCH-001 external adapters only know these versioned contracts; they do
-//! not carry decision rules. The OpenCode adapter itself is ticket 10.
 #![warn(missing_docs)]
 
 pub mod capture;

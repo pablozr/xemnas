@@ -133,7 +133,6 @@ fn migration_0006_applies_on_fresh_and_upgraded_databases() {
         assert!(table_exists(&connection, "assessments"));
         assert!(index_exists(&connection, "idx_assessments_capture_id"));
         assert!(index_exists(&connection, "idx_assessments_started_at"));
-        // Simulate a database already at version 5.
         connection
             .execute_batch(
                 "DROP TABLE assessments; DELETE FROM schema_migrations WHERE version = 6;",

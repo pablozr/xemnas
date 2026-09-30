@@ -1,9 +1,4 @@
 //! SQLite implementation of the Project persistence port.
-//!
-//! The schema is created by the embedded migrations in [`crate::store`]. The
-//! `location` column is `UNIQUE`: it is the single source of truth for the
-//! "already registered" rule, which keeps the check correct across restarts and
-//! shared store clones.
 
 use application::projects::{ProjectError, ProjectRecord, ProjectRepository};
 use rusqlite::{params, OptionalExtension};
@@ -16,9 +11,6 @@ fn storage_error(error: rusqlite::Error) -> ProjectError {
 }
 
 /// Returns `true` when the failure is a constraint violation.
-///
-/// The only constraints on `projects` are the primary key and the unique
-/// location, so both map to the same "already registered" outcome.
 fn is_conflict(error: &rusqlite::Error) -> bool {
     matches!(
         error,

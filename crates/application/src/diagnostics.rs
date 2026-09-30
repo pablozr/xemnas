@@ -1,11 +1,4 @@
 //! Sanitized operational diagnostics (MVP-SPEC §16, Gate 5).
-//!
-//! [`Diagnostics::export`] produces a **structural** document: versions, counts,
-//! recent job/receipt/assessment metadata and the AI profile mode. It can never
-//! carry substantive content — no artifact or diff text, no candidate/decision
-//! question or rationale, no token or secret. The sanitization is by
-//! construction: the document types have no field that could hold those values,
-//! and job diagnostics expose a stable error code rather than the raw message.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -118,10 +111,6 @@ pub struct ReceiptDiagnostic {
     /// RFC 3339 receipt time.
     pub received_at: String,
     /// Project identifier resolved from the receipt location, when registered.
-    ///
-    /// The canonical path is deliberately **not** exported: it can embed a user
-    /// name or other sensitive text, and the receipt-to-project association is
-    /// preserved by this opaque id instead.
     pub project_id: Option<String>,
 }
 
@@ -190,8 +179,6 @@ pub struct LossMetrics {
 }
 
 /// Operational metrics for the dogfood (spec §780).
-///
-/// Aggregates only: no candidate text, no artifact content, no per-row export.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DiagnosticsMetrics {
     /// Capture receipt → candidate creation latency.
@@ -406,9 +393,6 @@ where
 }
 
 /// Maps a raw job diagnostic to a stable code; the raw text never leaves here.
-///
-/// The jobs layer writes fixed product messages, so an unknown value still maps
-/// to `failed` rather than leaking its content.
 pub fn job_error_code(last_error: Option<&str>) -> Option<&'static str> {
     match last_error {
         None => None,

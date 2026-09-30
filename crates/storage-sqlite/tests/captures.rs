@@ -165,8 +165,6 @@ fn upgrade_reapplies_the_missing_migrations() {
     let root = temporary_directory("upgrade");
     let database = root.join("app.db");
 
-    // Build a database at the latest version, then roll it back by removing the
-    // tables and rows added from version 4 on.
     {
         let _ = SqliteStore::open(&database).expect("open store");
         let connection = Connection::open(&database).expect("open raw connection");
@@ -239,8 +237,6 @@ fn duplicate_artifact_id_rolls_the_whole_capture_back() {
     let store = SqliteStore::open(&database).expect("open store");
     seed_project(&store);
 
-    // Two artifacts sharing an id violate the primary key mid-transaction; the
-    // receipt and job written before them must be gone afterwards.
     let result = store.insert_capture(&write(
         "capture-duplicate",
         "key-duplicate",
@@ -361,7 +357,6 @@ fn failed_ingest_leaves_no_checkpoint() {
     let database = root.join("app.db");
     let store = SqliteStore::open(&database).expect("open store");
 
-    // Project missing: rejected before the receipt, so no checkpoint either.
     let rejected = store.insert_capture(&write(
         "capture-missing",
         "key-missing",
@@ -369,7 +364,6 @@ fn failed_ingest_leaves_no_checkpoint() {
     ));
     assert_eq!(rejected, Err(CaptureError::ProjectNotRegistered));
 
-    // Duplicate artifact id: rolled back after the checkpoint would have run.
     seed_project(&store);
     let duplicate = store.insert_capture(&write(
         "capture-duplicate",
@@ -401,8 +395,6 @@ fn replay_keeps_checkpoint_idempotent() {
     );
     store.insert_capture(&write).expect("first insert");
 
-    // The replay hits the receipt unique constraint and rolls back, so the
-    // checkpoint is not written again (and cannot move backwards).
     let replay = store.insert_capture(&write);
     assert_eq!(replay, Err(CaptureError::DuplicateIdempotencyKey));
 
@@ -414,5 +406,3 @@ fn replay_keeps_checkpoint_idempotent() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
-
-// Keep the capture persistence tests aligned with migrations 0001..0004.

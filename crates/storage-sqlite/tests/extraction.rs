@@ -235,7 +235,6 @@ fn status_check_and_project_cascade_are_enforced() {
 
     let mut invalid = candidate("candidate-bad", capture_id, "dedup-bad");
     invalid.status = "bogus".to_string();
-    // `INSERT OR IGNORE` skips the row the CHECK rejects instead of erroring.
     let ignored = store
         .insert_candidates(&[invalid])
         .expect("ignore the rejected row");
@@ -247,7 +246,6 @@ fn status_check_and_project_cascade_are_enforced() {
     let connection = Connection::open(&database).expect("open raw connection");
     assert_eq!(row_count(&connection, "decision_candidates"), 1);
 
-    // The CHECK constraint is enforced by the schema itself.
     let bad = connection.execute(
         "INSERT INTO decision_candidates \
          (id, project_id, capture_id, status, question, choice, rationale, signals, confidence, \
@@ -288,7 +286,6 @@ fn migration_0005_applies_on_fresh_and_upgraded_databases() {
             })
             .expect("count");
         assert!(versions >= 7, "0001..0008 must be applied, got {versions}");
-        // Simulate a database already at version 4.
         connection
             .execute_batch(
                 "DROP TABLE decision_candidates; DELETE FROM schema_migrations WHERE version = 5;",

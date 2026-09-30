@@ -1,8 +1,4 @@
 //! End-to-end ingest tests over a real loopback server and a real `SqliteStore`.
-//!
-//! The server binds `127.0.0.1:0` on its own runtime thread and is driven with a
-//! minimal blocking HTTP client, so the tests exercise the actual socket, auth
-//! middleware, body limit and timeout rather than only the router.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -107,8 +103,6 @@ fn start_with(
     config.request_timeout = request_timeout;
     ApiServer::start(config).expect("start local api")
 }
-
-// --- raw HTTP client -------------------------------------------------------
 
 fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
@@ -246,8 +240,6 @@ fn checkpoint_row(
         .expect("query checkpoint")
 }
 
-// --- log capture -----------------------------------------------------------
-
 #[derive(Clone, Default)]
 struct Buffer(Arc<Mutex<Vec<u8>>>);
 
@@ -298,8 +290,6 @@ fn logged_text() -> String {
     )
     .expect("utf8")
 }
-
-// --- tests -----------------------------------------------------------------
 
 #[test]
 fn bind_is_loopback_and_discovery_files_match() {
@@ -444,8 +434,6 @@ fn valid_capture_is_persisted_and_scheduled() {
         assert_eq!(fingerprint, sha256_hex(&content));
     }
 
-    // The adapter checkpoint is written in the same transaction and matches the
-    // accepted envelope's source coordinates.
     assert_eq!(table_count(&connection, "adapter_checkpoints"), 1);
     let checkpoint = checkpoint_row(&connection, "session-synthetic-complete")
         .expect("checkpoint for the accepted session");
@@ -659,8 +647,6 @@ fn a_symlink_that_escapes_the_registered_project_is_forbidden() {
     let registered = register_project(&store, &root);
     let registered_dir = PathBuf::from(&registered);
 
-    // A directory outside the registered project, plus a link inside the
-    // registered project that resolves to it.
     let outside = root.join("outside");
     std::fs::create_dir_all(&outside).expect("create outside directory");
     let link = registered_dir.join("escape");
@@ -969,8 +955,6 @@ impl ProjectRepository for RemovingProjectRepository {
 impl CaptureRepository for RemovingProjectRepository {
     fn insert_capture(&self, write: &CaptureWrite) -> Result<(), CaptureError> {
         let _ = ProjectRepository::remove(&self.store, &self.project_id);
-        // `SqliteStore` implements both `CaptureRepository` and `JobRepository`,
-        // which both declare `insert`; the call is disambiguated explicitly.
         CaptureRepository::insert_capture(&self.store, write)
     }
     fn find_receipt(&self, capture_id: &str) -> Result<Option<CaptureReceiptRecord>, CaptureError> {
@@ -1064,8 +1048,6 @@ fn stalled_request_body_times_out() {
             .and_then(|token| token.parse::<u16>().ok());
         assert_eq!(status, Some(504), "unexpected response: {head}");
     }
-    // An empty read means the server closed the connection instead of replying;
-    // the brief accepts either, and the elapsed assertion already holds.
 
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -1084,7 +1066,6 @@ fn schema_failure_never_logs_client_content() {
 
     let marker = "SECRET_MARKER_XYZ";
     let mut value = fixture("valid-minimal.json");
-    // Schema-invalid and carrying the marker in value positions.
     value["observed_at"] = json!(marker);
     value["idempotency_key"] = json!(marker);
     let (status, _) = post(
@@ -1171,7 +1152,6 @@ fn same_declared_fingerprint_for_different_contents_is_unprocessable() {
         .expect("artifacts")
         .push(second);
 
-    // Sanity: the first artifact is honest, so only the second can fail.
     assert_eq!(
         artifact_fingerprint("synthetic user text"),
         first["fingerprint"].as_str().expect("fingerprint")
@@ -1224,8 +1204,6 @@ fn outbox_drain_imports_without_duplicating() {
     assert_eq!(table_count(&connection, "jobs"), 1);
     assert_eq!(table_count(&connection, "adapter_checkpoints"), 1);
 
-    // Re-import the accepted envelope: deduplication keeps a single receipt and
-    // a single analysis job.
     std::fs::copy(
         outbox.join("accepted").join(&filename),
         pending.join(&filename),
@@ -1320,7 +1298,6 @@ fn raw_secrets_posted_to_the_api_are_redacted_before_persistence() {
     assert_eq!(status, 201, "body: {}", String::from_utf8_lossy(&body));
     assert_artifacts_redacted(&database);
 
-    // A replay stays idempotent: same receipt, nothing rewritten.
     let (status, _) = post(
         &server,
         "/v1/captures",

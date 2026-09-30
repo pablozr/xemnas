@@ -1,7 +1,4 @@
 //! SQLite implementation of the Settings → OpenCode persistence port.
-//!
-//! Aggregates `adapter_checkpoints` per adapter. Session and message
-//! identifiers are only counted, never selected.
 
 use crate::store::SqliteStore;
 use application::integration::{AdapterActivityRow, IntegrationError, IntegrationStore};
@@ -9,8 +6,6 @@ use application::integration::{AdapterActivityRow, IntegrationError, Integration
 impl IntegrationStore for SqliteStore {
     fn adapter_activity(&self) -> Result<Vec<AdapterActivityRow>, IntegrationError> {
         let connection = self.lock();
-        // The version comes from the most recently updated checkpoint of each
-        // adapter, so an upgrade of the adapter shows on its next capture.
         let mut statement = connection
             .prepare(
                 "SELECT c.adapter, \

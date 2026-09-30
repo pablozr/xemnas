@@ -24,7 +24,6 @@ impl FakeDecisions {
     fn with(decisions: Vec<StoredDecision>) -> Self {
         let store = Self::default();
         for decision in decisions {
-            // Mirrors the storage birth snapshot: v1 holds the full content.
             store
                 .revisions
                 .lock()
@@ -132,8 +131,6 @@ impl DecisionStore for FakeDecisions {
         project_id: Option<&str>,
         limit: usize,
     ) -> Result<Vec<DecisionSearchRow>, DecisionsError> {
-        // Mirror FTS semantics for the indexed columns only (question, choice,
-        // rationale); assumptions and the other arrays are not searched.
         let tokens: Vec<String> = match_query
             .split(" AND ")
             .map(|token| token.trim_matches('"').to_ascii_lowercase())
@@ -337,7 +334,6 @@ fn revise_snapshots_and_preserves_untouched_fields() {
     assert_eq!(fake.version_of("d-1"), Some(2));
     assert_eq!(fake.revision_versions("d-1"), vec![2, 1]);
 
-    // A partial revision keeps every untouched field identical in v2 and v1.
     assert_eq!(detail.revisions.len(), 2);
     let live = &detail.revisions[0];
     let original = &detail.revisions[1];
@@ -425,13 +421,6 @@ fn list_default_filter_includes_only_accepted() {
         .map(|row| row.decision_id.as_str())
         .collect();
     assert_eq!(ids, vec!["d-1"]);
-}
-
-#[test]
-fn no_delete_method_exists_on_the_decisions_surface() {
-    // Structural note: `DecisionStore` and `Decisions` expose no delete method;
-    // history is append-only and this test crate cannot call a method that does
-    // not exist. The guarantee is the API surface itself.
 }
 
 #[test]

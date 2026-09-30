@@ -1,39 +1,4 @@
 //! Telemetry bootstrap and sanitized log formatting.
-//!
-//! [`init`] installs a global [`tracing`] subscriber whose event formatter
-//! applies two layers of redaction (PRIV-001).
-//!
-//! **By field name.** Any field whose name contains a deny-listed fragment is
-//! replaced entirely with `[redacted]`, matched case-insensitively by
-//! substring. `message` is deliberately not deny-listed so ordinary log lines
-//! stay readable. Substring matching is intentionally broad: `authorization`
-//! is covered by `auth`, and unrelated fields such as `author` are redacted as
-//! well. Prefer explicit, non-sensitive field names for diagnostic data.
-//!
-//! **By value shape.** Every rendered value, including `message`, is scanned
-//! before it is written and credential-shaped fragments are replaced with
-//! `[redacted]`, because interpolating a secret into a message is the most
-//! common leak:
-//!
-//! - a `Bearer` authorization scheme followed by a token (case-insensitive),
-//!   rendered as `Bearer [redacted]`;
-//! - a JWT, recognized as a token starting with `eyJ` that contains at least
-//!   two `.` separators;
-//! - an API key with the common `sk-` or `sk_` prefix followed by at least one
-//!   non-whitespace character.
-//!
-//! A match is only rejected when the character immediately before it is
-//! alphanumeric, `_` or `-`; separators such as `=`, `:`, `&`, `/`, `.`, quotes
-//! and whitespace count as boundaries. That catches common `key=secret` shapes
-//! such as `token=eyJ...`, `api_key=sk-...` and `authorization=Bearer sk-...`
-//! while avoiding lookalikes inside ordinary words.
-//!
-//! Two rules keep the match precise. An `sk-`/`sk_` match only applies when the
-//! whole run is at least 12 characters, so ordinary URL path segments such as
-//! `/sk-docs` survive while real provider keys (usually 20+ characters) are
-//! redacted. A value run ends at `&`, `=` and `?` but keeps `/` and `+`, so
-//! `?token=<jwt>&x=1` preserves `&x=1` and a standard-base64 `Bearer` token is
-//! redacted whole instead of partially.
 #![warn(missing_docs)]
 
 use std::fmt;
@@ -49,9 +14,6 @@ use tracing_subscriber::EnvFilter;
 const REDACTED: &str = "[redacted]";
 
 /// Field-name fragments that mark a value as sensitive.
-///
-/// Matching is case-insensitive and by substring. `message` is intentionally
-/// absent so that log messages remain readable.
 const SENSITIVE_FIELD_NEEDLES: &[&str] = &[
     "token",
     "authorization",
@@ -89,18 +51,9 @@ const BEARER_SCHEME: &str = "bearer";
 const JWT_PREFIX: [char; 3] = ['e', 'y', 'J'];
 
 /// Minimum length for an `sk-` / `sk_` key to be treated as a credential.
-///
-/// Real provider keys are 20+ characters; the floor keeps ordinary URL path
-/// segments such as `/sk-docs` readable. There is deliberately no digit
-/// requirement, which would miss valid keys and leak them (PRIV-001 does not
-/// admit false negatives).
 const API_KEY_MIN_LEN: usize = 12;
 
 /// Returns `true` when a character belongs to an opaque value token.
-///
-/// This delimits the *end* of a value run. Whitespace, quotes, common
-/// delimiters and the query separators `&`, `=` and `?` end the run; `/` and
-/// `+` stay in it so standard-base64 credentials are redacted whole.
 fn is_value_char(character: char) -> bool {
     !character.is_whitespace()
         && !matches!(
@@ -110,11 +63,6 @@ fn is_value_char(character: char) -> bool {
 }
 
 /// Returns `true` for characters that continue a word on the left edge.
-///
-/// Used only for the left boundary of a value-shape match: alphanumerics, `_`
-/// and `-` continue a word, so a match right after them is a lookalike. Any
-/// other character (`=`, `:`, `?`, `&`, `/`, `.`, quotes, whitespace) is a
-/// boundary and lets the match happen.
 fn is_word_char(character: char) -> bool {
     character.is_alphanumeric() || character == '_' || character == '-'
 }
@@ -177,10 +125,6 @@ fn api_key_end(chars: &[char], position: usize) -> Option<usize> {
 }
 
 /// Replaces credential-shaped substrings with [`REDACTED`].
-///
-/// This is the value-shape layer of PRIV-001: it runs on every rendered value,
-/// including `message`, and removes secrets that were interpolated rather than
-/// carried in a deny-listed field.
 fn redact_value(value: &str) -> String {
     let chars: Vec<char> = value.chars().collect();
     let mut out = String::with_capacity(value.len());
@@ -239,13 +183,6 @@ impl fmt::Display for InitError {
 impl std::error::Error for InitError {}
 
 /// Installs the global tracing subscriber.
-///
-/// The filter defaults to `info` and is overridden by a valid `RUST_LOG`. The
-/// event formatter redacts deny-listed field values.
-///
-/// Calling this when a global subscriber is already installed is a no-op and
-/// returns `Ok(())`; an invalid `RUST_LOG` is reported as
-/// [`InitError::InvalidFilter`] instead of panicking (RUST-001).
 pub fn init() -> Result<(), InitError> {
     let filter = match std::env::var("RUST_LOG") {
         Ok(raw) => {
@@ -260,8 +197,6 @@ pub fn init() -> Result<(), InitError> {
             .with_writer(std::io::stderr),
     );
 
-    // An already-installed global subscriber is a legitimate no-op rather than
-    // a fatal error.
     let _already_initialized = tracing::subscriber::set_global_default(subscriber).is_err();
     Ok(())
 }
@@ -293,9 +228,6 @@ where
 }
 
 /// Field visitor that replaces sensitive values with [`REDACTED`].
-///
-/// [`Visit`] methods are infallible, so a failure from the underlying writer is
-/// captured in `error` and reported by the formatter afterwards.
 struct RedactingVisitor<'writer> {
     writer: &'writer mut dyn fmt::Write,
     error: fmt::Result,

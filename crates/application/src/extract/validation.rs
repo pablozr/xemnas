@@ -8,8 +8,6 @@ use super::{
 
 /// Validates a proposal before anything is persisted and returns its canonical
 /// signal list.
-///
-/// Failure rejects the whole batch; messages are fixed and carry no content.
 pub(super) fn validate_proposal(
     proposal: &CandidateProposal,
     evidence: &DecisionEvidence,

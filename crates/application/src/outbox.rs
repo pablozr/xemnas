@@ -1,29 +1,5 @@
 //! Outbox drain: import captures the adapter could not deliver while the app was
 //! closed.
-//!
-//! The outbox is a temporary transport (MVP-SPEC §5.18), not a second database.
-//! The adapter writes `pending/<sha256(idempotency_key)>.json` with the full
-//! envelope; on boot this module validates, deduplicates and imports each item,
-//! moving it to `accepted/` or `rejected/` with a rename. Nothing is ever
-//! deleted from `pending/` without a trace: transient failures put the item back
-//! and rejected items are written as a safe diagnostic **before** the pending
-//! file is removed.
-//!
-//! Claiming is a rename to `sending/` **before** the item is read, so a file the
-//! adapter replaces in the meantime can never be read stale and then archived
-//! under a newer name. Renames never delete the destination first.
-//!
-//! Transient failures are bounded without ever losing an item: after
-//! [`DrainPolicy::max_transient_attempts`] drains in which the project is not
-//! allowed (`Forbidden`), the item is parked in `stalled/` with its envelope
-//! intact and is no longer retried on every start; [`retry_stalled`] puts it
-//! back in `pending/` on an explicit user action. Storage failures are
-//! systemic, not item-specific, so they never count towards the cap.
-//! Rejected diagnostics are pruned after [`DrainPolicy::rejected_retention`].
-//!
-//! `application` deliberately has no `tracing` dependency: diagnostics are
-//! surfaced through [`DrainReport`] and the `rejected/` files, and the
-//! composition root logs them.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -125,9 +101,6 @@ pub struct DrainReport {
 }
 
 /// Drains the outbox under `root` into `api` with [`DrainPolicy::new`].
-///
-/// Directory-level failures return [`OutboxError`]; per-item failures never
-/// lose an item.
 pub fn drain(
     root: &Path,
     api: &dyn CaptureApi,
@@ -137,10 +110,6 @@ pub fn drain(
 }
 
 /// Drains the outbox under `root` into `api` with an explicit policy.
-///
-/// # Errors
-///
-/// [`OutboxError::Io`] when a directory cannot be created or listed.
 pub fn drain_with(
     root: &Path,
     api: &dyn CaptureApi,
@@ -156,8 +125,6 @@ pub fn drain_with(
 
     let mut report = DrainReport::default();
 
-    // Crash recovery: a claimed item that never finished goes back to pending.
-    // Re-importing is safe because ingest is idempotent by `idempotency_key`.
     for path in json_files(&sending_dir)? {
         if let Some(filename) = file_name(&path) {
             if restore_to_pending(root, &filename, &path) {
@@ -166,11 +133,8 @@ pub fn drain_with(
         }
     }
 
-    // Orphaned temporary files were never a finished item.
     remove_orphan_tmp(&pending_dir)?;
 
-    // Items accepted in this pass are exempt from retention, so a pending item
-    // older than the retention can never be pruned on the same drain.
     let mut accepted_now: BTreeSet<String> = BTreeSet::new();
 
     for path in json_files(&pending_dir)? {
@@ -178,20 +142,16 @@ pub fn drain_with(
             continue;
         };
 
-        // Claim first: the rename is the lock. Only the claimed file is read.
         let claimed = sending_dir.join(&filename);
         match move_no_replace(&path, &claimed) {
             Ok(true) => {}
-            // A concurrent drain owns it (or it is already being processed).
             Ok(false) => continue,
-            // Could not claim (source vanished or I/O error); leave it pending.
             Err(_) => continue,
         }
 
         let text = match fs::read_to_string(&claimed) {
             Ok(text) => text,
             Err(_) => {
-                // The claimed file could not be read; never lose it.
                 let _ = restore_to_pending(root, &filename, &claimed);
                 continue;
             }
@@ -248,10 +208,7 @@ pub fn drain_with(
                     accepted_now.insert(filename);
                     report.accepted += 1;
                 }
-                // A failed move leaves the item in `sending/`, recovered next time.
             }
-            // Transient: the project may be registered later. After the cap the
-            // item is parked intact in `stalled/`; it is never lost.
             Err(IngestError::Forbidden) => {
                 let attempts = record_attempt(root, &filename);
                 if attempts >= policy.max_transient_attempts.max(1)
@@ -263,8 +220,6 @@ pub fn drain_with(
                     let _ = restore_to_pending(root, &filename, &claimed);
                 }
             }
-            // Storage is busy or broken for every item alike: retry next time
-            // without counting towards the cap.
             Err(IngestError::Storage(_)) => {
                 let _ = restore_to_pending(root, &filename, &claimed);
             }
@@ -306,13 +261,6 @@ pub fn drain_with(
 /// Moves every item parked in `stalled/` back to `pending/`, resetting its
 /// attempt counter, so the next drain retries it (an explicit user action,
 /// for example after registering the project).
-///
-/// A stalled copy superseded by a newer pending file of the same key is
-/// dropped. Returns how many items went back to `pending/`.
-///
-/// # Errors
-///
-/// [`OutboxError::Io`] when `stalled/` or `pending/` cannot be listed or created.
 pub fn retry_stalled(root: &Path) -> Result<usize, OutboxError> {
     let stalled_dir = root.join(STALLED);
     if !stalled_dir.is_dir() {
@@ -350,9 +298,6 @@ fn stall(root: &Path, filename: &str, claimed: &Path) -> bool {
 }
 
 /// Increments and returns the `Forbidden` counter of an item.
-///
-/// Counters are best effort: an unreadable counter restarts at one, and a
-/// counter that cannot be written only delays the cap. They hold a number only.
 fn record_attempt(root: &Path, filename: &str) -> u32 {
     let directory = root.join(ATTEMPTS);
     let path = directory.join(filename);
@@ -395,24 +340,14 @@ fn remove_orphan_attempts(root: &Path, pending_dir: &Path) -> Result<(), OutboxE
 }
 
 /// Moves an accepted item and stamps the acceptance time on it.
-///
-/// The rename preserves the pending file's `mtime`, so retention would see an
-/// old item as newly accepted; stamping `now` makes the acceptance time the
-/// only age retention uses. If the accepted file already exists (idempotent
-/// replay), the claimed duplicate is removed instead of overwriting it.
 fn accept_item(filename: &str, claimed: &Path, accepted_dir: &Path) -> io::Result<()> {
     let accepted = accepted_dir.join(filename);
     match move_no_replace(claimed, &accepted) {
         Ok(true) => {
-            // Best effort: the `accepted_now` guard already exempts this item
-            // from retention in this pass even if the stamp cannot be written.
             let _ = stamp_modified(&accepted, SystemTime::now());
             Ok(())
         }
-        Ok(false) => {
-            // An identical accepted copy already exists; drop the claimed one.
-            fs::remove_file(claimed)
-        }
+        Ok(false) => fs::remove_file(claimed),
         Err(error) => Err(error),
     }
 }
@@ -426,10 +361,6 @@ fn stamp_modified(path: &Path, time: SystemTime) -> io::Result<()> {
 }
 
 /// Builds a unique temporary sibling name for `filename` inside `directory`.
-///
-/// The name keeps the contract `<filename>.<pid>.<counter>.tmp` so concurrent
-/// writers (other processes or threads) never share the same temporary file;
-/// leftovers still match the `*.tmp` cleanup sweep.
 fn unique_temporary(directory: &Path, filename: &str) -> PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -437,11 +368,6 @@ fn unique_temporary(directory: &Path, filename: &str) -> PathBuf {
 }
 
 /// Writes the safe diagnostic for a rejected item and removes the claimed file.
-///
-/// The diagnostic is written before the claimed file is removed; if that fails,
-/// the item is moved back to `pending/` so it can never disappear without a
-/// trace. The diagnostic holds only the filename, code and a safe detail —
-/// never the envelope content.
 fn reject(
     root: &Path,
     filename: &str,
@@ -472,14 +398,11 @@ fn reject(
             *report.rejected.entry(code.to_string()).or_insert(0) += 1;
         }
         Ok(false) => {
-            // A diagnostic for this item already exists; keep it and drop the
-            // claimed duplicate.
             let _ = fs::remove_file(&temporary);
             let _ = fs::remove_file(claimed);
             *report.rejected.entry(code.to_string()).or_insert(0) += 1;
         }
         Err(_) => {
-            // Could not record the rejection; never lose the item.
             let _ = fs::remove_file(&temporary);
             let _ = restore_to_pending(root, filename, claimed);
         }
@@ -487,19 +410,11 @@ fn reject(
 }
 
 /// Moves a claimed file back to `pending/`.
-///
-/// Returns `true` when the sending copy was resolved, either by moving it or by
-/// dropping it because a newer pending file for the same key already exists. If
-/// neither is possible the file stays in `sending/` and the next drain recovers
-/// it.
 fn restore_to_pending(root: &Path, filename: &str, source: &Path) -> bool {
     let pending = root.join(PENDING).join(filename);
     match move_no_replace(source, &pending) {
         Ok(true) => true,
-        Ok(false) => {
-            // A newer pending file for the same key supersedes this one.
-            fs::remove_file(source).is_ok()
-        }
+        Ok(false) => fs::remove_file(source).is_ok(),
         Err(_) => false,
     }
 }
@@ -587,11 +502,6 @@ fn file_name(path: &Path) -> Option<String> {
 }
 
 /// Renames `from` to `to` without deleting an existing destination.
-///
-/// Returns `Ok(true)` when the rename happened, `Ok(false)` when `to` is an
-/// existing regular file (it is kept untouched), and `Err` otherwise. A
-/// destination that exists but is not a regular file is an error, so a blocking
-/// directory cannot be silently overwritten.
 fn move_no_replace(from: &Path, to: &Path) -> io::Result<bool> {
     match fs::metadata(to) {
         Ok(metadata) if metadata.is_file() => return Ok(false),
@@ -760,7 +670,6 @@ mod tests {
         assert!(root.join("accepted").join(&name).exists());
         assert_eq!(api.seen_count(), 1);
 
-        // Put the accepted envelope back as a pending item and drain again.
         fs::copy(
             root.join("accepted").join(&name),
             root.join("pending").join(&name),
@@ -961,8 +870,6 @@ mod tests {
         let root = temporary_directory("accept-age");
         let name = filename();
         let pending = write_pending(&root, &name, &valid_envelope_json("key-1", "C:/proj"));
-        // The adapter may have written (and the user left) this item a long time
-        // ago; acceptance is what retention measures.
         set_mtime(
             &pending,
             SystemTime::now() - Duration::from_secs(30 * 24 * 60 * 60),
@@ -984,7 +891,6 @@ mod tests {
         let root = temporary_directory("reject-failure");
         let name = filename();
         write_pending(&root, &name, &valid_envelope_json("key-1", "C:/proj"));
-        // A directory where the diagnostic file should go makes the write fail.
         fs::create_dir_all(root.join("rejected").join(&name)).expect("blocking directory");
 
         let report = drain(
@@ -1042,7 +948,6 @@ mod tests {
         );
         assert!(!root.join("attempts").join(&name).exists());
 
-        // Parked items are not retried on every start.
         let third = drain_with(&root, &refusing, &capped(2)).expect("drain");
         assert_eq!((third.stalled, third.pending_remaining), (0, 0));
 

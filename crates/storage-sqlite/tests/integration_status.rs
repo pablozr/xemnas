@@ -172,8 +172,6 @@ fn checkpoints_from_before_0009_report_an_unknown_version() {
         );
     }
     {
-        // Simulate a v8 database: rebuild the table without the column, keeping
-        // the row, and forget migration 9.
         let connection = Connection::open(&database).expect("raw");
         connection
             .execute_batch(
@@ -205,7 +203,6 @@ fn checkpoints_from_before_0009_report_an_unknown_version() {
         .expect("version");
     assert_eq!(version, 9);
 
-    // The next capture of the same session records the version again.
     capture(
         &store,
         "c2",

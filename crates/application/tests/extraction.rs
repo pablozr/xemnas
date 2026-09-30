@@ -310,20 +310,15 @@ impl CandidateExtractor for BadExtractor {
 #[test]
 fn invalid_proposals_reject_the_whole_batch() {
     let mutators: &[fn(&mut CandidateProposal)] = &[
-        // Text fields.
         |proposal| proposal.question = "   ".to_string(),
         |proposal| proposal.choice = String::new(),
         |proposal| proposal.rationale = String::new(),
         |proposal| proposal.confidence_reason = String::new(),
-        // Confidence.
         |proposal| proposal.confidence = 1.5,
         |proposal| proposal.confidence = f64::NAN,
-        // Signals: empty or outside the detected set.
         |proposal| proposal.signals.clear(),
         |proposal| proposal.signals = vec![RelevanceSignal::DelegatedToAgent],
-        // Evidence refs.
         |proposal| proposal.evidence_refs = vec!["artifact-missing".to_string()],
-        // Diff summary shape.
         |proposal| proposal.diff_summary = "{ not json".to_string(),
         |proposal| proposal.diff_summary = "[]".to_string(),
         |proposal| {
@@ -611,7 +606,6 @@ fn input_hash_is_deterministic_sensitive_and_order_insensitive() {
     let first = input_hash(&evidence.capture_id, &evidence);
     assert_eq!(first, input_hash(&evidence.capture_id, &evidence));
 
-    // Reordering the artifacts must not change the hash.
     evidence.artifacts.reverse();
     assert_eq!(
         first,
@@ -619,12 +613,10 @@ fn input_hash_is_deterministic_sensitive_and_order_insensitive() {
         "artifact order must not matter"
     );
 
-    // Changing any artifact's content must change the hash.
     let mut changed = evidence.clone();
     changed.artifacts[0].content.push_str("\n+synthetic change");
     assert_ne!(first, input_hash(&changed.capture_id, &changed));
 
-    // Changing the capture id must change the hash.
     assert_ne!(first, input_hash("another-capture", &evidence));
 }
 
@@ -686,8 +678,6 @@ fn missing_capture_is_a_storage_error_without_assessment() {
 
 #[test]
 fn provider_setup_failures_are_recorded_with_stable_codes() {
-    // This helper never constructs an extractor, so it cannot open a network
-    // request; the fake store would otherwise stay empty.
     for (variant, expected) in [
         (ProviderSetupError::MissingSecret, "secret"),
         (ProviderSetupError::Keystore, "keystore"),
@@ -726,8 +716,6 @@ fn profile_unavailable_failure_records_a_safe_fallback_context() {
 
     let evidence = evidence(DURABLE[0]);
     let store = FakeStore::with(evidence.clone());
-    // A populated context is passed on purpose; the helper must replace it with
-    // the fixed unavailable context so no partial identity leaks.
     let context = detailed_context();
     let failure = fail_provider_setup(
         &store,

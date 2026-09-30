@@ -258,8 +258,6 @@ fn write_refuses_existing_without_overwrite_and_allows_it() {
 #[test]
 fn write_never_truncates_a_pre_existing_temporary_like_file() {
     let root = temporary_directory("temp-clash");
-    // A file matching the temporary pattern must stay untouched: `create_new`
-    // never opens or truncates an existing path.
     let planted = root.join("decision.md.00000000-0000-0000-0000-000000000000.tmp");
     std::fs::write(&planted, "planted").expect("plant");
     let export = Export::new(store());
@@ -292,8 +290,6 @@ fn overwrite_false_rejects_a_destination_created_after_preview() {
         .preview("decision-1", ExportFormat::Markdown)
         .expect("preview");
 
-    // The destination appears only after the preview: the install must still
-    // refuse atomically instead of replacing it.
     std::fs::write(&destination, "raced").expect("create destination");
     let error = export
         .write(&document, &destination, false)

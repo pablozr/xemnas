@@ -1,18 +1,6 @@
 //! Capture ingest use case: authorize the Project, persist the receipt, the
 //! artifacts, the analysis job and the adapter checkpoint in one transaction,
 //! and deduplicate replays.
-//!
-//! Deduplication is identity-driven: the `idempotency_key` names the event, so a
-//! replay returns the stored receipt without rewriting artifacts or scheduling
-//! another job. Artifacts inside one payload are deduplicated by
-//! `(kind, fingerprint)`; the same fingerprint in a different capture is
-//! legitimate, because those are different events. Analysis is scheduled as an
-//! [`ANALYZE_CAPTURE_KIND`] job; the composition root registers its handler
-//! (ticket 12), so the job runs the deterministic extraction pass.
-//!
-//! Content and metadata strings are redacted with [`crate::redact`] after the
-//! declared fingerprint is verified and before anything is persisted, so the
-//! stored fingerprint is the SHA-256 of the redacted content (PRIV-001).
 
 use std::collections::HashSet;
 
@@ -56,10 +44,6 @@ pub struct CaptureArtifactRecord {
 }
 
 /// The adapter high-water mark written with an accepted capture.
-///
-/// `(adapter, session_id)` identifies the adapter session; the row records the
-/// last accepted message and capture so the adapter can resume without
-/// replaying. It is upserted in the same transaction as the receipt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CaptureCheckpointRecord {
     /// Adapter name, for example `opencode`.
@@ -120,10 +104,6 @@ impl std::fmt::Display for CaptureError {
 impl std::error::Error for CaptureError {}
 
 /// Port that persists captures.
-///
-/// Infrastructure crates implement this trait; the application never knows how
-/// the rows are stored. `insert_capture` is one transaction: a failure leaves no
-/// receipt, artifact or job behind.
 pub trait CaptureRepository {
     /// Inserts the receipt, its artifacts and the analysis job atomically.
     fn insert_capture(&self, write: &CaptureWrite) -> Result<(), CaptureError>;
@@ -164,9 +144,6 @@ pub struct IngestOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IngestError {
     /// The project is not registered, or its path cannot be canonicalized.
-    ///
-    /// Both cases share one variant on purpose: the API must not leak whether a
-    /// path exists (§13).
     Forbidden,
     /// The payload repeats an artifact identifier.
     Conflict,
@@ -197,9 +174,6 @@ impl std::fmt::Display for IngestError {
 impl std::error::Error for IngestError {}
 
 /// The interface the local API depends on.
-///
-/// Implemented by [`CaptureIngest`]; keeping it a trait lets the API test a
-/// deterministic timeout with a fake that blocks.
 pub trait CaptureApi: Send + Sync {
     /// Validates the project, persists the capture and schedules analysis.
     fn ingest(
@@ -235,9 +209,6 @@ where
         envelope: &CaptureEnvelope,
         idempotency_key: &str,
     ) -> Result<CaptureWrite, IngestError> {
-        // §7.3 steps 3-4: canonicalize the path, then require it to be
-        // registered. A failed canonicalization is the same 403 as an unknown
-        // project, with no existence oracle.
         let canonical_path = canonicalize_location(&envelope.project.canonical_path)
             .map_err(|_| IngestError::Forbidden)?;
         let project = self
@@ -247,7 +218,6 @@ where
             .ok_or(IngestError::Forbidden)?;
         let _ = project;
 
-        // A repeated artifact id inside one payload is a client error.
         let mut seen_ids = HashSet::new();
         for artifact in &envelope.artifacts {
             if !seen_ids.insert(artifact.artifact_id.as_str()) {
@@ -255,13 +225,6 @@ where
             }
         }
 
-        // Recompute the SHA-256 of each content and require the declared
-        // fingerprint to match. Two different contents that declare the same
-        // fingerprint are rejected instead of silently dropping one.
-        //
-        // Then redact, and deduplicate by the fingerprint of the *redacted*
-        // content: that is what is stored, and two originals that differ only
-        // in a masked secret must not collide on the storage constraint.
         let mut seen_pairs = HashSet::new();
         let mut artifacts = Vec::new();
         for artifact in &envelope.artifacts {
@@ -340,8 +303,6 @@ where
                 replayed: false,
             }),
             Err(CaptureError::DuplicateIdempotencyKey) => {
-                // A replay returns the stored receipt unchanged; artifacts and
-                // the job were rolled back with the failed transaction.
                 let existing = self
                     .repository
                     .find_receipt_by_idempotency_key(idempotency_key)
@@ -515,8 +476,6 @@ mod tests {
 
     fn fake() -> FakeRepository {
         let repository = FakeRepository::default();
-        // Register the canonical form, exactly as the ingest use case will look
-        // it up.
         let location =
             crate::projects::canonicalize_location(&std::env::temp_dir().to_string_lossy())
                 .expect("temp dir canonicalizes");
@@ -553,7 +512,6 @@ mod tests {
             (ArtifactKind::UserText, ARTIFACT_ID_1, "first content"),
             (ArtifactKind::AssistantText, ARTIFACT_ID_1, "second content"),
         ]);
-        // Keep both fingerprints honest; the conflict is the repeated id.
         envelope.artifacts[0].fingerprint = artifact_fingerprint("first content");
         envelope.artifacts[1].fingerprint = artifact_fingerprint("second content");
         assert_eq!(

@@ -472,13 +472,6 @@ fn confirm_is_not_repeatable_and_creates_one_decision() {
 }
 
 #[test]
-fn no_delete_method_exists_on_the_decisions_surface() {
-    // Structural note: neither `Inbox` nor `InboxStore` exposes a delete method,
-    // and this test crate cannot call one because it does not exist. There is
-    // nothing to exercise at runtime; the guarantee is the API surface itself.
-}
-
-#[test]
 fn edits_validation_rejects_empty_whitespace_and_overflow() {
     let fake = FakeInbox::with(vec![stored(
         "a",
@@ -504,10 +497,6 @@ fn edits_validation_rejects_empty_whitespace_and_overflow() {
 
 #[test]
 fn validated_edits_can_only_be_built_by_validation() {
-    // Proof of the gate: `ValidatedEdits` has private fields and no public
-    // constructor, so the only way to obtain one is `CandidateEdits::validate`.
-    // Direct construction from this external test crate would not compile; what
-    // is left to assert at runtime is that invalid input never yields a value.
     let valid = edits("  pergunta  ", " escolha ", " razão ")
         .validate()
         .expect("valid edits");
@@ -672,7 +661,6 @@ fn batches_affect_the_count_and_never_accept() {
         .expect("snooze batch");
     assert_eq!(snoozed, 2);
 
-    // Invariant: no batch path can reach a confirmation state.
     for id in ["id-0", "id-1", "id-2", "id-3"] {
         let status = fake.status_of(id).expect("row");
         assert!(

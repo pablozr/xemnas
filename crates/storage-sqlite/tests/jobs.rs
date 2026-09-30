@@ -55,7 +55,6 @@ fn enqueue_persists_before_execution() {
 
     let job = jobs.enqueue("analysis", "{}", true).expect("enqueue job");
 
-    // Never run it: a freshly opened store must already see it queued.
     let reopened = SqliteStore::open(root.join("app.db")).expect("reopen store");
     let persisted = reopened
         .get(&job.id)
@@ -189,7 +188,6 @@ fn handler_panic_is_contained_and_the_next_job_still_runs() {
         ))
         .expect("insert next");
 
-    // The panic must not escape `run_next`.
     let first = jobs.run_next().expect("run").expect("first job ran");
     assert_eq!(first.state, JobState::Failed);
     let second = jobs.run_next().expect("run").expect("second job ran");
@@ -338,7 +336,6 @@ fn transition_is_compare_and_set() {
         ))
         .expect("insert");
 
-    // The row is queued, not running, so this must not match.
     assert!(!store
         .transition("cas", JobState::Running, JobState::Completed, None)
         .expect("transition from wrong state"));
@@ -436,5 +433,3 @@ fn reprocess_requeues_a_failed_job_and_clears_the_diagnostic() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
-
-// Covers persisted job state transitions and worker lifecycle.

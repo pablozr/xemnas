@@ -1,9 +1,6 @@
 //! End-to-end of the full cycle, in process: register, capture, candidate,
 //! Evidence, edit, confirmation, search and export — while proving the Project
 //! directory is never mutated and no `.git` is created.
-//!
-//! This is an integration test (not a PS1) because confirm/search/export are
-//! in-process use cases by design; the PS1 suites cover the binary and HTTP.
 
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -116,19 +113,16 @@ fn full_cycle_covers_register_capture_evidence_edit_confirm_search_export() {
     std::fs::write(project_dir.join("README.md"), "# synthetic\n").expect("write readme");
     std::fs::write(project_dir.join("src").join("main.rs"), "fn main() {}\n").expect("write main");
 
-    // Snapshot BEFORE the cycle, so the immutability assertion covers everything.
     let before = snapshot(&project_dir);
     assert!(before.iter().any(|(name, _)| name == ".gitignore"));
 
     let store = SqliteStore::open(root.join("app.db")).expect("open store");
 
-    // (a) register a real directory.
     let canonical = canonicalize_location(&project_dir.to_string_lossy()).expect("canonical");
     Projects::new(store.clone())
         .register(&project_dir)
         .expect("register project");
 
-    // (b) capture through the real ingest use case.
     let envelope = envelope(&canonical, "capture-full-cycle");
     let outcome = CaptureIngest::new(store.clone())
         .ingest(&envelope, &envelope.idempotency_key)
@@ -136,7 +130,6 @@ fn full_cycle_covers_register_capture_evidence_edit_confirm_search_export() {
     assert!(!outcome.replayed);
     let capture_id = outcome.receipt.capture_id.clone();
 
-    // (c) candidate through the real extraction pass.
     run_extraction(
         &store,
         &FakeCandidateExtractor,
@@ -150,7 +143,6 @@ fn full_cycle_covers_register_capture_evidence_edit_confirm_search_export() {
     let candidate_id = page.candidates[0].id.clone();
     assert_eq!(page.candidates[0].status, CandidateStatus::Pending);
 
-    // (d) Evidence: referenced artifacts in order.
     let detail = inbox.detail(&candidate_id).expect("detail");
     let evidence: Vec<&str> = detail
         .artifacts
@@ -159,20 +151,17 @@ fn full_cycle_covers_register_capture_evidence_edit_confirm_search_export() {
         .collect();
     assert_eq!(evidence, vec!["artifact-diff", "artifact-notes"]);
 
-    // (e) edit without confirming.
     inbox.adjust(&candidate_id, edited()).expect("adjust");
     assert_eq!(
         inbox.detail(&candidate_id).expect("detail").summary.status,
         CandidateStatus::Pending
     );
 
-    // (f) confirmation creates the decision.
     let confirmed = inbox
         .confirm(&candidate_id, Some(edited()))
         .expect("confirm");
     assert_eq!(confirmed.status, CandidateStatus::EditedAndAccepted);
 
-    // (g) search finds the confirmed decision.
     let decisions = Decisions::new(store.clone());
     let hits = decisions
         .search(&SearchQuery {
@@ -186,7 +175,6 @@ fn full_cycle_covers_register_capture_evidence_edit_confirm_search_export() {
         "the confirmed decision must be searchable"
     );
 
-    // (h) manual export to a destination outside the project directory.
     let export_dir = root.join("exports");
     std::fs::create_dir_all(&export_dir).expect("create export dir");
     let export = Export::new(store.clone());
@@ -202,7 +190,6 @@ fn full_cycle_covers_register_capture_evidence_edit_confirm_search_export() {
         "preview must equal the written file"
     );
 
-    // Post-conditions: v1 stays reconstructible after the promotion.
     let decision = decisions.detail(&confirmed.decision_id).expect("detail");
     assert!(
         decision
@@ -212,7 +199,6 @@ fn full_cycle_covers_register_capture_evidence_edit_confirm_search_export() {
         "the birth revision must stay readable"
     );
 
-    // (i) immutability: the project directory is byte-identical and has no .git.
     let after = snapshot(&project_dir);
     assert_eq!(
         before, after,

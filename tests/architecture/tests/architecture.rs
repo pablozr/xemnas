@@ -1,23 +1,9 @@
 //! Architecture guard tests.
-//!
-//! These integration tests enforce the dependency rules from ARCH-001. They run
-//! as part of `cargo test --workspace` and read the workspace manifests and
-//! sources directly, so a violating dependency edge, a `path` dependency that
-//! escapes the workspace, or a GPUI/process/FFI reference in the wrong crate
-//! fails the build without extra external tooling.
-//!
-//! Scope decision: the guard does **not** resolve the transitive dependency
-//! graph with `cargo metadata`. A cargo-in-cargo invocation is slow,
-//! environment sensitive and would hide violations behind a successful build.
-//! The direct-dependency allow-list for `domain` plus the source traps below
-//! cover the realistic escape hatches (AI SDKs, `std::process`, FFI).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-// The GPUI crate names are assembled at runtime so this guard's own source does
-// not contain the substrings it forbids elsewhere.
 const GPUI: &str = "gpui";
 const GPUI_PLATFORM: &str = "gpui_platform";
 
@@ -38,13 +24,6 @@ const DOMAIN_BANNED: &[&str] = &[
 const HTTP_BANNED: &[&str] = &["axum", "tower-http", "reqwest", "ureq"];
 
 /// Crates the `domain` crate is allowed to depend on directly.
-///
-/// Starts empty: the domain has no dependencies today. The list only grows when
-/// the specification has already approved a crate (for example `serde`, `uuid`
-/// or `thiserror`), and every addition must edit this guard on purpose. It is an
-/// allow-list because a deny-list of known AI providers (`genai`, `ollama`,
-/// `anthropic`, ...) can never be complete. The [`DOMAIN_BANNED`] deny-list
-/// stays as a second, more descriptive layer.
 const DOMAIN_ALLOWED_CRATES: &[&str] = &[];
 
 /// Direct process/FFI escape hatches forbidden in the domain (ARCH-001).
@@ -79,10 +58,6 @@ fn read_manifest(path: &Path) -> toml::Value {
 }
 
 /// Manifest dependencies keyed by declared alias.
-///
-/// The alias maps to **every** declaration of that alias: the same name can be
-/// declared under several `[target.'cfg(...)']` tables and each spec must be
-/// examined, so a later declaration cannot shadow an earlier forbidden one.
 type Dependencies = BTreeMap<String, Vec<toml::Value>>;
 
 /// Merges one dependency table into `deps`, preserving every declaration and
@@ -96,10 +71,6 @@ fn merge_dependency_table(table: Option<&toml::Value>, deps: &mut Dependencies) 
 }
 
 /// Collects every dependency of a manifest, including target-specific tables.
-///
-/// Reads `[dependencies]`, `[dev-dependencies]`, `[build-dependencies]` and the
-/// same three tables under each `[target.'cfg(...)']`, so a dependency hidden
-/// behind `[target.'cfg(windows)'.dependencies]` cannot escape the guard.
 fn dependencies(manifest: &toml::Value) -> Dependencies {
     let mut deps = BTreeMap::new();
     for table in DEPENDENCY_TABLES {
@@ -153,11 +124,6 @@ struct PathDependencies {
 }
 
 /// Resolves `path` dependencies against the registered member paths.
-///
-/// `canonicalize` is injected so the logic can be unit-tested without touching
-/// the filesystem. A `path` dep that cannot be canonicalized, or that resolves
-/// outside the registered members, is reported as unresolved instead of being
-/// skipped silently.
 fn resolve_path_dependencies(
     member_dir: &Path,
     deps: &Dependencies,
@@ -202,35 +168,17 @@ fn path_dependencies(member: &Member, all: &[Member]) -> PathDependencies {
 fn allowed_dependencies(name: &str) -> BTreeSet<&'static str> {
     let allowed: &[&str] = match name {
         "domain" => &[],
-        // The ingest use case consumes the versioned Capture Envelope contract
-        // directly: the contract is the language of the ingest boundary, and
-        // duplicating its shape into a command struct would drift (ticket 09).
         "application" => &["domain", "integration-contracts"],
         "integration-contracts" => &["domain"],
         "storage-sqlite" => &["application", "domain"],
-        // `storage-sqlite` is a dev-dependency only: the integration tests mount
-        // the real use case on a real store, exactly like `main.rs` composes
-        // them at runtime. The library itself stays storage-agnostic.
         "local-api" => &[
             "application",
             "domain",
             "integration-contracts",
             "storage-sqlite",
         ],
-        // External AI provider adapter (ticket 13): HTTP lives at the edge, so
-        // the provider crate implements the application's `CandidateExtractor`
-        // port and keeps `application`/`domain` free of HTTP (ARCH-001).
         "ai-provider" => &["application"],
         "telemetry" => &[],
-        // The desktop app is the composition root: `main.rs` opens the SQLite
-        // store and mounts it into the application use case before handing the
-        // port to the view. The UI never sees SQL, only the `Projects` use case;
-        // this edge is the documented "storage-sqlite implements the
-        // interfaces" wiring from the stack doc (Regra de dependência).
-        // `local-api` is started from `main.rs` on its own runtime thread so the
-        // API lives and dies with the desktop process (MVP-SPEC §9).
-        // `ai-provider` is wired here so the extractor choice is made at the
-        // composition root, never in the UI.
         "desktop-gpui" => &[
             "application",
             "domain",
@@ -434,13 +382,6 @@ fn domain_sources_do_not_reach_outside_the_process() {
 }
 
 /// Color literals are forbidden outside the token module.
-///
-/// Design system rule 3: views must never contain loose color values. This
-/// guard scans `apps/desktop-gpui/src/**` (except `ui/tokens.rs`) for
-/// `#RGB`/`#RRGGBB`/`#RRGGBBAA` literals, for `rgb`/`rgba`/`rgb8`/`rgba8`/
-/// `hsl`/`hsla`/`hsba` constructors, and for `Color::rgb(...)`/`Rgba { ... }`
-/// built from three or more numeric literals. `//` only starts a comment when
-/// it is outside a string and preceded by whitespace or the line start.
 #[test]
 fn no_color_literals_outside_tokens() {
     let root = workspace_root();
@@ -487,8 +428,6 @@ fn color_literal_violations(file: &Path, source: &str) -> Vec<String> {
             }
         }
 
-        // `Rgba { r: 0.1, g: 0.2, b: 0.3 }` has no constructor substring, so it
-        // is only flagged when it really carries three numeric literals.
         if !flagged_constructor {
             if let Some(marker) = numeric_color_constructor(line) {
                 violations.push(format!(
@@ -650,8 +589,6 @@ tower-http = "0.5"
 
     #[test]
     fn same_alias_in_two_targets_keeps_every_declaration() {
-        // The cfg strings are ordered so a last-wins `BTreeMap` overwrite would
-        // drop the forbidden `reqwest` declaration, making the failure explicit.
         let manifest = parse(
             r#"
 [target.'cfg(unix)'.dependencies]

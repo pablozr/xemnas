@@ -1,24 +1,4 @@
 //! OpenAI-compatible AI provider adapter.
-//!
-//! This is the one real provider selected for Gate 3 (MVP-SPEC §12): an
-//! HTTP adapter that turns a [`DecisionEvidence`] plus local relevance signals
-//! into [`CandidateProposal`]s through an OpenAI-compatible
-//! `/chat/completions` endpoint. It is infrastructure, so HTTP lives here and
-//! not in `application`/`domain` (ARCH-001).
-//!
-//! Safety properties enforced here:
-//!
-//! - **Consent first.** [`OpenAiCompatibleExtractor::extract`] refuses to touch
-//!   the network unless the profile has `external_calls_enabled` and a consent
-//!   record; the composition root also gates on [`choose_extractor`].
-//! - **Strict structured output.** The response is parsed into
-//!   `deny_unknown_fields` types; extra fields, oversized fields, oversized
-//!   responses and non-2xx statuses all fail. The model's text never becomes a
-//!   SQL string, a path or a command.
-//! - **Sanitized errors.** Messages carry status codes and failure categories
-//!   only — never the response body, a URL with query, or the secret.
-//!
-//! [`choose_extractor`]: application::profile::choose_extractor
 
 #![warn(missing_docs)]
 
@@ -63,9 +43,6 @@ Reply with a single JSON object only, no prose, matching exactly: \
 Use only evidence_refs from the provided artifact ids. No extra fields.";
 
 /// Bounded retry policy for transient provider failures.
-///
-/// Only transport errors (connect/timeout), HTTP 429 and 5xx are retried; a
-/// parse failure or any other 4xx fails on the first attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RetryPolicy {
     /// Maximum total attempts, including the first.
@@ -106,19 +83,6 @@ enum Attempt {
 }
 
 /// Runs the Settings → IA "teste com resposta estruturada" (MVP-SPEC §8).
-///
-/// Sends only the fixed synthetic evidence from
-/// [`application::extract::connection_test_evidence`] through the same
-/// consent gate, request shape, retries and strict parsing as a real
-/// extraction, then validates the proposals. Nothing is persisted and no
-/// capture content leaves the machine. It blocks on the network: callers on
-/// the UI must run it off the UI thread (ASYNC-001).
-///
-/// # Errors
-///
-/// [`ExtractError::Extractor`] when consent is missing or stale, the profile
-/// is invalid or the provider call fails; [`ExtractError::Validation`] when the
-/// answer breaks the candidate contract.
 pub fn test_connection(
     profile: &AiProfile,
     secret: String,
@@ -164,9 +128,6 @@ impl fmt::Debug for OpenAiCompatibleExtractor {
 
 impl OpenAiCompatibleExtractor {
     /// Builds the extractor for a validated profile and a non-empty secret.
-    ///
-    /// No network call happens here. An empty secret is rejected: a local
-    /// provider without authentication is a debt for a later ticket.
     pub fn new(profile: &AiProfile, secret: String) -> Result<Self, ExtractError> {
         if profile.kind != ProfileKind::OpenAiCompatible {
             return Err(ExtractError::Extractor(
@@ -182,7 +143,6 @@ impl OpenAiCompatibleExtractor {
             ));
         }
         let client = reqwest::blocking::Client::builder()
-            // Consent approves this destination only, including its TLS scheme.
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(REQUEST_TIMEOUT)
@@ -218,8 +178,6 @@ impl CandidateExtractor for OpenAiCompatibleExtractor {
         input: &DecisionEvidence,
         signals: &[RelevanceSignal],
     ) -> Result<Vec<CandidateProposal>, ExtractError> {
-        // Defense in depth: use the same single consent predicate as the
-        // composition root, so a stale or forged consent can never call out.
         if let Err(reason) = consent_status(&self.profile) {
             return Err(ExtractError::Extractor(format!(
                 "chamadas externas bloqueadas: {reason}"
@@ -264,10 +222,6 @@ impl CandidateExtractor for OpenAiCompatibleExtractor {
 
 impl OpenAiCompatibleExtractor {
     /// Performs one request and classifies the outcome.
-    ///
-    /// Transient outcomes are connect/timeout transport errors, HTTP 429 and
-    /// 5xx; everything else (other transport errors, other 4xx, oversized or
-    /// malformed bodies, validation) is fatal on the first attempt.
     fn attempt(&self, url: &str, body: &serde_json::Value, signals: &[RelevanceSignal]) -> Attempt {
         let mut request = self.client.post(url).json(body);
         if !self.secret.is_empty() {
@@ -374,11 +328,6 @@ fn build_user_content(
 }
 
 /// Minimal shape of an OpenAI-compatible `/chat/completions` response.
-///
-/// Real providers add fields we do not need (`usage`, `system_fingerprint`,
-/// `service_tier`, `refusal`, `tool_calls`), so this outer envelope is
-/// intentionally permissive; the strict, `deny_unknown_fields` contract is
-/// applied to the JSON string carried inside `choices[0].message.content`.
 #[derive(Debug, Deserialize)]
 struct ChatEnvelope {
     choices: Vec<ChatChoice>,
@@ -426,9 +375,6 @@ struct ModelDiffSummary {
 
 impl ModelEnvelope {
     /// Converts the model output into proposals, enforcing field bounds.
-    ///
-    /// Relevance signals always come from the local filter: the model does not
-    /// decide whether a capture is relevant.
     fn into_proposals(
         self,
         signals: &[RelevanceSignal],

@@ -1,13 +1,4 @@
 //! SQLite implementation of the Decision Inbox persistence port.
-//!
-//! `list`/`get` join the project, the receipt and the latest adapter checkpoint
-//! (when one still points at the capture), so the inbox shows project, session
-//! and date even though the capture row itself does not store them.
-//!
-//! Every write is a compare-and-set `UPDATE` with a **fixed destination** and a
-//! fixed set of allowed source statuses; the destination is never a parameter,
-//! so this implementation cannot be driven into a batch confirmation. Edits
-//! arrive as [`ValidatedEdits`].
 
 use std::collections::HashMap;
 
@@ -27,10 +18,6 @@ const CANDIDATE_COLUMNS: &str = "dc.id, dc.project_id, p.location, dc.capture_id
      dc.created_at, dc.updated_at";
 
 /// Join that attaches the project, the receipt and the latest checkpoint.
-///
-/// `adapter_checkpoints` is keyed by `(adapter, session_id)` and can stop
-/// pointing at an older capture, so the join is a `LEFT JOIN` on the newest
-/// checkpoint for this capture; the summary then falls back to the receipt time.
 const CANDIDATE_FROM: &str = "FROM decision_candidates dc \
      JOIN projects p ON p.id = dc.project_id \
      JOIN capture_receipts r ON r.capture_id = dc.capture_id \
@@ -257,7 +244,6 @@ impl InboxStore for SqliteStore {
             .collect::<Result<Vec<_>, _>>()
             .map_err(storage_error)?;
 
-        // Preserve the candidate's reference order and drop duplicate refs.
         let mut index: HashMap<String, ArtifactView> = found
             .into_iter()
             .map(|artifact| (artifact.artifact_id.clone(), artifact))
@@ -289,9 +275,6 @@ impl InboxStore for SqliteStore {
             CandidateStatus::Accepted
         };
 
-        // The whole promotion is one transaction: the candidate status change,
-        // the decision row, its v1 snapshot, its evidence links and the search
-        // index either all commit or none do.
         let mut connection = self.lock();
         let transaction = connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
@@ -330,7 +313,6 @@ impl InboxStore for SqliteStore {
             .execute(&sql, params_from_iter(binds))
             .map_err(storage_error)?;
         if changed == 0 {
-            // Dropping the transaction rolls back; nothing was written.
             return Ok(false);
         }
 
@@ -370,8 +352,6 @@ impl InboxStore for SqliteStore {
             )
             .map_err(storage_error)?;
 
-        // Duplicate references collapse on the UNIQUE constraint; only unique
-        // references consume a position, preserving the candidate's order.
         let mut position = 0i64;
         for artifact_id in &seed.evidence_refs {
             let inserted = transaction
@@ -404,8 +384,6 @@ impl InboxStore for SqliteStore {
         edits: &ValidatedEdits,
         updated_at: &str,
     ) -> Result<bool, InboxError> {
-        // No destination: the status column is untouched, so the candidate stays
-        // in the review queue.
         let changed = self
             .lock()
             .execute(

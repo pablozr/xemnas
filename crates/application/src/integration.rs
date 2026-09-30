@@ -1,17 +1,4 @@
 //! Settings → OpenCode: integration status and connection test (MVP-SPEC §8).
-//!
-//! [`Integration::status`] reports what the adapter needs to reach the desktop
-//! and what it has delivered so far: the local API endpoint, the adapters and
-//! versions seen in accepted captures, the last checkpoint, the outbox
-//! location and counts, and the contract version this build accepts.
-//! [`Integration::check`] is the connection test: a fixed list of local checks,
-//! each with a stable kind, an outcome and an actionable product message.
-//!
-//! Everything here is local and read-only. The checks inspect file metadata
-//! and the discovery file only; the bearer token is **never read**, and no
-//! session or message identifier, capture content or project path leaves this
-//! module (PRIV-001). Both methods touch SQLite and the filesystem, so callers
-//! on the UI must run them off the UI thread (ASYNC-001).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -54,9 +41,6 @@ impl std::fmt::Display for IntegrationError {
 impl std::error::Error for IntegrationError {}
 
 /// Per-adapter activity aggregated from the adapter checkpoints.
-///
-/// Carries no session or message identifier: only counts, the most recent
-/// adapter version and timestamps.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdapterActivityRow {
     /// Adapter name, for example `opencode`.
@@ -239,11 +223,6 @@ impl<S: IntegrationStore> Integration<S> {
     }
 
     /// Builds the integration snapshot.
-    ///
-    /// # Errors
-    ///
-    /// [`IntegrationError::Storage`] when the checkpoint query fails. Missing
-    /// directories are reported as zero counts, never as errors.
     pub fn status(&self) -> Result<IntegrationStatus, IntegrationError> {
         let adapters: Vec<AdapterStatus> = self
             .store
@@ -279,10 +258,6 @@ impl<S: IntegrationStore> Integration<S> {
 
     /// Runs the connection test: one [`IntegrationCheck`] per [`CheckKind`], in
     /// declaration order.
-    ///
-    /// # Errors
-    ///
-    /// [`IntegrationError::Storage`] when the checkpoint query fails.
     pub fn check(&self) -> Result<Vec<IntegrationCheck>, IntegrationError> {
         let status = self.status()?;
         let runtime = &self.environment.runtime_dir;

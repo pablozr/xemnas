@@ -1,7 +1,4 @@
 //! SQLite implementation of the diagnostics persistence port.
-//!
-//! Every query returns counts or metadata only; no artifact content, candidate
-//! text or secret is ever selected.
 
 use crate::store::SqliteStore;
 use application::diagnostics::{
@@ -43,10 +40,6 @@ fn grouped(
 
 /// Builds a percentile distribution over the integer `delta_ms` column of
 /// `deltas_sql`.
-///
-/// `deltas_sql` must be a `SELECT … AS delta_ms` statement with no `ORDER BY`;
-/// timestamps that SQLite cannot parse are already excluded by its `WHERE`. The
-/// percentile is the value at `ROUND((n-1) * p)` in ascending order.
 fn distribution(
     connection: &rusqlite::Connection,
     deltas_sql: &str,
@@ -158,8 +151,6 @@ impl DiagnosticsStore for SqliteStore {
 
     fn recent_receipts(&self, limit: usize) -> Result<Vec<ReceiptDiagnosticRow>, DiagnosticsError> {
         let connection = self.lock();
-        // Resolve the project id from the receipt location; the path itself is
-        // never selected, so it cannot leak into the document.
         let mut statement = connection
             .prepare(
                 "SELECT r.capture_id, r.artifact_count, r.received_at, p.id \

@@ -34,9 +34,6 @@ impl AssessmentOutcome {
 }
 
 /// One provenance row written to `assessments` (MVP-SPEC §12 line 645).
-///
-/// The row carries only metadata and hashes, never artifact content or a model
-/// response body (PRIV-001).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssessmentRecord {
     /// Generated identifier (UUID v7).
@@ -78,9 +75,6 @@ pub trait AssessmentStore {
 }
 
 /// Provenance context for one extraction run.
-///
-/// The composition root builds it from the loaded profile and the claimed job;
-/// tests use [`RunContext::for_tests`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunContext {
     /// AI Execution Profile identifier.
@@ -121,9 +115,6 @@ impl RunContext {
     }
 
     /// Fixed context for a run whose profile could not be read.
-    ///
-    /// Carries only literals: an unread profile must not leak a partial
-    /// identity, a model name or a consent hash into the provenance row.
     pub fn unavailable(job_id: Option<String>) -> Self {
         Self {
             profile_id: "unavailable".to_string(),
@@ -159,9 +150,6 @@ pub fn policy_snapshot(profile: &AiProfile) -> String {
 }
 
 /// Stable, order-insensitive hash of the assessed inputs.
-///
-/// `sha256(capture_id || sorted "artifact_id:fingerprint" lines)`. Changing any
-/// artifact's content changes the hash; reordering the artifacts does not.
 pub fn input_hash(capture_id: &str, evidence: &DecisionEvidence) -> String {
     let mut lines: Vec<String> = evidence
         .artifacts
@@ -180,10 +168,6 @@ pub fn input_hash(capture_id: &str, evidence: &DecisionEvidence) -> String {
 }
 
 /// Records a `skipped` assessment without calling any extractor.
-///
-/// Used by the composition root when [`crate::profile::choose_extractor`]
-/// returns `ExternalBlocked`: the capture stays valid, no provider is contacted,
-/// and the provenance row explains why nothing ran.
 pub fn record_skipped_assessment<S>(
     store: &S,
     capture_id: &str,
@@ -194,7 +178,6 @@ where
 {
     let started_at = now_rfc3339();
     let Some(evidence) = store.load_evidence(capture_id)? else {
-        // Same rule as `run_extraction`: a missing capture is a storage error.
         return Err(capture_not_found());
     };
     let evidence = normalize(evidence);
@@ -213,9 +196,6 @@ where
 }
 
 /// Why an external provider run could not start.
-///
-/// Each variant maps to a short, sanitized `assessments.error_code`; the
-/// decision lives here so the composition root stays thin and testable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderSetupError {
     /// The profile has consent but no stored secret.
@@ -253,14 +233,6 @@ pub const ERROR_CODE_PROFILE: &str = "profile";
 
 /// Records a terminal `failed` assessment for a provider that never started,
 /// then returns the typed job failure the caller must propagate.
-///
-/// Used by the composition root for the setup failures that never reach
-/// [`run_extraction`] (missing secret, keystore error, invalid config, unreadable
-/// profile): every execution still gets provenance. `input_hash` is computed
-/// exactly as in a real run; a missing capture is a storage error and writes
-/// nothing. [`ProviderSetupError::ProfileUnavailable`] forces the fixed
-/// [`RunContext::unavailable`] context, so an unread profile can never leak a
-/// partial identity into the row.
 pub fn fail_provider_setup<S>(
     store: &S,
     capture_id: &str,

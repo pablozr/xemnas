@@ -1,21 +1,4 @@
 //! Secret redaction at the ingest boundary (MVP-SPEC §13, PRIV-001).
-//!
-//! The OpenCode adapter already masks secrets before building an envelope
-//! (`adapters/opencode/src/redact.ts`). The engine repeats the same
-//! conservative rules before anything is persisted, so a local caller that
-//! posts raw content to `/v1/captures`, or an outbox file written by another
-//! tool, cannot store a credential verbatim. The rules mirror the adapter:
-//!
-//! - PEM `PRIVATE KEY` blocks are replaced whole;
-//! - `TOKEN`/`API_KEY`/`SECRET`/`PASSWORD`/`ACCESS_KEY`/`AUTHORIZATION`
-//!   assignment lines (`NAME=value`, `NAME: value`) keep the name and lose the
-//!   value;
-//! - known key shapes (`sk-…`, `ghp_…`, `github_pat_…`, `xox?-…`) are masked.
-//!
-//! Redaction is deterministic and idempotent: redacting twice yields the same
-//! text, so replays keep the same fingerprint. It only removes text; it never
-//! interprets content. Implemented without a regex engine to keep the
-//! application layer's dependencies unchanged.
 
 use serde_json::Value;
 
@@ -72,9 +55,6 @@ pub fn redact_json(value: &Value) -> Value {
 }
 
 /// Replaces `-----BEGIN … PRIVATE KEY----- … -----END … PRIVATE KEY-----`.
-///
-/// An unterminated block is masked to the end of the text: a truncated key is
-/// still a key.
 fn redact_private_keys(text: &str) -> String {
     const BEGIN: &str = "-----BEGIN ";
     const END: &str = "-----END ";
@@ -142,7 +122,6 @@ fn redact_assignments(text: &str) -> String {
             Some(start) => {
                 output.push_str(&line[..start]);
                 output.push_str(REDACTED);
-                // Keep a Windows line ending intact.
                 if line.ends_with('\r') {
                     output.push('\r');
                 }
@@ -208,9 +187,6 @@ fn redact_key_shapes(text: &str) -> String {
 }
 
 /// Length in bytes of a key shape at the start of `text`, if any.
-///
-/// The run ends at a word boundary like the adapter's `\b`: trailing `-` are
-/// given back, and a run followed by another word character does not match.
 fn key_shape_len(text: &str) -> Option<usize> {
     for (prefix, minimum, allowed) in KEY_SHAPES {
         let Some(rest) = text.strip_prefix(prefix) else {

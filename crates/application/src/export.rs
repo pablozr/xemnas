@@ -1,13 +1,4 @@
 //! Manual export of one Engineering Decision (MVP-SPEC §680).
-//!
-//! Export is always an explicit action: the caller supplies the destination the
-//! user picked, and this module never derives a path from the Project location.
-//! It also never touches the Project directory — it only reads the decision and
-//! writes the chosen file.
-//!
-//! [`Export::preview`] and [`Export::write`] produce the same bytes, so the user
-//! sees exactly what will be written. The content has no volatile timestamps:
-//! the same decision always renders to the same string.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -52,8 +43,6 @@ pub struct ExportResult {
 }
 
 /// Failure modes of the export use case.
-///
-/// Messages carry no host path and no decision content beyond a fixed literal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExportError {
     /// Reading the decision failed.
@@ -212,9 +201,6 @@ impl<S: crate::decisions::DecisionStore> Export<S> {
     }
 
     /// Writes a rendered document to the caller-chosen destination.
-    ///
-    /// The destination comes from the user's file picker; this use case never
-    /// derives a path from the Project and never writes inside it.
     pub fn write(
         &self,
         document: &ExportDocument,
@@ -243,24 +229,14 @@ impl<S: crate::decisions::DecisionStore> Export<S> {
             .map(|name| name.to_string_lossy().into_owned())
             .ok_or_else(|| ExportError::DestinationInvalid("destino sem nome".to_string()))?;
 
-        // The temporary is created exclusively (`create_new`): an existing file
-        // with the same name — including a symlink planted by someone else — is
-        // never opened, truncated or written.
         let temporary = create_temporary(&parent, &file_name, document.content.as_bytes())?;
 
         if overwrite {
-            // `rename` atomically replaces the destination. On Windows it
-            // replaces the link itself, so a destination symlink is swapped out
-            // rather than followed.
             if let Err(error) = std::fs::rename(&temporary, destination) {
                 let _ = std::fs::remove_file(&temporary);
                 return Err(ExportError::Io(error.to_string()));
             }
         } else {
-            // `hard_link` fails atomically with `AlreadyExists` if the
-            // destination appeared after the preview, closing the TOCTOU window.
-            // A filesystem without hard links reports an error; the export must
-            // not silently fall back to an unsafe rename.
             match std::fs::hard_link(&temporary, destination) {
                 Ok(()) => {
                     let _ = std::fs::remove_file(&temporary);
@@ -286,9 +262,6 @@ impl<S: crate::decisions::DecisionStore> Export<S> {
 const MAX_TEMP_ATTEMPTS: u8 = 8;
 
 /// Creates an exclusive temporary sibling and writes `content` into it.
-///
-/// The name embeds a fresh UUID v7 and the file is opened with `create_new`, so
-/// an existing file is never truncated; a clash simply draws another name.
 fn create_temporary(
     directory: &Path,
     filename: &str,

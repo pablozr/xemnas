@@ -1,9 +1,4 @@
 //! Extraction of Decision Candidates from a persisted capture.
-//!
-//! [`run_extraction`] loads the evidence, keeps it only when [`filter_relevant`]
-//! finds durable signals, asks a [`CandidateExtractor`] for proposals, validates
-//! the whole batch and stores it as `pending`. Every run leaves one provenance
-//! row. It never creates an Engineering Decision.
 
 mod assessment;
 mod connection_test;
@@ -150,9 +145,6 @@ impl std::error::Error for ExtractError {}
 
 impl ExtractError {
     /// Returns a short, stable code for provenance (`assessments.error_code`).
-    ///
-    /// The code is a fixed literal, never free-form text, so it is safe to store
-    /// and to show (PRIV-001).
     pub fn code(&self) -> &'static str {
         match self {
             Self::Storage(_) => "storage",
@@ -189,18 +181,11 @@ pub trait ExtractionStore {
     fn load_evidence(&self, capture_id: &str) -> Result<Option<DecisionEvidence>, ExtractError>;
 
     /// Inserts candidates, ignoring rows whose `dedup_hash` already exists.
-    ///
-    /// Returns the number of rows actually inserted.
     fn insert_candidates(&self, records: &[DecisionCandidateRecord])
         -> Result<usize, ExtractError>;
 }
 
 /// Runs the two passes and persists any candidates as `pending`.
-///
-/// Never creates an Engineering Decision; an empty filter result or an extractor
-/// failure leaves the capture untouched. Every terminal path writes one
-/// `assessments` row (MVP-SPEC §12) before returning, except a storage failure
-/// while reading or writing candidates, which propagates as an error.
 pub fn run_extraction<S, E>(
     store: &S,
     extractor: &E,
@@ -213,8 +198,6 @@ where
 {
     let started_at = now_rfc3339();
     let Some(evidence) = store.load_evidence(capture_id)? else {
-        // A capture that no longer exists is a storage/state error, not a
-        // successful empty analysis: the caller must see a failed job.
         return Err(capture_not_found());
     };
     let evidence = normalize(evidence);
@@ -253,9 +236,6 @@ where
         }
     };
 
-    // Validate the whole batch before touching the store: a malformed proposal
-    // must never leave partial rows behind. Each proposal yields its canonical
-    // (validated, sorted, deduplicated) signal list.
     let mut validated: Vec<(CandidateProposal, Vec<RelevanceSignal>)> = Vec::new();
     for proposal in proposals {
         match validate_proposal(&proposal, &evidence, &signals) {
@@ -351,9 +331,6 @@ pub fn truncate_content(value: &str, max_bytes: usize) -> String {
 }
 
 /// Canonical deduplication hash: `capture_id|question|choice|signals`.
-///
-/// `signals` is the already-canonical (sorted, deduplicated) list used for the
-/// `signals` column, so the hash is stable regardless of the extractor's order.
 fn dedup_hash(
     capture_id: &str,
     proposal: &CandidateProposal,

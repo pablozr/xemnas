@@ -1,10 +1,4 @@
 //! Projects use cases: register, list and remove tracked directories.
-//!
-//! This module owns the [`ProjectRepository`] port that infrastructure
-//! implements. Registering canonicalizes the directory (and only that: the
-//! directory's content is never read, written or copied) and mints a UUID v7
-//! identity, so a location registered twice is rejected through the storage
-//! `UNIQUE` constraint.
 
 use std::path::{Path, PathBuf};
 
@@ -13,11 +7,6 @@ use domain::projects::{Project, ProjectId, ProjectLocation, ProjectSummary};
 use crate::clock::now_rfc3339;
 
 /// A Project row as it is persisted.
-///
-/// This is a plain persistence record: it carries the identifier, the
-/// normalized location string and the RFC 3339 timestamp exactly as they are
-/// stored, so the application and storage layers can exchange it without
-/// depending on a shared database type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectRecord {
     /// Stable identifier of the Project.
@@ -71,14 +60,8 @@ impl std::fmt::Display for ProjectError {
 impl std::error::Error for ProjectError {}
 
 /// Port that persists Projects.
-///
-/// Infrastructure crates implement this trait; the application never knows how
-/// the rows are stored.
 pub trait ProjectRepository {
     /// Inserts a new record.
-    ///
-    /// Returns [`ProjectError::AlreadyRegistered`] when the identifier or the
-    /// canonical location already exists.
     fn insert(&self, record: &ProjectRecord) -> Result<(), ProjectError>;
 
     /// Returns every record ordered by registration time.
@@ -88,10 +71,6 @@ pub trait ProjectRepository {
     fn get(&self, id: &str) -> Result<Option<ProjectRecord>, ProjectError>;
 
     /// Returns the record whose normalized canonical location matches, if any.
-    ///
-    /// The ingest use case uses this as the project allow-list check. The
-    /// default scans [`ProjectRepository::list`]; storage overrides it with an
-    /// indexed query, and the default keeps in-memory test doubles compatible.
     fn find_by_location(&self, location: &str) -> Result<Option<ProjectRecord>, ProjectError> {
         Ok(self
             .list()?
@@ -100,19 +79,10 @@ pub trait ProjectRepository {
     }
 
     /// Removes the record with the given identifier.
-    ///
-    /// Returns `true` when a row was deleted. Removing the tracking note never
-    /// touches the directory on disk.
     fn remove(&self, id: &str) -> Result<bool, ProjectError>;
 }
 
 /// Canonicalizes a project path to the stable string persisted in `projects`.
-///
-/// Shared by [`Projects::register`] and the ingest use case so the allow-list
-/// lookup cannot drift from the stored representation. A missing path, a
-/// non-directory, or an OS canonicalization failure returns
-/// [`ProjectError::InvalidLocation`]; only `canonicalize`/`metadata` are used,
-/// the directory is never read or written.
 pub fn canonicalize_location(location: &str) -> Result<String, ProjectError> {
     let path = Path::new(location);
     let metadata = std::fs::metadata(path).map_err(|_| ProjectError::InvalidLocation)?;
@@ -137,10 +107,6 @@ impl<R: ProjectRepository> Projects<R> {
     }
 
     /// Registers a directory to track.
-    ///
-    /// The path is canonicalized; a missing path or a non-directory is rejected
-    /// with [`ProjectError::InvalidLocation`] before anything is persisted. The
-    /// directory is never opened, read or written.
     pub fn register(&self, location: impl AsRef<Path>) -> Result<Project, ProjectError> {
         let text = location.as_ref().to_string_lossy().into_owned();
         let canonical = canonicalize_location(&text)?;
@@ -183,9 +149,6 @@ impl<R: ProjectRepository> Projects<R> {
     }
 
     /// Removes the tracking note for a Project.
-    ///
-    /// Returns `true` when a Project was removed. Only the persisted row is
-    /// deleted; the directory on disk is left untouched.
     pub fn remove(&self, id: &str) -> Result<bool, ProjectError> {
         self.repository.remove(id)
     }
@@ -201,14 +164,6 @@ fn project_from_record(record: ProjectRecord) -> Project {
 }
 
 /// Normalizes a canonical Windows path to a stable, prefix-free representation.
-///
-/// `std::fs::canonicalize` on Windows returns verbatim paths such as
-/// `\\?\C:\work\xemnas`. That prefix is stripped for drive-letter paths (and
-/// the equivalent `\\?\UNC\server\share` form is rewritten as
-/// `\\server\share`) so the same directory is persisted with a single
-/// representation regardless of how it was typed and across restarts. The
-/// function is a no-op on other platforms and for verbatim paths it does not
-/// recognize.
 fn normalize_canonical_path(path: PathBuf) -> PathBuf {
     let text = path.to_string_lossy();
     if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
@@ -224,9 +179,6 @@ fn normalize_canonical_path(path: PathBuf) -> PathBuf {
     }
     path
 }
-
-// The accessor methods on `Project`, `ProjectSummary` and `ProjectLocation`
-// are reached directly through the domain re-exports imported above.
 
 #[cfg(test)]
 mod tests {

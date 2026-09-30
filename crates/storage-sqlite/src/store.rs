@@ -1,12 +1,4 @@
 //! SQLite store: one shared connection behind a mutex, plus embedded migrations.
-//!
-//! Spec §9 requires a single write queue and WAL, and spec §11 requires foreign
-//! keys. This store keeps exactly one `Connection` behind `Arc<Mutex<..>>` and
-//! shares it across the Project and Job repositories, so every write is
-//! serialized. Per the ticket decision, reads go through the same connection in
-//! Gate 1: short read-only connections arrive with the local API in Gate 2, and
-//! speculating them now would violate the "no abstraction without a second case"
-//! rule.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -15,10 +7,6 @@ use std::time::Duration;
 use rusqlite::Connection;
 
 /// Embedded schema migrations, applied in version order.
-///
-/// Each file is named `NNNN_description.sql`; the leading number is the
-/// `schema_migrations.version`. The top-level `migrations/` tree remains
-/// reserved for a future migration tool and is intentionally not read here.
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -85,9 +73,6 @@ impl std::fmt::Display for StorageError {
 impl std::error::Error for StorageError {}
 
 /// Shared SQLite store that implements the application storage ports.
-///
-/// The clone is cheap (`Arc`): every clone writes through the same connection
-/// and therefore the same single write queue.
 #[derive(Clone)]
 pub struct SqliteStore {
     connection: Arc<Mutex<Connection>>,
@@ -96,15 +81,6 @@ pub struct SqliteStore {
 impl SqliteStore {
     /// Opens (creating if needed) the database at `path`, configures it and
     /// applies migrations.
-    ///
-    /// The parent directory is created with `create_dir_all` when missing, so
-    /// opening a canonical path inside a fresh tree works without the caller
-    /// assembling the path or creating directories by hand. A failure to create
-    /// the parent is reported as [`StorageError::Open`]. A path without a parent
-    /// component (a bare file name) is opened as given.
-    ///
-    /// Configuration enables WAL (spec §9), foreign keys (spec §11) and a busy
-    /// timeout so an external writer cannot make a transient open fail.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StorageError> {
         let path = path.as_ref();
         if let Some(parent) = path.parent() {
@@ -123,11 +99,6 @@ impl SqliteStore {
     }
 
     /// Locks the shared connection, recovering from a poisoned mutex.
-    ///
-    /// A handler panic is caught by the job worker, but it happens while the
-    /// repository lock is held, so the mutex can be poisoned. The SQLite
-    /// connection itself remains valid and consistent, so poisoning is
-    /// recovered rather than propagated (RUST-001: this is not an `unwrap`).
     pub(crate) fn lock(&self) -> MutexGuard<'_, Connection> {
         self.connection
             .lock()
@@ -137,7 +108,6 @@ impl SqliteStore {
 
 /// Applies the connection pragmas required by the spec.
 fn configure(connection: &Connection) -> rusqlite::Result<()> {
-    // WAL lets readers proceed while a write is committed (spec §9).
     let _journal_mode: String =
         connection.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
     connection.pragma_update(None, "foreign_keys", "ON")?;
@@ -163,9 +133,6 @@ fn migrate(connection: &Connection) -> rusqlite::Result<()> {
 }
 
 /// Applies `migrations` forward-only, each in its own transaction.
-///
-/// A migration that fails rolls back entirely: neither its DDL nor its
-/// `schema_migrations` row is recorded, and the connection stays usable.
 fn apply_migrations(connection: &Connection, migrations: &[Migration]) -> rusqlite::Result<()> {
     connection.execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -345,7 +312,6 @@ mod tests {
             "the failed migration's table must be rolled back"
         );
 
-        // The connection is still usable and a corrected v2 applies cleanly.
         let corrected = [
             Migration {
                 version: 1,

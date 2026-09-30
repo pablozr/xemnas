@@ -1,8 +1,4 @@
 //! Cheap, deterministic relevance filter (MVP-SPEC §6).
-//!
-//! Vetoes run first: a capture without a diff, a test-only or comment-only diff,
-//! or explicit trivial wording is irrelevant unless an added production line
-//! carries a structural strong signal (DDL, a new dependency, security code).
 
 use std::collections::BTreeSet;
 
@@ -88,17 +84,10 @@ impl RelevanceSignal {
 }
 
 /// Returns `true` when the capture is one of the §6 exclusions.
-///
-/// A real structural strong signal in a production diff (DDL, a new dependency,
-/// a security-relevant code line) takes precedence: the trivial wording is then
-/// incidental and must not discard the capture. Otherwise a capture with no diff
-/// evidence, or one whose only diff is trivial, is vetoed.
 fn is_trivially_excluded(evidence: &DecisionEvidence, text: &str) -> bool {
     if has_structural_strong(evidence) {
         return false;
     }
-    // Without a `diff_hunk` there is no change to assess; free prose that merely
-    // mentions "CREATE TABLE" or "token" is not durable evidence.
     if !has_diff_hunk(evidence) {
         return true;
     }
@@ -122,12 +111,6 @@ fn has_diff_hunk(evidence: &DecisionEvidence) -> bool {
 
 /// Returns `true` when a production `diff_hunk` carries a strong structural
 /// signal.
-///
-/// Only `diff_hunk` artifacts are examined, only their added non-comment lines
-/// count, and a `.sql` path alone is never enough: a real DDL statement must be
-/// present. `INSERT`/`UPDATE` are data changes, not structural, and do not
-/// count. This keeps an incidental word or a commented-out DDL from defeating
-/// the trivial veto.
 fn has_structural_strong(evidence: &DecisionEvidence) -> bool {
     for artifact in &evidence.artifacts {
         if artifact.kind != "diff_hunk" {
@@ -191,7 +174,6 @@ fn artifact_has_dependency_addition(artifact: &EvidenceArtifact) -> bool {
             continue;
         }
         let addition = rest.trim();
-        // Commented-out manifest entries are not dependency additions.
         if addition.is_empty() || is_comment_prefix(addition) {
             continue;
         }
@@ -257,8 +239,6 @@ fn is_comment_prefix(content: &str) -> bool {
 pub fn filter_relevant(evidence: &DecisionEvidence) -> Vec<RelevanceSignal> {
     let text = aggregate_text(evidence);
 
-    // Veto rules run before any positive signal: a trivial/test-only change must
-    // not become relevant just because it mentions "schema", "api" or "token".
     if is_trivially_excluded(evidence, &text) {
         return Vec::new();
     }
@@ -388,7 +368,6 @@ fn has_dependency_addition(text: &str) -> bool {
             Some(rest) if rest.starts_with("++") => false,
             Some(addition) => {
                 let addition = addition.trim();
-                // Commented-out manifest entries are not dependency additions.
                 !addition.is_empty()
                     && !is_comment_prefix(addition)
                     && (addition.contains('=') || addition.contains(':'))

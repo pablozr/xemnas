@@ -17,12 +17,6 @@ pub struct ConnectionTestReport {
 }
 
 /// Builds the synthetic evidence used by the provider connection test.
-///
-/// The content is a fixed, fictitious decision written for this purpose: it
-/// never contains project data, so a test call sends nothing from the user's
-/// captures (MVP-SPEC §13). It is shaped like a real turn — user text plus a
-/// diff touching two components — so the relevance filter detects signals and
-/// the provider exercises the same structured contract as a real run.
 pub fn connection_test_evidence() -> DecisionEvidence {
     let artifact = |id: &str, kind: &str, content: &str| EvidenceArtifact {
         artifact_id: id.to_string(),
@@ -57,16 +51,6 @@ pub fn connection_test_evidence() -> DecisionEvidence {
 }
 
 /// Runs the provider connection test ("teste com resposta estruturada", §8).
-///
-/// Sends [`connection_test_evidence`] through `extractor` and validates every
-/// returned proposal with the same rules a real extraction applies. Nothing is
-/// persisted: no assessment, candidate or decision is written. Consent is the
-/// extractor's responsibility (the real provider refuses without it).
-///
-/// # Errors
-///
-/// The extractor's own error when the call fails, or
-/// [`ExtractError::Validation`] when a proposal breaks the contract.
 pub fn run_connection_test<E: CandidateExtractor>(
     extractor: &E,
 ) -> Result<ConnectionTestReport, ExtractError> {

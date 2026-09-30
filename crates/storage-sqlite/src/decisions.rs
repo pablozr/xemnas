@@ -1,8 +1,4 @@
 //! SQLite implementation of the Decisions persistence port.
-//!
-//! Reads join the project location; `revise` snapshots the new version and
-//! updates the live row plus the FTS index in one transaction. Nothing is ever
-//! deleted from `engineering_decisions` or `decision_revisions`.
 
 use application::decisions::{
     DecisionContent, DecisionQuery, DecisionRevisionRow, DecisionSearchRow, DecisionStatus,
@@ -212,8 +208,6 @@ impl DecisionStore for SqliteStore {
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(storage_error)?;
 
-        // Compare-and-set on the previous version: a concurrent revision loses
-        // and the caller sees `false` instead of overwriting.
         let changed = transaction
             .execute(
                 "UPDATE engineering_decisions \

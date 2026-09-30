@@ -169,8 +169,6 @@ fn list_joins_project_and_checkpoint_with_receipt_fallback() {
     let root = temporary_directory("list");
     let store = SqliteStore::open(root.join("app.db")).expect("open store");
     seed_project(&store);
-    // The shared session checkpoint ends up pointing at capture-2, so capture-1
-    // has no checkpoint and must fall back to its receipt.
     seed_capture(&store, "capture-1", "message-1");
     seed_capture(&store, "capture-2", "message-2");
     store
@@ -356,8 +354,6 @@ fn semantic_port_fixes_batch_destinations_and_rejects_wrong_sources() {
         ])
         .expect("insert candidates");
 
-    // The port exposes no destination parameter: the only batch operations are
-    // dismiss/snooze, and their destination is fixed inside the implementation.
     assert_eq!(
         InboxStore::snooze_batch(&store, &["cand-1".to_string()], "t1").expect("snooze batch"),
         1
@@ -369,7 +365,6 @@ fn semantic_port_fixes_batch_destinations_and_rejects_wrong_sources() {
     );
     assert_eq!(status_of(&store, "cand-2"), CandidateStatus::Dismissed);
 
-    // Wrong source states are rejected by the port, not silently accepted.
     assert_eq!(
         InboxStore::dismiss_batch(&store, &["cand-terminal".to_string()], "t2").expect("no-op"),
         0
@@ -479,7 +474,6 @@ fn validated_edits_are_persisted_by_confirm_and_adjust() {
         ])
         .expect("insert candidates");
 
-    // The only way to build the port's edits type is `CandidateEdits::validate`.
     let confirm_edits = CandidateEdits {
         question: " confirma q ".to_string(),
         choice: " confirma c ".to_string(),

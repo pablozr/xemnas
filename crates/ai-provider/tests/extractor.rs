@@ -322,7 +322,6 @@ fn consent_disabled_makes_no_request() {
 #[test]
 fn stale_consent_after_config_edit_makes_no_request() {
     let server = start_server("HTTP/1.1 200 OK", valid_body(1));
-    // Granted for one configuration, then the config changes under the consent.
     let mut profile = granted_profile(server.port, 64);
     profile.model = "another-model".to_string();
     let extractor =
@@ -587,7 +586,6 @@ fn backoff_delays_grow_exponentially_without_sleeping() {
 
 #[test]
 fn refused_connection_is_transient_and_retried() {
-    // Bind then drop, so the port has no listener.
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind");
     let port = listener.local_addr().expect("addr").port();
     drop(listener);

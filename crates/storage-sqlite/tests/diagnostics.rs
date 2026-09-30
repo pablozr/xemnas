@@ -132,7 +132,6 @@ fn exported_diagnostics_never_carry_content_markers() {
     let root = temporary_directory("sanitize");
     let store = SqliteStore::open(root.join("app.db")).expect("open store");
 
-    // Project + capture with a marker inside artifact content.
     let project = ProjectRecord::new(
         "project-1".to_string(),
         LOCATION.to_string(),
@@ -177,7 +176,6 @@ fn exported_diagnostics_never_carry_content_markers() {
         })
         .expect("seed capture");
 
-    // Candidate with a marker in its rationale, promoted to a decision.
     store
         .insert_candidates(&[candidate("cand-1")])
         .expect("insert candidate");
@@ -195,7 +193,6 @@ fn exported_diagnostics_never_carry_content_markers() {
         .confirm("cand-1", None)
         .expect("confirm");
 
-    // A failed job whose diagnostic is hostile.
     let hostile = JobRecord {
         id: "job-hostile".to_string(),
         kind: ANALYZE_CAPTURE_KIND.to_string(),
@@ -209,12 +206,10 @@ fn exported_diagnostics_never_carry_content_markers() {
     };
     JobRepository::insert(&store, &hostile).expect("insert hostile job");
 
-    // Runtime files that must never be read into the document.
     let state_dir = root.join("state");
     std::fs::create_dir_all(&state_dir).expect("create state dir");
     std::fs::write(state_dir.join("api-token"), MARKER_TOKEN).expect("write token");
 
-    // Outbox with one file per bucket; only counts may appear.
     let outbox = root.join("outbox");
     for (bucket, marker) in [
         ("pending", MARKER_OUTBOX),
@@ -237,8 +232,6 @@ fn exported_diagnostics_never_carry_content_markers() {
     let document = diagnostics.export().expect("export");
     let json = application::serde_json::to_string_pretty(&document).expect("serialize");
 
-    // Sanitization by construction: no marker survives anywhere, including the
-    // project path and the credential/query embedded in the endpoint.
     for marker in [
         MARKER_ARTIFACT,
         MARKER_RATIONALE,
@@ -256,7 +249,6 @@ fn exported_diagnostics_never_carry_content_markers() {
         );
     }
 
-    // Structural information is present and correct.
     assert_eq!(document.schema.migrations_version, 9);
     assert!(
         json.contains("\"metrics\""),

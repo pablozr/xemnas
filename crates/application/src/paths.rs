@@ -26,8 +26,6 @@ pub struct AppPaths {
 
 impl AppPaths {
     /// Resolves the paths from `XEMNAS_DATA_DIR`, `LOCALAPPDATA` and `XEMNAS_OUTBOX_DIR`.
-    ///
-    /// Nothing is created on disk.
     pub fn from_env() -> Self {
         let data_dir = non_empty(std::env::var_os(DATA_DIR_ENV))
             .map(PathBuf::from)

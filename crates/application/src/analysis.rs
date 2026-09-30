@@ -65,10 +65,6 @@ where
     }
 
     /// Analyzes one capture, reloading the profile so Settings changes apply at once.
-    ///
-    /// # Errors
-    ///
-    /// The [`ExtractError`] of a failed extraction or of a provenance write.
     pub fn run(
         &self,
         capture_id: &str,

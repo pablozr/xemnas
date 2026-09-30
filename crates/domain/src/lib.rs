@@ -1,9 +1,4 @@
 //! Domain layer: the decisional core of xemnas.
-//!
-//! This crate holds the product's core concepts (projects, capture, decisions,
-//! context) and their rules. Per ARCH-001 it must not know about UI, SQLite,
-//! HTTP, OpenCode or AI providers; those are reached through ports defined by
-//! the application layer. Concrete domain types land in ticket 06 and beyond.
 #![warn(missing_docs)]
 
 pub mod projects;

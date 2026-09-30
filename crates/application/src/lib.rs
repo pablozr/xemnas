@@ -1,9 +1,4 @@
 //! Application layer: use-case orchestration and the ports infrastructure implements.
-//!
-//! Per ARCH-001 this crate depends only on [`domain`] and defines the
-//! interfaces (ports) it needs, so infrastructure can implement them without
-//! the domain knowing about storage or transport. It holds the Project and Job
-//! use cases and the port traits their repositories implement.
 #![warn(missing_docs)]
 
 pub mod analysis;
@@ -27,20 +22,6 @@ pub use captures::{
     CaptureApi, CaptureArtifactRecord, CaptureCheckpointRecord, CaptureError, CaptureIngest,
     CaptureReceiptRecord, CaptureRepository, CaptureWrite, IngestError, IngestOutcome, Receipt,
 };
-pub use extract::{
-    connection_test_evidence, fail_provider_setup, filter_relevant, input_hash, policy_snapshot,
-    record_skipped_assessment, run_connection_test, run_extraction, truncate_content,
-    AssessmentOutcome, AssessmentRecord, AssessmentStore, CandidateExtractor, CandidateProposal,
-    ConnectionTestReport, DecisionCandidateRecord, DecisionEvidence, EvidenceArtifact,
-    ExtractError, ExtractionReport, ExtractionStore, FakeCandidateExtractor, ProviderSetupError,
-    RelevanceSignal, RunContext, ERROR_CODE_CONSENT, ERROR_CODE_KEYSTORE, ERROR_CODE_PROFILE,
-    ERROR_CODE_PROVIDER_CONFIG, ERROR_CODE_SECRET, MAX_EVIDENCE_ARTIFACTS,
-    MAX_EVIDENCE_CONTENT_BYTES,
-};
-// The Inbox port plumbing (`InboxStore`, `InboxQuery`, `Cursor`,
-// `StoredCandidate`, `ValidatedEdits`) stays in `application::inbox` for the
-// storage implementation and test fakes; only the front-facing surface is
-// re-exported at the crate root.
 pub use decisions::{
     sanitize_match_query, DecisionDetail, DecisionEdits, DecisionFilter, DecisionPage,
     DecisionRevision, DecisionSearchHit, DecisionStatus, DecisionSummary, Decisions,
@@ -52,9 +33,17 @@ pub use diagnostics::{
     OutboxCounts, ReceiptDiagnostic, RuntimeDiagnostic, SchemaInfo,
 };
 pub use export::{Export, ExportDocument, ExportError, ExportFormat, ExportResult};
+pub use extract::{
+    connection_test_evidence, fail_provider_setup, filter_relevant, input_hash, policy_snapshot,
+    record_skipped_assessment, run_connection_test, run_extraction, truncate_content,
+    AssessmentOutcome, AssessmentRecord, AssessmentStore, CandidateExtractor, CandidateProposal,
+    ConnectionTestReport, DecisionCandidateRecord, DecisionEvidence, EvidenceArtifact,
+    ExtractError, ExtractionReport, ExtractionStore, FakeCandidateExtractor, ProviderSetupError,
+    RelevanceSignal, RunContext, ERROR_CODE_CONSENT, ERROR_CODE_KEYSTORE, ERROR_CODE_PROFILE,
+    ERROR_CODE_PROVIDER_CONFIG, ERROR_CODE_SECRET, MAX_EVIDENCE_ARTIFACTS,
+    MAX_EVIDENCE_CONTENT_BYTES,
+};
 
-// Re-exported so integration tests in other crates can build a Capture Envelope
-// (and its metadata map) without adding a new dependency to those crates.
 pub use inbox::{
     ArtifactView, CandidateDetail, CandidateEdits, CandidateStatus, CandidateSummary,
     ConfirmOutcome, DiffSummary, Inbox, InboxError, InboxFilter, InboxPage, DEFAULT_PAGE_LIMIT,
