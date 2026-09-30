@@ -11,6 +11,7 @@ pub mod diagnostics;
 pub mod export;
 pub mod extract;
 pub mod inbox;
+pub mod injection;
 pub mod integration;
 pub mod jobs;
 pub mod outbox;
