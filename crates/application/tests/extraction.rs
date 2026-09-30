@@ -343,7 +343,7 @@ fn invalid_proposals_reject_the_whole_batch() {
             &RunContext::for_tests(),
         );
         assert!(
-            matches!(result, Err(ExtractError::Extractor(_))),
+            matches!(result, Err(ExtractError::Validation(_))),
             "an invalid proposal must reject the batch"
         );
         assert!(
@@ -596,11 +596,11 @@ fn assessment_records_failed_for_extractor_and_validation() {
         &evidence.capture_id,
         &RunContext::for_tests(),
     );
-    assert!(matches!(result, Err(ExtractError::Extractor(_))));
+    assert!(matches!(result, Err(ExtractError::Validation(_))));
     let rows = invalid.assessments();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].outcome, AssessmentOutcome::Failed);
-    assert_eq!(rows[0].error_code.as_deref(), Some("extractor"));
+    assert_eq!(rows[0].error_code.as_deref(), Some("validation"));
     assert!(invalid.records().is_empty(), "no partial candidate batch");
 }
 
@@ -631,6 +631,10 @@ fn input_hash_is_deterministic_sensitive_and_order_insensitive() {
 fn extract_error_codes_are_stable() {
     assert_eq!(ExtractError::Extractor("x".to_string()).code(), "extractor");
     assert_eq!(ExtractError::Storage("x".to_string()).code(), "storage");
+    assert_eq!(
+        ExtractError::Validation("x".to_string()).code(),
+        "validation"
+    );
 }
 
 #[test]

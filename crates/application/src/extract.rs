@@ -229,6 +229,9 @@ pub enum ExtractError {
     Storage(String),
     /// The extractor itself failed; the capture stays valid.
     Extractor(String),
+    /// The extractor answered, but a proposal broke the candidate contract
+    /// (empty field, confidence out of range, unknown evidence ref, ...).
+    Validation(String),
 }
 
 impl std::fmt::Display for ExtractError {
@@ -236,6 +239,7 @@ impl std::fmt::Display for ExtractError {
         match self {
             Self::Storage(message) => write!(formatter, "falha de armazenamento: {message}"),
             Self::Extractor(message) => write!(formatter, "falha do extrator: {message}"),
+            Self::Validation(message) => write!(formatter, "proposta inválida: {message}"),
         }
     }
 }
@@ -251,6 +255,7 @@ impl ExtractError {
         match self {
             Self::Storage(_) => "storage",
             Self::Extractor(_) => "extractor",
+            Self::Validation(_) => "validation",
         }
     }
 }
@@ -795,38 +800,40 @@ fn validate_proposal(
     detected: &[RelevanceSignal],
 ) -> Result<Vec<RelevanceSignal>, ExtractError> {
     if proposal.question.trim().is_empty() {
-        return Err(ExtractError::Extractor("proposta sem pergunta".to_string()));
+        return Err(ExtractError::Validation(
+            "proposta sem pergunta".to_string(),
+        ));
     }
     if proposal.choice.trim().is_empty() {
-        return Err(ExtractError::Extractor("proposta sem escolha".to_string()));
+        return Err(ExtractError::Validation("proposta sem escolha".to_string()));
     }
     if proposal.rationale.trim().is_empty() {
-        return Err(ExtractError::Extractor(
+        return Err(ExtractError::Validation(
             "proposta sem justificativa".to_string(),
         ));
     }
     if proposal.confidence_reason.trim().is_empty() {
-        return Err(ExtractError::Extractor(
+        return Err(ExtractError::Validation(
             "proposta sem explicacao de confianca".to_string(),
         ));
     }
     if !proposal.confidence.is_finite() || !(0.0..=1.0).contains(&proposal.confidence) {
-        return Err(ExtractError::Extractor(
+        return Err(ExtractError::Validation(
             "confianca fora do intervalo".to_string(),
         ));
     }
     if proposal.signals.is_empty() {
-        return Err(ExtractError::Extractor("proposta sem sinais".to_string()));
+        return Err(ExtractError::Validation("proposta sem sinais".to_string()));
     }
     for signal in &proposal.signals {
         if !detected.iter().any(|known| known == signal) {
-            return Err(ExtractError::Extractor(
+            return Err(ExtractError::Validation(
                 "proposta com sinal nao detectado".to_string(),
             ));
         }
     }
     if proposal.evidence_refs.is_empty() {
-        return Err(ExtractError::Extractor(
+        return Err(ExtractError::Validation(
             "proposta sem referencias de evidencia".to_string(),
         ));
     }
@@ -836,7 +843,7 @@ fn validate_proposal(
             .iter()
             .any(|artifact| &artifact.artifact_id == reference)
         {
-            return Err(ExtractError::Extractor(
+            return Err(ExtractError::Validation(
                 "proposta com referencia de evidencia desconhecida".to_string(),
             ));
         }
@@ -852,16 +859,16 @@ fn validate_proposal(
 /// Validates the `{files: [...], artifacts: n}` shape of a diff summary.
 fn validate_diff_summary(summary: &str, artifact_count: usize) -> Result<(), ExtractError> {
     let value: Value = serde_json::from_str(summary)
-        .map_err(|_| ExtractError::Extractor("diff_summary invalido".to_string()))?;
+        .map_err(|_| ExtractError::Validation("diff_summary invalido".to_string()))?;
     let object = value
         .as_object()
-        .ok_or_else(|| ExtractError::Extractor("diff_summary nao e objeto".to_string()))?;
+        .ok_or_else(|| ExtractError::Validation("diff_summary nao e objeto".to_string()))?;
     let files = object
         .get("files")
         .and_then(Value::as_array)
-        .ok_or_else(|| ExtractError::Extractor("diff_summary sem files".to_string()))?;
+        .ok_or_else(|| ExtractError::Validation("diff_summary sem files".to_string()))?;
     if files.len() > MAX_DIFF_SUMMARY_FILES {
-        return Err(ExtractError::Extractor(
+        return Err(ExtractError::Validation(
             "diff_summary com arquivos demais".to_string(),
         ));
     }
@@ -871,7 +878,7 @@ fn validate_diff_summary(summary: &str, artifact_count: usize) -> Result<(), Ext
             .map(|text| text.trim().is_empty())
             .unwrap_or(true)
         {
-            return Err(ExtractError::Extractor(
+            return Err(ExtractError::Validation(
                 "diff_summary com arquivo invalido".to_string(),
             ));
         }
@@ -879,9 +886,9 @@ fn validate_diff_summary(summary: &str, artifact_count: usize) -> Result<(), Ext
     let artifacts = object
         .get("artifacts")
         .and_then(Value::as_u64)
-        .ok_or_else(|| ExtractError::Extractor("diff_summary sem artifacts".to_string()))?;
+        .ok_or_else(|| ExtractError::Validation("diff_summary sem artifacts".to_string()))?;
     if artifacts as usize != artifact_count {
-        return Err(ExtractError::Extractor(
+        return Err(ExtractError::Validation(
             "diff_summary com contagem incoerente".to_string(),
         ));
     }
