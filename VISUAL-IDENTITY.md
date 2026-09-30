@@ -120,6 +120,51 @@ mas `docs/` é ignorado pelo Git: este arquivo é a regra versionável.
 - `xemnas --demo` abre uma prévia identificada com dados fictícios em memória,
   sem iniciar integrações, workers ou alterar o banco normal.
   `--demo --long-evidence` permite verificar fontes com 1.500 linhas.
+- Decisões tem a seção **Relações** depois das evidências: cada linha diz como a
+  relação se lê a partir da decisão aberta (Substitui, Substituída por, Depende
+  de, É base de, Conflita com), abre a outra decisão e marca a substituída.
+  **Relacionar** abre um seletor inline (tipo + decisões em vigor carregadas);
+  substituir tem borda de aviso e explica que a escolhida sai do contexto do
+  agente e fica no histórico.
+
+## Contexto — o que vale no projeto
+
+- Terceiro destino do projeto (Ctrl 3), numa `reading_page`: modo de contexto
+  do agente (Desligado, Medir, Ativo) como três opções lado a lado e tokens por
+  bloco com salvar só quando muda; decisões em vigor numa lista com borda que
+  abre em Decisões; regras do projeto agrupadas por tipo, com encerrar
+  confirmado na própria linha e um compositor (tipo + frase + Adicionar);
+  prévia do Context Pack para uma tarefa digitada, com barra de orçamento usado,
+  itens que entrariam e exportação Markdown/JSON.
+- Encerrar uma regra não apaga: ela deixa de valer e fica no histórico. A
+  prévia não é salva; exportar é ação explícita com destino escolhido.
+
+## Configurações
+
+- Página do app (engrenagem na barra de título, paleta Ctrl K ou a linha de
+  estado da lateral) com navegação à esquerda: IA e privacidade, OpenCode e
+  Diagnóstico, cada uma com ícone, título e uma dica curta.
+- Cada seção abre com cabeçalho (ícone em bloco de 48 px, título, frase) e um
+  **status em destaque** tingido pela cor do estado, seguido de **cartões** por
+  assunto (ícone, título e propósito no topo; corpo; rodapé com dica e a ação
+  principal). As peças ficam em `screens/settings/parts.rs` (`status_hero`,
+  `card`, `card_body`, `card_footer`, `stat_tile`, `kv_row`, `icon_tile`,
+  `step`) e só valem para Configurações.
+- Opções exclusivas (extrator, modo de contexto) são cartões com ícone e marca
+  de selecionado; campos em grade quando cabem lado a lado. Consentimento é uma
+  sequência de três passos numerados que ficam verdes quando concluídos.
+- OpenCode mostra o teste de conexão como lista de verificações com resultado
+  (OK, Atenção, Falha, Não se aplica) e as mensagens do backend; Diagnóstico
+  mostra medianas, perdas, tarefas com reprocessar/cancelar e exporta o JSON
+  sanitizado.
+- Painel do projeto: **Apagar dados…** mede o impacto real e só libera Apagar
+  tudo depois de digitar o nome do projeto; a pasta no disco não é tocada.
+
+## Interação
+
+- Botões respondem em três tempos: repouso, hover (preenchimento e borda sobem;
+  o primário ganha halo lavanda) e clique (um passo mais fundo). Desabilitado
+  não reage. Linhas de lista e abas usam a mola de `hover_tint`.
 
 ## Gate de entrega visual
 

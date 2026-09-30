@@ -2,7 +2,7 @@
 
 **O que foi construído:** relações entre decisões, Context Claims temporais e o Context Pack manual com exportação, no backend (ADR-0003).
 
-**Status: done (backend; telas com a sessão de front)**
+**Status: done (backend e telas)**
 
 - [x] Substituir uma decisão marca a anterior como `superseded`, registra a relação e não apaga nada.
 - [x] Claims tipadas com validade; listar pelas válidas numa data; encerrar sem apagar.
@@ -38,7 +38,7 @@ A lista de decisões continua mostrando só as `accepted` por padrão; as `super
 
 ## Pendências registradas
 
-- Telas: substituir/relacionar decisões, criar e encerrar claims, montar e exportar o pack (sessão de front).
+- ~~Telas: substituir/relacionar decisões, criar e encerrar claims, montar e exportar o pack.~~ Feito em 30/09/2026: relações e substituição no documento de Decisões (`735b493`); regras do projeto e prévia/exportação do pack na aba Contexto (`40ead8a`).
 - Medir a utilidade do pack no uso real antes de expô-lo a agentes (Fase 5, MCP).
 - A relevância é lexical: sinônimos e paráfrases não casam (AD-14; busca semântica só após medir).
 - Timeline por projeto: as datas já existem (confirmação, relações, validade das claims); a consulta dedicada fica para quando a tela for desenhada.

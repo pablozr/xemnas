@@ -41,6 +41,10 @@ atenção. Isso é o que diferencia o xemnas de um "resumo automático de sessã
 
 ## 2. Aba de contexto do projeto
 
+**Implementada em 30/09/2026** (`40ead8a`): modo do agente, decisões em vigor,
+regras do projeto e prévia do Context Pack. "Mudou recentemente" e "Para
+reconsiderar" ficaram de fora e seguem como ideia. O raciocínio original:
+
 Sim, acho útil, e talvez seja a tela que mais mostra o valor do produto. Hoje o
 contexto está espalhado entre Decisões, claims (sem tela) e o Context Pack (sem
 tela). Uma aba **Contexto** responderia "o que vale neste projeto agora?".
@@ -80,7 +84,7 @@ hoje não têm interface.
 
 ## 4. Ordem sugerida
 
-1. Aba **Contexto** (maior ganho de percepção, backend pronto).
+1. ~~Aba **Contexto**~~ (feita).
 2. Revisão agrupada por sessão e aviso de conflito na revisão.
 3. Importar ADRs/`AGENTS.md` existentes.
 4. Exportar resumo para `AGENTS.md`.

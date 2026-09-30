@@ -4,7 +4,7 @@ Semana de uso real do produto para medir **ruído, perdas, latência e tempo de 
 
 ## Como coletar
 
-1. **Métricas automáticas** — durante o uso, abrir a tela Diagnostics (sessão de front) e exportar o diagnóstico; a seção `metrics` traz:
+1. **Métricas automáticas** — durante o uso, abrir Configurações › Diagnóstico e usar Exportar…; a seção `metrics` traz:
    - `latency_capture_to_candidate_ms` — p50/p95 de `received_at → created_at` do candidato (ruído de cadência);
    - `review_time_ms` — p50/p95 de `created_at → confirmed_at` (tempo de revisão humana);
    - `noise.dismissed_ratio` — fração de candidatos descartados entre os decididos (ruído percebido);

@@ -2,7 +2,7 @@
 
 **O que foi construído:** um bloco compacto de contexto anexado ao pedido do usuário no OpenCode, com orçamento em tokens, sem repetição na sessão, auditoria e modo sombra.
 
-**Status: done (backend e adapter; métricas na tela de Diagnostics com a sessão de front)**
+**Status: done (backend, adapter e telas: modo por projeto na aba Contexto `40ead8a`, métricas em Configurações › Diagnóstico `03e47b3`)**
 
 **Autorização:** decidido pelo usuário em 2026-09-30, sem ADR, com base na pesquisa abaixo. A injeção começa desligada em todo projeto e o modo sombra existe para provar utilidade antes de ligar (limite do `IDEA.md`).
 

@@ -20,7 +20,9 @@ use gpui::{
 use super::format::{date_time, thousands};
 use crate::ui::controls::{action_button, button_foreground, ButtonKind};
 use crate::ui::icons::{icon, IconName};
-use crate::ui::patterns::{mark_selected, status_pill};
+use crate::ui::patterns::{
+    error_banner, mark_selected, skeleton_list, status_pill, toast, TOAST_DURATION,
+};
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{tint, SpacingScale, TypeScale};
@@ -97,7 +99,7 @@ mod parts;
 pub use diagnostics::{DiagnosticsBackend, DiagnosticsPanel, DiagnosticsService};
 pub use opencode::{IntegrationBackend, IntegrationService, OpenCodePanel};
 
-use parts::{banner, card, card_body, card_footer, field_row, icon_tile, step};
+use parts::{card, card_body, card_footer, field_row, icon_tile, step};
 
 /// Emitted when the user leaves the settings page.
 pub struct CloseSettings;
@@ -405,12 +407,29 @@ impl SettingsScreen {
                 match outcome {
                     Ok((profile, has_secret)) => {
                         this.seed(profile, has_secret, cx);
-                        this.notice = notice.map(str::to_owned);
+                        if let Some(notice) = notice {
+                            this.show_notice(notice.to_owned(), cx);
+                        }
                     }
                     Err(error) if this.stored.is_none() => this.load = Load::Failed(failure(error)),
                     Err(error) => this.error = Some(failure(error)),
                 }
                 cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// A confirmation toast that leaves on its own.
+    fn show_notice(&mut self, message: String, cx: &mut Context<Self>) {
+        self.notice = Some(message.clone());
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(TOAST_DURATION).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.notice.as_deref() == Some(message.as_str()) {
+                    this.notice = None;
+                    cx.notify();
+                }
             });
         })
         .detach();
@@ -1310,10 +1329,7 @@ impl Render for SettingsScreen {
             panel
         } else {
             match &self.load {
-                Load::Loading => text_style(div(), TypeScale::BODY_SMALL)
-                    .text_color(theme.colors.text_muted())
-                    .child("Carregando configurações…")
-                    .into_any_element(),
+                Load::Loading => skeleton_list(&theme, "settings-skeleton", 4),
                 Load::Failed(message) => {
                     let message = message.clone();
                     let retry = self.button(
@@ -1354,25 +1370,13 @@ impl Render for SettingsScreen {
                         .flex()
                         .flex_col()
                         .gap(px(SpacingScale::S5))
-                        .child(status)
-                        .children(self.notice.clone().map(|notice| {
-                            banner(
-                                &theme,
-                                "settings-notice",
-                                theme.colors.status_success(),
-                                notice,
-                            )
-                            .role(Role::Status)
-                        }))
                         .children(self.error.clone().map(|error| {
-                            banner(
-                                &theme,
-                                "settings-error",
-                                theme.colors.status_danger(),
-                                error,
-                            )
-                            .role(Role::Alert)
+                            error_banner(&theme, &error)
+                                .id("settings-error")
+                                .role(Role::Alert)
+                                .rounded(theme.radius.control())
                         }))
+                        .child(status)
                         .child(extractor)
                         .children(key)
                         .child(preview)
@@ -1381,54 +1385,64 @@ impl Render for SettingsScreen {
                 }
             }
         };
-        div().size_full().flex().child(nav).child(
-            div()
-                .id(("settings-content", section as usize))
-                .flex_1()
-                .min_w(px(0.0))
-                .h_full()
-                .overflow_y_scroll()
-                .px(px(40.0))
-                .pt(px(32.0))
-                .pb(px(64.0))
-                .child(
-                    div()
-                        .w_full()
-                        .max_w(px(READING_WIDTH))
-                        .mx_auto()
-                        .flex()
-                        .flex_col()
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(SpacingScale::S4))
-                                .mb(px(28.0))
-                                .child(icon_tile(
-                                    &theme,
-                                    section.glyph(),
-                                    theme.colors.accent_hover(),
-                                    48.0,
-                                ))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .gap(px(2.0))
-                                        .child(
-                                            text_style(div(), TypeScale::HEADING_1)
-                                                .child(section.title()),
-                                        )
-                                        .child(
-                                            text_style(div(), TypeScale::BODY_SMALL)
-                                                .text_color(theme.colors.text_muted())
-                                                .child(section.subtitle()),
-                                        ),
-                                ),
-                        )
-                        .child(body),
-                ),
-        )
+        let notice = (section == SettingsSection::Ai)
+            .then(|| self.notice.clone())
+            .flatten()
+            .map(|notice| toast(&theme, &notice, 24.0));
+        div()
+            .size_full()
+            .relative()
+            .flex()
+            .child(nav)
+            .children(notice)
+            .child(
+                div()
+                    .id(("settings-content", section as usize))
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .h_full()
+                    .overflow_y_scroll()
+                    .px(px(40.0))
+                    .pt(px(32.0))
+                    .pb(px(64.0))
+                    .child(
+                        div()
+                            .w_full()
+                            .max_w(px(READING_WIDTH))
+                            .mx_auto()
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(SpacingScale::S4))
+                                    .mb(px(28.0))
+                                    .child(icon_tile(
+                                        &theme,
+                                        section.glyph(),
+                                        theme.colors.accent_hover(),
+                                        48.0,
+                                    ))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap(px(2.0))
+                                            .child(
+                                                text_style(div(), TypeScale::HEADING_1)
+                                                    .child(section.title()),
+                                            )
+                                            .child(
+                                                text_style(div(), TypeScale::BODY_SMALL)
+                                                    .text_color(theme.colors.text_muted())
+                                                    .child(section.subtitle()),
+                                            ),
+                                    ),
+                            )
+                            .child(body),
+                    ),
+            )
     }
 }
 

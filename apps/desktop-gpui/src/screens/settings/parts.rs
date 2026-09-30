@@ -81,28 +81,6 @@ pub(super) fn card_footer(theme: &Theme) -> Div {
         .bg(theme.colors.glass_fill_low())
 }
 
-pub(super) fn banner(
-    theme: &Theme,
-    id: &'static str,
-    color: Rgba,
-    message: String,
-) -> Stateful<Div> {
-    text_style(div(), TypeScale::BODY_SMALL)
-        .id(id)
-        .flex()
-        .items_center()
-        .gap(px(SpacingScale::S2))
-        .px(px(SpacingScale::S3))
-        .py(px(SpacingScale::S2))
-        .rounded(theme.radius.control())
-        .bg(tint(color, 0.08))
-        .border_1()
-        .border_color(tint(color, 0.3))
-        .text_color(theme.colors.text_primary())
-        .child(div().size(px(6.0)).flex_none().rounded_full().bg(color))
-        .child(message)
-}
-
 pub(super) fn field_row(theme: &Theme, label: &str, field: AnyElement) -> Div {
     div()
         .flex()

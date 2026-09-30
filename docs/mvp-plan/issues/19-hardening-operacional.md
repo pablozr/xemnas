@@ -29,7 +29,7 @@
 
 ## Dívida registrada
 
-- Tela Diagnostics (botão exportar diagnóstico) = sessão de front; contrato: `Diagnostics::new(store, settings)`, `export()`, tipos `DiagnosticsDocument/DiagnosticsError` + structs de seção reexportadas.
+- Tela Diagnostics (botão exportar diagnóstico): feita em Configurações › Diagnóstico (`03e47b3`, 30/09/2026); contrato: `Diagnostics::new(store, settings)`, `export()`, tipos `DiagnosticsDocument/DiagnosticsError` + structs de seção reexportadas.
 - Redação de conteúdo somente no adapter (limite de confiança da fronteira — acima).
 - `recent_assessments.error_code` é a coluna de código curto como armazenada (valor hostil escrito ali passaria; não é conteúdo substantivo — contrato de código).
 - `Diagnostics::new` toma `(store, settings)` (perfil/segredo fora da porta de storage) e `export()` é `Result`.
