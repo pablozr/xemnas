@@ -126,7 +126,6 @@ pub fn action_footer(theme: &Theme, message: Option<(&str, bool)>) -> Div {
         .gap(px(SpacingScale::S2))
         .border_t_1()
         .border_color(theme.colors.hairline_divider())
-        .bg(theme.colors.canvas())
         .child(
             text_style(div(), TypeScale::BODY_SMALL)
                 .flex_1()
@@ -157,7 +156,7 @@ pub fn toast(theme: &Theme, message: &str, bottom: f32) -> AnyElement {
         .rounded(theme.radius.surface())
         .border_1()
         .border_color(theme.colors.hairline_divider())
-        .bg(theme.colors.surface())
+        .bg(theme.colors.floating())
         .shadow(vec![gpui::BoxShadow::new(
             px(0.0),
             px(8.0),

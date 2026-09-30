@@ -629,8 +629,11 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             .flex()
             .flex_col()
             .bg(theme.colors.chrome())
-            .border_r_1()
-            .border_color(theme.colors.hairline_divider())
+            .when(!theme.colors.is_glass(), |sidebar| {
+                sidebar
+                    .border_r_1()
+                    .border_color(theme.colors.hairline_divider())
+            })
             .child(
                 div()
                     .px(px(SpacingScale::S4))

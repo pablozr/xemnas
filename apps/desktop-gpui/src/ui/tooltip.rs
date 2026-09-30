@@ -29,7 +29,7 @@ impl Render for Tooltip {
             .rounded(theme.radius.control())
             .border_1()
             .border_color(theme.colors.hairline_divider())
-            .bg(theme.colors.surface())
+            .bg(theme.colors.floating())
             .text_color(theme.colors.text_primary())
             .shadow(vec![gpui::BoxShadow::new(
                 px(0.0),

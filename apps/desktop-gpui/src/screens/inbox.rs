@@ -845,7 +845,7 @@ impl<S: InboxStore + Send + 'static> Render for InboxScreen<S> {
             .children(self.error.map(|message| error_banner(&theme, message).id("inbox-error").role(Role::Alert).children(retry)))
             .children(self.notice.map(|message| toast(&theme, message, 72.0)))
             .child(div().flex_1().min_h(px(0.0)).flex()
-                .child(div().w(px(320.0)).flex_none().h_full().flex().flex_col().bg(theme.colors.rail())
+                .child(div().w(px(320.0)).flex_none().h_full().flex().flex_col().bg(theme.colors.pane())
                     .border_r_1().border_color(theme.colors.hairline_divider())
                     .child(div().px(px(SpacingScale::S4)).pt(px(SpacingScale::S3)).pb(px(SpacingScale::S2)).flex().items_center().gap(px(SpacingScale::S2))
                         .child(panel_title(&theme, "Aguardando revisão"))

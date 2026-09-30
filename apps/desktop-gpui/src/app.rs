@@ -691,7 +691,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
             .rounded(theme.radius.dialog())
             .border_1()
             .border_color(theme.colors.hairline_divider())
-            .bg(theme.colors.surface())
+            .bg(theme.colors.floating())
             .shadow(vec![BoxShadow::new(
                 px(0.0),
                 px(24.0),
@@ -1022,8 +1022,10 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
             .flex()
             .items_center()
             .bg(theme.colors.chrome())
-            .border_b_1()
-            .border_color(theme.colors.hairline_divider())
+            .when(!theme.colors.is_glass(), |bar| {
+                bar.border_b_1()
+                    .border_color(theme.colors.hairline_divider())
+            })
             .child(
                 div()
                     .flex_1()
@@ -1086,8 +1088,34 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
                         .h_full()
                         .flex()
                         .flex_col()
-                        // Reading surfaces stay opaque over the material.
-                        .bg(theme.colors.canvas())
+                        .bg(theme.colors.content())
+                        // Over the material the content is a card: margins on
+                        // the free sides, flush against the sidebar, 10 px
+                        // radius, hairline edge and a card shadow (Fluent's
+                        // card pattern; Arc and Zen frame content the same way).
+                        .when(theme.colors.is_glass(), |content| {
+                            content
+                                .mr(px(SpacingScale::S2))
+                                .mb(px(SpacingScale::S2))
+                                .rounded(theme.radius.surface())
+                                .border_1()
+                                .border_color(theme.colors.glass_border_card())
+                                .overflow_hidden()
+                                .shadow(vec![
+                                    BoxShadow::new(
+                                        px(0.0),
+                                        px(8.0),
+                                        theme.colors.shadow_low().into(),
+                                    )
+                                    .blur_radius(px(24.0)),
+                                    BoxShadow::new(
+                                        px(0.0),
+                                        px(1.0),
+                                        theme.colors.inset_highlight().alpha(0.06).into(),
+                                    )
+                                    .inset(),
+                                ])
+                        })
                         // One bar: the project as breadcrumb (its properties open
                         // in a panel from there), then its destinations.
                         .children(selected.as_ref().map(|project| {
@@ -1126,7 +1154,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
                                             .rounded(theme.radius.surface())
                                             .border_1()
                                             .border_color(theme.colors.hairline_divider())
-                                            .bg(theme.colors.surface())
+                                            .bg(theme.colors.floating())
                                             .shadow(vec![BoxShadow::new(
                                                 px(0.0),
                                                 px(12.0),

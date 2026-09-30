@@ -766,7 +766,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
             .h_full()
             .flex()
             .flex_col()
-            .bg(t.colors.rail())
+            .bg(t.colors.pane())
             .border_l_1()
             .border_color(t.colors.hairline_divider())
             .child(
@@ -1406,13 +1406,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> Render for DecisionsScreen<
                 )
                 .into_any_element()
         };
-        let mut reader = div()
-            .flex_1()
-            .min_w(px(0.0))
-            .h_full()
-            .flex()
-            .flex_col()
-            .bg(t.colors.canvas());
+        let mut reader = div().flex_1().min_w(px(0.0)).h_full().flex().flex_col();
         if let Some(error) = self.error.clone() {
             reader = reader.child(error_banner(&t, &error).when(
                 self.editor.is_none() && self.preview.is_none(),
@@ -1451,7 +1445,6 @@ impl<S: DecisionStore + InboxStore + Send + 'static> Render for DecisionsScreen<
             .track_focus(&self.reader_focus)
             .size_full()
             .flex()
-            .bg(t.colors.canvas())
             .child(reader)
             .child(self.index(compact, cx))
     }

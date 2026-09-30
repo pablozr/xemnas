@@ -26,9 +26,13 @@ mas `docs/` é ignorado pelo Git: este arquivo é a regra versionável.
 - Cada paleta (Quiet Glass e Carvão) é uma tabela `Palette` em `tokens.rs`;
   toda cor nova precisa existir nas duas.
 - Glass é o material do Windows (Mica Alt por padrão; `XEMNAS_BACKDROP=acrylic`,
-  `mica` ou `none`) aparecendo atrás de `color.chrome` na barra de título e na
-  lateral, só com o sistema em modo escuro. Superfícies de leitura, painéis e
-  diálogos são sólidos: o GPUI não tem blur por elemento.
+  `mica` ou `none`), só com o sistema em modo escuro. Camadas, conforme o
+  Fluent: barra de título e lateral formam uma moldura translúcida sem emendas
+  (`color.chrome`); o conteúdo é um card flutuante (`color.content`, ~88%) com
+  8 px de margem, raio de 10 px, borda e sombra de card; painéis internos não
+  têm fundo próprio (`color.pane`); evidência e código ficam sólidos;
+  superfícies transitórias usam `color.floating`. O GPUI não tem blur por
+  elemento. Pesquisa: `docs/design-review/glass-research.md`.
 - Feedback: confirmações são toasts que saem sozinhos; erros recuperáveis são
   uma faixa no topo com a ação real de repetir; listas carregando mostram
   esqueleto; superfícies vazias usam `empty_panel` (marca, rótulo, título, o que

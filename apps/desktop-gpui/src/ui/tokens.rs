@@ -37,6 +37,8 @@ struct Palette {
     canvas_deep: Tone,
     rail: Tone,
     chrome_glass: Tone,
+    content_glass: Tone,
+    floating_glass: Tone,
     surface: Tone,
     surface_hover: Tone,
     selection: Tone,
@@ -57,6 +59,8 @@ const QUIET_GLASS: Palette = Palette {
     canvas_deep: Tone::solid(0x090D15),
     rail: Tone::solid(0x0A0E17),
     chrome_glass: Tone(0x0A0E17, 0.62),
+    content_glass: Tone(0x0D111A, 0.86),
+    floating_glass: Tone(0x181E2A, 0.94),
     surface: Tone::solid(0x181E2A),
     surface_hover: Tone::solid(0x202634),
     selection: Tone::solid(0x1C1A28),
@@ -77,6 +81,8 @@ const CHARCOAL: Palette = Palette {
     canvas_deep: Tone::solid(0x1B1B1F),
     rail: Tone::solid(0x1B1B1F),
     chrome_glass: Tone(0x1B1B1F, 0.66),
+    content_glass: Tone(0x202024, 0.88),
+    floating_glass: Tone(0x26262C, 0.95),
     surface: Tone::solid(0x26262C),
     surface_hover: Tone::solid(0x302B39),
     selection: Tone::solid(0x302B39),
@@ -141,6 +147,40 @@ impl ColorTokens {
             self.palette.chrome_glass.rgba()
         } else {
             self.rail()
+        }
+    }
+
+    /// `color.content` — the content card over the material (Fluent's content
+    /// layer: a low-opacity fill that lets the base tint through). Opaque
+    /// canvas when there is no material.
+    pub fn content(&self) -> Rgba {
+        if self.glass {
+            self.palette.content_glass.rgba()
+        } else {
+            self.canvas()
+        }
+    }
+
+    /// `color.pane` — a secondary list inside the content (review queue,
+    /// decision index). Over the material it has no fill of its own and is
+    /// separated by hairlines: GPUI clips children rectangularly, so a filled
+    /// pane would square off the card's rounded corners.
+    pub fn pane(&self) -> Rgba {
+        if self.glass {
+            self.rail().alpha(0.0)
+        } else {
+            self.rail()
+        }
+    }
+
+    /// `color.floating` — transient surfaces (palette, panels, toasts,
+    /// tooltips): nearly opaque over the material, as Fluent asks of text on
+    /// glass, and fully opaque without it.
+    pub fn floating(&self) -> Rgba {
+        if self.glass {
+            self.palette.floating_glass.rgba()
+        } else {
+            self.surface()
         }
     }
 
