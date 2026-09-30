@@ -64,6 +64,83 @@ pub fn reading_title(text: &str) -> Div {
         .font_weight(gpui::FontWeight::MEDIUM)
 }
 
+/// The reading column width shared by Revisão, Decisões and the editors.
+pub const READING_WIDTH: f32 = 760.0;
+
+/// A scrollable page with the reading column centred in it.
+pub fn reading_page(id: impl Into<ElementId>, column: impl IntoElement) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex_1()
+        .min_h(px(0.0))
+        .overflow_y_scroll()
+        .px(px(SpacingScale::S8))
+        .py(px(SpacingScale::S8))
+        .child(
+            div()
+                .w_full()
+                .max_w(px(READING_WIDTH))
+                .mx_auto()
+                .flex()
+                .flex_col()
+                .gap(px(SpacingScale::S6))
+                .child(column),
+        )
+}
+
+/// A labelled form field: section label above the control, optional hint.
+pub fn form_field(
+    theme: &Theme,
+    label: &str,
+    hint: Option<&str>,
+    control: impl IntoElement,
+) -> Div {
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(px(SpacingScale::S2))
+        .child(section_label(theme, label))
+        .child(control)
+        .when_some(hint, |field, hint| {
+            field.child(
+                text_style(div(), TypeScale::META)
+                    .text_color(theme.colors.text_muted())
+                    .child(hint.to_owned()),
+            )
+        })
+}
+
+/// The bar that holds a surface's actions, pinned under its scrolling
+/// content: Revisão's review actions and both editors share it. A message on
+/// the left explains why the primary action is unavailable.
+pub fn action_footer(theme: &Theme, message: Option<(&str, bool)>) -> Div {
+    div()
+        .flex_none()
+        .px(px(SpacingScale::S8))
+        .py(px(SpacingScale::S3))
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(px(SpacingScale::S2))
+        .border_t_1()
+        .border_color(theme.colors.hairline_divider())
+        .bg(theme.colors.canvas())
+        .child(
+            text_style(div(), TypeScale::BODY_SMALL)
+                .flex_1()
+                .min_w(px(0.0))
+                .when_some(message, |text, (message, danger)| {
+                    text.text_color(if danger {
+                        theme.colors.status_danger()
+                    } else {
+                        theme.colors.text_muted()
+                    })
+                    .child(message.to_owned())
+                }),
+        )
+}
+
 /// A status pill: dot plus text, never colour alone.
 pub fn status_pill(theme: &Theme, color: Rgba, label: &'static str) -> Div {
     text_style(div(), TypeScale::META)

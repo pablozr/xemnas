@@ -18,8 +18,8 @@ use crate::ui::controls::{action_button, ButtonKind};
 use crate::ui::glass::focus_ring;
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
-    count_chip, fade_in, hover_tint, mark_selected, panel_title, reading_title, section_label,
-    status_pill, track_hover, word_wrapped,
+    action_footer, count_chip, fade_in, hover_tint, mark_selected, panel_title, reading_title,
+    section_label, status_pill, track_hover, word_wrapped, READING_WIDTH,
 };
 use crate::ui::search_field::SearchField;
 use crate::ui::theme::{text_style, Theme};
@@ -67,9 +67,6 @@ pub struct InboxScreen<S: InboxStore + Send + 'static> {
     action_focus: [FocusHandle; 4],
     notice: Option<&'static str>,
 }
-
-/// The reading column shared with the Decisions document.
-const READING_WIDTH: f32 = 760.0;
 
 impl<S: InboxStore + Send + 'static> InboxScreen<S> {
     /// Composes the application use case without opening storage in the view.
@@ -397,17 +394,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             "Ajustar",
             "Confirmar",
         ];
-        div()
-            .flex_none()
-            .border_t_1()
-            .border_color(theme.colors.hairline_divider())
-            .px(px(SpacingScale::S8))
-            .py(px(SpacingScale::S3))
-            .bg(theme.colors.canvas())
-            .flex()
-            .flex_wrap()
-            .justify_end()
-            .gap(px(SpacingScale::S2))
+        action_footer(&theme, self.busy.then_some(("Registrando…", false)))
             .children(
                 [
                     ReviewAction::Reject,

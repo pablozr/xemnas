@@ -10,15 +10,13 @@ use crate::ui::{
     icons::{icon, IconName},
     patterns::{
         count_chip, fade_in, hover_tint, mark_selected, panel_title, reading_title, section_label,
-        status_pill, track_hover, word_wrapped,
+        status_pill, track_hover, word_wrapped, READING_WIDTH,
     },
     search_field::{SearchChanged, SearchField},
     theme::{text_style, Theme},
     tokens::{SpacingScale, TypeScale},
 };
 
-/// The reading column shared with the Revisão pane.
-const READING_WIDTH: f32 = 760.0;
 use application::decisions::{
     DecisionDetail, DecisionFilter, DecisionPage, DecisionSearchHit, DecisionSource,
     DecisionStatus, DecisionStore, DecisionSummary, Decisions, SearchQuery,
