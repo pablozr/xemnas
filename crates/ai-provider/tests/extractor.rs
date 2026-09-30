@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ai_provider::OpenAiCompatibleExtractor;
+use ai_provider::{test_connection, OpenAiCompatibleExtractor};
 use application::extract::{
     run_extraction, AssessmentRecord, AssessmentStore, CandidateExtractor, DecisionCandidateRecord,
     DecisionEvidence, EvidenceArtifact, ExtractError, ExtractionStore, RelevanceSignal, RunContext,
@@ -681,4 +681,59 @@ fn uuid_like() -> String {
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
     format!("{}-{nanos}", std::process::id())
+}
+
+/// Strict model answer that cites the synthetic connection-test artifacts.
+fn connection_test_body(evidence_ref: &str) -> Vec<u8> {
+    chat_body(
+        &serde_json::json!({
+            "proposals": [{
+                "question": "Onde persistir a fila de exemplo?",
+                "choice": "SQLite",
+                "rationale": "Aplicativo local.",
+                "confidence": 0.8,
+                "confidence_reason": "Troca explícita.",
+                "evidence_refs": [evidence_ref],
+                "diff_summary": { "files": [], "artifacts": 2 }
+            }]
+        })
+        .to_string(),
+    )
+}
+
+#[test]
+fn connection_test_sends_only_synthetic_evidence_and_validates() {
+    let server = start_server(
+        "HTTP/1.1 200 OK",
+        connection_test_body("00000000-0000-7000-8000-000000000001"),
+    );
+    let profile = granted_profile(server.port, 4_000);
+    let report = test_connection(&profile, "sk-synthetic".to_string()).expect("connection test");
+    assert_eq!(report.proposals, 1);
+    assert_eq!(server.requests.load(Ordering::SeqCst), 1);
+    let request = server.last_request.lock().expect("lock").clone();
+    assert!(
+        request.contains("fila de exemplo"),
+        "the request carries the synthetic evidence"
+    );
+}
+
+#[test]
+fn connection_test_without_consent_makes_no_request() {
+    let server = start_server(
+        "HTTP/1.1 200 OK",
+        connection_test_body("00000000-0000-7000-8000-000000000001"),
+    );
+    let profile = base_profile(server.port, 4_000);
+    let result = test_connection(&profile, "sk-synthetic".to_string());
+    assert!(matches!(result, Err(ExtractError::Extractor(_))));
+    assert_eq!(server.requests.load(Ordering::SeqCst), 0, "no network call");
+}
+
+#[test]
+fn connection_test_flags_an_answer_that_breaks_the_contract() {
+    let server = start_server("HTTP/1.1 200 OK", connection_test_body("not-an-artifact"));
+    let profile = granted_profile(server.port, 4_000);
+    let result = test_connection(&profile, "sk-synthetic".to_string());
+    assert_eq!(result.map_err(|error| error.code()), Err("validation"));
 }

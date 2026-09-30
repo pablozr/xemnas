@@ -24,12 +24,13 @@ pub use captures::{
     CaptureReceiptRecord, CaptureRepository, CaptureWrite, IngestError, IngestOutcome, Receipt,
 };
 pub use extract::{
-    fail_provider_setup, filter_relevant, input_hash, policy_snapshot, record_skipped_assessment,
-    run_extraction, truncate_content, AssessmentOutcome, AssessmentRecord, AssessmentStore,
-    CandidateExtractor, CandidateProposal, DecisionCandidateRecord, DecisionEvidence,
-    EvidenceArtifact, ExtractError, ExtractionReport, ExtractionStore, FakeCandidateExtractor,
-    ProviderSetupError, RelevanceSignal, RunContext, ERROR_CODE_CONSENT, ERROR_CODE_KEYSTORE,
-    ERROR_CODE_PROFILE, ERROR_CODE_PROVIDER_CONFIG, ERROR_CODE_SECRET, MAX_EVIDENCE_ARTIFACTS,
+    connection_test_evidence, fail_provider_setup, filter_relevant, input_hash, policy_snapshot,
+    record_skipped_assessment, run_connection_test, run_extraction, truncate_content,
+    AssessmentOutcome, AssessmentRecord, AssessmentStore, CandidateExtractor, CandidateProposal,
+    ConnectionTestReport, DecisionCandidateRecord, DecisionEvidence, EvidenceArtifact,
+    ExtractError, ExtractionReport, ExtractionStore, FakeCandidateExtractor, ProviderSetupError,
+    RelevanceSignal, RunContext, ERROR_CODE_CONSENT, ERROR_CODE_KEYSTORE, ERROR_CODE_PROFILE,
+    ERROR_CODE_PROVIDER_CONFIG, ERROR_CODE_SECRET, MAX_EVIDENCE_ARTIFACTS,
     MAX_EVIDENCE_CONTENT_BYTES,
 };
 // The Inbox port plumbing (`InboxStore`, `InboxQuery`, `Cursor`,

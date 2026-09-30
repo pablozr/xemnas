@@ -7,7 +7,8 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use application::extract::{
-    fail_provider_setup, input_hash, record_skipped_assessment, run_extraction, AssessmentOutcome,
+    connection_test_evidence, fail_provider_setup, filter_relevant, input_hash,
+    record_skipped_assessment, run_connection_test, run_extraction, AssessmentOutcome,
     AssessmentRecord, AssessmentStore, CandidateExtractor, CandidateProposal,
     DecisionCandidateRecord, DecisionEvidence, EvidenceArtifact, ExtractError, ExtractionStore,
     FakeCandidateExtractor, ProviderSetupError, RelevanceSignal, RunContext,
@@ -754,4 +755,45 @@ fn profile_unavailable_failure_records_a_safe_fallback_context() {
         "the hash must match a real run"
     );
     assert!(store.records().is_empty(), "no candidate rows");
+}
+
+#[test]
+fn connection_test_accepts_a_valid_structured_answer() {
+    let evidence = connection_test_evidence();
+    assert!(
+        !filter_relevant(&evidence).is_empty(),
+        "the synthetic evidence must dispatch the extractor like a real turn"
+    );
+    let report = run_connection_test(&FakeCandidateExtractor).expect("connection test");
+    assert_eq!(report.proposals, 1);
+}
+
+#[test]
+fn connection_test_reports_provider_and_contract_failures() {
+    assert!(matches!(
+        run_connection_test(&FailingExtractor),
+        Err(ExtractError::Extractor(_))
+    ));
+    let invalid = BadExtractor {
+        mutate: |proposal| proposal.evidence_refs = vec!["unknown-ref".to_string()],
+    };
+    assert_eq!(
+        run_connection_test(&invalid).map_err(|error| error.code()),
+        Err("validation")
+    );
+}
+
+#[test]
+fn connection_test_evidence_is_synthetic() {
+    let evidence = connection_test_evidence();
+    assert_eq!(evidence.capture_id, "connection-test");
+    assert!(evidence.adapter.is_none() && evidence.session_id.is_none());
+    for artifact in &evidence.artifacts {
+        assert!(
+            artifact.content.contains("sintético")
+                || artifact.content.contains("exemplo")
+                || artifact.content.contains("Exemplo"),
+            "only fixed fictitious content is sent"
+        );
+    }
 }

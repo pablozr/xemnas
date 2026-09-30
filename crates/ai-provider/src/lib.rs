@@ -28,8 +28,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use application::extract::{
-    truncate_content, CandidateExtractor, CandidateProposal, DecisionEvidence, ExtractError,
-    RelevanceSignal, MAX_DIFF_SUMMARY_FILES,
+    run_connection_test, truncate_content, CandidateExtractor, CandidateProposal,
+    ConnectionTestReport, DecisionEvidence, ExtractError, RelevanceSignal, MAX_DIFF_SUMMARY_FILES,
 };
 use application::profile::{consent_status, AiProfile, ProfileError, ProfileKind, SecretStore};
 use serde::{Deserialize, Serialize};
@@ -102,6 +102,28 @@ enum Attempt {
     Transient,
     /// A failure that must not be retried.
     Fatal(ExtractError),
+}
+
+/// Runs the Settings → IA "teste com resposta estruturada" (MVP-SPEC §8).
+///
+/// Sends only the fixed synthetic evidence from
+/// [`application::extract::connection_test_evidence`] through the same
+/// consent gate, request shape, retries and strict parsing as a real
+/// extraction, then validates the proposals. Nothing is persisted and no
+/// capture content leaves the machine. It blocks on the network: callers on
+/// the UI must run it off the UI thread (ASYNC-001).
+///
+/// # Errors
+///
+/// [`ExtractError::Extractor`] when consent is missing or stale, the profile
+/// is invalid or the provider call fails; [`ExtractError::Validation`] when the
+/// answer breaks the candidate contract.
+pub fn test_connection(
+    profile: &AiProfile,
+    secret: String,
+) -> Result<ConnectionTestReport, ExtractError> {
+    let extractor = OpenAiCompatibleExtractor::new(profile, secret)?;
+    run_connection_test(&extractor)
 }
 
 /// An OpenAI-compatible candidate extractor.
