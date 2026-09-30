@@ -322,9 +322,10 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
             .when(!selected, |tab| {
                 tab.hover(move |style| {
                     style
-                        .bg(theme.colors.hover_veil())
-                        .text_color(theme.colors.text_secondary())
+                        .bg(theme.colors.glass_fill_medium())
+                        .text_color(theme.colors.text_primary())
                 })
+                .active(move |style| style.bg(theme.colors.glass_fill_strong()))
             })
             .on_click(
                 cx.listener(move |this, _, window, cx| this.switch_to(destination, window, cx)),

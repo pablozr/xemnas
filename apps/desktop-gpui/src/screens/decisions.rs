@@ -614,7 +614,8 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                 .or_insert_with(|| cx.focus_handle().tab_stop(true))
                 .clone();
             let key_id = id.clone();
-            let hover = t.colors.hover_veil();
+            let hover = t.colors.glass_fill_medium();
+            let pressed = t.colors.glass_fill_strong();
             let row = div()
                 .id(format!("decision-{id}"))
                 .relative()
@@ -623,7 +624,10 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                 .flex()
                 .flex_col()
                 .gap(px(SpacingScale::S1))
-                .when(!active, |row| row.hover(move |style| style.bg(hover)))
+                .when(!active, |row| {
+                    row.hover(move |style| style.bg(hover))
+                        .active(move |style| style.bg(pressed))
+                })
                 .role(Role::Button)
                 .aria_label(question.clone())
                 .aria_selected(active)

@@ -445,7 +445,8 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
         let selected = self.selected.as_deref() == Some(&row.id);
         let id = row.id.clone();
         let key_id = id.clone();
-        let hover = theme.colors.hover_veil();
+        let hover = theme.colors.glass_fill_medium();
+        let pressed = theme.colors.glass_fill_strong();
         let element = div()
             .id((ElementId::from("candidate"), row.id.clone()))
             .relative()
@@ -454,7 +455,10 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             .flex()
             .flex_col()
             .gap(px(SpacingScale::S1))
-            .when(!selected, |row| row.hover(move |style| style.bg(hover)))
+            .when(!selected, |row| {
+                row.hover(move |style| style.bg(hover))
+                    .active(move |style| style.bg(pressed))
+            })
             .role(Role::Button)
             .aria_label(row.question.clone())
             .aria_selected(selected)

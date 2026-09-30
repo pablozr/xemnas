@@ -8,7 +8,7 @@
 //! the same ring statically for screenshots.
 
 use gpui::prelude::*;
-use gpui::{div, px, Div, ElementId, Rgba, Role, Stateful};
+use gpui::{div, px, BoxShadow, Div, ElementId, Rgba, Role, Stateful};
 
 use crate::ui::glass::{focus_ring as glass_focus_ring, GlassSurface, GlassVariant};
 use crate::ui::theme::{text_style, Theme};
@@ -97,22 +97,56 @@ pub fn action_button(
         .focus_visible(focus_ring(theme))
         .cursor_pointer();
     let button = button.text_color(button_foreground(theme, kind, enabled));
-    match kind {
-        ButtonKind::Primary if enabled => button
+    // GPUI has no style transitions, so each state has to read on its own:
+    // hover lifts the fill and the edge, press settles one step deeper, and a
+    // disabled control ignores both so it never looks clickable.
+    match (kind, enabled) {
+        (ButtonKind::Primary, true) => button
             .bg(colors.accent_emphasis())
-            .hover(move |style| style.bg(colors.accent_hover())),
-        ButtonKind::Primary => button.bg(colors.surface()),
-        ButtonKind::Secondary => button
             .border_1()
-            .border_color(colors.hairline_divider())
-            .hover(move |style| style.bg(colors.hover_veil())),
-        ButtonKind::Ghost => button.hover(move |style| style.bg(colors.hover_veil())),
+            .border_color(colors.emphasis_highlight())
+            .shadow(vec![BoxShadow::new(
+                px(0.0),
+                px(1.0),
+                colors.shadow_low().into(),
+            )])
+            .hover(move |style| {
+                style.bg(colors.accent_hover()).shadow(vec![BoxShadow::new(
+                    px(0.0),
+                    px(0.0),
+                    colors.glow_lavender_strong().into(),
+                )
+                .blur_radius(px(14.0))])
+            })
+            .active(move |style| style.bg(colors.accent_default()).shadow(vec![])),
+        (ButtonKind::Primary, false) => button.bg(colors.surface()),
+        (ButtonKind::Secondary, true) => button
+            .bg(colors.glass_fill_card())
+            .border_1()
+            .border_color(colors.glass_border_control())
+            .hover(move |style| {
+                style
+                    .bg(colors.glass_fill_medium())
+                    .border_color(colors.glass_border_card_hover())
+                    .text_color(colors.text_primary())
+            })
+            .active(move |style| style.bg(colors.glass_fill_strong())),
+        (ButtonKind::Secondary, false) => button.border_1().border_color(colors.hairline_divider()),
+        (ButtonKind::Ghost, true) => button
+            .hover(move |style| {
+                style
+                    .bg(colors.glass_fill_medium())
+                    .text_color(colors.text_primary())
+            })
+            .active(move |style| style.bg(colors.glass_fill_strong())),
+        (ButtonKind::Ghost, false) => button,
     }
 }
 
 /// A square icon-only ghost action (`control.sm`), for title and list headers.
 pub fn icon_action(theme: &Theme, id: impl Into<ElementId>, aria_label: &str) -> Stateful<Div> {
-    let hover = theme.colors.hover_veil();
+    let hover = theme.colors.glass_fill_medium();
+    let pressed = theme.colors.glass_fill_strong();
     div()
         .id(id)
         .size(px(ControlSize::SM))
@@ -122,6 +156,7 @@ pub fn icon_action(theme: &Theme, id: impl Into<ElementId>, aria_label: &str) ->
         .justify_center()
         .rounded(theme.radius.control())
         .hover(move |style| style.bg(hover))
+        .active(move |style| style.bg(pressed))
         .role(Role::Button)
         .aria_label(aria_label.to_string())
         .focus_visible(focus_ring(theme))

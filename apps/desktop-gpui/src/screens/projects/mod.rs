@@ -500,7 +500,8 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             .map(|(_, handle)| handle.clone())
             .unwrap_or_else(|| self.confirm_focus.clone());
         // Hover must not erase the persistent selection state.
-        let hover = theme.colors.hover_veil();
+        let hover = theme.colors.glass_fill_medium();
+        let pressed = theme.colors.glass_fill_strong();
         let row = div()
             .id((ElementId::from("project-entry"), id.clone()))
             .relative()
@@ -509,7 +510,10 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             .flex()
             .items_center()
             .gap(px(SpacingScale::S3))
-            .when(!selected, |row| row.hover(move |style| style.bg(hover)));
+            .when(!selected, |row| {
+                row.hover(move |style| style.bg(hover))
+                    .active(move |style| style.bg(pressed))
+            });
         mark_selected(row, theme, selected)
             .role(Role::Button)
             .aria_label(format!("Selecionar {}", summary.name()))

@@ -84,6 +84,12 @@ const CHARCOAL: Palette = Palette {
     status_danger: Tone::solid(0xE27F8D),
 };
 
+/// A token at another opacity: status tints and soft backgrounds are derived
+/// from their token instead of being new literals.
+pub fn tint(color: Rgba, alpha: f32) -> Rgba {
+    Rgba { a: alpha, ..color }
+}
+
 /// Color tokens from the Quiet Glass design system.
 ///
 /// Palette-specific values live in one [`Palette`] table per theme; the
@@ -360,6 +366,11 @@ impl ColorTokens {
     /// `glow.lavender` — diffuse edge light, never a saturated fill.
     pub fn glow_lavender(&self) -> Rgba {
         rgb(0xA89EBA).alpha(0.08)
+    }
+
+    /// `glow.lavender-strong` — halo under a hovered primary action.
+    pub fn glow_lavender_strong(&self) -> Rgba {
+        rgb(0xB3A5CB).alpha(0.35)
     }
 
     /// The inner top highlight, as an inset shadow colour.
