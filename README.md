@@ -36,8 +36,15 @@ to the agent as context, without the agent ever deciding for you.
   the conversation or diff excerpts it came from. You confirm, adjust, defer or reject it.
 - **Versioned decisions.** Revising creates a new version and keeps the previous one; every
   decision is searchable, carries its provenance and exports to Markdown or JSON.
+- **Project context at a glance.** A Context tab with the decisions in force, the project's
+  rules (assumptions, constraints, goals, conventions), how the agent receives them, and a
+  preview of the exact pack a task would get.
+- **Decisions that relate.** Mark what supersedes, depends on or conflicts with what; a
+  superseded decision leaves the agent's context but stays in history.
 - **Context back to the agent.** A Context Pack with the decisions in force, plus a read-only
   MCP server the agent can query when it needs to.
+- **Honest operations.** A connection test for the OpenCode integration and a diagnostics page
+  with latency, losses and retryable jobs, exported without any content.
 - **Local by default.** SQLite on your machine and an offline extractor. An external AI provider
   only runs after a preview of what leaves the machine and your explicit consent.
 - **Native app.** Rust + [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui),
