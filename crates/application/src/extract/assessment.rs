@@ -132,6 +132,8 @@ fn profile_adapter(profile: &AiProfile) -> &'static str {
     match profile.kind {
         ProfileKind::Fake => "fake",
         ProfileKind::OpenAiCompatible => "openai-compatible",
+        ProfileKind::ChatGptPlan => "chatgpt-plan",
+        ProfileKind::OpenCode => "opencode",
     }
 }
 
@@ -141,6 +143,8 @@ pub fn policy_snapshot(profile: &AiProfile) -> String {
         "kind": match profile.kind {
             ProfileKind::Fake => "fake",
             ProfileKind::OpenAiCompatible => "open_ai_compatible",
+            ProfileKind::ChatGptPlan => "chat_gpt_plan",
+            ProfileKind::OpenCode => "open_code",
         },
         "max_input_chars": profile.max_input_chars,
         "redaction_on_ingest": true,

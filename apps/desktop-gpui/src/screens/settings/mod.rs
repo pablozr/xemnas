@@ -769,6 +769,8 @@ impl SettingsScreen {
         let (id, glyph) = match kind {
             ProfileKind::Fake => ("settings-kind-local", IconName::Cpu),
             ProfileKind::OpenAiCompatible => ("settings-kind-external", IconName::Cloud),
+            ProfileKind::ChatGptPlan => ("settings-kind-chatgpt", IconName::Key),
+            ProfileKind::OpenCode => ("settings-kind-opencode", IconName::Link),
         };
         let focus = self
             .focus

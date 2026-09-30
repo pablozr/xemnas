@@ -390,6 +390,8 @@ where
             ai_profile.kind = match profile.kind {
                 ProfileKind::Fake => "fake".to_string(),
                 ProfileKind::OpenAiCompatible => "openai-compatible".to_string(),
+                ProfileKind::ChatGptPlan => "chatgpt-plan".to_string(),
+                ProfileKind::OpenCode => "opencode".to_string(),
             };
             ai_profile.provider = profile.endpoint.as_deref().and_then(endpoint_host);
             ai_profile.has_secret = status.map(|status| status.has_secret).unwrap_or(false);

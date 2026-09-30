@@ -121,6 +121,7 @@ fn external_profile(consented: bool) -> AiProfile {
         max_input_chars: 4_096,
         external_calls_enabled: true,
         consent: None,
+        chatgpt: None,
     };
     if !consented {
         return profile;

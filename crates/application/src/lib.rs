@@ -20,6 +20,7 @@ pub mod outbox;
 pub mod paths;
 pub mod profile;
 pub mod projects;
+pub mod providers;
 pub mod redact;
 pub mod relations;
 

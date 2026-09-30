@@ -15,14 +15,46 @@ pub const DEFAULT_MAX_INPUT_CHARS: usize = 8_192;
 pub const PREVIEW_CATEGORIES: &[&str] =
     &["user_text", "assistant_text", "diff_hunk", "tool_summary"];
 
-/// Which extractor a profile selects.
+/// Base URL of the OpenAI API used with a ChatGPT plan (ADR-0004).
+pub const CHATGPT_API_BASE: &str = "https://api.openai.com/v1";
+
+/// Default address of a local OpenCode server (`opencode serve`).
+pub const OPENCODE_DEFAULT_ENDPOINT: &str = "http://127.0.0.1:4096";
+
+/// Which extractor a profile selects (ADR-0004).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProfileKind {
     /// Deterministic, offline extractor; never touches the network.
     Fake,
-    /// OpenAI-compatible HTTP provider; requires explicit consent.
+    /// OpenAI-compatible HTTP provider: an API key, or a local model on a
+    /// loopback address (Ollama, LM Studio) that needs no key.
     OpenAiCompatible,
+    /// The user's ChatGPT plan through Sign in with ChatGPT.
+    ChatGptPlan,
+    /// A model configured in the user's local OpenCode server.
+    OpenCode,
+}
+
+/// Non-secret facts about the connected ChatGPT account. The refresh token
+/// lives only in the OS secret store; the access token only in memory.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChatGptAccount {
+    /// Client id issued at the first sign-in (`oaiapp_…`); reused afterwards.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+    /// Stable per-installation host identifier (`urn:uuid:…`).
+    pub host_id: String,
+    /// E-mail of the signed-in account, for the UI and the consent preview.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    /// OpenID subject of the signed-in account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+    /// Whether `chatgpt.tokens.use.direct` was granted (plan usage allowed).
+    #[serde(default)]
+    pub plan_usage: bool,
 }
 
 /// Recorded consent for external calls, tied to a preview hash.
@@ -55,6 +87,9 @@ pub struct AiProfile {
     pub external_calls_enabled: bool,
     /// Consent recorded when external calls were enabled.
     pub consent: Option<ConsentRecord>,
+    /// ChatGPT account facts; only meaningful for [`ProfileKind::ChatGptPlan`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chatgpt: Option<ChatGptAccount>,
 }
 
 fn default_max_input_chars() -> usize {
@@ -72,13 +107,78 @@ impl AiProfile {
         match self.kind {
             ProfileKind::Fake => Ok(()),
             ProfileKind::OpenAiCompatible => {
-                if self.model.trim().is_empty() {
-                    return Err(ProfileError::Invalid("o modelo é obrigatório".to_string()));
-                }
+                require_model(&self.model)?;
                 validate_endpoint(self.endpoint.as_deref().unwrap_or_default())?;
                 Ok(())
             }
+            ProfileKind::ChatGptPlan => {
+                require_model(&self.model)?;
+                if self.endpoint.is_some() {
+                    return Err(ProfileError::Invalid(
+                        "a conta ChatGPT usa o endereço da OpenAI".to_string(),
+                    ));
+                }
+                Ok(())
+            }
+            ProfileKind::OpenCode => {
+                if !self.model.contains('/') || self.model.trim().starts_with('/') {
+                    return Err(ProfileError::Invalid(
+                        "escolha um modelo do OpenCode no formato provedor/modelo".to_string(),
+                    ));
+                }
+                let endpoint = self.endpoint.as_deref().unwrap_or_default();
+                validate_endpoint(endpoint)?;
+                if !is_loopback_endpoint(endpoint) {
+                    return Err(ProfileError::Invalid(
+                        "o OpenCode precisa estar nesta máquina (endereço de loopback)".to_string(),
+                    ));
+                }
+                Ok(())
+            }
         }
+    }
+
+    /// The account under which this profile's credential lives in the
+    /// secret store: the API key, the ChatGPT refresh token or the OpenCode
+    /// server password. Separate names keep switching kinds from mixing them.
+    pub fn credential_account(&self) -> String {
+        match self.kind {
+            ProfileKind::Fake | ProfileKind::OpenAiCompatible => self.id.clone(),
+            ProfileKind::ChatGptPlan => format!("{}.chatgpt", self.id),
+            ProfileKind::OpenCode => format!("{}.opencode", self.id),
+        }
+    }
+
+    /// Whether extraction cannot run without a stored credential. A local
+    /// model on loopback and OpenCode (password optional) need none.
+    pub fn credential_required(&self) -> bool {
+        match self.kind {
+            ProfileKind::Fake | ProfileKind::OpenCode => false,
+            ProfileKind::OpenAiCompatible => {
+                !self.endpoint.as_deref().is_some_and(is_loopback_endpoint)
+            }
+            ProfileKind::ChatGptPlan => true,
+        }
+    }
+}
+
+fn require_model(model: &str) -> Result<(), ProfileError> {
+    if model.trim().is_empty() {
+        return Err(ProfileError::Invalid("o modelo é obrigatório".to_string()));
+    }
+    Ok(())
+}
+
+/// Whether `endpoint` is an http(s) URL on a loopback IP (local model or
+/// OpenCode on this machine).
+pub fn is_loopback_endpoint(endpoint: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(endpoint) else {
+        return false;
+    };
+    match parsed.host() {
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        _ => false,
     }
 }
 
@@ -92,6 +192,7 @@ pub fn offline_default_profile() -> AiProfile {
         max_input_chars: DEFAULT_MAX_INPUT_CHARS,
         external_calls_enabled: false,
         consent: None,
+        chatgpt: None,
     }
 }
 
@@ -217,7 +318,7 @@ pub fn consent_status(profile: &AiProfile) -> Result<(), &'static str> {
     if profile.validate().is_err() {
         return Err("configuração do provedor inválida");
     }
-    if profile.kind != ProfileKind::OpenAiCompatible {
+    if profile.kind == ProfileKind::Fake {
         return Err("apenas perfis externos exigem consentimento");
     }
     if !profile.external_calls_enabled {
@@ -279,6 +380,10 @@ pub struct ConsentPreview {
     pub redaction_on_ingest: bool,
     /// Approximate total characters for a full-size request.
     pub total_approximate_chars: usize,
+    /// The account whose plan is used (ChatGPT e-mail). Absent for the other
+    /// kinds, so their previews and consent hashes are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
 }
 
 /// Builds the consent preview for a profile.
@@ -291,13 +396,21 @@ pub fn build_preview(profile: &AiProfile) -> ConsentPreview {
         })
         .collect();
     let total_approximate_chars = profile.max_input_chars.saturating_mul(categories.len());
+    // The ChatGPT plan always goes to the OpenAI API, whatever the profile
+    // file says; the preview names that destination and the account.
+    let destination = match profile.kind {
+        ProfileKind::ChatGptPlan => Some(CHATGPT_API_BASE),
+        _ => profile.endpoint.as_deref(),
+    };
     ConsentPreview {
         kind: match profile.kind {
             ProfileKind::Fake => "fake".to_string(),
             ProfileKind::OpenAiCompatible => "open_ai_compatible".to_string(),
+            ProfileKind::ChatGptPlan => "chat_gpt_plan".to_string(),
+            ProfileKind::OpenCode => "open_code".to_string(),
         },
-        endpoint_host: profile.endpoint.as_deref().and_then(endpoint_host),
-        endpoint_fingerprint: profile.endpoint.as_deref().and_then(|endpoint| {
+        endpoint_host: destination.and_then(endpoint_host),
+        endpoint_fingerprint: destination.and_then(|endpoint| {
             validate_endpoint(endpoint)
                 .ok()
                 .map(|()| artifact_fingerprint(endpoint))
@@ -306,6 +419,13 @@ pub fn build_preview(profile: &AiProfile) -> ConsentPreview {
         categories,
         redaction_on_ingest: true,
         total_approximate_chars,
+        account: match profile.kind {
+            ProfileKind::ChatGptPlan => profile
+                .chatgpt
+                .as_ref()
+                .and_then(|account| account.email.clone().or_else(|| account.subject.clone())),
+            _ => None,
+        },
     }
 }
 
@@ -349,13 +469,17 @@ pub fn preview_hash(preview: &ConsentPreview) -> String {
 }
 
 /// Grants consent to a profile, returning the updated profile.
+///
+/// `credential_ready` says whether the credential the kind needs is present:
+/// the API key for a remote endpoint, the ChatGPT sign-in with plan usage.
+/// Kinds that need no credential pass `true`.
 pub fn grant_consent(
     profile: &AiProfile,
     preview: &ConsentPreview,
     now: &str,
-    has_secret: bool,
+    credential_ready: bool,
 ) -> Result<AiProfile, ProfileError> {
-    if profile.kind != ProfileKind::OpenAiCompatible {
+    if profile.kind == ProfileKind::Fake {
         return Err(ProfileError::Invalid(
             "apenas perfis externos exigem consentimento".to_string(),
         ));
@@ -366,9 +490,15 @@ pub fn grant_consent(
             "a prévia de consentimento mudou; gere novamente".to_string(),
         ));
     }
-    if !has_secret {
+    if profile.credential_required() && !credential_ready {
         return Err(ProfileError::Invalid(
-            "configure a chave do provedor antes de consentir".to_string(),
+            match profile.kind {
+                ProfileKind::ChatGptPlan => {
+                    "entre com a conta ChatGPT e permita o uso do plano antes de consentir"
+                }
+                _ => "configure a chave do provedor antes de consentir",
+            }
+            .to_string(),
         ));
     }
     let mut granted = profile.clone();
@@ -393,8 +523,26 @@ pub fn revoke_consent(profile: &AiProfile) -> AiProfile {
 pub struct AiStatus {
     /// Extractor selected by the stored profile.
     pub choice: ExtractorChoice,
-    /// Whether a secret is stored for the profile.
+    /// Whether a credential is stored for the profile's kind.
     pub has_secret: bool,
+}
+
+/// A completed ChatGPT sign-in, before it is stored.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SignedIn {
+    /// Account facts to keep in the profile.
+    pub account: ChatGptAccount,
+    /// Refresh token for the secret store; never logged or displayed.
+    pub refresh_token: String,
+}
+
+impl std::fmt::Debug for SignedIn {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SignedIn")
+            .field("account", &self.account)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Facade used by the desktop settings screen and the composition root.
@@ -447,31 +595,93 @@ where
         self.secrets.get_secret(account)
     }
 
-    /// Grants consent using the stored secret, and persists the profile.
+    /// Grants consent when the kind's credential is ready, and persists the
+    /// profile.
     pub fn grant(
         &self,
         profile: &AiProfile,
         preview: &ConsentPreview,
         now: &str,
     ) -> Result<AiProfile, ProfileError> {
-        let has_secret = self.secrets.get_secret(&profile.id)?.is_some();
-        let granted = grant_consent(profile, preview, now, has_secret)?;
+        let granted = grant_consent(profile, preview, now, self.credential_ready(profile)?)?;
         self.profiles.save(&granted)?;
         Ok(granted)
     }
 
-    /// Revokes consent, disables external calls and deletes the stored secret.
+    /// Whether the credential `profile` needs is present (always true for
+    /// kinds that need none).
+    pub fn credential_ready(&self, profile: &AiProfile) -> Result<bool, ProfileError> {
+        if !profile.credential_required() {
+            return Ok(true);
+        }
+        let stored = self
+            .secrets
+            .get_secret(&profile.credential_account())?
+            .is_some();
+        Ok(match profile.kind {
+            ProfileKind::ChatGptPlan => {
+                stored
+                    && profile
+                        .chatgpt
+                        .as_ref()
+                        .is_some_and(|account| account.plan_usage)
+            }
+            _ => stored,
+        })
+    }
+
+    /// Revokes consent and disables external calls. For an API-key profile
+    /// the key is deleted too; a ChatGPT sign-in stays until the user signs out.
     pub fn revoke(&self, profile: &AiProfile) -> Result<AiProfile, ProfileError> {
         let revoked = revoke_consent(profile);
         self.profiles.save(&revoked)?;
-        self.secrets.delete_secret(&profile.id)?;
+        if profile.kind == ProfileKind::OpenAiCompatible {
+            self.secrets.delete_secret(&profile.credential_account())?;
+        }
         Ok(revoked)
     }
 
-    /// Reports the current extractor choice and secret presence.
+    /// Stores a completed ChatGPT sign-in: refresh token in the secret store,
+    /// account facts in the profile. Signing into another account than the
+    /// consented one changes the preview, so consent must be given again.
+    pub fn store_sign_in(
+        &self,
+        profile: &AiProfile,
+        signed_in: SignedIn,
+    ) -> Result<AiProfile, ProfileError> {
+        let mut updated = profile.clone();
+        updated.kind = ProfileKind::ChatGptPlan;
+        updated.endpoint = None;
+        updated.chatgpt = Some(signed_in.account);
+        self.secrets
+            .set_secret(&updated.credential_account(), &signed_in.refresh_token)?;
+        self.save(&updated)?;
+        Ok(updated)
+    }
+
+    /// Forgets the ChatGPT sign-in: deletes the refresh token, disables
+    /// external calls and keeps the issued client id and host id for the next
+    /// sign-in (ADR-0004).
+    pub fn forget_sign_in(&self, profile: &AiProfile) -> Result<AiProfile, ProfileError> {
+        let mut updated = revoke_consent(profile);
+        let account = format!("{}.chatgpt", profile.id);
+        if let Some(chatgpt) = updated.chatgpt.as_mut() {
+            chatgpt.email = None;
+            chatgpt.subject = None;
+            chatgpt.plan_usage = false;
+        }
+        self.secrets.delete_secret(&account)?;
+        self.save(&updated)?;
+        Ok(updated)
+    }
+
+    /// Reports the current extractor choice and credential presence.
     pub fn status(&self) -> Result<AiStatus, ProfileError> {
         let profile = self.load_or_seed()?;
-        let has_secret = self.secrets.get_secret(&profile.id)?.is_some();
+        let has_secret = self
+            .secrets
+            .get_secret(&profile.credential_account())?
+            .is_some();
         Ok(AiStatus {
             choice: choose_extractor(Some(&profile)),
             has_secret,
@@ -517,6 +727,7 @@ mod tests {
             max_input_chars: 4_096,
             external_calls_enabled: false,
             consent: None,
+            chatgpt: None,
         }
     }
 
@@ -924,6 +1135,133 @@ mod tests {
             settings.status().expect("status").choice,
             ExtractorChoice::ExternalBlocked
         );
+        assert!(!settings.status().expect("status").has_secret);
+    }
+
+    fn chatgpt_profile() -> AiProfile {
+        AiProfile {
+            kind: ProfileKind::ChatGptPlan,
+            model: "gpt-plan".to_string(),
+            endpoint: None,
+            chatgpt: Some(super::ChatGptAccount {
+                client_id: Some("oaiapp_test".to_string()),
+                host_id: "urn:uuid:00000000-0000-4000-8000-000000000000".to_string(),
+                email: Some("person@example.test".to_string()),
+                subject: Some("sub-1".to_string()),
+                plan_usage: true,
+            }),
+            ..external_profile()
+        }
+    }
+
+    #[test]
+    fn existing_profiles_keep_their_preview_and_consent() {
+        let preview = serde_json::to_string(&build_preview(&external_profile())).expect("json");
+        assert!(!preview.contains("account"), "no new key for the old kinds");
+        let legacy = "{\"id\":\"x\",\"kind\":\"open_ai_compatible\",\"model\":\"m\",            \"endpoint\":\"https://api.example.test/v1\",\"consent\":null}";
+        let loaded: AiProfile = serde_json::from_str(legacy).expect("old file still loads");
+        assert_eq!(loaded.chatgpt, None);
+    }
+
+    #[test]
+    fn new_kinds_validate_their_destination() {
+        let mut chatgpt = chatgpt_profile();
+        assert!(chatgpt.validate().is_ok());
+        chatgpt.endpoint = Some("https://elsewhere.test/v1".to_string());
+        assert!(
+            chatgpt.validate().is_err(),
+            "the plan always goes to OpenAI"
+        );
+
+        let mut opencode = AiProfile {
+            kind: ProfileKind::OpenCode,
+            model: "anthropic/claude-test".to_string(),
+            endpoint: Some(super::OPENCODE_DEFAULT_ENDPOINT.to_string()),
+            ..external_profile()
+        };
+        assert!(opencode.validate().is_ok());
+        opencode.model = "no-provider".to_string();
+        assert!(opencode.validate().is_err());
+        opencode.model = "anthropic/claude-test".to_string();
+        opencode.endpoint = Some("https://remote.example.test".to_string());
+        assert!(
+            opencode.validate().is_err(),
+            "OpenCode must be on this machine"
+        );
+    }
+
+    #[test]
+    fn credentials_are_required_only_where_the_kind_needs_them() {
+        let mut local = external_profile();
+        local.endpoint = Some("http://127.0.0.1:11434/v1".to_string());
+        assert!(!local.credential_required(), "a local model needs no key");
+        assert!(external_profile().credential_required());
+        assert!(chatgpt_profile().credential_required());
+        assert_eq!(chatgpt_profile().credential_account(), "profile-1.chatgpt");
+        assert_eq!(external_profile().credential_account(), "profile-1");
+
+        let granted = grant_consent(&local, &build_preview(&local), "now", false)
+            .expect("local model consents without a key");
+        assert_eq!(
+            choose_extractor(Some(&granted)),
+            ExtractorChoice::ExternalEnabled
+        );
+        assert!(grant_consent(
+            &chatgpt_profile(),
+            &build_preview(&chatgpt_profile()),
+            "now",
+            false
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn chatgpt_consent_is_bound_to_the_account() {
+        let profile = chatgpt_profile();
+        let preview = build_preview(&profile);
+        assert_eq!(preview.endpoint_host.as_deref(), Some("api.openai.com"));
+        assert_eq!(preview.account.as_deref(), Some("person@example.test"));
+        let granted = grant_consent(&profile, &preview, "now", true).expect("grant");
+        let mut other = granted.clone();
+        other.chatgpt.as_mut().expect("account").email = Some("other@example.test".into());
+        assert!(
+            consent_status(&other).is_err(),
+            "another account needs a new consent"
+        );
+    }
+
+    #[test]
+    fn sign_in_is_stored_and_forgotten_through_the_secret_store() {
+        let settings = AiSettings::new(MemoryProfiles::default(), MemorySecrets::default());
+        let profile = settings.load_or_seed().expect("seed");
+        let mut account = chatgpt_profile().chatgpt.expect("account");
+        account.plan_usage = true;
+        let stored = settings
+            .store_sign_in(
+                &AiProfile {
+                    model: "gpt-plan".to_string(),
+                    ..profile
+                },
+                super::SignedIn {
+                    account,
+                    refresh_token: "refresh-synthetic".to_string(),
+                },
+            )
+            .expect("store");
+        assert_eq!(stored.kind, ProfileKind::ChatGptPlan);
+        assert!(settings.credential_ready(&stored).expect("ready"));
+        let preview = settings.preview(&stored);
+        let granted = settings.grant(&stored, &preview, "now").expect("grant");
+        assert_eq!(
+            settings.status().expect("status").choice,
+            ExtractorChoice::ExternalEnabled
+        );
+
+        let forgotten = settings.forget_sign_in(&granted).expect("forget");
+        assert!(!forgotten.external_calls_enabled);
+        let kept = forgotten.chatgpt.expect("client id kept");
+        assert_eq!(kept.client_id.as_deref(), Some("oaiapp_test"));
+        assert!(!kept.plan_usage);
         assert!(!settings.status().expect("status").has_secret);
     }
 }

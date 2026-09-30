@@ -199,6 +199,7 @@ fn settings() -> AiSettings<MemoryProfiles, MemorySecrets> {
         max_input_chars: 4_096,
         external_calls_enabled: true,
         consent: None,
+        chatgpt: None,
     };
     profile.consent = Some(ConsentRecord {
         granted_at: "2026-01-01T00:00:00Z".to_string(),

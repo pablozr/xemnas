@@ -190,6 +190,7 @@ fn base_profile(port: u16, max_input_chars: usize) -> AiProfile {
         max_input_chars,
         external_calls_enabled: false,
         consent: None,
+        chatgpt: None,
     }
 }
 
