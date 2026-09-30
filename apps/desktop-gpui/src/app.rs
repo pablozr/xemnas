@@ -101,6 +101,7 @@ enum Command {
     ProjectPanel,
     OpenFolder,
     ToggleTheme,
+    OpenSettings,
 }
 
 /// The open palette: its query field and highlighted row.
@@ -558,6 +559,16 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
             shortcut: None,
             command: Command::ToggleTheme,
         });
+        if self.settings.is_some() {
+            items.push(PaletteItem {
+                group: "Ações",
+                label: "Configurações".into(),
+                detail: None,
+                glyph: IconName::Settings,
+                shortcut: None,
+                command: Command::OpenSettings,
+            });
+        }
         items
     }
 
@@ -621,6 +632,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
                 }
             }
             Command::ToggleTheme => self.toggle_theme(window, cx),
+            Command::OpenSettings => self.toggle_settings(window, cx),
         }
         cx.notify();
     }
