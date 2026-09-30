@@ -2,11 +2,13 @@
 #![warn(missing_docs)]
 
 pub mod claims;
+pub mod entities;
 pub mod projects;
 pub mod relations;
 pub mod time;
 
 pub use claims::{ClaimError, ClaimKind, ContextClaim, MAX_STATEMENT_CHARS};
+pub use entities::{EdgeKind, EdgeOrigin, EntityError, EntityKind, NodeKind};
 pub use projects::{Project, ProjectId, ProjectLocation, ProjectSummary};
 pub use relations::{DecisionRelation, RelationError, RelationKind};
 pub use time::Timestamp;

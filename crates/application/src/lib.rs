@@ -12,6 +12,7 @@ pub mod decisions;
 pub mod diagnostics;
 pub mod export;
 pub mod extract;
+pub mod graph;
 pub mod inbox;
 pub mod injection;
 pub mod integration;

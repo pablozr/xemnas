@@ -70,6 +70,7 @@ fn removal_with_data_deletes_only_that_project_after_the_typed_name() {
             claims: 1,
             captures: 1,
             injections: 1,
+            entities: 0,
         }
     );
     assert!(

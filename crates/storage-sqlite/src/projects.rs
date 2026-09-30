@@ -92,6 +92,7 @@ impl ProjectRepository for SqliteStore {
                  WHERE canonical_path = (SELECT location FROM projects WHERE id = ?1)",
             )?,
             injections: count("SELECT COUNT(*) FROM context_injections WHERE project_id = ?1")?,
+            entities: count("SELECT COUNT(*) FROM entities WHERE project_id = ?1")?,
         })
     }
 
@@ -114,6 +115,10 @@ impl ProjectRepository for SqliteStore {
 /// Deletes a project's rows child-first; captures cascade to artifacts,
 /// checkpoints, assessments and candidates.
 const PURGE_STATEMENTS: &[&str] = &[
+    "DELETE FROM entity_edges WHERE project_id = ?1",
+    "DELETE FROM entity_patterns WHERE entity_id IN      (SELECT entity_id FROM entities WHERE project_id = ?1)",
+    "DELETE FROM entity_aliases WHERE entity_id IN      (SELECT entity_id FROM entities WHERE project_id = ?1)",
+    "DELETE FROM entities WHERE project_id = ?1",
     "DELETE FROM context_injections WHERE project_id = ?1",
     "DELETE FROM claims_fts WHERE claim_id IN \
      (SELECT claim_id FROM context_claims WHERE project_id = ?1)",

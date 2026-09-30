@@ -129,6 +129,85 @@ pub fn decision(
         .decision_id
 }
 
+/// Confirms a decision whose own capture changed `files` and carries `diff`
+/// as a `diff_hunk`, and returns the decision id.
+pub fn decision_with_diff(
+    store: &SqliteStore,
+    project: &str,
+    key: &str,
+    question: &str,
+    files: &[&str],
+    diff: &str,
+) -> String {
+    let capture = format!("capture-{key}");
+    let at = "2026-01-02T00:00:00Z".to_string();
+    store
+        .insert_capture(&CaptureWrite {
+            receipt: CaptureReceiptRecord {
+                capture_id: capture.clone(),
+                idempotency_key: format!("key-{capture}"),
+                canonical_path: format!("C:/synthetic/{project}"),
+                received_at: at.clone(),
+                artifact_count: 1,
+            },
+            artifacts: vec![CaptureArtifactRecord {
+                capture_id: capture.clone(),
+                artifact_id: format!("art-{key}"),
+                kind: "diff_hunk".to_string(),
+                content: diff.to_string(),
+                metadata: "{}".to_string(),
+                fingerprint: format!("{:0>64}", key.len() + 7),
+            }],
+            job: JobRecord {
+                id: format!("job-{capture}"),
+                kind: ANALYZE_CAPTURE_KIND.to_string(),
+                payload: capture.clone(),
+                state: JobState::Queued,
+                idempotent: true,
+                attempts: 0,
+                last_error: None,
+                created_at: at.clone(),
+                updated_at: at.clone(),
+            },
+            checkpoint: CaptureCheckpointRecord {
+                adapter: "opencode".to_string(),
+                adapter_version: "0.1.0".to_string(),
+                session_id: format!("session-{key}"),
+                message_id: format!("message-{key}"),
+                capture_id: capture.clone(),
+                observed_at: at.clone(),
+                updated_at: at.clone(),
+            },
+        })
+        .expect("seed capture");
+    let id = format!("cand-{key}");
+    let files: Vec<String> = files.iter().map(|file| format!("\"{file}\"")).collect();
+    store
+        .insert_candidates(&[DecisionCandidateRecord {
+            id: id.clone(),
+            project_id: project.to_string(),
+            capture_id: capture,
+            status: "pending".to_string(),
+            question: question.to_string(),
+            choice: format!("escolha de {key}"),
+            rationale: format!("motivo de {key}"),
+            signals: "[\"public_contract\"]".to_string(),
+            confidence: 0.7,
+            confidence_reason: "sintético".to_string(),
+            evidence_refs: format!("[\"art-{key}\"]"),
+            diff_summary: format!("{{\"files\":[{}],\"artifacts\":1}}", files.join(",")),
+            dedup_hash: format!("dedup-{key}"),
+            created_at: at.clone(),
+            updated_at: at,
+        }])
+        .expect("insert candidate");
+    let edits: Option<CandidateEdits> = None;
+    Inbox::new(store.clone())
+        .confirm(&id, edits)
+        .expect("confirm candidate")
+        .decision_id
+}
+
 /// Edits with only the rationale set.
 pub fn rationale(text: &str) -> DecisionEdits {
     DecisionEdits {

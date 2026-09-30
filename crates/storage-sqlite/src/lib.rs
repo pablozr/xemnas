@@ -10,6 +10,7 @@ mod context_settings;
 mod decisions;
 mod diagnostics;
 mod extraction;
+mod graph;
 mod inbox;
 mod injections;
 mod integration;

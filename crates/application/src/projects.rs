@@ -105,6 +105,8 @@ pub struct RemovalImpact {
     pub captures: i64,
     /// Context injection audit rows.
     pub injections: i64,
+    /// Components and technologies of the map, with their links.
+    pub entities: i64,
 }
 
 impl RemovalImpact {

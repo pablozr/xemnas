@@ -1,6 +1,6 @@
-# Fase 4 (proposta) — grafo de entidades do projeto
+# Fase 4 — grafo de entidades do projeto
 
-**Status: proposta, não iniciada.** Implementar só depois da semana de uso real, se os sinais abaixo aparecerem. Exige ADR antes do código (SCOPE-001).
+**Status: em implementação**, conforme [ADR-0005](../../arquitetura/adr/0005-grafo-de-entidades.md), que decide começar antes da semana de uso real. O ADR é a regra vigente; este plano fica como fundamento.
 
 ## Ideia em uma frase
 

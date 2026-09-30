@@ -1,0 +1,67 @@
+# ADR-0005: Grafo de entidades do projeto
+
+- **Status:** aceito
+- **Data:** 2026-09-30
+- **Contexto:** a busca de contexto é lexical (FTS5, AD-14). Quando o pedido ao agente não cita as palavras certas ("corrige esse bug"), o contexto certo não vem, e não há como perguntar "o que vale para este arquivo?" ou "o que depende do SQLite?". O plano `docs/roadmap/fase-4/00-plano-grafo-de-entidades.md` propunha ligar decisões e claims às coisas concretas do projeto. O usuário decidiu implementar o plano completo agora, antes do uso diário, em vez de esperar os sinais de uso real que o plano pedia.
+- **Decisão:** um grafo tipado, temporal e confirmado por humano, guardado no SQLite do app, sem banco de grafo e sem extração por IA.
+
+## Modelo
+
+| Peça | Campos | Regra |
+| --- | --- | --- |
+| **Entidade** | projeto, tipo (`component` ou `technology`), nome, chave normalizada, descrição, criada em, aposentada em | chave = nome em minúsculas só com letras e dígitos; única por projeto e tipo; aposentar nunca apaga |
+| **Padrão de caminho** | entidade (componente), glob relativo | como o CODEOWNERS: `*`, `**`, `?`; sem `..`, sem caminho absoluto |
+| **Alias** | entidade, texto, chave | "SQLite 3" e "sqlite" resolvem para a mesma tecnologia |
+| **Aresta** | tipo, origem (decisão, claim ou entidade), entidade alvo, procedência (`human` ou `derived`), motivo, criada em, confirmada em, invalidada em | nunca apagada: invalidar marca `invalidated_at` |
+
+Tipos de aresta:
+
+- `affects`: decisão → componente;
+- `uses`: decisão → tecnologia;
+- `applies_to`: claim → componente ou tecnologia;
+- `part_of`: componente → componente, sem ciclo.
+
+Uma aresta `human` nasce confirmada. Uma `derived` nasce como **sugestão** (sem `confirmed_at`) e só vale depois de confirmada. Rejeitar uma sugestão a invalida, e a derivação não a propõe de novo.
+
+## Como o grafo nasce (sem IA)
+
+- **Componentes propostos** a partir dos arquivos que as decisões realmente tocaram (`diff_summary.files` do candidato de origem): o prefixo `crates/<nome>`, `apps/<nome>`, `packages/<nome>`, `adapters/<nome>`, `libs/<nome>`, `services/<nome>` ou `modules/<nome>`, senão a primeira pasta. A proposta vira entidade só com um clique do usuário.
+- **Sugestões `affects`**: arquivos de uma decisão vigente que casam com o padrão de um componente.
+- **Tecnologias propostas e sugestões `uses`**: dependências adicionadas em `Cargo.toml` ou `package.json` nos diffs de evidência da decisão, resolvidas por chave ou alias.
+- **Ação do usuário**: qualquer entidade, padrão, alias ou aresta, confirmada na hora.
+
+A derivação é determinística e roda sob demanda ("Atualizar sugestões"). Ela não lê o disco do repositório, só o que o app já capturou.
+
+## Consultas
+
+Todas aceitam `as_of`. Uma aresta vale em `t` quando foi confirmada até `t` e não foi invalidada até `t`. Uma entidade existe entre a criação e a aposentadoria. Uma decisão vale até ser substituída.
+
+- **Mapa do projeto**: componentes e tecnologias vivos, com decisões vigentes, claims válidas, última atividade e conflitos por entidade, mais as arestas `part_of`.
+- **Vizinhança**: um nó (decisão, claim ou entidade) e o que está a até 2 saltos (arestas do grafo e relações entre decisões), truncada em N nós com o aviso `truncated`.
+- **Lente de arquivo**: caminho → componentes cujo padrão casa → decisões vigentes que os afetam e claims válidas que se aplicam.
+- **Impacto**: a partir de uma entidade ou decisão, as decisões que dependem dela, transitivamente (`depends_on`).
+- **Linha do tempo**: eventos datados do projeto (decisão confirmada ou substituída, claim começa ou termina, entidade criada ou aposentada, aresta confirmada ou invalidada) num intervalo.
+- **Conflitos**: pares `conflicts_with` vigentes que tocam a mesma entidade.
+
+## Uso pelo agente
+
+- O Context Pack aceita arquivos: decisões e claims ligados aos componentes desses arquivos entram antes da busca lexical, dentro do mesmo orçamento.
+- O MCP ganha `file_context` (lente de arquivo) e `search_context` aceita `path`, ambos somente leitura, pela API local.
+
+## Interface
+
+Uma aba **Mapa** no projeto (Ctrl 4 e paleta), no padrão de `docs/design/VISUAL-IDENTITY.md`: lista de componentes e tecnologias à esquerda, detalhe da entidade (decisões, claims, partes, conflitos, impacto) na coluna de leitura, caixa de sugestões para confirmar ou rejeitar, lente de arquivo e linha do tempo. Nunca o grafo inteiro de uma vez: sempre um nó e sua vizinhança.
+
+## Consequências
+
+- `domain` ganha `entities` (tipos, chave normalizada, glob e regras de aresta), sem dependências novas.
+- Migration 14 cria `entities`, `entity_patterns`, `entity_aliases` e `entity_edges`; apagar o projeto apaga o grafo dele, e o impacto da remoção conta entidades.
+- `application::graph` concentra casos de uso e consultas; `storage-sqlite` implementa o port.
+- A qualidade das sugestões depende dos diffs capturados; sem diff não há sugestão, só vínculo manual.
+
+## Alternativas rejeitadas
+
+- **Grafo extraído por LLM (GraphRAG):** caro, com entidades duplicadas e relações não confiáveis; contraria a autoridade humana sobre o que vale.
+- **Banco de grafo ou grafo genérico de nós e arestas:** o volume é pequeno, o SQLite com `WITH RECURSIVE` basta, e a spec pede relações tipadas e auditáveis (ADR-0003).
+- **Grafo de símbolos (chamadas, imports):** ferramentas de código já fazem isso; o xemnas guarda o porquê, no nível de componente e caminho.
+- **Ler a árvore do repositório para propor componentes:** o app não lê o repositório hoje; os arquivos das decisões já mostram onde o trabalho acontece.
