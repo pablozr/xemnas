@@ -39,3 +39,8 @@
 - `tool_summary` gravado como JSON cru no envelope (shape a confirmar no dogfood 18/20).
 - Shapes/porta do OpenCode reais a confirmar em 18/20 (E2E usa fixture e servidor fake 127.0.0.1:0).
 - Desvios da sessão de front (não bloqueantes, reportados ao usuário): `cargo fmt` vermelho em `apps/**`; guard `no_color_literals_outside_tokens` (`icons.rs:61` `#ffffff`); teste próprio `rendered_text_surfaces_meet_wcag_aa` vermelho.
+
+## Pendências resolvidas depois do fechamento
+
+- Retenção de rejeitados: diagnósticos em `rejected/` são removidos após 30 dias (`DrainPolicy::rejected_retention`) — `8067a34`.
+- Teto de transientes: item recusado como `Forbidden` em 5 drains vai intacto para `stalled/`; `outbox::retry_stalled` o devolve a `pending/`; falha de storage não conta — `8067a34`.

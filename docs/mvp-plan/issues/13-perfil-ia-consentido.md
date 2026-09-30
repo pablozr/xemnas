@@ -42,3 +42,7 @@
 - Perfil fora do SQLite significa que não há histórico/audit trail de consentimento além do próprio arquivo (proveniência completa = ticket 14).
 - Provider nativo OpenAI e OpenCodeGateway continuam fora (§12: apenas um provider real no MVP).
 - Ambiente: WDAC bloqueia build scripts de `windows-sys 0.60` (motivo do pino do keyring); SAC segue bloqueando exes de teste intermitentemente.
+
+## Pendências resolvidas depois do fechamento
+
+- Teste com resposta estruturada: `ai_provider::test_connection` envia só evidência sintética fixa pelo mesmo gate de consentimento e valida a resposta; nada é persistido — `c6712d8`. A tela continua com o front.

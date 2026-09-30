@@ -39,3 +39,7 @@
 - Concorrência em `revise` ⇒ perde com `not_found` (sem sinal de conflito mais rico).
 - `superseded` e qualquer ação de supersede/delete ficam para spec posterior.
 - Campo `assumptions/reconsider_when/scope/consequences` editável por `revise`, mas a UI de edição completa desses campos é polish do front.
+
+## Pendências resolvidas depois do fechamento
+
+- Concorrência em `revise`: `DecisionsError::Conflict` (código `conflict`) quando outra versão foi salva antes; `not_found` só quando a decisão sumiu — `f7be0e0`.

@@ -33,3 +33,7 @@
 - Redação de conteúdo somente no adapter (limite de confiança da fronteira — acima).
 - `recent_assessments.error_code` é a coluna de código curto como armazenada (valor hostil escrito ali passaria; não é conteúdo substantivo — contrato de código).
 - `Diagnostics::new` toma `(store, settings)` (perfil/segredo fora da porta de storage) e `export()` é `Result`.
+
+## Pendências resolvidas depois do fechamento
+
+- Redação no motor Rust: `application::redact` reaplica as regras do adapter em toda captura (API e outbox) antes de persistir; o fingerprint gravado é o do conteúdo redigido — `bcbd6af`. Continua limitada a padrões conhecidos.
