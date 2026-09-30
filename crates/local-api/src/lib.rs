@@ -1,10 +1,4 @@
 //! Local HTTP boundary: the only place HTTP is allowed (ARCH-001).
-//!
-//! This crate exposes application use cases over a loopback-only HTTP API for
-//! local automations. Every endpoint requires the per-session bearer token,
-//! browser origins are rejected, the body is bounded and use-case calls run off
-//! the async runtime with a timeout. The concrete use case is injected, so
-//! `local-api` never depends on storage at runtime.
 #![warn(missing_docs)]
 
 pub mod auth;
@@ -18,8 +12,8 @@ pub use discovery::{
     PROTOCOL_VERSION, TOKEN_FILE,
 };
 pub use server::{
-    bind_loopback, router, serve, ApiConfig, ApiServer, ApiServerConfig, ApiServerError,
-    RunningApi, DEFAULT_MAX_BODY_BYTES, DEFAULT_REQUEST_TIMEOUT,
+    bind_loopback, router, router_with_services, serve, ApiConfig, ApiServer, ApiServerConfig,
+    ApiServerError, OptionalServices, RunningApi, DEFAULT_MAX_BODY_BYTES, DEFAULT_REQUEST_TIMEOUT,
 };
 
 /// Returns a stable identifier for this crate, used by wiring smoke tests.

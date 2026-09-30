@@ -16,13 +16,14 @@ struct FakeDecisions {
     decisions: Arc<Mutex<HashMap<String, StoredDecision>>>,
     revisions: Arc<Mutex<HashMap<String, Vec<DecisionRevisionRow>>>>,
     evidence: Arc<Mutex<HashMap<String, Vec<EvidenceLinkRow>>>>,
+    /// When set, `revise` simulates another editor saving first.
+    race: Arc<Mutex<bool>>,
 }
 
 impl FakeDecisions {
     fn with(decisions: Vec<StoredDecision>) -> Self {
         let store = Self::default();
         for decision in decisions {
-            // Mirrors the storage birth snapshot: v1 holds the full content.
             store
                 .revisions
                 .lock()
@@ -130,8 +131,6 @@ impl DecisionStore for FakeDecisions {
         project_id: Option<&str>,
         limit: usize,
     ) -> Result<Vec<DecisionSearchRow>, DecisionsError> {
-        // Mirror FTS semantics for the indexed columns only (question, choice,
-        // rationale); assumptions and the other arrays are not searched.
         let tokens: Vec<String> = match_query
             .split(" AND ")
             .map(|token| token.trim_matches('"').to_ascii_lowercase())
@@ -181,6 +180,9 @@ impl DecisionStore for FakeDecisions {
         let Some(decision) = decisions.get_mut(id) else {
             return Ok(false);
         };
+        if *self.race.lock().expect("lock") {
+            decision.version += 1;
+        }
         if decision.version + 1 != version {
             return Ok(false);
         }
@@ -332,7 +334,6 @@ fn revise_snapshots_and_preserves_untouched_fields() {
     assert_eq!(fake.version_of("d-1"), Some(2));
     assert_eq!(fake.revision_versions("d-1"), vec![2, 1]);
 
-    // A partial revision keeps every untouched field identical in v2 and v1.
     assert_eq!(detail.revisions.len(), 2);
     let live = &detail.revisions[0];
     let original = &detail.revisions[1];
@@ -423,8 +424,28 @@ fn list_default_filter_includes_only_accepted() {
 }
 
 #[test]
-fn no_delete_method_exists_on_the_decisions_surface() {
-    // Structural note: `DecisionStore` and `Decisions` expose no delete method;
-    // history is append-only and this test crate cannot call a method that does
-    // not exist. The guarantee is the API surface itself.
+fn stale_editor_and_lost_race_report_a_conflict() {
+    let fake = FakeDecisions::with(vec![decision("d-1", "2026-01-01T00:00:00Z")]);
+    let decisions = Decisions::new(fake.clone());
+    let edits = || DecisionEdits {
+        rationale: Some("nova razão".to_string()),
+        ..DecisionEdits::default()
+    };
+
+    decisions
+        .revise_version("d-1", 1, edits())
+        .expect("current version saves");
+    let stale = decisions
+        .revise_version("d-1", 1, edits())
+        .expect_err("stale version");
+    assert_eq!(stale, DecisionsError::Conflict);
+    assert_eq!(stale.code(), "conflict");
+
+    *fake.race.lock().expect("lock") = true;
+    let raced = decisions.revise("d-1", edits()).expect_err("lost race");
+    assert_eq!(raced, DecisionsError::Conflict);
+    let raced_versioned = decisions
+        .revise_version("d-1", fake.version_of("d-1").expect("version"), edits())
+        .expect_err("lost race with the current version");
+    assert_eq!(raced_versioned, DecisionsError::Conflict);
 }

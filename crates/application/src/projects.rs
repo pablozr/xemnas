@@ -1,10 +1,4 @@
 //! Projects use cases: register, list and remove tracked directories.
-//!
-//! This module owns the [`ProjectRepository`] port that infrastructure
-//! implements. Registering canonicalizes the directory (and only that: the
-//! directory's content is never read, written or copied) and mints a UUID v7
-//! identity, so a location registered twice is rejected through the storage
-//! `UNIQUE` constraint.
 
 use std::path::{Path, PathBuf};
 
@@ -13,11 +7,6 @@ use domain::projects::{Project, ProjectId, ProjectLocation, ProjectSummary};
 use crate::clock::now_rfc3339;
 
 /// A Project row as it is persisted.
-///
-/// This is a plain persistence record: it carries the identifier, the
-/// normalized location string and the RFC 3339 timestamp exactly as they are
-/// stored, so the application and storage layers can exchange it without
-/// depending on a shared database type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectRecord {
     /// Stable identifier of the Project.
@@ -71,14 +60,8 @@ impl std::fmt::Display for ProjectError {
 impl std::error::Error for ProjectError {}
 
 /// Port that persists Projects.
-///
-/// Infrastructure crates implement this trait; the application never knows how
-/// the rows are stored.
 pub trait ProjectRepository {
     /// Inserts a new record.
-    ///
-    /// Returns [`ProjectError::AlreadyRegistered`] when the identifier or the
-    /// canonical location already exists.
     fn insert(&self, record: &ProjectRecord) -> Result<(), ProjectError>;
 
     /// Returns every record ordered by registration time.
@@ -88,10 +71,6 @@ pub trait ProjectRepository {
     fn get(&self, id: &str) -> Result<Option<ProjectRecord>, ProjectError>;
 
     /// Returns the record whose normalized canonical location matches, if any.
-    ///
-    /// The ingest use case uses this as the project allow-list check. The
-    /// default scans [`ProjectRepository::list`]; storage overrides it with an
-    /// indexed query, and the default keeps in-memory test doubles compatible.
     fn find_by_location(&self, location: &str) -> Result<Option<ProjectRecord>, ProjectError> {
         Ok(self
             .list()?
@@ -100,19 +79,81 @@ pub trait ProjectRepository {
     }
 
     /// Removes the record with the given identifier.
-    ///
-    /// Returns `true` when a row was deleted. Removing the tracking note never
-    /// touches the directory on disk.
     fn remove(&self, id: &str) -> Result<bool, ProjectError>;
+
+    /// Counts what [`ProjectRepository::purge`] would delete.
+    fn removal_impact(&self, _id: &str) -> Result<RemovalImpact, ProjectError> {
+        Ok(RemovalImpact::default())
+    }
+
+    /// Deletes the project and every row that belongs to it, in one transaction.
+    fn purge(&self, id: &str) -> Result<bool, ProjectError> {
+        self.remove(id)
+    }
+}
+
+/// What removing a project with its data deletes; the repository on disk is never touched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RemovalImpact {
+    /// Engineering Decisions, with their revisions, evidence and relations.
+    pub decisions: i64,
+    /// Decision Candidates.
+    pub candidates: i64,
+    /// Context Claims.
+    pub claims: i64,
+    /// Captures, with their artifacts, checkpoints, assessments and jobs.
+    pub captures: i64,
+    /// Context injection audit rows.
+    pub injections: i64,
+}
+
+impl RemovalImpact {
+    /// Whether nothing besides the project row would be deleted.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Failure modes of [`Projects::remove_with_data`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemovalError {
+    /// The project lookup or the deletion failed.
+    Project(ProjectError),
+    /// The typed confirmation does not match the project name.
+    ConfirmationMismatch,
+}
+
+impl RemovalError {
+    /// Short, stable code.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Project(ProjectError::NotFound) => "not_found",
+            Self::Project(_) => "storage",
+            Self::ConfirmationMismatch => "confirmation_mismatch",
+        }
+    }
+}
+
+impl std::fmt::Display for RemovalError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Project(error) => write!(formatter, "{error}"),
+            Self::ConfirmationMismatch => {
+                formatter.write_str("digite exatamente o nome do projeto para confirmar")
+            }
+        }
+    }
+}
+
+impl std::error::Error for RemovalError {}
+
+impl From<ProjectError> for RemovalError {
+    fn from(error: ProjectError) -> Self {
+        Self::Project(error)
+    }
 }
 
 /// Canonicalizes a project path to the stable string persisted in `projects`.
-///
-/// Shared by [`Projects::register`] and the ingest use case so the allow-list
-/// lookup cannot drift from the stored representation. A missing path, a
-/// non-directory, or an OS canonicalization failure returns
-/// [`ProjectError::InvalidLocation`]; only `canonicalize`/`metadata` are used,
-/// the directory is never read or written.
 pub fn canonicalize_location(location: &str) -> Result<String, ProjectError> {
     let path = Path::new(location);
     let metadata = std::fs::metadata(path).map_err(|_| ProjectError::InvalidLocation)?;
@@ -123,6 +164,21 @@ pub fn canonicalize_location(location: &str) -> Result<String, ProjectError> {
     Ok(normalize_canonical_path(canonical)
         .to_string_lossy()
         .into_owned())
+}
+
+/// Finds the registered project for an agent's working directory, if any.
+///
+/// # Errors
+///
+/// `Storage` on query failure; an invalid or unregistered directory is `Ok(None)`.
+pub fn find_project_by_directory<R: ProjectRepository + ?Sized>(
+    repository: &R,
+    directory: &str,
+) -> Result<Option<ProjectRecord>, ProjectError> {
+    match canonicalize_location(directory) {
+        Ok(location) => repository.find_by_location(&location),
+        Err(_) => Ok(None),
+    }
 }
 
 /// Project use cases over a [`ProjectRepository`].
@@ -137,10 +193,6 @@ impl<R: ProjectRepository> Projects<R> {
     }
 
     /// Registers a directory to track.
-    ///
-    /// The path is canonicalized; a missing path or a non-directory is rejected
-    /// with [`ProjectError::InvalidLocation`] before anything is persisted. The
-    /// directory is never opened, read or written.
     pub fn register(&self, location: impl AsRef<Path>) -> Result<Project, ProjectError> {
         let text = location.as_ref().to_string_lossy().into_owned();
         let canonical = canonicalize_location(&text)?;
@@ -182,12 +234,41 @@ impl<R: ProjectRepository> Projects<R> {
             .collect())
     }
 
-    /// Removes the tracking note for a Project.
-    ///
-    /// Returns `true` when a Project was removed. Only the persisted row is
-    /// deleted; the directory on disk is left untouched.
+    /// Removes a Project that has no data; one with data fails and keeps everything.
     pub fn remove(&self, id: &str) -> Result<bool, ProjectError> {
         self.repository.remove(id)
+    }
+
+    /// Counts what [`Projects::remove_with_data`] would delete, for the warning.
+    ///
+    /// # Errors
+    ///
+    /// `NotFound` for an unknown project, `Storage` on query failure.
+    pub fn removal_impact(&self, id: &str) -> Result<RemovalImpact, ProjectError> {
+        self.get(id)?;
+        self.repository.removal_impact(id)
+    }
+
+    /// Deletes a Project and all its data after the user types its name.
+    ///
+    /// # Errors
+    ///
+    /// `confirmation_mismatch` when `typed_name` differs from the project name;
+    /// nothing is deleted in that case.
+    pub fn remove_with_data(
+        &self,
+        id: &str,
+        typed_name: &str,
+    ) -> Result<RemovalImpact, RemovalError> {
+        let project = self.get(id)?;
+        if typed_name.trim() != project.location().display_name() {
+            return Err(RemovalError::ConfirmationMismatch);
+        }
+        let impact = self.repository.removal_impact(id)?;
+        if !self.repository.purge(id)? {
+            return Err(RemovalError::Project(ProjectError::NotFound));
+        }
+        Ok(impact)
     }
 }
 
@@ -201,14 +282,6 @@ fn project_from_record(record: ProjectRecord) -> Project {
 }
 
 /// Normalizes a canonical Windows path to a stable, prefix-free representation.
-///
-/// `std::fs::canonicalize` on Windows returns verbatim paths such as
-/// `\\?\C:\work\xemnas`. That prefix is stripped for drive-letter paths (and
-/// the equivalent `\\?\UNC\server\share` form is rewritten as
-/// `\\server\share`) so the same directory is persisted with a single
-/// representation regardless of how it was typed and across restarts. The
-/// function is a no-op on other platforms and for verbatim paths it does not
-/// recognize.
 fn normalize_canonical_path(path: PathBuf) -> PathBuf {
     let text = path.to_string_lossy();
     if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
@@ -224,9 +297,6 @@ fn normalize_canonical_path(path: PathBuf) -> PathBuf {
     }
     path
 }
-
-// The accessor methods on `Project`, `ProjectSummary` and `ProjectLocation`
-// are reached directly through the domain re-exports imported above.
 
 #[cfg(test)]
 mod tests {

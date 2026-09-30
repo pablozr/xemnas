@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use application::diagnostics::{
     job_error_code, AssessmentDiagnosticRow, Diagnostics, DiagnosticsCounts, DiagnosticsError,
     DiagnosticsMetrics, DiagnosticsStore, Distribution, JobDiagnosticRow, LossMetrics,
-    NoiseMetrics, OutboxCounts, ReceiptDiagnosticRow,
+    NoiseMetrics, ReceiptDiagnosticRow,
 };
 use application::jobs::INTERRUPTED_NON_IDEMPOTENT;
 use application::profile::{
@@ -69,14 +69,6 @@ impl DiagnosticsStore for FakeStore {
         }])
     }
 
-    fn outbox_counts(&self) -> Result<OutboxCounts, DiagnosticsError> {
-        Ok(OutboxCounts {
-            pending: 1,
-            accepted: 2,
-            rejected: 3,
-        })
-    }
-
     fn metrics(&self) -> Result<DiagnosticsMetrics, DiagnosticsError> {
         Ok(DiagnosticsMetrics {
             latency_capture_to_candidate_ms: Distribution {
@@ -97,8 +89,9 @@ impl DiagnosticsStore for FakeStore {
                 assessments_failed: 1,
                 assessments_skipped: 2,
                 jobs_failed: 3,
-                outbox_rejected: 3,
+                outbox_rejected: 0,
             },
+            context: Default::default(),
         })
     }
 }
@@ -144,6 +137,7 @@ impl DiagnosticsStore for EmptyStore {
                 jobs_failed: 0,
                 outbox_rejected: 0,
             },
+            context: Default::default(),
         })
     }
     fn recent_jobs(&self, _limit: usize) -> Result<Vec<JobDiagnosticRow>, DiagnosticsError> {
@@ -160,13 +154,6 @@ impl DiagnosticsStore for EmptyStore {
         _limit: usize,
     ) -> Result<Vec<AssessmentDiagnosticRow>, DiagnosticsError> {
         Ok(Vec::new())
-    }
-    fn outbox_counts(&self) -> Result<OutboxCounts, DiagnosticsError> {
-        Ok(OutboxCounts {
-            pending: 0,
-            accepted: 0,
-            rejected: 0,
-        })
     }
 }
 
@@ -237,7 +224,13 @@ fn job_error_code_never_carries_the_raw_message() {
 
 #[test]
 fn document_is_structural_and_serializable() {
-    let diagnostics = Diagnostics::new(FakeStore, settings());
+    let outbox = outbox_with(&[
+        ("pending", 1),
+        ("accepted", 2),
+        ("rejected", 3),
+        ("stalled", 4),
+    ]);
+    let diagnostics = Diagnostics::new(FakeStore, settings(), &outbox);
     let document = diagnostics.export().expect("export");
 
     assert_eq!(document.schema.app_version, env!("CARGO_PKG_VERSION"));
@@ -245,6 +238,7 @@ fn document_is_structural_and_serializable() {
     assert_eq!(document.counts.projects, 2);
     assert_eq!(document.counts.artifacts, 4);
     assert_eq!(document.outbox.pending, 1);
+    assert_eq!(document.outbox.stalled, 4);
     assert_eq!(document.ai_profile.kind, "openai-compatible");
     assert_eq!(
         document.ai_profile.provider.as_deref(),
@@ -281,6 +275,10 @@ fn document_is_structural_and_serializable() {
     assert_eq!(document.metrics.noise.decided_total, 4);
     assert_eq!(document.metrics.noise.dismissed_ratio, Some(0.25));
     assert_eq!(document.metrics.losses.jobs_failed, 3);
+    assert_eq!(
+        document.metrics.losses.outbox_rejected, 3,
+        "rejected losses come from the outbox directory"
+    );
 
     let json = serde_json::to_string_pretty(&document).expect("serialize");
     assert!(json.contains("\"migrations_version\": 8"));
@@ -298,11 +296,12 @@ fn document_is_structural_and_serializable() {
     let reparsed: application::diagnostics::DiagnosticsDocument =
         serde_json::from_str(&json).expect("round trip");
     assert_eq!(reparsed, document);
+    let _ = std::fs::remove_dir_all(&outbox);
 }
 
 #[test]
 fn empty_metrics_are_zero_and_none_with_valid_json() {
-    let document = Diagnostics::new(EmptyStore, settings())
+    let document = Diagnostics::new(EmptyStore, settings(), outbox_with(&[]))
         .export()
         .expect("export");
 
@@ -322,4 +321,24 @@ fn empty_metrics_are_zero_and_none_with_valid_json() {
     let reparsed: application::diagnostics::DiagnosticsDocument =
         serde_json::from_str(&json).expect("round trip");
     assert_eq!(reparsed, document);
+}
+
+/// Creates an outbox root with `count` JSON files in each named bucket.
+fn outbox_with(buckets: &[(&str, usize)]) -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let root = std::env::temp_dir().join(format!(
+        "xemnas-diagnostics-outbox-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    for (bucket, count) in buckets {
+        let directory = root.join(bucket);
+        std::fs::create_dir_all(&directory).expect("create bucket");
+        for index in 0..*count {
+            std::fs::write(directory.join(format!("{index}.json")), "{}").expect("write item");
+        }
+    }
+    root
 }

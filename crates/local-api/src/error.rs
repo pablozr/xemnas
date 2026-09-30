@@ -1,7 +1,4 @@
 //! HTTP error mapping: product-language body, technical detail only in `tracing`.
-//!
-//! Every response body is `{"code": "...", "message": "<PT-BR>"}`. The store and
-//! validation details never reach the client; they are logged instead.
 
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};

@@ -1,11 +1,6 @@
 //! SQLite implementation of the Project persistence port.
-//!
-//! The schema is created by the embedded migrations in [`crate::store`]. The
-//! `location` column is `UNIQUE`: it is the single source of truth for the
-//! "already registered" rule, which keeps the check correct across restarts and
-//! shared store clones.
 
-use application::projects::{ProjectError, ProjectRecord, ProjectRepository};
+use application::projects::{ProjectError, ProjectRecord, ProjectRepository, RemovalImpact};
 use rusqlite::{params, OptionalExtension};
 
 use crate::store::SqliteStore;
@@ -16,9 +11,6 @@ fn storage_error(error: rusqlite::Error) -> ProjectError {
 }
 
 /// Returns `true` when the failure is a constraint violation.
-///
-/// The only constraints on `projects` are the primary key and the unique
-/// location, so both map to the same "already registered" outcome.
 fn is_conflict(error: &rusqlite::Error) -> bool {
     matches!(
         error,
@@ -83,7 +75,64 @@ impl ProjectRepository for SqliteStore {
             .map(|removed| removed > 0)
             .map_err(storage_error)
     }
+
+    fn removal_impact(&self, id: &str) -> Result<RemovalImpact, ProjectError> {
+        let connection = self.lock();
+        let count = |sql: &str| -> Result<i64, ProjectError> {
+            connection
+                .query_row(sql, [id], |row| row.get(0))
+                .map_err(storage_error)
+        };
+        Ok(RemovalImpact {
+            decisions: count("SELECT COUNT(*) FROM engineering_decisions WHERE project_id = ?1")?,
+            candidates: count("SELECT COUNT(*) FROM decision_candidates WHERE project_id = ?1")?,
+            claims: count("SELECT COUNT(*) FROM context_claims WHERE project_id = ?1")?,
+            captures: count(
+                "SELECT COUNT(*) FROM capture_receipts \
+                 WHERE canonical_path = (SELECT location FROM projects WHERE id = ?1)",
+            )?,
+            injections: count("SELECT COUNT(*) FROM context_injections WHERE project_id = ?1")?,
+        })
+    }
+
+    fn purge(&self, id: &str) -> Result<bool, ProjectError> {
+        let mut connection = self.lock();
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        for sql in PURGE_STATEMENTS {
+            transaction.execute(sql, [id]).map_err(storage_error)?;
+        }
+        let removed = transaction
+            .execute("DELETE FROM projects WHERE id = ?1", [id])
+            .map_err(storage_error)?;
+        transaction.commit().map_err(storage_error)?;
+        Ok(removed > 0)
+    }
 }
+
+/// Deletes a project's rows child-first; captures cascade to artifacts,
+/// checkpoints, assessments and candidates.
+const PURGE_STATEMENTS: &[&str] = &[
+    "DELETE FROM context_injections WHERE project_id = ?1",
+    "DELETE FROM claims_fts WHERE claim_id IN \
+     (SELECT claim_id FROM context_claims WHERE project_id = ?1)",
+    "DELETE FROM context_claims WHERE project_id = ?1",
+    "DELETE FROM decision_relations WHERE from_decision_id IN \
+     (SELECT decision_id FROM engineering_decisions WHERE project_id = ?1) \
+     OR to_decision_id IN (SELECT decision_id FROM engineering_decisions WHERE project_id = ?1)",
+    "DELETE FROM decisions_fts WHERE decision_id IN \
+     (SELECT decision_id FROM engineering_decisions WHERE project_id = ?1)",
+    "DELETE FROM decision_revisions WHERE decision_id IN \
+     (SELECT decision_id FROM engineering_decisions WHERE project_id = ?1)",
+    "DELETE FROM engineering_decisions WHERE project_id = ?1",
+    "DELETE FROM jobs WHERE kind = 'analyze_capture' AND payload IN \
+     (SELECT capture_id FROM capture_receipts \
+      WHERE canonical_path = (SELECT location FROM projects WHERE id = ?1))",
+    "DELETE FROM capture_receipts \
+     WHERE canonical_path = (SELECT location FROM projects WHERE id = ?1)",
+    "DELETE FROM decision_candidates WHERE project_id = ?1",
+];
 
 #[cfg(test)]
 mod tests {

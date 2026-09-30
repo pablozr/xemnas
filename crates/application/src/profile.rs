@@ -1,13 +1,4 @@
 //! AI execution profiles: configuration, consent and secret access.
-//!
-//! External AI calls are off until the user explicitly enables them with a
-//! preview and a recorded consent (MVP-SPEC §12, AD-12). This module is pure
-//! policy plus file I/O; it never performs network calls and never sees a
-//! provider name beyond the profile's `kind`. Secrets are reached through the
-//! [`SecretStore`] port, implemented by the OS keychain in `ai-provider`.
-//!
-//! The offline fake stays the default: a machine with no profile (or a `fake`
-//! profile) extracts locally and never sends data anywhere.
 
 use std::fs;
 use std::io;
@@ -72,10 +63,6 @@ fn default_max_input_chars() -> usize {
 
 impl AiProfile {
     /// Validates the profile for its kind.
-    ///
-    /// A `fake` profile needs nothing beyond a positive input cap; an
-    /// External profiles require a model and an HTTPS endpoint without URL
-    /// credentials, query or fragment. HTTP is allowed only for loopback IPs.
     pub fn validate(&self) -> Result<(), ProfileError> {
         if self.max_input_chars == 0 {
             return Err(ProfileError::Invalid(
@@ -194,8 +181,6 @@ fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
         file.write_all(text.as_bytes())?;
         file.sync_all()?;
         drop(file);
-        // rename replaces an existing file atomically on Windows and Unix.
-        // A failed replacement leaves the previous profile intact.
         fs::rename(&temporary, path)
     })();
     if result.is_err() {
@@ -205,9 +190,6 @@ fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
 }
 
 /// Port that stores one secret per account in an OS-protected backend.
-///
-/// The application never names a concrete backend; `ai-provider` implements it
-/// with the OS keychain.
 pub trait SecretStore {
     /// Stores (or replaces) the secret for `account`.
     fn set_secret(&self, account: &str, secret: &str) -> Result<(), ProfileError>;
@@ -231,13 +213,6 @@ pub enum ExtractorChoice {
 }
 
 /// Single source of truth for whether a profile may call an external provider.
-///
-/// Returns `Ok(())` only when the profile is external, calls are enabled, a
-/// consent record exists, and that consent still matches the current
-/// configuration (`consent.preview_hash == preview_hash(build_preview(profile))`).
-/// Editing the endpoint, model, limits or kind after consent invalidates it, and
-/// a hand-written consent record cannot pass. The `Err` payload is a sanitized
-/// reason safe to log or show.
 pub fn consent_status(profile: &AiProfile) -> Result<(), &'static str> {
     if profile.validate().is_err() {
         return Err("configuração do provedor inválida");
@@ -258,11 +233,6 @@ pub fn consent_status(profile: &AiProfile) -> Result<(), &'static str> {
 }
 
 /// Chooses the extractor for a profile without looking at any provider name.
-///
-/// `ExternalEnabled` is unreachable unless [`consent_status`] accepts the
-/// profile. A plain offline profile keeps the fake; a profile that carries any
-/// external intent (enabled and/or a consent record) without a valid consent is
-/// blocked.
 pub fn choose_extractor(profile: Option<&AiProfile>) -> ExtractorChoice {
     let Some(profile) = profile else {
         return ExtractorChoice::OfflineFake;
@@ -379,9 +349,6 @@ pub fn preview_hash(preview: &ConsentPreview) -> String {
 }
 
 /// Grants consent to a profile, returning the updated profile.
-///
-/// Requires an `open_ai_compatible` profile, a valid profile, a preview that
-/// matches the profile and a stored secret. It never persists by itself.
 pub fn grant_consent(
     profile: &AiProfile,
     preview: &ConsentPreview,
@@ -715,8 +682,6 @@ mod tests {
         );
         assert!(consent_status(&changed_limit).is_err());
 
-        // Changing the kind invalidates consent as well; a `fake` profile must
-        // never be treated as external, so the observable choice is blocked.
         let mut changed_kind = granted.clone();
         changed_kind.kind = ProfileKind::Fake;
         assert_eq!(
@@ -856,7 +821,6 @@ mod tests {
         let store = FileProfileStore::new(root.join("profile.json"));
         let previous = external_profile();
         store.save(&previous).expect("seed");
-        // Permit readers but deny replacement/deletion for the test's lifetime.
         let held = std::fs::OpenOptions::new()
             .read(true)
             .share_mode(1)

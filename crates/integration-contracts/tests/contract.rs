@@ -1,19 +1,4 @@
 //! Contract tests for the Capture Envelope.
-//!
-//! The **JSON Schema generated from the Rust types is the validation source of
-//! truth**. The fixtures in `tests/fixtures/capture/` are classified by filename
-//! prefix (the contract shared with the TypeScript adapter):
-//!
-//! - `valid-*`      — schema accepts and the Rust type deserializes;
-//! - `invalid-*`    — schema rejects;
-//! - `incomplete-*` — a required field is missing;
-//! - `incompatible-*` — the `schema_version` is not the supported one.
-//!
-//! Regenerate the versioned schema artifact after changing the contract:
-//!
-//! ```text
-//! cargo test -p integration-contracts --test contract -- --ignored regenerate_capture_envelope_schema
-//! ```
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -84,11 +69,6 @@ fn sha256_hex(value: &str) -> String {
 }
 
 /// Builds a draft 2020-12 validator that also asserts `format`.
-///
-/// Schemars emits draft 2020-12, whose `format` vocabulary is annotation-only
-/// by default; asserting formats explicitly is what makes an invalid
-/// `observed_at` fail. The TypeScript side must enable the equivalent
-/// (`ajv-formats`) on the same schema.
 fn capture_validator() -> jsonschema::Validator {
     jsonschema::draft202012::options()
         .should_validate_formats(true)
@@ -154,8 +134,6 @@ fn valid_fixtures_validate_deserialize_and_round_trip() {
             "{name} must round-trip without losing semantics"
         );
 
-        // Explicit fields the criterion calls out: version, idempotency,
-        // identity and observation time.
         assert_eq!(json!(envelope.schema_version), value["schema_version"]);
         assert_eq!(json!(envelope.idempotency_key), value["idempotency_key"]);
         assert_eq!(json!(envelope.capture_id), value["capture_id"]);
@@ -238,10 +216,6 @@ fn invalid_fixtures_are_rejected_by_the_schema() {
             "{name} must be rejected by the schema"
         );
 
-        // Structural violations must also fail typed deserialization. Pattern
-        // or format violations (uuid, timestamp, fingerprint) are schema-only:
-        // serde carries them as strings, and the version mismatch is a schema
-        // `const` that serde's `u32` cannot express.
         let serde_must_reject = is_incomplete
             || name.starts_with("invalid-extra-field")
             || name.starts_with("invalid-wrong-type")

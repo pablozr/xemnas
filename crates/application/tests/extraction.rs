@@ -7,7 +7,8 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use application::extract::{
-    fail_provider_setup, input_hash, record_skipped_assessment, run_extraction, AssessmentOutcome,
+    connection_test_evidence, fail_provider_setup, filter_relevant, input_hash,
+    record_skipped_assessment, run_connection_test, run_extraction, AssessmentOutcome,
     AssessmentRecord, AssessmentStore, CandidateExtractor, CandidateProposal,
     DecisionCandidateRecord, DecisionEvidence, EvidenceArtifact, ExtractError, ExtractionStore,
     FakeCandidateExtractor, ProviderSetupError, RelevanceSignal, RunContext,
@@ -309,20 +310,15 @@ impl CandidateExtractor for BadExtractor {
 #[test]
 fn invalid_proposals_reject_the_whole_batch() {
     let mutators: &[fn(&mut CandidateProposal)] = &[
-        // Text fields.
         |proposal| proposal.question = "   ".to_string(),
         |proposal| proposal.choice = String::new(),
         |proposal| proposal.rationale = String::new(),
         |proposal| proposal.confidence_reason = String::new(),
-        // Confidence.
         |proposal| proposal.confidence = 1.5,
         |proposal| proposal.confidence = f64::NAN,
-        // Signals: empty or outside the detected set.
         |proposal| proposal.signals.clear(),
         |proposal| proposal.signals = vec![RelevanceSignal::DelegatedToAgent],
-        // Evidence refs.
         |proposal| proposal.evidence_refs = vec!["artifact-missing".to_string()],
-        // Diff summary shape.
         |proposal| proposal.diff_summary = "{ not json".to_string(),
         |proposal| proposal.diff_summary = "[]".to_string(),
         |proposal| {
@@ -343,7 +339,7 @@ fn invalid_proposals_reject_the_whole_batch() {
             &RunContext::for_tests(),
         );
         assert!(
-            matches!(result, Err(ExtractError::Extractor(_))),
+            matches!(result, Err(ExtractError::Validation(_))),
             "an invalid proposal must reject the batch"
         );
         assert!(
@@ -596,11 +592,11 @@ fn assessment_records_failed_for_extractor_and_validation() {
         &evidence.capture_id,
         &RunContext::for_tests(),
     );
-    assert!(matches!(result, Err(ExtractError::Extractor(_))));
+    assert!(matches!(result, Err(ExtractError::Validation(_))));
     let rows = invalid.assessments();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].outcome, AssessmentOutcome::Failed);
-    assert_eq!(rows[0].error_code.as_deref(), Some("extractor"));
+    assert_eq!(rows[0].error_code.as_deref(), Some("validation"));
     assert!(invalid.records().is_empty(), "no partial candidate batch");
 }
 
@@ -610,7 +606,6 @@ fn input_hash_is_deterministic_sensitive_and_order_insensitive() {
     let first = input_hash(&evidence.capture_id, &evidence);
     assert_eq!(first, input_hash(&evidence.capture_id, &evidence));
 
-    // Reordering the artifacts must not change the hash.
     evidence.artifacts.reverse();
     assert_eq!(
         first,
@@ -618,12 +613,10 @@ fn input_hash_is_deterministic_sensitive_and_order_insensitive() {
         "artifact order must not matter"
     );
 
-    // Changing any artifact's content must change the hash.
     let mut changed = evidence.clone();
     changed.artifacts[0].content.push_str("\n+synthetic change");
     assert_ne!(first, input_hash(&changed.capture_id, &changed));
 
-    // Changing the capture id must change the hash.
     assert_ne!(first, input_hash("another-capture", &evidence));
 }
 
@@ -631,6 +624,10 @@ fn input_hash_is_deterministic_sensitive_and_order_insensitive() {
 fn extract_error_codes_are_stable() {
     assert_eq!(ExtractError::Extractor("x".to_string()).code(), "extractor");
     assert_eq!(ExtractError::Storage("x".to_string()).code(), "storage");
+    assert_eq!(
+        ExtractError::Validation("x".to_string()).code(),
+        "validation"
+    );
 }
 
 #[test]
@@ -681,8 +678,6 @@ fn missing_capture_is_a_storage_error_without_assessment() {
 
 #[test]
 fn provider_setup_failures_are_recorded_with_stable_codes() {
-    // This helper never constructs an extractor, so it cannot open a network
-    // request; the fake store would otherwise stay empty.
     for (variant, expected) in [
         (ProviderSetupError::MissingSecret, "secret"),
         (ProviderSetupError::Keystore, "keystore"),
@@ -721,8 +716,6 @@ fn profile_unavailable_failure_records_a_safe_fallback_context() {
 
     let evidence = evidence(DURABLE[0]);
     let store = FakeStore::with(evidence.clone());
-    // A populated context is passed on purpose; the helper must replace it with
-    // the fixed unavailable context so no partial identity leaks.
     let context = detailed_context();
     let failure = fail_provider_setup(
         &store,
@@ -750,4 +743,45 @@ fn profile_unavailable_failure_records_a_safe_fallback_context() {
         "the hash must match a real run"
     );
     assert!(store.records().is_empty(), "no candidate rows");
+}
+
+#[test]
+fn connection_test_accepts_a_valid_structured_answer() {
+    let evidence = connection_test_evidence();
+    assert!(
+        !filter_relevant(&evidence).is_empty(),
+        "the synthetic evidence must dispatch the extractor like a real turn"
+    );
+    let report = run_connection_test(&FakeCandidateExtractor).expect("connection test");
+    assert_eq!(report.proposals, 1);
+}
+
+#[test]
+fn connection_test_reports_provider_and_contract_failures() {
+    assert!(matches!(
+        run_connection_test(&FailingExtractor),
+        Err(ExtractError::Extractor(_))
+    ));
+    let invalid = BadExtractor {
+        mutate: |proposal| proposal.evidence_refs = vec!["unknown-ref".to_string()],
+    };
+    assert_eq!(
+        run_connection_test(&invalid).map_err(|error| error.code()),
+        Err("validation")
+    );
+}
+
+#[test]
+fn connection_test_evidence_is_synthetic() {
+    let evidence = connection_test_evidence();
+    assert_eq!(evidence.capture_id, "connection-test");
+    assert!(evidence.adapter.is_none() && evidence.session_id.is_none());
+    for artifact in &evidence.artifacts {
+        assert!(
+            artifact.content.contains("sintético")
+                || artifact.content.contains("exemplo")
+                || artifact.content.contains("Exemplo"),
+            "only fixed fictitious content is sent"
+        );
+    }
 }

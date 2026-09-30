@@ -1,8 +1,4 @@
 //! SQLite implementation of the Job persistence port.
-//!
-//! All state changes use compare-and-set SQL, so a claim or a transition can
-//! never resurrect a job from the wrong state. `recover_interrupted` runs the
-//! interrupted idempotent/non-idempotent split in a single transaction.
 
 use application::jobs::{
     JobError, JobRecord, JobRepository, JobState, RecoveryReport, INTERRUPTED_NON_IDEMPOTENT,

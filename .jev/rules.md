@@ -18,6 +18,16 @@ rules:
     source: user
   SCOPE-001:
     source: user
+  ARCH-002:
+    source: user
+  CONTRACT-001:
+    source: user
+  DATA-001:
+    source: user
+  STYLE-001:
+    source: user
+  STYLE-002:
+    source: user
 ```
 
 ## ARCH-001
@@ -154,7 +164,7 @@ severity: error
 
 ### Rule
 
-Implementar somente o ticket atual e o escopo do MVP aprovado; funcionalidades futuras exigem decisão explícita.
+Implementar somente o ticket atual e o escopo aprovado; funcionalidades futuras exigem decisão explícita do usuário registrada em ADR (`docs/adr/`) antes do código.
 
 ### Violation
 
@@ -163,3 +173,83 @@ Introduzir cloud, grafo, RAG, MCP, sincronização, multiusuário, daemon, novos
 ### Allowed
 
 Suporte técnico estritamente necessário para o ticket, testes, documentação e correções de segurança.
+
+## ARCH-002
+
+severity: error
+
+### Rule
+
+Composition roots (binários em `apps/`) só montam dependências, registram handlers e fazem log; orquestração e regra de negócio vivem em casos de uso do `application`. Caminhos locais vêm só de `application::AppPaths`.
+
+### Violation
+
+Decidir fluxo de negócio no binário (escolher provider, checar consentimento, gravar proveniência), duplicar resolução de caminhos ou variáveis de ambiente fora de `AppPaths`, ou fazer o storage ler o filesystem fora do banco.
+
+### Allowed
+
+Logs, mapeamento de resultado para estado de job e leitura de configuração de runtime (por exemplo retenção) na composition root.
+
+## CONTRACT-001
+
+severity: error
+
+### Rule
+
+Os tipos de `integration-contracts` são o contrato versionado com o adapter TypeScript: suas docs geram o JSON Schema. Qualquer mudança neles regenera o schema, atualiza o adapter e mantém o teste de contrato verde.
+
+### Violation
+
+Editar campos ou docs desses tipos sem regenerar `adapters/opencode/schemas/`, ou mudar o contrato sem subir `schema_version`.
+
+### Allowed
+
+Mudanças internas que não alteram o schema gerado.
+
+## DATA-001
+
+severity: error
+
+### Rule
+
+Migrations são forward-only e transacionais. Uma migration nova atualiza junto os testes que contam migrations, a versão citada no `README.md` e em `tests/e2e/install-clean.ps1`, e testa o upgrade a partir da versão anterior com dados existentes.
+
+### Violation
+
+Editar migration já publicada, apagar dados em migration sem decisão explícita, ou adicionar migration sem teste de upgrade.
+
+### Allowed
+
+Lacunas de numeração já registradas (0007).
+
+## STYLE-001
+
+severity: warning
+
+### Rule
+
+Código legível sem comentários narrativos: nomes e funções pequenas explicam o código. Nada de comentários `//` com histórico, referência a ticket ou explicação longa. Itens públicos têm doc de uma linha objetiva (exigida por `missing_docs`).
+
+### Violation
+
+Adicionar blocos de comentário explicativo, referências como "ticket 12" ou docs de vários parágrafos.
+
+### Allowed
+
+`// SAFETY:` em `unsafe`, seção `# Errors` quando o erro não é óbvio, e as docs de `integration-contracts` (CONTRACT-001).
+
+## STYLE-002
+
+severity: warning
+
+### Rule
+
+Linhas com até 100 colunas e closures curtas. Expressão que o `rustfmt` não consegue quebrar vira função nomeada.
+
+### Violation
+
+Linhas longas que o `rustfmt` deixou sem formatar, como closures com lógica e strings de UI inteiras em uma linha.
+
+### Allowed
+
+Literais de string longos (SQL, mensagens de produto, fixtures e dados de demonstração).

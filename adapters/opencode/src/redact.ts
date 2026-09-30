@@ -12,6 +12,7 @@
 //! Nothing here interprets content: it only removes, masks or summarizes it.
 //! The raw, unbounded, unredacted text never leaves this module.
 
+import { stripContextBlocks } from "./context.js";
 import type { OpenCodeFileDiff, OpenCodePart } from "./opencode.js";
 
 const REDACTED = "[REDACTED]";
@@ -95,9 +96,9 @@ export function collectText(parts: OpenCodePart[]): string {
     .join("\n");
 }
 
-/** Redacts then bounds `content`; returns `""` when nothing survives. */
+/** Drops injected context blocks, redacts, then bounds `content`. */
 export function boundContent(content: string, maxBytes: number): string {
-  return truncateUtf8(redactSecrets(content), maxBytes);
+  return truncateUtf8(redactSecrets(stripContextBlocks(content)), maxBytes);
 }
 
 /** Context lines kept around each change when formatting a hunk. */

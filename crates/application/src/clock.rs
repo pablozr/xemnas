@@ -1,14 +1,6 @@
 //! RFC 3339 UTC clock shared by the application use cases.
-//!
-//! The application must not depend on a calendar crate for a value the domain
-//! treats as an opaque string, so the civil date is derived directly from the
-//! UNIX epoch. Projects and Jobs persist timestamps in this exact format
-//! (`%Y-%m-%dT%H:%M:%SZ`, UTC), which is why the conversion lives in one place
-//! instead of being copied per use case.
 
 /// Returns the current time as an RFC 3339 UTC timestamp.
-///
-/// If the system clock predates 1970 the epoch itself is used.
 pub(crate) fn now_rfc3339() -> String {
     let since_epoch = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -24,10 +16,6 @@ pub(crate) fn now_rfc3339() -> String {
 }
 
 /// Converts a count of days since 1970-01-01 into `(year, month, day)`.
-///
-/// Howard Hinnant's `civil_from_days` algorithm, valid for the full proleptic
-/// Gregorian calendar and therefore for any timestamp the system clock can
-/// produce.
 fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
     let shifted = days_since_epoch + 719_468;
     let era = if shifted >= 0 {

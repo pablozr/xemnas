@@ -5,7 +5,9 @@ use application::captures::{
     CaptureArtifactRecord, CaptureCheckpointRecord, CaptureReceiptRecord, CaptureRepository,
     CaptureWrite,
 };
-use application::decisions::{DecisionEdits, DecisionFilter, Decisions, SearchQuery};
+use application::decisions::{
+    DecisionEdits, DecisionFilter, Decisions, DecisionsError, SearchQuery,
+};
 use application::extract::{DecisionCandidateRecord, ExtractionStore};
 use application::inbox::{CandidateStatus, DecisionSeed, Inbox, InboxStore};
 use application::jobs::{JobRecord, JobState, ANALYZE_CAPTURE_KIND};
@@ -77,6 +79,7 @@ fn seed_project_and_capture(store: &SqliteStore) {
         },
         checkpoint: CaptureCheckpointRecord {
             adapter: "opencode".to_string(),
+            adapter_version: "0.1.0".to_string(),
             session_id: "session-1".to_string(),
             message_id: "message-1".to_string(),
             capture_id: "capture-1".to_string(),
@@ -130,7 +133,6 @@ fn migration_0008_applies_on_fresh_and_upgraded_databases() {
         assert!(table_exists(&connection, "decision_revisions"));
         assert!(table_exists(&connection, "evidence_links"));
         assert!(table_exists(&connection, "decisions_fts"));
-        // Simulate a version-6 database (no 0007 exists).
         connection
             .execute_batch(
                 "DROP TABLE decisions_fts; DROP TABLE evidence_links; \
@@ -149,7 +151,7 @@ fn migration_0008_applies_on_fresh_and_upgraded_databases() {
             row.get(0)
         })
         .expect("count");
-    assert_eq!(versions, 7);
+    assert_eq!(versions, 12);
 
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -304,8 +306,6 @@ fn promote_rolls_back_completely_on_failure() {
         .confirm("cand-1", None)
         .expect("confirm first");
 
-    // Reuse the existing decision id: the INSERT fails and the whole
-    // transaction must roll back, leaving cand-2 pending.
     let colliding = DecisionSeed {
         decision_id: first.decision_id.clone(),
         project_id: "project-1".to_string(),
@@ -377,7 +377,7 @@ fn revise_updates_the_index_and_keeps_the_history() {
             ..DecisionEdits::default()
         },
     );
-    assert!(stale.is_err());
+    assert_eq!(stale.map(|_| ()), Err(DecisionsError::Conflict));
     assert_eq!(
         decisions
             .detail(&outcome.decision_id)
@@ -387,7 +387,6 @@ fn revise_updates_the_index_and_keeps_the_history() {
         2
     );
 
-    // The index follows the live version: the new term matches, the old does not.
     let hits = decisions
         .search(&SearchQuery {
             query: "gamma".to_string(),
@@ -461,7 +460,6 @@ fn revision_content_is_reconstructible_in_full() {
     assert_eq!(live.scope, vec!["escopo ç"]);
     assert_eq!(live.consequences, vec!["consequência ç"]);
 
-    // Raw table proof that the arrays are stored as JSON and survive intact.
     let connection = Connection::open(root.join("app.db")).expect("raw");
     let (question, assumptions): (String, String) = connection
         .query_row(
