@@ -71,12 +71,14 @@ impl SearchEdit {
 
     /// Collapses selection to the specified UTF-8 byte boundary.
     pub fn move_to(&mut self, offset: usize) {
+        let offset = self.valid_offset(offset);
         self.selection = offset..offset;
         self.reversed = false;
     }
 
     /// Extends the selection to the specified UTF-8 byte boundary.
     pub fn select_to(&mut self, offset: usize) {
+        let offset = self.valid_offset(offset);
         let anchor = if self.reversed {
             self.selection.end
         } else {
@@ -132,6 +134,14 @@ impl SearchEdit {
             text.replace("\r\n", " ").replace(['\r', '\n'], " ")
         }
     }
+
+    fn valid_offset(&self, offset: usize) -> usize {
+        let mut offset = offset.min(self.text.len());
+        while !self.text.is_char_boundary(offset) {
+            offset -= 1;
+        }
+        offset
+    }
 }
 
 fn utf16_to_byte(text: &str, offset: usize) -> usize {
@@ -148,6 +158,25 @@ fn utf16_to_byte(text: &str, offset: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::SearchEdit;
+
+    #[test]
+    fn clicking_placeholder_or_stale_layout_cannot_move_beyond_the_value() {
+        let mut edit = SearchEdit::default();
+        edit.move_to(12); // Pixel hit testing can still refer to the placeholder.
+        edit.replace(None, "credenciais");
+        assert_eq!(edit.text, "credenciais");
+        edit.move_to(100);
+        edit.select_to(999);
+        edit.replace(None, "!");
+        assert_eq!(edit.text, "credenciais!");
+        edit.text = "é".into();
+        edit.move_to(1);
+        assert_eq!(
+            edit.caret(),
+            0,
+            "never place the caret inside a UTF-8 character"
+        );
+    }
 
     #[test]
     fn replaces_selection_without_appending_at_end() {

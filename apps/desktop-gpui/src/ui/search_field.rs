@@ -140,6 +140,9 @@ impl SearchField {
     }
 
     fn changed(&mut self, cx: &mut Context<Self>) {
+        self.layout = None;
+        self.wrapped.clear();
+        self.last_caret = None;
         cx.emit(SearchChanged(self.edit.text.clone()));
         cx.notify();
     }
