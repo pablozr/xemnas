@@ -56,13 +56,13 @@ npm test                      # testes de contrato do envelope
 npm run send-fixture          # envia fixture pela outbox (modo CLI)
 ```
 
-Variáveis relevantes: `OPENCODE_URL` (padrão `http://127.0.0.1:4096`), `XEMNAS_DATA_DIR`, `XEMNAS_OUTBOX_DIR` e, para a injeção de contexto, `XEMNAS_CONTEXT_MODE` (`off` por padrão, `shadow` ou `inject`), `XEMNAS_CONTEXT_TIMEOUT_MS` e `XEMNAS_CONTEXT_BUDGET_TOKENS` (ver [`docs/fase-3/02-injecao-de-contexto.md`](docs/fase-3/02-injecao-de-contexto.md)).
+Variáveis relevantes: `OPENCODE_URL` (padrão `http://127.0.0.1:4096`), `XEMNAS_DATA_DIR`, `XEMNAS_OUTBOX_DIR`. A injeção de contexto é ligada por projeto no app (desligada, medir ou ativa); o plugin só aceita `XEMNAS_CONTEXT_TIMEOUT_MS` como ajuste opcional (ver [`docs/fase-3/02-injecao-de-contexto.md`](docs/fase-3/02-injecao-de-contexto.md)).
 
 **Ativação (uma vez, sem publicar):** o OpenCode carrega plugins de arquivos locais — crie `~/.config/opencode/plugins/xemnas.ts` reexportando o build (`export { XemnasOpenCodeAdapter as Xemnas } from "<repo>/adapters/opencode/dist/src/index.js"`; caminho relativo a partir de `plugins/` é `../../../orca/projects/xemnas/...`). O wrapper deve ter **um único export** (o factory), para o OpenCode não registrar os exports utilitários do módulo. Reinicie a sessão do OpenCode após criar o arquivo.
 
 ## Context Pack (Fase 3)
 
-O backend monta um **Context Pack** para uma tarefa: decisões vigentes e premissas/regras válidas numa data, escolhidas por busca lexical, com citações (decisão e versão, evidências, relações) e limite de tamanho. Exportar para Markdown ou JSON exige ação explícita e destino escolhido. Decisões podem ser substituídas sem apagar a anterior. No OpenCode, o plugin pode anexar ao pedido um bloco compacto (cerca de 300 tokens, sem repetir na sessão), desligado por padrão e com modo sombra para medir antes de ligar. Detalhes e contrato para a UI: [`docs/fase-3/01-context-pack-manual.md`](docs/fase-3/01-context-pack-manual.md) e [ADR-0003](docs/adr/0003-fase-3-contexto-recuperavel.md).
+O backend monta um **Context Pack** para uma tarefa: decisões vigentes e premissas/regras válidas numa data, escolhidas por busca lexical, com citações (decisão e versão, evidências, relações) e limite de tamanho. Exportar para Markdown ou JSON exige ação explícita e destino escolhido. Decisões podem ser substituídas sem apagar a anterior. No OpenCode, o plugin pode anexar ao pedido um bloco compacto (cerca de 300 tokens, sem repetir na sessão), desligado por padrão, ligado por projeto nas configurações do app, com modo sombra para medir antes de ativar. Detalhes e contrato para a UI: [`docs/fase-3/01-context-pack-manual.md`](docs/fase-3/01-context-pack-manual.md) e [ADR-0003](docs/adr/0003-fase-3-contexto-recuperavel.md).
 
 ## Privacidade
 

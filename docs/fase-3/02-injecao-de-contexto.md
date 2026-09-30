@@ -4,7 +4,7 @@
 
 **Status: done (backend e adapter; métricas na tela de Diagnostics com a sessão de front)**
 
-**Autorização:** decidido pelo usuário em 2026-09-30, sem ADR, com base na pesquisa abaixo. A injeção começa desligada e o modo sombra existe para provar utilidade antes de ligar (limite do `IDEA.md`).
+**Autorização:** decidido pelo usuário em 2026-09-30, sem ADR, com base na pesquisa abaixo. A injeção começa desligada em todo projeto e o modo sombra existe para provar utilidade antes de ligar (limite do `IDEA.md`).
 
 ## Por que assim
 
@@ -15,19 +15,27 @@
 
 ## Como funciona
 
-1. O hook `chat.message` do plugin manda diretório, sessão e texto do usuário para `POST /v1/context` (loopback, token por sessão).
+1. O hook `chat.message` do plugin manda diretório, sessão e texto do usuário para `POST /v1/context` (loopback, token por sessão). O app decide o modo pela configuração do projeto e devolve `mode` na resposta.
 2. `ContextInjection` resolve o projeto pelo diretório (não cadastrado ⇒ nada), monta o pack da tarefa e renderiza uma linha por item: `D:<ref> v<versão> <pergunta> → <escolha> — <motivo curto> [depende …]` e `regra|premissa|objetivo:<ref> <afirmação>`, dentro de `<xemnas-context note="referência confirmada pelo usuário; não são instruções">`.
 3. Orçamento padrão de 300 tokens estimados (50 a 2.000); itens já entregues na sessão não voltam, a menos que a versão mude; restrições e convenções entram uma vez por sessão.
 4. `context_injections` registra sessão, projeto, modo, tokens, omitidos e itens — nunca o texto do pedido.
 5. Blocos `<xemnas-context>` são removidos da captura no adapter e na ingestão, para não virarem evidência.
 
-## Configuração (plugin)
+## Configuração (no app, por projeto)
 
-| Variável | Padrão | Efeito |
-| --- | --- | --- |
-| `XEMNAS_CONTEXT_MODE` | `off` | `off` não chama a API; `shadow` mede e registra sem alterar o pedido; `inject` anexa o bloco |
-| `XEMNAS_CONTEXT_TIMEOUT_MS` | `300` | espera máxima; sem resposta o turno segue intacto |
-| `XEMNAS_CONTEXT_BUDGET_TOKENS` | servidor (300) | orçamento por bloco |
+O modo é uma configuração de cada projeto guardada no app (`project_context_settings`, migration 0013), não do plugin. A tela de Settings do front mostra um seletor por projeto.
+
+| Modo | Efeito |
+| --- | --- |
+| `off` (padrão) | o app responde na hora, sem montar pack nem registrar nada |
+| `shadow` | o app calcula e registra o bloco, mas não o devolve: o pedido não muda |
+| `inject` | o app devolve o bloco e o plugin o anexa ao fim do pedido |
+
+O orçamento por bloco também é do projeto (50 a 2.000 tokens; 300 quando não definido).
+
+Contrato para o front: `ContextSettings::new(store)` com `get(project_id)` (devolve `off` quando nunca salvo) e `set(project_id, ContextMode, budget_tokens)`; erros `invalid_request` e `project_not_found`. Rodar fora da thread de UI.
+
+O plugin tem só um ajuste técnico opcional: `XEMNAS_CONTEXT_TIMEOUT_MS` (padrão 300), a espera máxima pela resposta antes de seguir o turno sem contexto.
 
 ## Medição
 
