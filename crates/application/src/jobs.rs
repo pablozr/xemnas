@@ -1,11 +1,4 @@
 //! Jobs use cases: persist work, run it off the UI thread, recover it on boot.
-//!
-//! Jobs are persisted before any execution (spec §9) and move through the five
-//! explicit states of spec §11. Handlers run in a dedicated worker thread
-//! spawned by [`Jobs::spawn_worker`]; the worker never touches the UI thread
-//! (ASYNC-001). A handler error or panic becomes a `failed` job with a
-//! sanitized message, so neither the UI nor the process is brought down
-//! (spec §14, PRIV-001).
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -19,9 +12,6 @@ use crate::clock::now_rfc3339;
 
 thread_local! {
     /// Set only while a job handler runs on this thread.
-    ///
-    /// The panic hook installed by [`install_panic_sanitizer`] reads it to
-    /// decide whether a panic payload must be suppressed (PRIV-001).
     static JOB_PANIC_SANITIZED: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -36,11 +26,6 @@ fn replace_job_panic_sanitized(value: bool) -> bool {
 }
 
 /// Writes a panic report that has no parameter for the panic payload.
-///
-/// Only the thread name and the source location are included. The payload is
-/// omitted on purpose: a handler may panic with prompts, diffs or credentials,
-/// and PRIV-001 forbids that content from reaching a log. The source location
-/// (`file:line`) is safe and useful for diagnosis.
 pub fn write_sanitized_panic_report(
     writer: &mut impl Write,
     thread_name: Option<&str>,
@@ -55,10 +40,6 @@ pub fn write_sanitized_panic_report(
 }
 
 /// Installs the process panic hook that sanitizes job-handler panics.
-///
-/// A panic raised while a handler runs writes only the sanitized report to
-/// stderr; any other panic delegates to the hook installed before, so the rest
-/// of the application (including the UI toolkit) keeps its own behavior.
 pub fn install_panic_sanitizer() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info: &PanicHookInfo<'_>| {
@@ -105,12 +86,6 @@ impl JobState {
     }
 
     /// Parses a persisted state literal.
-    ///
-    /// Returns [`JobError::Storage`] for an unknown literal, which can only be
-    /// database corruption because the schema carries a `CHECK` constraint.
-    // The inherent name mirrors `std::str::FromStr`, but that trait's error type
-    // would be opaque (`Infallible` is unused here); the domain error is the
-    // useful return for the storage round-trip.
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(value: &str) -> Result<Self, JobError> {
         match value {
@@ -127,9 +102,6 @@ impl JobState {
 }
 
 /// A persisted job row.
-///
-/// This is a plain persistence record: `payload` is opaque text (the JSON
-/// contract arrives in ticket 08) and the timestamps are RFC 3339 UTC strings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JobRecord {
     /// Stable identifier of the job.
@@ -153,12 +125,6 @@ pub struct JobRecord {
 }
 
 /// Typed reason a handler reports a job as failed.
-///
-/// Variants carry **no runtime string**: every message is a fixed product text,
-/// so sensitive content (payload, prompts, diffs, credentials) cannot reach
-/// `last_error` even if a handler tries. Start with the one honest generic
-/// reason; the tickets that need a finer taxonomy (09/11) extend this enum with
-/// documented variants and fixed messages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobFailure {
     /// The handler could not complete the job for a reason it owns.
@@ -181,9 +147,6 @@ impl std::fmt::Display for JobFailure {
 }
 
 /// Failure modes of the Jobs use cases.
-///
-/// These are framework and storage errors only; a handler reports through
-/// [`JobFailure`], which cannot carry a free-form message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JobError {
     /// The storage backend failed; the message is diagnostic only.
@@ -223,10 +186,6 @@ impl std::error::Error for JobError {}
 pub const INTERRUPTED_NON_IDEMPOTENT: &str = "O job foi interrompido por um reinício do aplicativo e não pode ser retomado automaticamente porque não é idempotente.";
 
 /// Job kind scheduled by ingest to analyze a persisted capture.
-///
-/// No handler is registered for this kind until ticket 12, so the job stays
-/// `queued` by design: `claim_next` never drops or silently fails a kind without
-/// a registered handler.
 pub const ANALYZE_CAPTURE_KIND: &str = "analyze_capture";
 
 /// Fixed diagnostic for a handler panic. The panic content is never used.
@@ -271,9 +230,6 @@ type JobHandler = Arc<dyn Fn(&JobRecord) -> Result<(), JobFailure> + Send + Sync
 type Observer = Arc<dyn Fn(JobEvent) + Send + Sync + 'static>;
 
 /// Port that persists jobs.
-///
-/// Infrastructure crates implement this trait; the application never knows how
-/// rows are stored.
 pub trait JobRepository {
     /// Inserts a new record.
     fn insert(&self, record: &JobRecord) -> Result<(), JobError>;
@@ -285,16 +241,9 @@ pub trait JobRepository {
     fn list(&self) -> Result<Vec<JobRecord>, JobError>;
 
     /// Atomically claims the oldest queued job whose kind is in `registered_kinds`.
-    ///
-    /// Claims `queued -> running` and increments `attempts`. Jobs whose kind is
-    /// not registered stay `queued`: they never disappear and are never failed
-    /// silently.
     fn claim_next(&self, registered_kinds: &[String]) -> Result<Option<JobRecord>, JobError>;
 
     /// Compare-and-set transition: changes state only when the row is in `from`.
-    ///
-    /// Returns `false` when no row matched, which is how an invalid transition
-    /// (for example cancelling a `running` job) is detected.
     fn transition(
         &self,
         id: &str,
@@ -309,9 +258,6 @@ pub trait JobRepository {
 }
 
 /// Jobs use cases over a [`JobRepository`].
-///
-/// Handlers are registered before the instance is shared and are frozen
-/// afterwards, so every clone of a shared `Jobs` sees the same handlers.
 #[derive(Clone)]
 pub struct Jobs<R> {
     repository: R,
@@ -345,9 +291,6 @@ impl<R> Jobs<R> {
     }
 
     /// Registers the handler for a job kind.
-    ///
-    /// Must be called before the instance is shared; registering after a clone
-    /// exists only affects the caller's copy and is therefore not the contract.
     pub fn register(&mut self, kind: impl Into<String>, handler: JobHandler) {
         let kind = kind.into();
         if !self.handlers.contains_key(&kind) {
@@ -357,9 +300,6 @@ impl<R> Jobs<R> {
     }
 
     /// Installs the callback the worker uses to report events.
-    ///
-    /// This is how the composition root logs outcomes while this crate stays
-    /// free of `tracing` (spec §14).
     pub fn observe_with<F>(&mut self, observer: F)
     where
         F: Fn(JobEvent) + Send + Sync + 'static,
@@ -381,9 +321,6 @@ impl<R> Jobs<R> {
 
 impl<R: JobRepository> Jobs<R> {
     /// Persists a job and wakes the worker.
-    ///
-    /// The job is written before any execution (spec §9). The kind must have a
-    /// registered handler, otherwise nothing could ever run it.
     pub fn enqueue(
         &self,
         kind: &str,
@@ -416,9 +353,6 @@ impl<R: JobRepository> Jobs<R> {
     }
 
     /// Cancels a queued job.
-    ///
-    /// Only `queued -> cancelled` is allowed; a `running` or terminal job
-    /// cannot be cancelled and returns [`JobError::InvalidTransition`].
     pub fn cancel(&self, id: &str) -> Result<(), JobError> {
         let record = self.repository.get(id)?.ok_or(JobError::NotFound)?;
         if record.state != JobState::Queued {
@@ -440,11 +374,6 @@ impl<R: JobRepository> Jobs<R> {
     }
 
     /// Requeues a failed job so a worker can claim it again.
-    ///
-    /// Only `failed -> queued` is allowed; the compare-and-set also clears
-    /// `last_error`. `attempts` keeps incrementing on the next claim, so a manual
-    /// reprocessing stays visible and unbounded — the only bounded retry is the
-    /// provider's own transient retry policy.
     pub fn reprocess(&self, id: &str) -> Result<(), JobError> {
         let record = self.repository.get(id)?.ok_or(JobError::NotFound)?;
         if record.state != JobState::Failed {
@@ -467,25 +396,16 @@ impl<R: JobRepository> Jobs<R> {
     }
 
     /// Recovers jobs left `running` by a restart.
-    ///
-    /// Idempotent jobs return to `queued`; non-idempotent ones become `failed`
-    /// with a visible diagnostic. Call this once at boot, before the worker.
     pub fn recover(&self) -> Result<RecoveryReport, JobError> {
         self.repository.recover_interrupted()
     }
 
     /// Claims and runs the next eligible job.
-    ///
-    /// Returns `Ok(None)` when nothing is eligible, `Ok(Some(outcome))` after a
-    /// handler completed, errored or panicked, and `Err` only on storage
-    /// failure. A handler panic is contained here, so the caller survives.
     pub fn run_next(&self) -> Result<Option<JobOutcome>, JobError> {
         let Some(record) = self.repository.claim_next(&self.kinds)? else {
             return Ok(None);
         };
         let Some(handler) = self.handlers.get(&record.kind) else {
-            // The claim filter makes this unreachable, but a job must never be
-            // lost if the two views disagree.
             self.transition_checked(&record.id, JobState::Running, JobState::Queued, None)?;
             return Ok(Some(JobOutcome {
                 job_id: record.id,
@@ -495,9 +415,6 @@ impl<R: JobRepository> Jobs<R> {
             }));
         };
 
-        // Only the handler call may panic with sensitive content; the flag makes
-        // the installed panic hook omit that payload. `catch_unwind` guarantees
-        // the flag is restored even when the handler panics.
         let previous = replace_job_panic_sanitized(true);
         let result = catch_unwind(AssertUnwindSafe(|| handler(&record)));
         replace_job_panic_sanitized(previous);
@@ -508,8 +425,6 @@ impl<R: JobRepository> Jobs<R> {
                 JobState::Completed
             }
             Ok(Err(failure)) => {
-                // A typed failure carries a fixed product message; no runtime
-                // text reaches `last_error` (PRIV-001).
                 self.transition_checked(
                     &record.id,
                     JobState::Running,
@@ -519,7 +434,6 @@ impl<R: JobRepository> Jobs<R> {
                 JobState::Failed
             }
             Err(_panic) => {
-                // A fixed message: the panic content and payload are never used.
                 self.transition_checked(
                     &record.id,
                     JobState::Running,
@@ -539,9 +453,6 @@ impl<R: JobRepository> Jobs<R> {
     }
 
     /// Applies a compare-and-set transition, treating a miss as a conflict.
-    ///
-    /// A `false` result means another writer changed the row, so the caller must
-    /// not report a terminal outcome the database did not record.
     fn transition_checked(
         &self,
         id: &str,
@@ -562,10 +473,6 @@ where
     R: JobRepository + Clone + Send + 'static,
 {
     /// Starts the dedicated worker thread.
-    ///
-    /// The thread waits on a condition variable with a short poll timeout,
-    /// drains every eligible job, and stops when [`WorkerHandle::stop`] is
-    /// called. It never touches the UI (ASYNC-001).
     pub fn spawn_worker(&self) -> WorkerHandle {
         let stop = self.stop.clone();
         let signal = self.signal.clone();
@@ -627,8 +534,6 @@ fn worker_loop<R>(
             }
         }
 
-        // Wait for a wakeup or the poll timeout; holding the generation lock
-        // across the wait closes the lost-wakeup window with `wake`.
         let generation = signal
             .generation
             .lock()
@@ -644,10 +549,6 @@ fn worker_loop<R>(
 }
 
 /// Handle to the worker thread.
-///
-/// Stops and joins the thread. Dropping the handle without joining is allowed
-/// but leaves the thread running until the process ends; the composition root
-/// calls [`WorkerHandle::stop`] and [`WorkerHandle::join`] on shutdown.
 pub struct WorkerHandle {
     signal: Arc<Signal>,
     stop: Arc<AtomicBool>,
@@ -669,9 +570,6 @@ impl WorkerHandle {
     }
 
     /// Waits for the worker thread to finish.
-    ///
-    /// Returns an error if the thread could not be started, terminated
-    /// unexpectedly, or stopped because of a storage failure.
     pub fn join(mut self) -> Result<(), JobError> {
         if let Some(thread) = self.thread.take() {
             thread.join().map_err(|_| {
@@ -827,8 +725,6 @@ mod tests {
         assert_eq!(queued.state, JobState::Queued);
         assert_eq!(queued.last_error, None, "reprocess must clear last_error");
 
-        // The worker was woken: the next claim picks the job up and increments
-        // attempts, so manual reprocessing stays visible.
         let claimed = repository
             .claim_next(&["analysis".to_string()])
             .expect("claim")
@@ -1024,9 +920,6 @@ mod tests {
 
     #[test]
     fn installed_hook_sanitizes_a_handler_panic() {
-        // stderr cannot be captured in-process without another crate, so this
-        // test installs a hook that re-renders through the exact function
-        // `install_panic_sanitizer` uses and captures it in memory.
         let previous = std::panic::take_hook();
         let buffer = Arc::new(Mutex::new(Vec::<u8>::new()));
         let buffer_hook = buffer.clone();
@@ -1122,7 +1015,6 @@ mod tests {
             "job-orphan",
             "desconhecido",
         )));
-        // No handler registered, so the defensive requeue branch runs.
         assert_eq!(
             jobs.run_next(),
             Err(JobError::InvalidTransition {

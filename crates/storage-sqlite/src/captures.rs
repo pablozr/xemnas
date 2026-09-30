@@ -1,10 +1,4 @@
 //! SQLite implementation of the Capture persistence port.
-//!
-//! One transaction writes the receipt, its artifacts and the analysis job, so a
-//! constraint failure (a repeated artifact id, say) leaves no partial state. The
-//! `idempotency_key` unique constraint is the deduplication mechanism; the
-//! transaction reports it distinctly so the use case can return the stored
-//! receipt instead of writing again.
 
 use application::captures::{CaptureError, CaptureReceiptRecord, CaptureRepository, CaptureWrite};
 use rusqlite::{params, OptionalExtension, Row};
@@ -32,9 +26,6 @@ fn map_receipt(row: &Row<'_>) -> rusqlite::Result<CaptureReceiptRecord> {
 }
 
 /// Classifies a constraint failure into the capture error it represents.
-///
-/// The message names the failed constraint, which is how the receipt unique
-/// index is told apart from the artifact primary/unique indexes.
 fn constraint_kind(error: &rusqlite::Error) -> Option<CaptureError> {
     if let rusqlite::Error::SqliteFailure(failure, message) = error {
         if failure.code != rusqlite::ErrorCode::ConstraintViolation {
@@ -58,9 +49,6 @@ impl CaptureRepository for SqliteStore {
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(storage_error)?;
 
-        // §7.3 steps 4-6: the allow-list check is authoritative inside the same
-        // IMMEDIATE transaction that writes. A project removed after the
-        // use-case pre-check cannot leave a capture for an unregistered project.
         let registered: i64 = transaction
             .query_row(
                 "SELECT COUNT(*) FROM projects WHERE location = ?1",
@@ -124,18 +112,15 @@ impl CaptureRepository for SqliteStore {
             )
             .map_err(storage_error)?;
 
-        // Adapter checkpoint, in the same transaction so a rejected capture
-        // leaves no checkpoint behind. `ON CONFLICT` advances the session's
-        // high-water mark; a replay never reaches here (the receipt unique
-        // conflict rolls the whole transaction back), so a replayed older
-        // message cannot move the mark backwards.
         transaction
             .execute(
                 "INSERT INTO adapter_checkpoints \
-                 (adapter, session_id, message_id, capture_id, observed_at, updated_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+                 (adapter, session_id, message_id, capture_id, observed_at, updated_at, \
+                  adapter_version) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
                  ON CONFLICT(adapter, session_id) DO UPDATE SET \
                      message_id = excluded.message_id, \
+                     adapter_version = excluded.adapter_version, \
                      capture_id = excluded.capture_id, \
                      observed_at = excluded.observed_at, \
                      updated_at = excluded.updated_at",
@@ -146,6 +131,7 @@ impl CaptureRepository for SqliteStore {
                     write.checkpoint.capture_id,
                     write.checkpoint.observed_at,
                     write.checkpoint.updated_at,
+                    write.checkpoint.adapter_version,
                 ],
             )
             .map_err(storage_error)?;

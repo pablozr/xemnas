@@ -1,17 +1,12 @@
 //! SQLite implementation of the diagnostics persistence port.
-//!
-//! Every query returns counts or metadata only; no artifact content, candidate
-//! text or secret is ever selected.
 
-use std::collections::BTreeMap;
-use std::path::Path;
-
-use crate::store::{default_data_dir, SqliteStore};
+use crate::store::SqliteStore;
 use application::diagnostics::{
-    AssessmentDiagnosticRow, DiagnosticsCounts, DiagnosticsError, DiagnosticsMetrics,
-    DiagnosticsStore, Distribution, JobDiagnosticRow, LossMetrics, NoiseMetrics, OutboxCounts,
-    ReceiptDiagnosticRow,
+    AssessmentDiagnosticRow, ContextMetrics, ContextModeMetrics, DiagnosticsCounts,
+    DiagnosticsError, DiagnosticsMetrics, DiagnosticsStore, Distribution, JobDiagnosticRow,
+    LossMetrics, NoiseMetrics, ReceiptDiagnosticRow,
 };
+use std::collections::BTreeMap;
 
 /// Converts a query failure into a storage error.
 fn storage_error(error: rusqlite::Error) -> DiagnosticsError {
@@ -43,38 +38,8 @@ fn grouped(
     Ok(rows.into_iter().collect())
 }
 
-/// Counts `*.json` files directly inside `directory`; a missing directory is 0.
-fn count_files(directory: &Path) -> i64 {
-    std::fs::read_dir(directory)
-        .map(|entries| {
-            entries
-                .filter_map(Result::ok)
-                .filter(|entry| {
-                    entry
-                        .path()
-                        .extension()
-                        .map(|extension| extension.eq_ignore_ascii_case("json"))
-                        .unwrap_or(false)
-                })
-                .count() as i64
-        })
-        .unwrap_or(0)
-}
-
-/// Resolves the outbox root the same way the composition root drains it.
-fn outbox_root() -> std::path::PathBuf {
-    std::env::var_os("XEMNAS_OUTBOX_DIR")
-        .filter(|value| !value.is_empty())
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| default_data_dir().join("outbox"))
-}
-
 /// Builds a percentile distribution over the integer `delta_ms` column of
 /// `deltas_sql`.
-///
-/// `deltas_sql` must be a `SELECT … AS delta_ms` statement with no `ORDER BY`;
-/// timestamps that SQLite cannot parse are already excluded by its `WHERE`. The
-/// percentile is the value at `ROUND((n-1) * p)` in ascending order.
 fn distribution(
     connection: &rusqlite::Connection,
     deltas_sql: &str,
@@ -186,8 +151,6 @@ impl DiagnosticsStore for SqliteStore {
 
     fn recent_receipts(&self, limit: usize) -> Result<Vec<ReceiptDiagnosticRow>, DiagnosticsError> {
         let connection = self.lock();
-        // Resolve the project id from the receipt location; the path itself is
-        // never selected, so it cannot leak into the document.
         let mut statement = connection
             .prepare(
                 "SELECT r.capture_id, r.artifact_count, r.received_at, p.id \
@@ -235,15 +198,6 @@ impl DiagnosticsStore for SqliteStore {
         Ok(rows)
     }
 
-    fn outbox_counts(&self) -> Result<OutboxCounts, DiagnosticsError> {
-        let root = outbox_root();
-        Ok(OutboxCounts {
-            pending: count_files(&root.join("pending")),
-            accepted: count_files(&root.join("accepted")),
-            rejected: count_files(&root.join("rejected")),
-        })
-    }
-
     fn metrics(&self) -> Result<DiagnosticsMetrics, DiagnosticsError> {
         let connection = self.lock();
 
@@ -274,8 +228,6 @@ impl DiagnosticsStore for SqliteStore {
             )
             .map_err(storage_error)?;
 
-        let outbox_rejected = self.outbox_counts()?.rejected;
-
         Ok(DiagnosticsMetrics {
             latency_capture_to_candidate_ms: latency,
             review_time_ms: review,
@@ -287,10 +239,42 @@ impl DiagnosticsStore for SqliteStore {
                 assessments_failed,
                 assessments_skipped,
                 jobs_failed,
-                outbox_rejected,
+                outbox_rejected: 0,
+            },
+            context: ContextMetrics {
+                shadow: context_mode(&connection, "shadow")?,
+                inject: context_mode(&connection, "inject")?,
             },
         })
     }
+}
+
+/// Aggregates the context injection audit for one mode.
+fn context_mode(
+    connection: &rusqlite::Connection,
+    mode: &str,
+) -> Result<ContextModeMetrics, DiagnosticsError> {
+    connection
+        .query_row(
+            "SELECT COUNT(*), COUNT(DISTINCT session_id), COALESCE(SUM(tokens), 0), \
+                    (SELECT COUNT(*) FROM context_injection_items i \
+                     JOIN context_injections c ON c.injection_id = i.injection_id \
+                     WHERE c.mode = ?1) \
+             FROM context_injections WHERE mode = ?1",
+            [mode],
+            |row| {
+                let blocks: i64 = row.get(0)?;
+                let tokens_total: i64 = row.get(2)?;
+                Ok(ContextModeMetrics {
+                    blocks,
+                    sessions: row.get(1)?,
+                    items: row.get(3)?,
+                    tokens_total,
+                    tokens_avg: (blocks > 0).then(|| tokens_total / blocks),
+                })
+            },
+        )
+        .map_err(storage_error)
 }
 
 /// Rounds a ratio to four decimals, as promised by the document shape.

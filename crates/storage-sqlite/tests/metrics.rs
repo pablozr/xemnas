@@ -95,6 +95,7 @@ fn seed_capture(store: &SqliteStore, capture_id: &str, session_id: &str, receive
             },
             checkpoint: CaptureCheckpointRecord {
                 adapter: "opencode".to_string(),
+                adapter_version: "0.1.0".to_string(),
                 session_id: session_id.to_string(),
                 message_id: "message-1".to_string(),
                 capture_id: capture_id.to_string(),
@@ -145,7 +146,6 @@ fn metrics_are_aggregated_from_seeded_timestamps() {
     )
     .expect("seed project");
 
-    // Two receipts at the same instant; candidate offsets give known deltas.
     seed_capture(&store, "capture-1", "session-1", "2026-01-01T00:00:00Z");
     seed_capture(&store, "capture-2", "session-2", "2026-01-01T00:00:00Z");
 
@@ -160,12 +160,10 @@ fn metrics_are_aggregated_from_seeded_timestamps() {
                 "edited_and_accepted",
             ),
             candidate("cand-4", "capture-2", "2026-01-01T00:00:05Z", "accepted"),
-            // Malformed date: it must be ignored, not fail the export.
             candidate("cand-bad", "capture-1", "not-a-date", "pending"),
         ])
         .expect("insert candidates");
 
-    // Confirm cand-1, then pin the confirmation time so review time is exact.
     Inbox::new(store.clone())
         .confirm("cand-1", None)
         .expect("confirm");
@@ -180,7 +178,6 @@ fn metrics_are_aggregated_from_seeded_timestamps() {
             .expect("pin confirmation time");
     }
 
-    // Losses: two failed assessments, one skipped, one failed job.
     for (index, outcome) in [
         (1, AssessmentOutcome::Failed),
         (2, AssessmentOutcome::Failed),
@@ -222,38 +219,31 @@ fn metrics_are_aggregated_from_seeded_timestamps() {
     )
     .expect("insert failed job");
 
-    // One rejected outbox file.
     let outbox = root.join("outbox");
     std::fs::create_dir_all(outbox.join("rejected")).expect("create rejected dir");
     std::fs::write(outbox.join("rejected").join("item.json"), "{}").expect("write rejected");
-    std::env::set_var("XEMNAS_OUTBOX_DIR", &outbox);
 
     let document = Diagnostics::new(
         store.clone(),
         AiSettings::new(NoProfiles::default(), NoSecrets),
+        &outbox,
     )
     .export()
     .expect("export");
 
-    std::env::remove_var("XEMNAS_OUTBOX_DIR");
-
-    // Latency deltas: [1000, 2000, 3000, 5000] ms (the malformed row is dropped).
     let latency = &document.metrics.latency_capture_to_candidate_ms;
     assert_eq!(latency.samples, 4);
     assert_eq!(latency.p50, Some(3000));
     assert_eq!(latency.p95, Some(5000));
 
-    // Review: one decision, 11s after the candidate.
     let review = &document.metrics.review_time_ms;
     assert_eq!(review.samples, 1);
     assert_eq!(review.p50, Some(10_000));
     assert_eq!(review.p95, Some(10_000));
 
-    // Noise: 1 dismissed out of 4 decided.
     assert_eq!(document.metrics.noise.decided_total, 4);
     assert_eq!(document.metrics.noise.dismissed_ratio, Some(0.25));
 
-    // Losses.
     assert_eq!(document.metrics.losses.assessments_failed, 2);
     assert_eq!(document.metrics.losses.assessments_skipped, 1);
     assert_eq!(document.metrics.losses.jobs_failed, 1);

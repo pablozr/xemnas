@@ -1,14 +1,6 @@
 //! Engineering Decisions: accepted candidates promoted to versioned, searchable
 //! decisions with provenance. Nothing is ever hard-deleted: a revision keeps the
 //! previous snapshot in `decision_revisions`, and the history stays readable.
-//!
-//! The promotion itself happens inside [`crate::inbox::InboxStore::confirm_one`]
-//! so the candidate status change, the decision row, its first snapshot, its
-//! evidence links and the search index commit in one transaction. This module
-//! owns the read/revise/search surface of an already-promoted decision.
-//!
-//! `superseded` is modelled for a later ticket (§7.6 line 441); no MVP action
-//! sets it, so a decision only ever reaches `accepted` today.
 
 use crate::clock::now_rfc3339;
 use crate::inbox::{
@@ -26,7 +18,7 @@ pub const MAX_ARRAY_ITEM_CHARS: usize = 1_000;
 pub enum DecisionStatus {
     /// The decision is current.
     Accepted,
-    /// The decision was replaced by a newer one (model only; no MVP action).
+    /// The decision was replaced by a newer one.
     Superseded,
 }
 
@@ -50,15 +42,16 @@ impl DecisionStatus {
 }
 
 /// Failure modes of the Decisions use case.
-///
-/// Every variant carries a stable [`DecisionsError::code`]; messages never
-/// include decision content, host paths or query text (PRIV-001).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DecisionsError {
     /// The storage backend failed; the message is diagnostic only.
     Storage(String),
     /// No decision with the requested id exists.
     NotFound,
+    /// Another revision was saved first, or the decision is no longer accepted.
+    Conflict,
+    /// The requested relation is not allowed.
+    InvalidRelation(String),
     /// The submitted revision failed validation.
     InvalidEdits(String),
     /// The search query was empty after sanitization.
@@ -75,6 +68,8 @@ impl DecisionsError {
         match self {
             Self::Storage(_) => "storage",
             Self::NotFound => "not_found",
+            Self::Conflict => "conflict",
+            Self::InvalidRelation(_) => "invalid_relation",
             Self::InvalidEdits(_) => "invalid_edits",
             Self::InvalidQuery(_) => "invalid_query",
             Self::InvalidFilter(_) => "invalid_filter",
@@ -88,6 +83,9 @@ impl std::fmt::Display for DecisionsError {
         match self {
             Self::Storage(message) => write!(formatter, "falha de armazenamento: {message}"),
             Self::NotFound => formatter.write_str("decisão não encontrada"),
+            Self::Conflict => formatter
+                .write_str("a decisão mudou ou não está mais vigente; atualize e tente de novo"),
+            Self::InvalidRelation(message) => write!(formatter, "relação inválida: {message}"),
             Self::InvalidEdits(message) => write!(formatter, "revisão inválida: {message}"),
             Self::InvalidQuery(message) => write!(formatter, "consulta inválida: {message}"),
             Self::InvalidFilter(message) => write!(formatter, "filtro inválido: {message}"),
@@ -258,9 +256,6 @@ pub struct DecisionSummary {
 }
 
 /// One full revision in the history.
-///
-/// Every version is stored in full, so an earlier version is reconstructible
-/// after any number of revisions (nothing is hard-deleted).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecisionRevision {
     /// Revision version.
@@ -459,8 +454,6 @@ pub struct DecisionSearchRow {
 }
 
 /// Full content written when a revision is snapshotted.
-///
-/// Array fields carry serialized JSON arrays, exactly as stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecisionContent {
     /// Decision question.
@@ -480,9 +473,6 @@ pub struct DecisionContent {
 }
 
 /// Persistence port the Decisions use case needs.
-///
-/// There is deliberately no delete method anywhere: a decision and its history
-/// are append-only.
 pub trait DecisionStore {
     /// Returns decisions matching `query`, ordered `confirmed_at DESC, id DESC`.
     fn list(&self, query: &DecisionQuery) -> Result<Vec<StoredDecision>, DecisionsError>;
@@ -505,8 +495,6 @@ pub trait DecisionStore {
     ) -> Result<Vec<DecisionSearchRow>, DecisionsError>;
 
     /// Snapshots `content` as `version` and updates the live row and the index.
-    ///
-    /// Returns `false` when no decision matched (concurrent change).
     fn revise(
         &self,
         id: &str,
@@ -688,9 +676,7 @@ impl<S: DecisionStore> Decisions<S> {
         let edits = edits.validate()?;
         let row = self.store.get(id)?.ok_or(DecisionsError::NotFound)?;
         if expected.is_some_and(|expected| row.version != expected) {
-            return Err(DecisionsError::InvalidEdits(
-                "a decisão recebeu outra versão".into(),
-            ));
+            return Err(DecisionsError::Conflict);
         }
         let content = DecisionContent {
             question: edits.question.unwrap_or(row.question),
@@ -707,17 +693,16 @@ impl<S: DecisionStore> Decisions<S> {
         };
         let version = row.version + 1;
         if !self.store.revise(id, &content, version, &now_rfc3339())? {
-            return Err(DecisionsError::NotFound);
+            return Err(match self.store.get(id)? {
+                Some(_) => DecisionsError::Conflict,
+                None => DecisionsError::NotFound,
+            });
         }
         self.detail(id)
     }
 }
 
 /// Sanitizes a free-text query into an FTS5 `MATCH` expression.
-///
-/// Keeps only word characters and `-`, drops FTS operators and boolean keywords,
-/// then quotes every term and joins them with `AND`. Returns `None` when nothing
-/// usable remains.
 pub fn sanitize_match_query(raw: &str) -> Option<String> {
     let mut tokens = Vec::new();
     for token in raw.split_whitespace() {

@@ -132,7 +132,6 @@ fn exported_diagnostics_never_carry_content_markers() {
     let root = temporary_directory("sanitize");
     let store = SqliteStore::open(root.join("app.db")).expect("open store");
 
-    // Project + capture with a marker inside artifact content.
     let project = ProjectRecord::new(
         "project-1".to_string(),
         LOCATION.to_string(),
@@ -167,6 +166,7 @@ fn exported_diagnostics_never_carry_content_markers() {
             },
             checkpoint: CaptureCheckpointRecord {
                 adapter: "opencode".to_string(),
+                adapter_version: "0.1.0".to_string(),
                 session_id: "session-1".to_string(),
                 message_id: "message-1".to_string(),
                 capture_id: "capture-1".to_string(),
@@ -176,7 +176,6 @@ fn exported_diagnostics_never_carry_content_markers() {
         })
         .expect("seed capture");
 
-    // Candidate with a marker in its rationale, promoted to a decision.
     store
         .insert_candidates(&[candidate("cand-1")])
         .expect("insert candidate");
@@ -194,7 +193,6 @@ fn exported_diagnostics_never_carry_content_markers() {
         .confirm("cand-1", None)
         .expect("confirm");
 
-    // A failed job whose diagnostic is hostile.
     let hostile = JobRecord {
         id: "job-hostile".to_string(),
         kind: ANALYZE_CAPTURE_KIND.to_string(),
@@ -208,12 +206,10 @@ fn exported_diagnostics_never_carry_content_markers() {
     };
     JobRepository::insert(&store, &hostile).expect("insert hostile job");
 
-    // Runtime files that must never be read into the document.
     let state_dir = root.join("state");
     std::fs::create_dir_all(&state_dir).expect("create state dir");
     std::fs::write(state_dir.join("api-token"), MARKER_TOKEN).expect("write token");
 
-    // Outbox with one file per bucket; only counts may appear.
     let outbox = root.join("outbox");
     for (bucket, marker) in [
         ("pending", MARKER_OUTBOX),
@@ -224,7 +220,6 @@ fn exported_diagnostics_never_carry_content_markers() {
         std::fs::create_dir_all(&directory).expect("create bucket");
         std::fs::write(directory.join("item.json"), marker).expect("write item");
     }
-    std::env::set_var("XEMNAS_OUTBOX_DIR", &outbox);
 
     let diagnostics = Diagnostics::new(
         store.clone(),
@@ -232,14 +227,11 @@ fn exported_diagnostics_never_carry_content_markers() {
             SeededProfiles::external_with_credential_endpoint(),
             SomeSecrets,
         ),
+        &outbox,
     );
     let document = diagnostics.export().expect("export");
     let json = application::serde_json::to_string_pretty(&document).expect("serialize");
 
-    std::env::remove_var("XEMNAS_OUTBOX_DIR");
-
-    // Sanitization by construction: no marker survives anywhere, including the
-    // project path and the credential/query embedded in the endpoint.
     for marker in [
         MARKER_ARTIFACT,
         MARKER_RATIONALE,
@@ -257,8 +249,7 @@ fn exported_diagnostics_never_carry_content_markers() {
         );
     }
 
-    // Structural information is present and correct.
-    assert_eq!(document.schema.migrations_version, 8);
+    assert_eq!(document.schema.migrations_version, 13);
     assert!(
         json.contains("\"metrics\""),
         "the metrics section is part of the sanitized sweep"

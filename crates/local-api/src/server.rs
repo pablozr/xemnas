@@ -1,16 +1,14 @@
 //! Axum router, authentication middleware, timeouts and the four MVP endpoints.
-//!
-//! The router is generic over the [`CaptureApi`] trait so `local-api` never
-//! depends on storage at runtime; the composition root (or a test) mounts the
-//! concrete use case. Blocking use-case calls always run on `spawn_blocking`
-//! with a timeout, so the async runtime is never blocked (ASYNC-001).
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use application::agent_access::{AgentAccessError, AgentApi};
 use application::captures::{CaptureApi, IngestError, Receipt};
+use application::context::ContextError;
+use application::injection::{ContextApi, InjectionOutcome, InjectionRequest};
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{DefaultBodyLimit, Path, Request, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -19,7 +17,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use integration_contracts::capture::{CaptureEnvelope, CAPTURE_ENVELOPE_SCHEMA_VERSION};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::auth::constant_time_eq;
@@ -67,25 +65,49 @@ impl ApiConfig {
 #[derive(Clone)]
 struct AppState {
     api: Arc<dyn CaptureApi>,
+    services: OptionalServices,
     config: ApiConfig,
 }
 
-/// Builds the router with the four MVP endpoints.
-///
-/// Every route requires the bearer token, including `GET /v1/health`
-/// (ticket 09 decision 5). A request carrying `Origin` is rejected with 403
-/// before any handler runs (§13 browser threat). The whole-request timeout is
-/// the outermost layer, so it also covers reading the body.
+/// Use cases whose routes exist only when they are set.
+#[derive(Clone, Default)]
+pub struct OptionalServices {
+    /// Context injection: `POST /v1/context`.
+    pub context: Option<Arc<dyn ContextApi>>,
+    /// Read-only agent access: `POST /v1/agent/decision` and `/v1/agent/search`.
+    pub agent: Option<Arc<dyn AgentApi>>,
+}
+
+/// Builds the router with the capture endpoints only.
 pub fn router(api: Arc<dyn CaptureApi>, config: ApiConfig) -> Router {
-    let state = AppState {
-        api,
-        config: config.clone(),
-    };
-    Router::new()
+    router_with_services(api, OptionalServices::default(), config)
+}
+
+/// Builds the router with the capture endpoints and the services that are set.
+pub fn router_with_services(
+    api: Arc<dyn CaptureApi>,
+    services: OptionalServices,
+    config: ApiConfig,
+) -> Router {
+    let mut routes = Router::new()
         .route("/v1/health", get(health))
         .route("/v1/capabilities", get(capabilities))
         .route("/v1/captures", post(create_capture))
-        .route("/v1/captures/{id}", get(get_capture))
+        .route("/v1/captures/{id}", get(get_capture));
+    if services.context.is_some() {
+        routes = routes.route("/v1/context", post(prepare_context));
+    }
+    if services.agent.is_some() {
+        routes = routes
+            .route("/v1/agent/decision", post(agent_decision))
+            .route("/v1/agent/search", post(agent_search));
+    }
+    let state = AppState {
+        api,
+        services,
+        config: config.clone(),
+    };
+    routes
         .layer(middleware::from_fn_with_state(state.clone(), authorize))
         .layer(DefaultBodyLimit::max(config.max_body_bytes))
         .layer(middleware::from_fn_with_state(
@@ -110,6 +132,8 @@ pub async fn serve(listener: tokio::net::TcpListener, router: Router) -> std::io
 pub struct ApiServerConfig {
     /// The use case the API exposes.
     pub api: Arc<dyn CaptureApi>,
+    /// Optional use cases; their routes exist only when set.
+    pub services: OptionalServices,
     /// Directory receiving `discovery.json` and `api-token`.
     pub runtime_dir: PathBuf,
     /// Protocol version advertised to adapters.
@@ -125,6 +149,7 @@ impl ApiServerConfig {
     pub fn new(api: Arc<dyn CaptureApi>, runtime_dir: impl Into<PathBuf>) -> Self {
         Self {
             api,
+            services: OptionalServices::default(),
             runtime_dir: runtime_dir.into(),
             protocol_version: PROTOCOL_VERSION,
             max_body_bytes: DEFAULT_MAX_BODY_BYTES,
@@ -230,8 +255,9 @@ impl ApiServer {
             .map_err(|error| ApiServerError::Io(error.to_string()))?;
 
         let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel();
-        let router = router(
+        let router = router_with_services(
             config.api,
+            config.services,
             ApiConfig {
                 protocol_version: config.protocol_version,
                 instance_id,
@@ -290,10 +316,6 @@ async fn authorize(State(state): State<AppState>, request: Request, next: Next) 
 }
 
 /// Applies the whole-request timeout around the inner service.
-///
-/// Because this wraps `next.run`, the deadline also covers body extraction: a
-/// client that stalls mid-body is cut off with 504 instead of holding the
-/// connection forever.
 async fn with_request_timeout(
     State(state): State<AppState>,
     request: Request,
@@ -320,7 +342,72 @@ async fn capabilities(State(state): State<AppState>) -> Json<Value> {
         "protocol_version": state.config.protocol_version,
         "capture_schema_versions": [CAPTURE_ENVELOPE_SCHEMA_VERSION],
         "max_body_bytes": state.config.max_body_bytes,
+        "context": state.services.context.is_some(),
+        "agent": state.services.agent.is_some(),
     }))
+}
+
+/// Body of `POST /v1/context`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ContextBody {
+    canonical_path: String,
+    session_id: String,
+    prompt: String,
+}
+
+/// Response of `POST /v1/context`.
+#[derive(Serialize)]
+struct ContextResponse {
+    mode: &'static str,
+    context: Option<String>,
+    tokens: usize,
+    items: usize,
+    omitted: usize,
+}
+
+impl From<InjectionOutcome> for ContextResponse {
+    fn from(outcome: InjectionOutcome) -> Self {
+        Self {
+            mode: outcome.mode.as_str(),
+            context: outcome.block,
+            tokens: outcome.tokens,
+            items: outcome.items,
+            omitted: outcome.omitted,
+        }
+    }
+}
+
+/// `POST /v1/context`: the compact block for one agent turn; the prompt is never logged.
+async fn prepare_context(
+    State(state): State<AppState>,
+    payload: Result<Json<ContextBody>, JsonRejection>,
+) -> Response {
+    let Some(context) = state.services.context.clone() else {
+        return ApiError::NotFound.into_response();
+    };
+    let body = match payload {
+        Ok(Json(body)) => body,
+        Err(rejection) => return json_rejection_to_api_error(rejection).into_response(),
+    };
+    let request = InjectionRequest {
+        canonical_path: body.canonical_path,
+        session_id: body.session_id,
+        prompt: body.prompt,
+    };
+    match run_blocking(move || context.prepare(request)).await {
+        Ok(Ok(outcome)) => Json(ContextResponse::from(outcome)).into_response(),
+        Ok(Err(ContextError::InvalidRequest(_))) => ApiError::BadRequest.into_response(),
+        Ok(Err(error)) => {
+            tracing::error!(
+                code = error.code(),
+                operation = "prepare_context",
+                "context injection failed"
+            );
+            ApiError::Internal.into_response()
+        }
+        Err(error) => error.into_response(),
+    }
 }
 
 /// `POST /v1/captures`: the eight ingest steps of MVP-SPEC §7.3.
@@ -343,9 +430,6 @@ async fn create_capture(
     };
 
     if let Err(error) = integration_contracts::capture::validate_envelope(&value) {
-        // Never log the validation Display: it includes `instance()`, which is
-        // client content (prompts, diffs, credentials). Only schema-defined
-        // keywords and counts are safe (PRIV-001, §13, §19.9).
         tracing::warn!(
             operation = "validate_capture",
             error_count = error.error_count(),
@@ -358,7 +442,6 @@ async fn create_capture(
     let envelope: CaptureEnvelope = match serde_json::from_value(value) {
         Ok(envelope) => envelope,
         Err(error) => {
-            // Serde errors can quote offending scalars; log only the position.
             tracing::warn!(
                 operation = "deserialize_capture",
                 line = error.line(),
@@ -375,8 +458,6 @@ async fn create_capture(
 
     let api = state.api.clone();
     let key_for_call = idempotency_key.clone();
-    // The whole-request timeout layer already bounds this call; the blocking
-    // SQLite work runs on the blocking pool so the runtime stays responsive.
     let outcome = run_blocking(move || api.ingest(&envelope, &key_for_call)).await;
 
     match outcome {
@@ -401,6 +482,81 @@ async fn get_capture(State(state): State<AppState>, Path(capture_id): Path<Strin
         Ok(Ok(receipt)) => Json(ReceiptBody::from(receipt)).into_response(),
         Ok(Err(error)) => ingest_error_response(error),
         Err(error) => error.into_response(),
+    }
+}
+
+/// Body of `POST /v1/agent/decision`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentDecisionBody {
+    canonical_path: String,
+    reference: String,
+}
+
+/// Body of `POST /v1/agent/search`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentSearchBody {
+    canonical_path: String,
+    query: String,
+    budget_tokens: Option<usize>,
+}
+
+/// `POST /v1/agent/decision`: the full decision behind a short reference.
+async fn agent_decision(
+    State(state): State<AppState>,
+    payload: Result<Json<AgentDecisionBody>, JsonRejection>,
+) -> Response {
+    let Some(agent) = state.services.agent.clone() else {
+        return ApiError::NotFound.into_response();
+    };
+    let body = match payload {
+        Ok(Json(body)) => body,
+        Err(rejection) => return json_rejection_to_api_error(rejection).into_response(),
+    };
+    match run_blocking(move || agent.decision(&body.canonical_path, &body.reference)).await {
+        Ok(Ok(text)) => Json(json!({ "text": text })).into_response(),
+        Ok(Err(error)) => agent_error_response(error),
+        Err(error) => error.into_response(),
+    }
+}
+
+/// `POST /v1/agent/search`: a compact block for an explicit query; the query is never logged.
+async fn agent_search(
+    State(state): State<AppState>,
+    payload: Result<Json<AgentSearchBody>, JsonRejection>,
+) -> Response {
+    let Some(agent) = state.services.agent.clone() else {
+        return ApiError::NotFound.into_response();
+    };
+    let body = match payload {
+        Ok(Json(body)) => body,
+        Err(rejection) => return json_rejection_to_api_error(rejection).into_response(),
+    };
+    let result =
+        run_blocking(move || agent.search(&body.canonical_path, &body.query, body.budget_tokens))
+            .await;
+    match result {
+        Ok(Ok(text)) => Json(json!({ "text": text })).into_response(),
+        Ok(Err(error)) => agent_error_response(error),
+        Err(error) => error.into_response(),
+    }
+}
+
+fn agent_error_response(error: AgentAccessError) -> Response {
+    match error {
+        AgentAccessError::NotFound => ApiError::NotFound.into_response(),
+        AgentAccessError::Ambiguous => ApiError::Conflict.into_response(),
+        AgentAccessError::ProjectNotFound => ApiError::Forbidden.into_response(),
+        AgentAccessError::InvalidRequest(_) => ApiError::BadRequest.into_response(),
+        AgentAccessError::Storage(_) => {
+            tracing::error!(
+                code = error.code(),
+                operation = "agent_access",
+                "agent read failed"
+            );
+            ApiError::Internal.into_response()
+        }
     }
 }
 
@@ -432,9 +588,6 @@ fn json_rejection_to_api_error(rejection: JsonRejection) -> ApiError {
 }
 
 /// Runs a blocking use-case call on the blocking pool.
-///
-/// The deadline is enforced by the whole-request timeout layer, not here, so it
-/// also covers body extraction.
 async fn run_blocking<T, F>(task: F) -> Result<T, ApiError>
 where
     F: FnOnce() -> T + Send + 'static,

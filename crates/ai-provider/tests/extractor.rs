@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ai_provider::OpenAiCompatibleExtractor;
+use ai_provider::{test_connection, OpenAiCompatibleExtractor};
 use application::extract::{
     run_extraction, AssessmentRecord, AssessmentStore, CandidateExtractor, DecisionCandidateRecord,
     DecisionEvidence, EvidenceArtifact, ExtractError, ExtractionStore, RelevanceSignal, RunContext,
@@ -322,7 +322,6 @@ fn consent_disabled_makes_no_request() {
 #[test]
 fn stale_consent_after_config_edit_makes_no_request() {
     let server = start_server("HTTP/1.1 200 OK", valid_body(1));
-    // Granted for one configuration, then the config changes under the consent.
     let mut profile = granted_profile(server.port, 64);
     profile.model = "another-model".to_string();
     let extractor =
@@ -587,7 +586,6 @@ fn backoff_delays_grow_exponentially_without_sleeping() {
 
 #[test]
 fn refused_connection_is_transient_and_retried() {
-    // Bind then drop, so the port has no listener.
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind");
     let port = listener.local_addr().expect("addr").port();
     drop(listener);
@@ -681,4 +679,59 @@ fn uuid_like() -> String {
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
     format!("{}-{nanos}", std::process::id())
+}
+
+/// Strict model answer that cites the synthetic connection-test artifacts.
+fn connection_test_body(evidence_ref: &str) -> Vec<u8> {
+    chat_body(
+        &serde_json::json!({
+            "proposals": [{
+                "question": "Onde persistir a fila de exemplo?",
+                "choice": "SQLite",
+                "rationale": "Aplicativo local.",
+                "confidence": 0.8,
+                "confidence_reason": "Troca explícita.",
+                "evidence_refs": [evidence_ref],
+                "diff_summary": { "files": [], "artifacts": 2 }
+            }]
+        })
+        .to_string(),
+    )
+}
+
+#[test]
+fn connection_test_sends_only_synthetic_evidence_and_validates() {
+    let server = start_server(
+        "HTTP/1.1 200 OK",
+        connection_test_body("00000000-0000-7000-8000-000000000001"),
+    );
+    let profile = granted_profile(server.port, 4_000);
+    let report = test_connection(&profile, "sk-synthetic".to_string()).expect("connection test");
+    assert_eq!(report.proposals, 1);
+    assert_eq!(server.requests.load(Ordering::SeqCst), 1);
+    let request = server.last_request.lock().expect("lock").clone();
+    assert!(
+        request.contains("fila de exemplo"),
+        "the request carries the synthetic evidence"
+    );
+}
+
+#[test]
+fn connection_test_without_consent_makes_no_request() {
+    let server = start_server(
+        "HTTP/1.1 200 OK",
+        connection_test_body("00000000-0000-7000-8000-000000000001"),
+    );
+    let profile = base_profile(server.port, 4_000);
+    let result = test_connection(&profile, "sk-synthetic".to_string());
+    assert!(matches!(result, Err(ExtractError::Extractor(_))));
+    assert_eq!(server.requests.load(Ordering::SeqCst), 0, "no network call");
+}
+
+#[test]
+fn connection_test_flags_an_answer_that_breaks_the_contract() {
+    let server = start_server("HTTP/1.1 200 OK", connection_test_body("not-an-artifact"));
+    let profile = granted_profile(server.port, 4_000);
+    let result = test_connection(&profile, "sk-synthetic".to_string());
+    assert_eq!(result.map_err(|error| error.code()), Err("validation"));
 }

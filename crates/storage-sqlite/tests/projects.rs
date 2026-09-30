@@ -1,4 +1,4 @@
-﻿//! End-to-end Project persistence tests: identity and location survive a
+//! End-to-end Project persistence tests: identity and location survive a
 //! restart, removing tracking never touches the directory on disk, and the
 //! canonicalization rules collapse textual variants into one row.
 
@@ -116,7 +116,6 @@ fn duplicate_location_forms_are_rejected() {
         Err(ProjectError::AlreadyRegistered)
     );
 
-    // A non-canonical `..` form must resolve to the same canonical directory.
     let nested = project_directory.join("nested");
     std::fs::create_dir_all(&nested).expect("create nested");
     let parent_via_dotdot = nested.join("..");

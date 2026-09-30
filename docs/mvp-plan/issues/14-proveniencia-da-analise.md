@@ -40,3 +40,8 @@
 - Retry automático de job (backoff entre execuções) ficou deliberadamente ausente: só retry intra-provider (3×) + reprocess manual — nenhuma tentativa automática sem teto.
 - Ambiente: **WDAC bloqueia por caminho** exes novos em `target\debug` (~30 tentativas, `Unblock-File` não resolve); cópia em `%TEMP%` executa — workaround documentado (relink novo + cópia ou espera de reputação). Processo antigo da sessão de front (PID 43696) segura a imagem renomeada `xemnas-locked.exe`.
 - Proveniência de execuções de AssessmentGenerator (ticket futuro de assessments reais) ainda não existe — aqui só extração (Gate 3).
+
+## Pendências resolvidas depois do fechamento
+
+- `ExtractError::Validation` (código `validation`) separa proposta fora do contrato de falha do provider (`extractor`) — `c0d11a9`.
+- Consulta para a tela de Diagnósticos: `DiagnosticsDocument.recent_assessments` (ticket 19) cobre a listagem.

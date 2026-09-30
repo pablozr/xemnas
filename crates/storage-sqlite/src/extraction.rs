@@ -1,9 +1,4 @@
 //! SQLite implementation of the extraction persistence port.
-//!
-//! `load_evidence` reads the receipt, its project and the capture artifacts in a
-//! deterministic order (by `artifact_id`) with defensive bounds;
-//! `insert_candidates` writes every candidate in one transaction and relies on
-//! the `dedup_hash` unique constraint so reprocessing never duplicates.
 
 use application::extract::{
     truncate_content, DecisionCandidateRecord, DecisionEvidence, EvidenceArtifact, ExtractError,

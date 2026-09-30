@@ -91,6 +91,7 @@ fn seed_capture(store: &SqliteStore, capture_id: &str) {
         },
         checkpoint: CaptureCheckpointRecord {
             adapter: "opencode".to_string(),
+            adapter_version: "0.1.0".to_string(),
             session_id: "session-1".to_string(),
             message_id: "message-1".to_string(),
             capture_id: capture_id.to_string(),
@@ -132,7 +133,6 @@ fn migration_0006_applies_on_fresh_and_upgraded_databases() {
         assert!(table_exists(&connection, "assessments"));
         assert!(index_exists(&connection, "idx_assessments_capture_id"));
         assert!(index_exists(&connection, "idx_assessments_started_at"));
-        // Simulate a database already at version 5.
         connection
             .execute_batch(
                 "DROP TABLE assessments; DELETE FROM schema_migrations WHERE version = 6;",
@@ -155,8 +155,8 @@ fn migration_0006_applies_on_fresh_and_upgraded_databases() {
             |row| row.get(0),
         )
         .expect("count distinct");
-    assert_eq!(versions, 7);
-    assert_eq!(distinct, 7);
+    assert_eq!(versions, 12);
+    assert_eq!(distinct, 12);
 
     let _ = std::fs::remove_dir_all(&root);
 }

@@ -1,8 +1,4 @@
 //! End-to-end ingest tests over a real loopback server and a real `SqliteStore`.
-//!
-//! The server binds `127.0.0.1:0` on its own runtime thread and is driven with a
-//! minimal blocking HTTP client, so the tests exercise the actual socket, auth
-//! middleware, body limit and timeout rather than only the router.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -107,8 +103,6 @@ fn start_with(
     config.request_timeout = request_timeout;
     ApiServer::start(config).expect("start local api")
 }
-
-// --- raw HTTP client -------------------------------------------------------
 
 fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
@@ -246,8 +240,6 @@ fn checkpoint_row(
         .expect("query checkpoint")
 }
 
-// --- log capture -----------------------------------------------------------
-
 #[derive(Clone, Default)]
 struct Buffer(Arc<Mutex<Vec<u8>>>);
 
@@ -298,8 +290,6 @@ fn logged_text() -> String {
     )
     .expect("utf8")
 }
-
-// --- tests -----------------------------------------------------------------
 
 #[test]
 fn bind_is_loopback_and_discovery_files_match() {
@@ -444,8 +434,6 @@ fn valid_capture_is_persisted_and_scheduled() {
         assert_eq!(fingerprint, sha256_hex(&content));
     }
 
-    // The adapter checkpoint is written in the same transaction and matches the
-    // accepted envelope's source coordinates.
     assert_eq!(table_count(&connection, "adapter_checkpoints"), 1);
     let checkpoint = checkpoint_row(&connection, "session-synthetic-complete")
         .expect("checkpoint for the accepted session");
@@ -659,8 +647,6 @@ fn a_symlink_that_escapes_the_registered_project_is_forbidden() {
     let registered = register_project(&store, &root);
     let registered_dir = PathBuf::from(&registered);
 
-    // A directory outside the registered project, plus a link inside the
-    // registered project that resolves to it.
     let outside = root.join("outside");
     std::fs::create_dir_all(&outside).expect("create outside directory");
     let link = registered_dir.join("escape");
@@ -969,8 +955,6 @@ impl ProjectRepository for RemovingProjectRepository {
 impl CaptureRepository for RemovingProjectRepository {
     fn insert_capture(&self, write: &CaptureWrite) -> Result<(), CaptureError> {
         let _ = ProjectRepository::remove(&self.store, &self.project_id);
-        // `SqliteStore` implements both `CaptureRepository` and `JobRepository`,
-        // which both declare `insert`; the call is disambiguated explicitly.
         CaptureRepository::insert_capture(&self.store, write)
     }
     fn find_receipt(&self, capture_id: &str) -> Result<Option<CaptureReceiptRecord>, CaptureError> {
@@ -1064,8 +1048,6 @@ fn stalled_request_body_times_out() {
             .and_then(|token| token.parse::<u16>().ok());
         assert_eq!(status, Some(504), "unexpected response: {head}");
     }
-    // An empty read means the server closed the connection instead of replying;
-    // the brief accepts either, and the elapsed assertion already holds.
 
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -1084,7 +1066,6 @@ fn schema_failure_never_logs_client_content() {
 
     let marker = "SECRET_MARKER_XYZ";
     let mut value = fixture("valid-minimal.json");
-    // Schema-invalid and carrying the marker in value positions.
     value["observed_at"] = json!(marker);
     value["idempotency_key"] = json!(marker);
     let (status, _) = post(
@@ -1171,7 +1152,6 @@ fn same_declared_fingerprint_for_different_contents_is_unprocessable() {
         .expect("artifacts")
         .push(second);
 
-    // Sanity: the first artifact is honest, so only the second can fail.
     assert_eq!(
         artifact_fingerprint("synthetic user text"),
         first["fingerprint"].as_str().expect("fingerprint")
@@ -1224,8 +1204,6 @@ fn outbox_drain_imports_without_duplicating() {
     assert_eq!(table_count(&connection, "jobs"), 1);
     assert_eq!(table_count(&connection, "adapter_checkpoints"), 1);
 
-    // Re-import the accepted envelope: deduplication keeps a single receipt and
-    // a single analysis job.
     std::fs::copy(
         outbox.join("accepted").join(&filename),
         pending.join(&filename),
@@ -1238,5 +1216,487 @@ fn outbox_drain_imports_without_duplicating() {
     assert_eq!(table_count(&connection, "jobs"), 1);
     assert_eq!(table_count(&connection, "adapter_checkpoints"), 1);
 
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Envelope whose first artifact carries raw secrets in content and metadata,
+/// with a fingerprint that matches the raw content (a caller that skipped the
+/// adapter's redaction).
+fn envelope_with_raw_secrets(location: &str) -> Value {
+    let mut envelope = envelope_for(location);
+    let content = "API_KEY=SECRET-MARKER-RAW\nusar sk-SECRETMARKERKEY123456 no cliente";
+    envelope["artifacts"][0]["content"] = json!(content);
+    envelope["artifacts"][0]["fingerprint"] = json!(sha256_hex(content));
+    envelope["artifacts"][0]["metadata"] = json!({
+        "note": "token ghp_SECRETMARKERabcdefghijklmnop"
+    });
+    envelope
+}
+
+fn assert_artifacts_redacted(database: &Path) {
+    let connection = rusqlite::Connection::open(database).expect("open raw connection");
+    let mut statement = connection
+        .prepare("SELECT content, metadata, fingerprint FROM capture_artifacts")
+        .expect("prepare");
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .expect("query")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect");
+    assert_eq!(rows.len(), 4);
+    let mut redacted = 0;
+    for (content, metadata, fingerprint) in rows {
+        assert!(
+            !content.contains("SECRET-MARKER") && !content.contains("SECRETMARKER"),
+            "raw secret persisted in content"
+        );
+        assert!(
+            !metadata.contains("SECRETMARKER"),
+            "raw secret persisted in metadata"
+        );
+        assert_eq!(
+            fingerprint,
+            sha256_hex(&content),
+            "the stored fingerprint is the redacted content's"
+        );
+        if content.contains("[REDACTED]") {
+            redacted += 1;
+        }
+    }
+    assert_eq!(redacted, 1);
+}
+
+#[test]
+fn raw_secrets_posted_to_the_api_are_redacted_before_persistence() {
+    let root = temporary_directory("redact-api");
+    let database = root.join("app.db");
+    let store = SqliteStore::open(&database).expect("open store");
+    let location = register_project(&store, &root);
+    let server = start(
+        &store,
+        local_api::DEFAULT_MAX_BODY_BYTES,
+        Duration::from_secs(5),
+        root.clone(),
+    );
+
+    let envelope = envelope_with_raw_secrets(&location);
+    let key = envelope_key(&envelope);
+    let (status, body) = post(
+        &server,
+        "/v1/captures",
+        Some(server.token()),
+        Some(&key),
+        None,
+        &body_of(&envelope),
+    );
+    assert_eq!(status, 201, "body: {}", String::from_utf8_lossy(&body));
+    assert_artifacts_redacted(&database);
+
+    let (status, _) = post(
+        &server,
+        "/v1/captures",
+        Some(server.token()),
+        Some(&key),
+        None,
+        &body_of(&envelope),
+    );
+    assert_eq!(status, 200);
+    assert_artifacts_redacted(&database);
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn raw_secrets_imported_from_the_outbox_are_redacted_before_persistence() {
+    let root = temporary_directory("redact-outbox");
+    let database = root.join("app.db");
+    let store = SqliteStore::open(&database).expect("open store");
+    let location = register_project(&store, &root);
+    let envelope = envelope_with_raw_secrets(&location);
+    let filename = format!("{}.json", sha256_hex(&envelope_key(&envelope)));
+    let pending = root.join("outbox").join("pending");
+    std::fs::create_dir_all(&pending).expect("create pending");
+    std::fs::write(pending.join(&filename), body_of(&envelope)).expect("write pending");
+
+    let report = application::outbox::drain(
+        &root.join("outbox"),
+        &CaptureIngest::new(store.clone()),
+        Duration::from_secs(60),
+    )
+    .expect("drain");
+    assert_eq!(report.accepted, 1);
+    assert_artifacts_redacted(&database);
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+fn start_with_context(store: &SqliteStore, runtime_dir: PathBuf) -> RunningApi {
+    let api: Arc<dyn CaptureApi> = Arc::new(CaptureIngest::new(store.clone()));
+    let mut config = ApiServerConfig::new(api, runtime_dir);
+    config.services.context = Some(Arc::new(application::injection::ContextInjection::new(
+        store.clone(),
+    )));
+    ApiServer::start(config).expect("start local api")
+}
+
+fn seed_convention(store: &SqliteStore, location: &str) {
+    let project = store
+        .find_by_location(location)
+        .expect("find project")
+        .expect("registered project");
+    application::claims::Claims::new(store.clone())
+        .create(application::claims::NewClaim {
+            project_id: project.id,
+            kind: domain::claims::ClaimKind::Convention,
+            statement: "Mensagens de erro em português".to_string(),
+            valid_from: Some("2020-01-01".to_string()),
+            valid_until: None,
+            source_decision_id: None,
+        })
+        .expect("seed claim");
+}
+
+fn context_body(location: &str, session: &str, prompt: &str) -> Vec<u8> {
+    body_of(&json!({
+        "canonical_path": location,
+        "session_id": session,
+        "prompt": prompt,
+    }))
+}
+
+fn set_context_mode(
+    store: &SqliteStore,
+    location: &str,
+    mode: application::context_settings::ContextMode,
+) {
+    let project = store
+        .find_by_location(location)
+        .expect("find project")
+        .expect("registered project");
+    application::context_settings::ContextSettings::new(store.clone())
+        .set(&project.id, mode, None)
+        .expect("set context mode");
+}
+
+fn post_context(server: &RunningApi, token: Option<&str>, body: &[u8]) -> (u16, Value) {
+    let (status, raw) = post(server, "/v1/context", token, None, None, body);
+    let value = serde_json::from_slice(&raw).unwrap_or(Value::Null);
+    (status, value)
+}
+
+#[test]
+fn context_endpoint_follows_the_project_mode() {
+    use application::context_settings::ContextMode;
+
+    let root = temporary_directory("context");
+    let store = SqliteStore::open(root.join("app.db")).expect("open store");
+    let location = register_project(&store, &root);
+    seed_convention(&store, &location);
+    let server = start_with_context(&store, root.clone());
+
+    let (status, raw) = get(&server, "/v1/capabilities", Some(server.token()), None);
+    assert_eq!(status, 200);
+    let capabilities: Value = serde_json::from_slice(&raw).expect("json");
+    assert_eq!(capabilities["context"], json!(true));
+
+    let body = context_body(&location, "s1", "SECRET-MARKER-PROMPT corrigir a tela");
+    let (status, off) = post_context(&server, Some(server.token()), &body);
+    assert_eq!(status, 200, "{off}");
+    assert_eq!(off["mode"], json!("off"));
+    assert_eq!(
+        (off["context"].clone(), off["items"].clone()),
+        (Value::Null, json!(0))
+    );
+
+    set_context_mode(&store, &location, ContextMode::Inject);
+    let (_, first) = post_context(&server, Some(server.token()), &body);
+    assert_eq!(first["mode"], json!("inject"));
+    let block = first["context"].as_str().expect("block");
+    assert!(block.contains("regra:"));
+    assert!(block.contains("Mensagens de erro em português"));
+    assert_eq!(first["items"], json!(1));
+    assert!(first["tokens"]
+        .as_u64()
+        .is_some_and(|tokens| tokens > 0 && tokens < 60));
+
+    let (_, second) = post_context(&server, Some(server.token()), &body);
+    assert_eq!(
+        second["context"],
+        Value::Null,
+        "nothing new in the same session"
+    );
+
+    set_context_mode(&store, &location, ContextMode::Shadow);
+    let (_, shadow) = post_context(
+        &server,
+        Some(server.token()),
+        &context_body(&location, "s2", "tela"),
+    );
+    assert_eq!(shadow["mode"], json!("shadow"));
+    assert_eq!(shadow["context"], Value::Null);
+    assert_eq!(shadow["items"], json!(1));
+
+    assert!(
+        !logged_text().contains("SECRET-MARKER-PROMPT"),
+        "the prompt never reaches a log"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn context_endpoint_enforces_auth_and_a_strict_body() {
+    let root = temporary_directory("context-strict");
+    let store = SqliteStore::open(root.join("app.db")).expect("open store");
+    let location = register_project(&store, &root);
+    let server = start_with_context(&store, root.clone());
+    let body = context_body(&location, "s1", "tela");
+
+    assert_eq!(post_context(&server, None, &body).0, 401);
+    let with_mode = body_of(&json!({
+        "canonical_path": location, "session_id": "s1", "prompt": "tela", "mode": "inject"
+    }));
+    assert_eq!(
+        post_context(&server, Some(server.token()), &with_mode).0,
+        422,
+        "the adapter no longer chooses the mode"
+    );
+    assert_eq!(
+        post_context(
+            &server,
+            Some(server.token()),
+            &context_body(&location, " ", "tela")
+        )
+        .0,
+        400
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn context_endpoint_is_absent_unless_enabled() {
+    let root = temporary_directory("context-off");
+    let store = SqliteStore::open(root.join("app.db")).expect("open store");
+    let location = register_project(&store, &root);
+    let server = start(
+        &store,
+        local_api::DEFAULT_MAX_BODY_BYTES,
+        Duration::from_secs(5),
+        root.clone(),
+    );
+    let (_, raw) = get(&server, "/v1/capabilities", Some(server.token()), None);
+    let capabilities: Value = serde_json::from_slice(&raw).expect("json");
+    assert_eq!(capabilities["context"], json!(false));
+    let (status, _) = post_context(
+        &server,
+        Some(server.token()),
+        &context_body(&location, "s1", "tela"),
+    );
+    assert_eq!(status, 404);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn injected_context_blocks_never_become_evidence() {
+    let root = temporary_directory("strip-context");
+    let database = root.join("app.db");
+    let store = SqliteStore::open(&database).expect("open store");
+    let location = register_project(&store, &root);
+    let server = start(
+        &store,
+        local_api::DEFAULT_MAX_BODY_BYTES,
+        Duration::from_secs(5),
+        root.clone(),
+    );
+    let mut envelope = envelope_for(&location);
+    let content = "pedido real\n\n<xemnas-context note=\"x\">\nregra:ab Erros em português\n</xemnas-context>";
+    envelope["artifacts"][0]["content"] = json!(content);
+    envelope["artifacts"][0]["fingerprint"] = json!(sha256_hex(content));
+    let key = envelope_key(&envelope);
+    let (status, body) = post(
+        &server,
+        "/v1/captures",
+        Some(server.token()),
+        Some(&key),
+        None,
+        &body_of(&envelope),
+    );
+    assert_eq!(status, 201, "body: {}", String::from_utf8_lossy(&body));
+    let stored: Vec<String> = {
+        let connection = rusqlite::Connection::open(&database).expect("raw");
+        let mut statement = connection
+            .prepare("SELECT content FROM capture_artifacts")
+            .expect("prepare");
+        statement
+            .query_map([], |row| row.get(0))
+            .expect("query")
+            .collect::<Result<_, _>>()
+            .expect("collect")
+    };
+    assert!(stored.iter().any(|content| content == "pedido real"));
+    assert!(stored
+        .iter()
+        .all(|content| !content.contains("xemnas-context")));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+fn start_with_agent(store: &SqliteStore, runtime_dir: PathBuf) -> RunningApi {
+    let api: Arc<dyn CaptureApi> = Arc::new(CaptureIngest::new(store.clone()));
+    let mut config = ApiServerConfig::new(api, runtime_dir);
+    config.services.agent = Some(Arc::new(application::agent_access::AgentAccess::new(
+        store.clone(),
+    )));
+    ApiServer::start(config).expect("start local api")
+}
+
+/// Ingests the fixture capture and confirms one decision citing its first artifact.
+fn confirmed_decision(store: &SqliteStore, server: &RunningApi, location: &str) -> String {
+    use application::extract::{DecisionCandidateRecord, ExtractionStore};
+
+    let envelope = envelope_for(location);
+    let key = envelope_key(&envelope);
+    let (status, _) = post(
+        server,
+        "/v1/captures",
+        Some(server.token()),
+        Some(&key),
+        None,
+        &body_of(&envelope),
+    );
+    assert_eq!(status, 201);
+    let project = store
+        .find_by_location(location)
+        .expect("find")
+        .expect("project");
+    let artifact = envelope["artifacts"][0]["artifact_id"]
+        .as_str()
+        .expect("artifact id");
+    store
+        .insert_candidates(&[DecisionCandidateRecord {
+            id: "cand-agent".to_string(),
+            project_id: project.id,
+            capture_id: envelope["capture_id"]
+                .as_str()
+                .expect("capture")
+                .to_string(),
+            status: "pending".to_string(),
+            question: "Qual banco usar?".to_string(),
+            choice: "SQLite".to_string(),
+            rationale: "App local.".to_string(),
+            signals: "[\"public_contract\"]".to_string(),
+            confidence: 0.7,
+            confidence_reason: "sintético".to_string(),
+            evidence_refs: format!("[\"{artifact}\"]"),
+            diff_summary: "{\"files\":[],\"artifacts\":1}".to_string(),
+            dedup_hash: "dedup-agent".to_string(),
+            created_at: "2026-01-02T00:00:00Z".to_string(),
+            updated_at: "2026-01-02T00:00:00Z".to_string(),
+        }])
+        .expect("candidate");
+    let confirm_edits: Option<application::inbox::CandidateEdits> = None;
+    application::inbox::Inbox::new(store.clone())
+        .confirm("cand-agent", confirm_edits)
+        .expect("confirm")
+        .decision_id
+}
+
+fn post_json(server: &RunningApi, path: &str, value: &Value) -> (u16, Value) {
+    let (status, raw) = post(
+        server,
+        path,
+        Some(server.token()),
+        None,
+        None,
+        &body_of(value),
+    );
+    (status, serde_json::from_slice(&raw).unwrap_or(Value::Null))
+}
+
+#[test]
+fn agent_routes_open_references_and_search() {
+    let root = temporary_directory("agent");
+    let store = SqliteStore::open(root.join("app.db")).expect("open store");
+    let location = register_project(&store, &root);
+    let server = start_with_agent(&store, root.clone());
+    let decision = confirmed_decision(&store, &server, &location);
+    let reference = format!("D:{}", application::injection::short_ref(&decision));
+
+    let (_, raw) = get(&server, "/v1/capabilities", Some(server.token()), None);
+    let capabilities: Value = serde_json::from_slice(&raw).expect("json");
+    assert_eq!(capabilities["agent"], json!(true));
+    assert_eq!(capabilities["context"], json!(false));
+
+    let (status, body) = post_json(
+        &server,
+        "/v1/agent/decision",
+        &json!({ "canonical_path": location, "reference": reference }),
+    );
+    assert_eq!(status, 200, "{body}");
+    let text = body["text"].as_str().expect("text");
+    assert!(text.contains("pergunta: Qual banco usar?"));
+    assert!(text.contains("escolha: SQLite"));
+
+    let (status, body) = post_json(
+        &server,
+        "/v1/agent/search",
+        &json!({ "canonical_path": location, "query": "SECRET-MARKER-QUERY banco" }),
+    );
+    assert_eq!(status, 200);
+    assert!(body["text"]
+        .as_str()
+        .is_some_and(|text| text.contains("Qual banco usar? → SQLite")));
+    let (_, empty) = post_json(
+        &server,
+        "/v1/agent/search",
+        &json!({ "canonical_path": location, "query": "renderização" }),
+    );
+    assert_eq!(empty["text"], Value::Null);
+    assert!(!logged_text().contains("SECRET-MARKER-QUERY"));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn agent_routes_map_errors_and_require_auth() {
+    let root = temporary_directory("agent-errors");
+    let store = SqliteStore::open(root.join("app.db")).expect("open store");
+    let location = register_project(&store, &root);
+    let server = start_with_agent(&store, root.clone());
+    let elsewhere = root.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("dir");
+    let decision = |path: &str, reference: &str| {
+        post_json(
+            &server,
+            "/v1/agent/decision",
+            &json!({ "canonical_path": path, "reference": reference }),
+        )
+        .0
+    };
+
+    assert_eq!(decision(&location, "D:zzzzzzzz"), 404);
+    assert_eq!(decision(&location, "D:ab"), 400);
+    assert_eq!(decision(&elsewhere.to_string_lossy(), "D:zzzzzzzz"), 403);
+    assert_eq!(
+        post_json(
+            &server,
+            "/v1/agent/decision",
+            &json!({ "canonical_path": location, "reference": "D:zzzzzzzz", "extra": 1 }),
+        )
+        .0,
+        422
+    );
+    let (status, _) = post(
+        &server,
+        "/v1/agent/search",
+        None,
+        None,
+        None,
+        &body_of(&json!({ "canonical_path": location, "query": "x" })),
+    );
+    assert_eq!(status, 401);
     let _ = std::fs::remove_dir_all(&root);
 }

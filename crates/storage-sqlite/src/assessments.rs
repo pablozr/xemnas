@@ -1,8 +1,4 @@
 //! SQLite implementation of the assessment provenance port.
-//!
-//! One row per analysis run, carrying metadata and hashes only — never artifact
-//! content or a provider response body (PRIV-001). The foreign key to
-//! `capture_receipts` keeps a capture's assessments cascading with it.
 
 use application::extract::{AssessmentRecord, AssessmentStore, ExtractError};
 use rusqlite::params;

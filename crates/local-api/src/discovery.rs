@@ -1,13 +1,4 @@
 //! Session discovery file and token file.
-//!
-//! The adapter discovers the loopback port, protocol version and instance id
-//! from `{runtime}/discovery.json`, and reads the bearer token from
-//! `{runtime}/api-token`. Both are rewritten on every startup and removed on a
-//! graceful shutdown (stack doc "API local → Ciclo de vida").
-//!
-//! On Unix the files are created with mode `600`. On Windows the token relies on
-//! the per-user profile ACL, which is the platform's equivalent protection for
-//! files under `%LOCALAPPDATA%`.
 
 use std::path::{Path, PathBuf};
 
@@ -39,8 +30,6 @@ pub struct DiscoveryInfo {
 }
 
 /// Writes the discovery and token files, creating the runtime directory.
-///
-/// Overwrites any previous session files.
 pub fn write_runtime_files(
     runtime_dir: &Path,
     discovery: &DiscoveryInfo,

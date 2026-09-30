@@ -247,7 +247,7 @@ Glass não pode depender obrigatoriamente de blur real. Em plataformas ou cenas 
 - preservar o mesmo contraste;
 - nunca bloquear o produto por ausência de blur.
 
-No Windows, Mica/blur pode ser usado no fundo da janela quando o backend do GPUI estiver estável. Superfícies internas continuam com receita própria e previsível.
+A janela é opaca em todas as plataformas; Mica, acrílico ou blur não são usados. Superfícies internas continuam com receita própria e previsível.
 
 ## Layout desktop
 

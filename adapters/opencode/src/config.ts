@@ -59,6 +59,9 @@ export const DEFAULT_MESSAGE_LIMIT = 200;
  */
 export const DEFAULT_MAX_MESSAGE_PAGES = 10;
 
+/** Default wait for a context block before the turn proceeds without it. */
+export const DEFAULT_CONTEXT_TIMEOUT_MS = 300;
+
 /** Resolved, immutable adapter configuration. */
 export interface AdapterConfig {
   /** OpenCode server base URL, no trailing slash. */
@@ -96,6 +99,8 @@ export interface AdapterConfig {
   messageLimit: number;
   /** Maximum backward pages fetched per reconciliation. */
   maxMessagePages: number;
+  /** Maximum wait for a context block, in milliseconds. */
+  contextTimeoutMs: number;
 }
 
 /** Contents of `discovery.json` written by the local API. */
@@ -208,6 +213,11 @@ export function resolveConfig(
       env,
       "XEMNAS_ADAPTER_MAX_MESSAGE_PAGES",
       DEFAULT_MAX_MESSAGE_PAGES,
+    ),
+    contextTimeoutMs: envInt(
+      env,
+      "XEMNAS_CONTEXT_TIMEOUT_MS",
+      DEFAULT_CONTEXT_TIMEOUT_MS,
     ),
   };
 }

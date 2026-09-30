@@ -1,101 +1,146 @@
-# xemnas — Contextual Engineering
+<p align="center">
+  <img src="docs/assets/readme/banner.png" alt="xemnas — memória de decisões de engenharia, local e com evidência" width="100%">
+</p>
 
-Memória decisional local para engenharia de software de apoio a agentes de programação. O produto observa o trabalho no OpenCode, propõe **Decision Candidates** com evidência e transforma confirmação humana em **Engineering Decisions** versionadas e pesquisáveis — tudo local, sem envio externo sem consentimento explícito.
+<p align="center">
+  <a href="LICENSE"><img alt="Licença MIT" src="https://img.shields.io/badge/licen%C3%A7a-MIT-8b7fd6?style=flat-square"></a>
+  <img alt="Rust" src="https://img.shields.io/badge/Rust-GPUI-8b7fd6?style=flat-square&logo=rust&logoColor=white">
+  <img alt="Windows" src="https://img.shields.io/badge/plataforma-Windows-8b7fd6?style=flat-square&logo=windows&logoColor=white">
+  <img alt="Local-first" src="https://img.shields.io/badge/dados-100%25%20locais-8b7fd6?style=flat-square">
+</p>
 
-Especificação e arquitetura: [`docs/MVP-SPEC.md`](docs/MVP-SPEC.md), [`docs/CONTEXT.md`](docs/CONTEXT.md), [`docs/stack-e-arquitetura-rust-gpui.md`](docs/stack-e-arquitetura-rust-gpui.md), ADRs em [`docs/adr/`](docs/adr/).
+<p align="center">
+  <a href="#como-funciona">Como funciona</a> ·
+  <a href="#começando">Começando</a> ·
+  <a href="#integrações">Integrações</a> ·
+  <a href="#privacidade">Privacidade</a> ·
+  <a href="#arquitetura">Arquitetura</a> ·
+  <a href="#documentacao">Documentação</a>
+</p>
 
-## Instalação e execução
+---
 
-**Requisitos:** Windows; Rust estável (só para buildar a partir do código).
+Agentes de código tomam dezenas de decisões por sessão, e quase todas se perdem
+no histórico do chat. O **xemnas** acompanha esse trabalho, propõe as decisões que
+apareceram nele com a evidência que as sustenta e guarda as que você confirmar,
+como uma memória versionada e pesquisável do projeto. Essa memória volta para o
+agente como contexto, sem que ele decida nada por você.
+
+<p align="center">
+  <img src="docs/assets/readme/review.png" alt="Revisão: candidatos a decisão com escolha sugerida, motivo e evidências" width="92%">
+</p>
+
+## Destaques
+
+- **Revisão com evidência.** Cada candidato traz a escolha sugerida, o motivo e os trechos
+  de conversa ou diff de onde saiu. Você confirma, ajusta, adia ou rejeita.
+- **Decisões versionadas.** Revisar cria uma nova versão sem apagar a anterior; tudo tem
+  busca, proveniência e exportação em Markdown ou JSON.
+- **Contexto de volta para o agente.** Um Context Pack com as decisões vigentes, e um
+  servidor MCP somente leitura para o agente consultar quando precisar.
+- **Local por padrão.** SQLite na sua máquina e extração offline. Um provedor de IA externo
+  só entra com prévia do que sai e consentimento explícito.
+- **App nativo.** Rust + [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui), o framework de UI do Zed, sem Electron e sem navegador.
+
+## Como funciona
+
+```mermaid
+flowchart LR
+    A["Sessão no OpenCode"] -->|"adapter: captura redigida"| B["xemnas (local)"]
+    B --> C["Candidatos + evidências"]
+    C -->|"você confirma"| D[("Decisões versionadas")]
+    D -->|"Context Pack · MCP"| A
+```
+
+1. **Captura.** O plugin do OpenCode envia a sessão para a API local do app, só em
+   loopback, com segredos mascarados antes de gravar. Com o app fechado, ela espera numa
+   fila de arquivos.
+2. **Extração.** Um job em segundo plano propõe candidatos. O extrator padrão é offline;
+   um provedor compatível com OpenAI é opcional.
+3. **Revisão.** Nada vira decisão sem você.
+4. **Contexto.** As decisões vigentes voltam ao agente por injeção compacta (ligada por
+   projeto) ou por consulta MCP.
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/assets/readme/decisions.png" alt="Decisões: documento versionado com contexto, evidências e índice"></td>
+    <td width="50%"><img src="docs/assets/readme/settings.png" alt="Configurações: extrator, chave no cofre e prévia do que sai da máquina"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><b>Decisões</b>: documento, histórico, evidências e índice</sub></td>
+    <td align="center"><sub><b>IA e privacidade</b>: extrator, cofre e prévia do envio</sub></td>
+  </tr>
+</table>
+
+## Começando
+
+**Requisitos:** Windows e Rust estável.
 
 ```powershell
+git clone https://github.com/pablozr/xemnas
+cd xemnas
+
+# Explorar com dados fictícios (banco em memória, nada é gravado)
+cargo run --locked -p desktop-gpui --bin xemnas -- --demo
+
+# Uso real
 cargo build --release --locked -p desktop-gpui --bin xemnas
 .\target\release\xemnas.exe
 ```
 
-Para explorar o layout com candidatos fictícios:
+Pacote ZIP distribuível: `.\tools\package.ps1`. Opções da demo, caminhos de dados e o
+build cruzado estão em [docs/operacao.md](docs/operacao.md).
 
-```powershell
-cargo run --locked -p desktop-gpui --bin xemnas -- --demo
-# Prévia na menor janela suportada:
-cargo run --locked -p desktop-gpui --bin xemnas -- --demo --compact
-# Evidência extensa para conferir rolagem e virtualização:
-cargo run --locked -p desktop-gpui --bin xemnas -- --demo --long-evidence
-```
+## Integrações
 
-A demonstração usa um banco em memória e não inicia workers, API ou provedores.
-Os dados desaparecem ao fechar a janela. Na tela atual, Revisão permite ler
-candidatos e evidências do projeto selecionado, ajustar, confirmar, rejeitar e
-adiar/retomar candidatos. A contagem da aba considera toda a fila do projeto.
-Detalhes mantém as propriedades e a remoção do acompanhamento.
-
-Pacote distribuível (ZIP versionado em `dist\`):
-
-```powershell
-.\tools\package.ps1          # build release + staging verificado por SHA-256
-.\tests\e2e\install-clean.ps1  # prova instalação/desinstalação limpas
-```
-
-**Onde ficam os dados** (tudo local):
-
-| Item | Caminho |
+| | |
 | --- | --- |
-| Diretório de dados | `XEMNAS_DATA_DIR` (se definido) ou `%LOCALAPPDATA%\xemnas` |
-| Banco SQLite | `<dados>\state\app.db` (migrations forward-only, versão atual 8) |
-| API local | somente loopback; token por sessão em `<dados>\api-token`; porta em `<dados>\discovery.json` |
-| Outbox de capturas | `XEMNAS_OUTBOX_DIR` ou `<dados>\outbox` (`pending/`, `accepted/`, `rejected/`) |
-
-## Integração com o OpenCode
-
-O adapter em [`adapters/opencode/`](adapters/opencode/) é um plugin fino: disparo em idle → reconcile pela API pública do OpenCode → validação do **Capture Envelope** → `POST /v1/captures` (ou escrita na outbox quando o desktop está fechado). Ele não contém regras de domínio e nunca chama modelo.
-
-```powershell
-cd adapters/opencode
-npm ci
-npm test                      # testes de contrato do envelope
-npm run send-fixture          # envia fixture pela outbox (modo CLI)
-```
-
-Variáveis relevantes: `OPENCODE_URL` (padrão `http://127.0.0.1:4096`), `XEMNAS_DATA_DIR`, `XEMNAS_OUTBOX_DIR`.
-
-**Ativação (uma vez, sem publicar):** o OpenCode carrega plugins de arquivos locais — crie `~/.config/opencode/plugins/xemnas.ts` reexportando o build (`export { XemnasOpenCodeAdapter as Xemnas } from "<repo>/adapters/opencode/dist/src/index.js"`; caminho relativo a partir de `plugins/` é `../../../orca/projects/xemnas/...`). O wrapper deve ter **um único export** (o factory), para o OpenCode não registrar os exports utilitários do módulo. Reinicie a sessão do OpenCode após criar o arquivo.
+| **OpenCode** | Plugin em [`adapters/opencode`](adapters/opencode): captura em idle, valida o envelope e envia para o app ou para a fila de arquivos. Não tem regra de domínio e não chama modelo. [Ativação](docs/operacao.md#integração-com-o-opencode) |
+| **MCP** | `xemnas-mcp` ([`apps/mcp-server`](apps/mcp-server)): `get_decision` e `search_context`, somente leitura, sobre stdio. Funciona com OpenCode e Claude Code. [Configuração](docs/fase-5/01-mcp-leitura.md) |
+| **Context Pack** | Decisões vigentes e regras válidas numa data, com citações e limite de tamanho. [Detalhes](docs/fase-3/01-context-pack-manual.md) |
 
 ## Privacidade
 
-- **Local por padrão.** Nenhum dado sai da máquina sem consentimento explícito e perfil configurado (§13 da spec).
-- A API de IA só é usada com consentimento vigente (`preview_hash` verificado) e segredos no cofre do sistema (keyring) — nunca em texto no SQLite.
-- Providers externos exigem HTTPS. HTTP é permitido apenas em IPs de loopback, como `http://127.0.0.1:11434/v1` ou `http://[::1]:11434/v1`; URLs com credenciais, query ou fragmento são rejeitadas e redirecionamentos não são seguidos. O consentimento inclui o endpoint completo: consentimentos anteriores à inclusão desse vínculo exigem nova aprovação.
-- **Redação acontece na fronteira do adapter** (`adapters/opencode/src/redact.ts`), antes de qualquer persistência.
-- Logs nunca contêm token bearer, prompts, conversas ou diffs; falhas de job são sanitizadas; o **diagnóstico exportado é sanitizado por construção** (só estrutura — sem conteúdo de artefatos, decisões, caminhos ou credenciais).
-- Exportação de decisão exige ação explícita, preview e destino escolhido pelo usuário; confirmar não escreve nada no repositório e o produto nunca faz commit.
+- Dados ficam em `%LOCALAPPDATA%\xemnas`; a API local só escuta em loopback, com token por sessão.
+- Segredos são redigidos duas vezes antes de qualquer gravação: no adapter e no motor Rust.
+- IA externa exige HTTPS (HTTP só em loopback), prévia do que sai da máquina e consentimento ligado a essa prévia.
+  A chave do provedor fica no Gerenciador de Credenciais do Windows, nunca em arquivo.
+- Logs e diagnóstico exportado não carregam conteúdo de conversas, diffs ou credenciais.
+- O xemnas não faz commit nem escreve no seu repositório; exportar é sempre uma ação sua.
 
-## Recovery
+## Arquitetura
 
-- Jobs interrompidos voltam para `queued` na reinicialização quando idempotentes; capturas na outbox são importadas depois (com desktop fechado inclusive) sem duplicar (chaves de idempotência + dedup por constraint).
-- `cargo test` inclui testes de crash/restart; E2Es: `tests\e2e\jobs-recovery.ps1`, `tests\e2e\capture-outbox.ps1`, `tests\e2e\install-clean.ps1`.
+Monólito modular em Rust com camadas verificadas por teste de arquitetura.
 
-## Limitações conhecidas
+| Pasta | Papel |
+| --- | --- |
+| `crates/domain` | Regras e tipos do domínio, sem I/O |
+| `crates/application` | Casos de uso e portas (Inbox, Decisões, Export, Context Pack, perfil de IA) |
+| `crates/storage-sqlite` | SQLite + FTS5, migrations forward-only |
+| `crates/local-api` | API HTTP local para o adapter e para agentes |
+| `crates/ai-provider` | Provedor compatível com OpenAI e cofre de credenciais |
+| `apps/desktop-gpui` | App desktop (GPUI) e raiz de composição |
+| `apps/mcp-server` | Servidor MCP somente leitura |
+| `adapters/opencode` | Plugin TypeScript do OpenCode |
 
-- A interface (telas Inbox/Decisions/Settings/Diagnostics e navegação por teclado) é entregue em paralelo — o backend dos fluxos já está completo e aprovado.
-- Redação de conteúdo existe no adapter, não no motor Rust: um caller local enviando segredo cru via API o persiste.
-- Busca é lexical (FTS5) — sem embeddings/vector graph (spec: provar filtros antes de embeddings).
-- `superseded` está modelado no schema, sem ação/UI ainda.
-- Builds bit-a-bit reproduzíveis não são prometidos (timestamps Windows); o caminho `--locked` + CI é o mesmo.
-- Cross build (`pwsh -File tools\build-windows-cross.ps1`): só faz sentido em **release** — em debug o GPUI resolve os shaders HLSL em runtime pelo `CARGO_MANIFEST_DIR` do container, caminho inexistente no Windows (panic `os error 3`). O script gera o `shaders_bytes.rs` no host com o `fxc.exe` da SDK e o container o copia para o `OUT_DIR` antes de compilar.
-- Smart App Control pode bloquear binários novos não assinados (erros `os error 4551`, DLLs de proc-macro em `target\debug\deps`, `E0463` em compilações): apague o artefato bloqueado (e o fingerprint em `target\debug\.fingerprint`) e recompile — o novo arquivo costuma ganhar veredito novo. Desligar a SAC é decisão do usuário (é irreversível sem reinstalar o Windows).
+## Documentação
 
-- Testes de provedor pago são opt-in; a suíte padrão usa fake/fixtures.
-- Estado de conclusão do MVP e dogfood: ver [`docs/mvp-plan/issues/20-dogfood-e-conclusao.md`](docs/mvp-plan/issues/20-dogfood-e-conclusao.md) e [`docs/dogfood-log.md`](docs/dogfood-log.md).
+- [Especificação do MVP](docs/MVP-SPEC.md) e [vocabulário do domínio](docs/CONTEXT.md)
+- [Stack e arquitetura](docs/stack-e-arquitetura-rust-gpui.md) · [ADRs](docs/adr/)
+- [Design system Quiet Glass](docs/design-system-quiet-glass.md)
+- [Operação, dados locais e limitações conhecidas](docs/operacao.md)
 
-## Desenvolvimento (validação)
+## Contribuindo
 
 ```powershell
-$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
-cargo deny check
-cargo audit
 ```
 
-CI (`.github/workflows/ci.yml`): `quality` (fmt, clippy, testes, audit, deny), `contract` (testes TS do adapter) e `package` (ZIP como artifact).
+O CI roda esses mesmos checks, mais `cargo deny`, `cargo audit`, os testes do adapter e o
+empacotamento. Commits pequenos, um assunto por vez; veja [AGENTS.md](AGENTS.md).
+
+## Licença
+
+[MIT](LICENSE) © contribuidores do xemnas

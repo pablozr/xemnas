@@ -1,16 +1,11 @@
 //! Sanitized operational diagnostics (MVP-SPEC §16, Gate 5).
-//!
-//! [`Diagnostics::export`] produces a **structural** document: versions, counts,
-//! recent job/receipt/assessment metadata and the AI profile mode. It can never
-//! carry substantive content — no artifact or diff text, no candidate/decision
-//! question or rationale, no token or secret. The sanitization is by
-//! construction: the document types have no field that could hold those values,
-//! and job diagnostics expose a stable error code rather than the raw message.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::integration::outbox_status;
 use crate::jobs::INTERRUPTED_NON_IDEMPOTENT;
 use crate::profile::{
     consent_status, endpoint_host, AiSettings, ProfileKind, ProfileStore, SecretStore,
@@ -84,6 +79,9 @@ pub struct OutboxCounts {
     pub accepted: i64,
     /// Files archived in `rejected/`.
     pub rejected: i64,
+    /// Intact items parked in `stalled/` after repeated refusals.
+    #[serde(default)]
+    pub stalled: i64,
 }
 
 /// One recent job, without its raw diagnostic.
@@ -113,10 +111,6 @@ pub struct ReceiptDiagnostic {
     /// RFC 3339 receipt time.
     pub received_at: String,
     /// Project identifier resolved from the receipt location, when registered.
-    ///
-    /// The canonical path is deliberately **not** exported: it can embed a user
-    /// name or other sensitive text, and the receipt-to-project association is
-    /// preserved by this opaque id instead.
     pub project_id: Option<String>,
 }
 
@@ -184,9 +178,31 @@ pub struct LossMetrics {
     pub outbox_rejected: i64,
 }
 
+/// Context blocks computed in one delivery mode.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ContextModeMetrics {
+    /// Blocks computed.
+    pub blocks: i64,
+    /// Distinct agent sessions that received a block.
+    pub sessions: i64,
+    /// Items across all blocks.
+    pub items: i64,
+    /// Estimated tokens across all blocks.
+    pub tokens_total: i64,
+    /// Average estimated tokens per block, when any.
+    pub tokens_avg: Option<i64>,
+}
+
+/// Context injection metrics, split by mode.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ContextMetrics {
+    /// Measured but not sent to the agent.
+    pub shadow: ContextModeMetrics,
+    /// Appended to the agent prompt.
+    pub inject: ContextModeMetrics,
+}
+
 /// Operational metrics for the dogfood (spec §780).
-///
-/// Aggregates only: no candidate text, no artifact content, no per-row export.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DiagnosticsMetrics {
     /// Capture receipt → candidate creation latency.
@@ -197,6 +213,9 @@ pub struct DiagnosticsMetrics {
     pub noise: NoiseMetrics,
     /// Losses: failed/skipped work.
     pub losses: LossMetrics,
+    /// Context injection volume.
+    #[serde(default)]
+    pub context: ContextMetrics,
 }
 
 /// The exported diagnostics document.
@@ -270,7 +289,7 @@ pub trait DiagnosticsStore {
     /// Database counts.
     fn counts(&self) -> Result<DiagnosticsCounts, DiagnosticsError>;
 
-    /// Operational metrics (latency, review time, noise, losses).
+    /// Operational metrics; `losses.outbox_rejected` is filled by the use case.
     fn metrics(&self) -> Result<DiagnosticsMetrics, DiagnosticsError>;
 
     /// Recent jobs, newest first.
@@ -284,9 +303,6 @@ pub trait DiagnosticsStore {
         &self,
         limit: usize,
     ) -> Result<Vec<AssessmentDiagnosticRow>, DiagnosticsError>;
-
-    /// Outbox file counts.
-    fn outbox_counts(&self) -> Result<OutboxCounts, DiagnosticsError>;
 }
 
 /// Diagnostics use case over a [`DiagnosticsStore`] and the AI settings.
@@ -294,6 +310,7 @@ pub trait DiagnosticsStore {
 pub struct Diagnostics<S, P, K> {
     store: S,
     settings: AiSettings<P, K>,
+    outbox_dir: PathBuf,
 }
 
 impl<S, P, K> Diagnostics<S, P, K>
@@ -302,9 +319,13 @@ where
     P: ProfileStore,
     K: SecretStore,
 {
-    /// Wraps the store and the AI settings.
-    pub fn new(store: S, settings: AiSettings<P, K>) -> Self {
-        Self { store, settings }
+    /// Wraps the store, the AI settings and the outbox root to count.
+    pub fn new(store: S, settings: AiSettings<P, K>, outbox_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            store,
+            settings,
+            outbox_dir: outbox_dir.into(),
+        }
     }
 
     /// Builds the sanitized diagnostics document.
@@ -314,7 +335,7 @@ where
             migrations_version: self.store.migrations_version()?,
         };
         let counts = self.store.counts()?;
-        let metrics = self.store.metrics()?;
+        let mut metrics = self.store.metrics()?;
         let recent_jobs = self
             .store
             .recent_jobs(RECENT_LIMIT)?
@@ -348,7 +369,14 @@ where
                 error_code: row.error_code,
             })
             .collect();
-        let outbox = self.store.outbox_counts()?;
+        let status = outbox_status(&self.outbox_dir);
+        let outbox = OutboxCounts {
+            pending: status.pending,
+            accepted: status.accepted,
+            rejected: status.rejected,
+            stalled: status.stalled,
+        };
+        metrics.losses.outbox_rejected = outbox.rejected;
 
         let mut ai_profile = AiProfileDiagnostic {
             kind: "unavailable".to_string(),
@@ -392,9 +420,6 @@ where
 }
 
 /// Maps a raw job diagnostic to a stable code; the raw text never leaves here.
-///
-/// The jobs layer writes fixed product messages, so an unknown value still maps
-/// to `failed` rather than leaking its content.
 pub fn job_error_code(last_error: Option<&str>) -> Option<&'static str> {
     match last_error {
         None => None,
