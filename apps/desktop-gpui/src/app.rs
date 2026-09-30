@@ -188,6 +188,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
     }
 
     fn switch_destination(&mut self, inbox: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.theme = Theme::quiet_glass();
         self.in_inbox = inbox;
         self.in_decisions = false;
         window.focus(&self.destination_focus[usize::from(inbox)], cx);
@@ -259,6 +260,11 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
                     }
                 }),
             )
+            .child(if inbox {
+                crate::ui::icons::Icon::list(&theme, 14.0).into_any_element()
+            } else {
+                crate::ui::icons::Icon::layers(&theme, 14.0).into_any_element()
+            })
             .child(if inbox { "Revisão" } else { "Detalhes" })
             .when(inbox, |tab| {
                 tab.child(
@@ -286,7 +292,14 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
             .px(px(12.0))
             .flex()
             .items_center()
+            .gap(px(7.0))
             .rounded(px(6.0))
+            .border_1()
+            .border_color(if selected {
+                theme.colors.glass_edge_lavender()
+            } else {
+                theme.colors.canvas()
+            })
             .bg(if selected {
                 theme.colors.decision_selected()
             } else {
@@ -310,10 +323,12 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
                     cx.stop_propagation();
                 }
             }))
+            .child(crate::ui::icons::Icon::file(&theme, 14.0, !selected))
             .child("Decisões")
     }
 
     fn switch_decisions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.theme = Theme::charcoal();
         self.in_decisions = true;
         self.in_inbox = false;
         window.focus(&self.destination_focus[2], cx);
@@ -362,7 +377,10 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
             .as_ref()
             .and_then(|screen| screen.read(cx).selected_project());
         let body: gpui::AnyElement = if let Some(projects) = self.projects.clone() {
-            let sidebar = projects.update(cx, |screen, cx| screen.render_sidebar(cx));
+            let sidebar = projects.update(cx, |screen, cx| {
+                screen.set_theme(theme, cx);
+                screen.render_sidebar(cx)
+            });
             let content = if selected.is_some() && self.in_decisions {
                 self.decisions
                     .as_ref()

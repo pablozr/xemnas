@@ -676,6 +676,12 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
         sidebar.into_any_element()
     }
 
+    /// Shares the destination's palette with the persistent navigation rail.
+    pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
+        self.theme = theme;
+        self.search.update(cx, |search, _| search.set_theme(theme));
+    }
+
     /// Project properties and tracking controls without a duplicate sidebar.
     pub fn render_details(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;

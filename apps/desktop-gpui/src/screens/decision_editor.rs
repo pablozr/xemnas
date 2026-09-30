@@ -51,6 +51,7 @@ impl DecisionEditor {
         let fields = std::array::from_fn(|i| {
             cx.new(|cx| {
                 let mut field = SearchField::new(cx);
+                field.set_theme(Theme::charcoal());
                 field.multiline(if i == 2 { 160.0 } else { 100.0 });
                 field.set_context(LABELS[i], cx);
                 field.set_value(&original[i], cx);
@@ -121,7 +122,7 @@ impl DecisionEditor {
 }
 impl Render for DecisionEditor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let t = Theme::quiet_glass();
+        let t = Theme::charcoal();
         let edits = self.edits(cx);
         let valid = edits.validate().is_ok();
         let _ = &self.subscriptions;
@@ -131,8 +132,9 @@ impl Render for DecisionEditor {
                 .children([false,true].into_iter().enumerate().map(|(i,save)|{
                     let enabled=!self.busy&&(!save||valid);
                     text_style(div(),TypeScale::BODY_SMALL).id(("revision-action",i)).h(px(32.0)).px(px(12.0)).flex().items_center().rounded(px(6.0))
-                        .bg(if save{t.colors.decision_selected()}else{t.colors.decision_layer()})
-                        .text_color(if enabled{t.colors.text_primary()}else{t.colors.text_disabled()})
+                        .border_1().border_color(t.colors.decision_line())
+                        .bg(if save&&enabled{t.colors.decision_accent()}else{t.colors.decision_layer()})
+                        .text_color(if save&&enabled{t.colors.accent_on_emphasis()}else if enabled{t.colors.text_primary()}else{t.colors.text_disabled()})
                         .role(gpui::Role::Button).aria_label(if save{"Salvar nova versão"}else{"Cancelar revisão"}).track_focus(&self.focus[i]).cursor_pointer()
                         .on_click(cx.listener(move|this,_,_,cx|this.submit(save,cx)))
                         .on_key_down(cx.listener(move|this,event:&gpui::KeyDownEvent,_,cx|{if matches!(event.keystroke.key.as_str(),"enter"|"space"){this.submit(save,cx);cx.stop_propagation();}}))
