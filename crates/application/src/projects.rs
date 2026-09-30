@@ -80,6 +80,77 @@ pub trait ProjectRepository {
 
     /// Removes the record with the given identifier.
     fn remove(&self, id: &str) -> Result<bool, ProjectError>;
+
+    /// Counts what [`ProjectRepository::purge`] would delete.
+    fn removal_impact(&self, _id: &str) -> Result<RemovalImpact, ProjectError> {
+        Ok(RemovalImpact::default())
+    }
+
+    /// Deletes the project and every row that belongs to it, in one transaction.
+    fn purge(&self, id: &str) -> Result<bool, ProjectError> {
+        self.remove(id)
+    }
+}
+
+/// What removing a project with its data deletes; the repository on disk is never touched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RemovalImpact {
+    /// Engineering Decisions, with their revisions, evidence and relations.
+    pub decisions: i64,
+    /// Decision Candidates.
+    pub candidates: i64,
+    /// Context Claims.
+    pub claims: i64,
+    /// Captures, with their artifacts, checkpoints, assessments and jobs.
+    pub captures: i64,
+    /// Context injection audit rows.
+    pub injections: i64,
+}
+
+impl RemovalImpact {
+    /// Whether nothing besides the project row would be deleted.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Failure modes of [`Projects::remove_with_data`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemovalError {
+    /// The project lookup or the deletion failed.
+    Project(ProjectError),
+    /// The typed confirmation does not match the project name.
+    ConfirmationMismatch,
+}
+
+impl RemovalError {
+    /// Short, stable code.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Project(ProjectError::NotFound) => "not_found",
+            Self::Project(_) => "storage",
+            Self::ConfirmationMismatch => "confirmation_mismatch",
+        }
+    }
+}
+
+impl std::fmt::Display for RemovalError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Project(error) => write!(formatter, "{error}"),
+            Self::ConfirmationMismatch => {
+                formatter.write_str("digite exatamente o nome do projeto para confirmar")
+            }
+        }
+    }
+}
+
+impl std::error::Error for RemovalError {}
+
+impl From<ProjectError> for RemovalError {
+    fn from(error: ProjectError) -> Self {
+        Self::Project(error)
+    }
 }
 
 /// Canonicalizes a project path to the stable string persisted in `projects`.
@@ -148,9 +219,41 @@ impl<R: ProjectRepository> Projects<R> {
             .collect())
     }
 
-    /// Removes the tracking note for a Project.
+    /// Removes a Project that has no data; one with data fails and keeps everything.
     pub fn remove(&self, id: &str) -> Result<bool, ProjectError> {
         self.repository.remove(id)
+    }
+
+    /// Counts what [`Projects::remove_with_data`] would delete, for the warning.
+    ///
+    /// # Errors
+    ///
+    /// `NotFound` for an unknown project, `Storage` on query failure.
+    pub fn removal_impact(&self, id: &str) -> Result<RemovalImpact, ProjectError> {
+        self.get(id)?;
+        self.repository.removal_impact(id)
+    }
+
+    /// Deletes a Project and all its data after the user types its name.
+    ///
+    /// # Errors
+    ///
+    /// `confirmation_mismatch` when `typed_name` differs from the project name;
+    /// nothing is deleted in that case.
+    pub fn remove_with_data(
+        &self,
+        id: &str,
+        typed_name: &str,
+    ) -> Result<RemovalImpact, RemovalError> {
+        let project = self.get(id)?;
+        if typed_name.trim() != project.location().display_name() {
+            return Err(RemovalError::ConfirmationMismatch);
+        }
+        let impact = self.repository.removal_impact(id)?;
+        if !self.repository.purge(id)? {
+            return Err(RemovalError::Project(ProjectError::NotFound));
+        }
+        Ok(impact)
     }
 }
 

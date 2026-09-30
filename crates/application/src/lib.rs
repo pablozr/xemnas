@@ -87,7 +87,8 @@ pub use profile::{
     SecretStore, DEFAULT_MAX_INPUT_CHARS, PREVIEW_CATEGORIES,
 };
 pub use projects::{
-    canonicalize_location, ProjectError, ProjectRecord, ProjectRepository, Projects,
+    canonicalize_location, ProjectError, ProjectRecord, ProjectRepository, Projects, RemovalError,
+    RemovalImpact,
 };
 pub use relations::{
     DecisionRelations, RelationDirection, RelationInsert, RelationRow, RelationStore, RelationView,

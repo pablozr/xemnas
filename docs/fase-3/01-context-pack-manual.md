@@ -27,6 +27,8 @@ Todos fazem I/O: rodar fora da thread de UI (ASYNC-001).
 | `ContextPacks::new(store)` | `build_pack(ContextRequest)` (trait `ContextProvider`) | `invalid_request`, `project_not_found` |
 | `export` | `preview_pack(&pack, ExportFormat)`, `write_pack(&doc, destino, overwrite)` | `destination_exists`, `destination_invalid`, `io` |
 
+Remover projeto com dados: `Projects::removal_impact(id)` devolve as contagens para o aviso (decisões, candidatos, claims, capturas, injeções); `Projects::remove_with_data(id, nome_digitado)` apaga tudo do projeto numa transação só se o nome digitado bater (`confirmation_mismatch` caso contrário). `Projects::remove(id)` continua recusando projeto com dados (nada é apagado). O repositório no disco nunca é tocado.
+
 A lista de decisões continua mostrando só as `accepted` por padrão; as `superseded` aparecem com `DecisionFilter { statuses: vec![Superseded], .. }`.
 
 ## Evidências
