@@ -702,7 +702,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
         if self.loaded && count == 0 {
             list = list.child(
                 text_style(div(), TypeScale::BODY_SMALL)
-                    .p(px(12.0))
+                    .p(px(SpacingScale::S3))
                     .text_color(t.colors.text_muted())
                     .child(if searching {
                         "Nenhum resultado. Tente outra palavra."
@@ -813,17 +813,17 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                 .mx_auto()
                 .flex()
                 .flex_col()
-                .gap(px(16.0))
+                .gap(px(SpacingScale::S4))
                 .child(div().flex().child(back))
                 .child(text_style(div(), TypeScale::HEADING_1).child("Histórico de versões"))
                 .child(text_style(div(),TypeScale::BODY_SMALL).text_color(t.colors.text_muted()).child("Cada versão conserva o documento completo. Abra uma versão para ler seu conteúdo."));
             for revision in &detail.revisions {
                 history = history.child(
                     div()
-                        .p(px(16.0))
+                        .p(px(SpacingScale::S4))
                         .border_1()
                         .border_color(t.colors.hairline_divider())
-                        .rounded(px(8.0))
+                        .rounded(t.radius.surface())
                         .child(self.button(
                             format!("version-{}", revision.version),
                             format!(
@@ -842,12 +842,12 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                         ))
                         .child(
                             text_style(div(), TypeScale::HEADING_3)
-                                .mt(px(12.0))
+                                .mt(px(SpacingScale::S3))
                                 .child(revision.question.clone()),
                         )
                         .child(
                             text_style(div(), TypeScale::BODY_SMALL)
-                                .mt(px(8.0))
+                                .mt(px(SpacingScale::S2))
                                 .text_color(t.colors.text_muted())
                                 .child(revision.choice.clone()),
                         ),
@@ -959,10 +959,10 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
         let mut context = div()
             .flex()
             .flex_wrap()
-            .gap(px(16.0))
+            .gap(px(SpacingScale::S4))
             .border_t_1()
             .border_color(t.colors.hairline_divider())
-            .pt(px(20.0));
+            .pt(px(SpacingScale::S5));
         for (index, (label, items)) in [
             ("Escopo", &detail.scope),
             ("Premissas", &detail.assumptions),
@@ -977,7 +977,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                 .min_w(px(180.0))
                 .flex()
                 .flex_col()
-                .gap(px(10.0))
+                .gap(px(SpacingScale::S2))
                 .child(self.button(
                     format!("context-{index}"),
                     format!("{label} · {}", items.len()),
@@ -1007,15 +1007,15 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                 div()
                     .border_t_1()
                     .border_color(t.colors.hairline_divider())
-                    .pt(px(18.0))
+                    .pt(px(SpacingScale::S4))
                     .flex()
                     .flex_col()
-                    .gap(px(12.0))
+                    .gap(px(SpacingScale::S3))
                     .child(
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(8.0))
+                            .gap(px(SpacingScale::S2))
                             .child(icon(IconName::Layers, 14.0, t.colors.text_muted()))
                             .child(
                                 text_style(div(), TypeScale::HEADING_3)
@@ -1029,15 +1029,15 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
             div()
                 .border_t_1()
                 .border_color(t.colors.hairline_divider())
-                .pt(px(16.0))
+                .pt(px(SpacingScale::S4))
                 .flex()
                 .flex_col()
-                .gap(px(5.0))
+                .gap(px(SpacingScale::S1))
                 .child(
                     div()
                         .flex()
                         .items_center()
-                        .gap(px(7.0))
+                        .gap(px(SpacingScale::S2))
                         .child(icon(IconName::Link, 12.0, t.colors.text_muted()))
                         .child(section_label(&t, "Proveniência")),
                 )
@@ -1230,11 +1230,11 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
         );
         panel = panel.child(
             div()
-                .px(px(24.0))
-                .py(px(14.0))
+                .px(px(SpacingScale::S6))
+                .py(px(SpacingScale::S3))
                 .flex()
                 .items_center()
-                .gap(px(12.0))
+                .gap(px(SpacingScale::S3))
                 .child(
                     text_style(div(), TypeScale::META)
                         .flex_1()
@@ -1253,25 +1253,26 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                 )),
         );
         if let Some(path) = &self.overwrite {
-            panel =
-                panel.child(
-                    div()
-                        .p(px(16.0))
-                        .bg(t.colors.selection())
-                        .child(text_style(div(), TypeScale::BODY_SMALL).mb(px(10.0)).child(
-                            format!(
+            panel = panel.child(
+                div()
+                    .p(px(SpacingScale::S4))
+                    .bg(t.colors.selection())
+                    .child(
+                        text_style(div(), TypeScale::BODY_SMALL)
+                            .mb(px(SpacingScale::S2))
+                            .child(format!(
                                 "O arquivo {} já existe. Substituir seu conteúdo?",
                                 path.display()
-                            ),
-                        ))
-                        .child(self.button(
-                            "export-overwrite".into(),
-                            "Substituir arquivo".into(),
-                            Action::SaveExport(true),
-                            true,
-                            cx,
-                        )),
-                );
+                            )),
+                    )
+                    .child(self.button(
+                        "export-overwrite".into(),
+                        "Substituir arquivo".into(),
+                        Action::SaveExport(true),
+                        true,
+                        cx,
+                    )),
+            );
         }
         let source = application::inbox::ArtifactView {
             artifact_id: "export".into(),
