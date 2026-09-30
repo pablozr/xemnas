@@ -74,6 +74,7 @@ impl DiagnosticsStore for FakeStore {
             pending: 1,
             accepted: 2,
             rejected: 3,
+            stalled: 4,
         })
     }
 
@@ -166,6 +167,7 @@ impl DiagnosticsStore for EmptyStore {
             pending: 0,
             accepted: 0,
             rejected: 0,
+            stalled: 0,
         })
     }
 }
@@ -245,6 +247,7 @@ fn document_is_structural_and_serializable() {
     assert_eq!(document.counts.projects, 2);
     assert_eq!(document.counts.artifacts, 4);
     assert_eq!(document.outbox.pending, 1);
+    assert_eq!(document.outbox.stalled, 4);
     assert_eq!(document.ai_profile.kind, "openai-compatible");
     assert_eq!(
         document.ai_profile.provider.as_deref(),

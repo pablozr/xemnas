@@ -241,6 +241,7 @@ impl DiagnosticsStore for SqliteStore {
             pending: count_files(&root.join("pending")),
             accepted: count_files(&root.join("accepted")),
             rejected: count_files(&root.join("rejected")),
+            stalled: count_files(&root.join("stalled")),
         })
     }
 

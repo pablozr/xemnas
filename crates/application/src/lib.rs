@@ -69,7 +69,10 @@ pub use jobs::{
     JobEvent, JobFailure, JobOutcome, JobRecord, JobRepository, JobState, Jobs, RecoveryReport,
     WorkerHandle, ANALYZE_CAPTURE_KIND, INTERRUPTED_NON_IDEMPOTENT,
 };
-pub use outbox::{drain, DrainReport, OutboxError};
+pub use outbox::{
+    drain, drain_with, retry_stalled, DrainPolicy, DrainReport, OutboxError,
+    DEFAULT_MAX_TRANSIENT_ATTEMPTS, DEFAULT_REJECTED_RETENTION,
+};
 pub use profile::{
     build_preview, choose_extractor, grant_consent, offline_default_profile, preview_hash,
     revoke_consent, AiProfile, AiSettings, AiStatus, ConsentPreview, ConsentRecord,

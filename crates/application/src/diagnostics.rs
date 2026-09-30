@@ -84,6 +84,9 @@ pub struct OutboxCounts {
     pub accepted: i64,
     /// Files archived in `rejected/`.
     pub rejected: i64,
+    /// Intact items parked in `stalled/` after repeated refusals.
+    #[serde(default)]
+    pub stalled: i64,
 }
 
 /// One recent job, without its raw diagnostic.

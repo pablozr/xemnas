@@ -13,6 +13,14 @@
 //! adapter replaces in the meantime can never be read stale and then archived
 //! under a newer name. Renames never delete the destination first.
 //!
+//! Transient failures are bounded without ever losing an item: after
+//! [`DrainPolicy::max_transient_attempts`] drains in which the project is not
+//! allowed (`Forbidden`), the item is parked in `stalled/` with its envelope
+//! intact and is no longer retried on every start; [`retry_stalled`] puts it
+//! back in `pending/` on an explicit user action. Storage failures are
+//! systemic, not item-specific, so they never count towards the cap.
+//! Rejected diagnostics are pruned after [`DrainPolicy::rejected_retention`].
+//!
 //! `application` deliberately has no `tracing` dependency: diagnostics are
 //! surfaced through [`DrainReport`] and the `rejected/` files, and the
 //! composition root logs them.
@@ -38,6 +46,41 @@ const SENDING: &str = "sending";
 const ACCEPTED: &str = "accepted";
 /// Subdirectory with safe diagnostics for items that can never be imported.
 const REJECTED: &str = "rejected";
+/// Subdirectory with intact items parked after too many transient failures.
+const STALLED: &str = "stalled";
+/// Subdirectory with per-item transient attempt counters.
+const ATTEMPTS: &str = "attempts";
+
+/// Default retention of `rejected/` diagnostics: long enough to outlive a
+/// dogfood week, short enough that diagnostics cannot pile up forever.
+pub const DEFAULT_REJECTED_RETENTION: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+
+/// Default number of drains an item may be refused as `Forbidden` before it is
+/// parked in `stalled/`.
+pub const DEFAULT_MAX_TRANSIENT_ATTEMPTS: u32 = 5;
+
+/// Retention and retry bounds for one drain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DrainPolicy {
+    /// Age after which `accepted/` items are removed.
+    pub accepted_retention: Duration,
+    /// Age after which `rejected/` diagnostics are removed.
+    pub rejected_retention: Duration,
+    /// `Forbidden` refusals tolerated before an item is parked in `stalled/`;
+    /// `0` is treated as `1`.
+    pub max_transient_attempts: u32,
+}
+
+impl DrainPolicy {
+    /// Policy with the given accepted retention and the default bounds.
+    pub fn new(accepted_retention: Duration) -> Self {
+        Self {
+            accepted_retention,
+            rejected_retention: DEFAULT_REJECTED_RETENTION,
+            max_transient_attempts: DEFAULT_MAX_TRANSIENT_ATTEMPTS,
+        }
+    }
+}
 
 /// Failure setting up or listing the outbox.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,17 +118,33 @@ pub struct DrainReport {
     pub sending_recovered: usize,
     /// Accepted items removed by retention.
     pub pruned: usize,
+    /// Rejected diagnostics removed by retention.
+    pub pruned_rejected: usize,
+    /// Items parked in `stalled/` by this drain after too many refusals.
+    pub stalled: usize,
 }
 
-/// Drains the outbox under `root` into `api`.
+/// Drains the outbox under `root` into `api` with [`DrainPolicy::new`].
 ///
-/// `accepted_retention` bounds only `accepted/`; `rejected/` diagnostics are
-/// kept until a later ticket defines their retention. Directory-level failures
-/// return [`OutboxError`]; per-item failures never lose an item.
+/// Directory-level failures return [`OutboxError`]; per-item failures never
+/// lose an item.
 pub fn drain(
     root: &Path,
     api: &dyn CaptureApi,
     accepted_retention: Duration,
+) -> Result<DrainReport, OutboxError> {
+    drain_with(root, api, &DrainPolicy::new(accepted_retention))
+}
+
+/// Drains the outbox under `root` into `api` with an explicit policy.
+///
+/// # Errors
+///
+/// [`OutboxError::Io`] when a directory cannot be created or listed.
+pub fn drain_with(
+    root: &Path,
+    api: &dyn CaptureApi,
+    policy: &DrainPolicy,
 ) -> Result<DrainReport, OutboxError> {
     let pending_dir = root.join(PENDING);
     let sending_dir = root.join(SENDING);
@@ -185,14 +244,28 @@ pub fn drain(
         match api.ingest(&envelope, &envelope.idempotency_key) {
             Ok(_) => {
                 if accept_item(&filename, &claimed, &accepted_dir).is_ok() {
+                    clear_attempts(root, &filename);
                     accepted_now.insert(filename);
                     report.accepted += 1;
                 }
                 // A failed move leaves the item in `sending/`, recovered next time.
             }
-            // Transient: the project may be registered later, or storage busy.
-            // The item goes back to pending and is never lost.
-            Err(IngestError::Forbidden) | Err(IngestError::Storage(_)) => {
+            // Transient: the project may be registered later. After the cap the
+            // item is parked intact in `stalled/`; it is never lost.
+            Err(IngestError::Forbidden) => {
+                let attempts = record_attempt(root, &filename);
+                if attempts >= policy.max_transient_attempts.max(1)
+                    && stall(root, &filename, &claimed)
+                {
+                    clear_attempts(root, &filename);
+                    report.stalled += 1;
+                } else {
+                    let _ = restore_to_pending(root, &filename, &claimed);
+                }
+            }
+            // Storage is busy or broken for every item alike: retry next time
+            // without counting towards the cap.
+            Err(IngestError::Storage(_)) => {
                 let _ = restore_to_pending(root, &filename, &claimed);
             }
             Err(IngestError::InvalidFingerprint) => reject(
@@ -223,8 +296,102 @@ pub fn drain(
     }
 
     report.pending_remaining = json_files(&pending_dir)?.len();
-    report.pruned = prune_accepted(&accepted_dir, accepted_retention, &accepted_now)?;
+    report.pruned = prune_older(&accepted_dir, policy.accepted_retention, &accepted_now)?;
+    report.pruned_rejected =
+        prune_older(&rejected_dir, policy.rejected_retention, &BTreeSet::new())?;
+    remove_orphan_attempts(root, &pending_dir)?;
     Ok(report)
+}
+
+/// Moves every item parked in `stalled/` back to `pending/`, resetting its
+/// attempt counter, so the next drain retries it (an explicit user action,
+/// for example after registering the project).
+///
+/// A stalled copy superseded by a newer pending file of the same key is
+/// dropped. Returns how many items went back to `pending/`.
+///
+/// # Errors
+///
+/// [`OutboxError::Io`] when `stalled/` or `pending/` cannot be listed or created.
+pub fn retry_stalled(root: &Path) -> Result<usize, OutboxError> {
+    let stalled_dir = root.join(STALLED);
+    if !stalled_dir.is_dir() {
+        return Ok(0);
+    }
+    fs::create_dir_all(root.join(PENDING))?;
+    let mut restored = 0;
+    for path in json_files(&stalled_dir)? {
+        let Some(filename) = file_name(&path) else {
+            continue;
+        };
+        clear_attempts(root, &filename);
+        match move_no_replace(&path, &root.join(PENDING).join(&filename)) {
+            Ok(true) => restored += 1,
+            Ok(false) => {
+                let _ = fs::remove_file(&path);
+            }
+            Err(_) => {}
+        }
+    }
+    Ok(restored)
+}
+
+/// Parks a claimed item in `stalled/`; returns `false` (item untouched) when
+/// the move is not possible, so the caller restores it to `pending/`.
+fn stall(root: &Path, filename: &str, claimed: &Path) -> bool {
+    let stalled_dir = root.join(STALLED);
+    if fs::create_dir_all(&stalled_dir).is_err() {
+        return false;
+    }
+    matches!(
+        move_no_replace(claimed, &stalled_dir.join(filename)),
+        Ok(true)
+    )
+}
+
+/// Increments and returns the `Forbidden` counter of an item.
+///
+/// Counters are best effort: an unreadable counter restarts at one, and a
+/// counter that cannot be written only delays the cap. They hold a number only.
+fn record_attempt(root: &Path, filename: &str) -> u32 {
+    let directory = root.join(ATTEMPTS);
+    let path = directory.join(filename);
+    let attempts = fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| text.trim().parse::<u32>().ok())
+        .unwrap_or(0)
+        .saturating_add(1);
+    if fs::create_dir_all(&directory).is_ok() {
+        let temporary = unique_temporary(&directory, filename);
+        if fs::write(&temporary, attempts.to_string()).is_ok()
+            && fs::rename(&temporary, &path).is_err()
+        {
+            let _ = fs::remove_file(&temporary);
+        }
+    }
+    attempts
+}
+
+fn clear_attempts(root: &Path, filename: &str) {
+    let _ = fs::remove_file(root.join(ATTEMPTS).join(filename));
+}
+
+/// Removes counters whose item is no longer pending (accepted elsewhere,
+/// rejected, or replaced by the adapter with a different name).
+fn remove_orphan_attempts(root: &Path, pending_dir: &Path) -> Result<(), OutboxError> {
+    let directory = root.join(ATTEMPTS);
+    if !directory.is_dir() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(&directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        let orphan = file_name(&path).is_some_and(|name| !pending_dir.join(name).exists());
+        if path.is_file() && orphan {
+            let _ = fs::remove_file(&path);
+        }
+    }
+    Ok(())
 }
 
 /// Moves an accepted item and stamps the acceptance time on it.
@@ -383,12 +550,12 @@ fn remove_orphan_tmp(dir: &Path) -> Result<(), OutboxError> {
     Ok(())
 }
 
-/// Removes accepted items older than `retention`, skipping items accepted in
-/// this pass.
-fn prune_accepted(
+/// Removes `*.json` items older than `retention`, skipping `exempt` names (for
+/// `accepted/`, the items accepted in this pass).
+fn prune_older(
     dir: &Path,
     retention: Duration,
-    accepted_now: &BTreeSet<String>,
+    exempt: &BTreeSet<String>,
 ) -> Result<usize, OutboxError> {
     let mut pruned = 0;
     let now = SystemTime::now();
@@ -396,7 +563,7 @@ fn prune_accepted(
         let Some(filename) = file_name(&path) else {
             continue;
         };
-        if accepted_now.contains(&filename) {
+        if exempt.contains(&filename) {
             continue;
         }
         let Ok(modified) = fs::metadata(&path).and_then(|metadata| metadata.modified()) else {
@@ -442,7 +609,9 @@ fn move_no_replace(from: &Path, to: &Path) -> io::Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::{drain, unique_temporary, DrainReport, OutboxError};
+    use super::{
+        drain, drain_with, retry_stalled, unique_temporary, DrainPolicy, DrainReport, OutboxError,
+    };
     use crate::captures::{CaptureApi, IngestError, IngestOutcome, Receipt};
     use integration_contracts::capture::{artifact_fingerprint, CaptureEnvelope};
     use std::collections::HashMap;
@@ -840,5 +1009,124 @@ mod tests {
         assert!(error.to_string().contains("boom"));
         let _: &dyn std::error::Error = &error;
         let _ = DrainReport::default();
+    }
+
+    fn capped(max: u32) -> DrainPolicy {
+        DrainPolicy {
+            max_transient_attempts: max,
+            ..DrainPolicy::new(RETENTION)
+        }
+    }
+
+    #[test]
+    fn forbidden_items_stall_after_the_cap_and_retry_restores_them() {
+        let root = temporary_directory("stall");
+        let name = filename();
+        let envelope = valid_envelope_json("key-1", "C:/proj");
+        write_pending(&root, &name, &envelope);
+        let refusing = FailingApi(IngestError::Forbidden);
+
+        let first = drain_with(&root, &refusing, &capped(2)).expect("drain");
+        assert_eq!((first.stalled, first.pending_remaining), (0, 1));
+        assert_eq!(
+            fs::read_to_string(root.join("attempts").join(&name)).expect("counter"),
+            "1"
+        );
+
+        let second = drain_with(&root, &refusing, &capped(2)).expect("drain");
+        assert_eq!((second.stalled, second.pending_remaining), (1, 0));
+        assert_eq!(
+            fs::read_to_string(root.join("stalled").join(&name)).expect("stalled item"),
+            envelope,
+            "the parked item keeps its envelope intact"
+        );
+        assert!(!root.join("attempts").join(&name).exists());
+
+        // Parked items are not retried on every start.
+        let third = drain_with(&root, &refusing, &capped(2)).expect("drain");
+        assert_eq!((third.stalled, third.pending_remaining), (0, 0));
+
+        assert_eq!(retry_stalled(&root).expect("retry"), 1);
+        assert!(root.join("pending").join(&name).exists());
+        assert!(!root.join("stalled").join(&name).exists());
+        let api = AcceptingApi::default();
+        let accepted = drain_with(&root, &api, &capped(2)).expect("drain");
+        assert_eq!(accepted.accepted, 1);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn storage_failures_never_count_towards_the_cap() {
+        let root = temporary_directory("storage-cap");
+        let name = filename();
+        write_pending(&root, &name, &valid_envelope_json("key-1", "C:/proj"));
+        let failing = FailingApi(IngestError::Storage("busy".to_string()));
+        for _ in 0..3 {
+            let report = drain_with(&root, &failing, &capped(1)).expect("drain");
+            assert_eq!((report.stalled, report.pending_remaining), (0, 1));
+        }
+        assert!(!root.join("stalled").join(&name).exists());
+        assert!(!root.join("attempts").join(&name).exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn acceptance_clears_the_attempt_counter() {
+        let root = temporary_directory("counter-cleared");
+        let name = filename();
+        write_pending(&root, &name, &valid_envelope_json("key-1", "C:/proj"));
+        drain_with(&root, &FailingApi(IngestError::Forbidden), &capped(5)).expect("drain");
+        assert!(root.join("attempts").join(&name).exists());
+        drain_with(&root, &AcceptingApi::default(), &capped(5)).expect("drain");
+        assert!(!root.join("attempts").join(&name).exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_newer_pending_item_supersedes_its_stalled_copy_on_retry() {
+        let root = temporary_directory("stall-superseded");
+        let name = filename();
+        write_pending(&root, &name, &valid_envelope_json("key-1", "C:/proj"));
+        drain_with(&root, &FailingApi(IngestError::Forbidden), &capped(1)).expect("drain");
+        assert!(root.join("stalled").join(&name).exists());
+        let newer = valid_envelope_json("key-1", "C:/newer");
+        write_pending(&root, &name, &newer);
+
+        assert_eq!(retry_stalled(&root).expect("retry"), 0);
+        assert!(!root.join("stalled").join(&name).exists());
+        assert_eq!(
+            fs::read_to_string(root.join("pending").join(&name)).expect("pending"),
+            newer
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn retry_without_stalled_directory_is_a_no_op() {
+        let root = temporary_directory("no-stalled");
+        assert_eq!(retry_stalled(&root).expect("retry"), 0);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rejected_diagnostics_older_than_the_retention_are_pruned() {
+        let root = temporary_directory("rejected-retention");
+        let rejected = root.join("rejected");
+        fs::create_dir_all(&rejected).expect("rejected dir");
+        let old = rejected.join("old.json");
+        let recent = rejected.join("recent.json");
+        fs::write(&old, "{}").expect("old");
+        fs::write(&recent, "{}").expect("recent");
+        set_mtime(
+            &old,
+            SystemTime::now() - Duration::from_secs(31 * 24 * 60 * 60),
+        );
+
+        let report = drain(&root, &AcceptingApi::default(), RETENTION).expect("drain");
+        assert_eq!(report.pruned_rejected, 1);
+        assert!(!old.exists());
+        assert!(recent.exists());
+        let _ = fs::remove_dir_all(&root);
     }
 }

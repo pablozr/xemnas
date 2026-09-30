@@ -163,6 +163,8 @@ pub struct OutboxStatus {
     pub accepted: i64,
     /// Safe diagnostics in `rejected/`.
     pub rejected: i64,
+    /// Intact items parked in `stalled/` after repeated refusals.
+    pub stalled: i64,
 }
 
 /// Settings → OpenCode snapshot.
@@ -411,6 +413,17 @@ fn token_check(path: &Path) -> IntegrationCheck {
 }
 
 fn outbox_check(outbox: &OutboxStatus) -> IntegrationCheck {
+    if outbox.stalled > 0 {
+        return check(
+            CheckKind::Outbox,
+            CheckOutcome::Warning,
+            format!(
+                "{} captura(s) da outbox estão paradas porque o projeto não foi aceito. \
+                 Cadastre o projeto e reprocesse a outbox.",
+                outbox.stalled
+            ),
+        );
+    }
     if outbox.rejected > 0 {
         return check(
             CheckKind::Outbox,
@@ -449,6 +462,7 @@ pub fn outbox_status(root: &Path) -> OutboxStatus {
         pending: count_json(&root.join("pending")),
         accepted: count_json(&root.join("accepted")),
         rejected: count_json(&root.join("rejected")),
+        stalled: count_json(&root.join("stalled")),
     }
 }
 
@@ -567,7 +581,12 @@ mod tests {
     #[test]
     fn status_counts_outbox_json_files_only() {
         let root = temp_dir("outbox");
-        for (directory, files) in [("pending", 2), ("accepted", 1), ("rejected", 3)] {
+        for (directory, files) in [
+            ("pending", 2),
+            ("accepted", 1),
+            ("rejected", 3),
+            ("stalled", 4),
+        ] {
             let path = root.join("outbox").join(directory);
             fs::create_dir_all(&path).expect("outbox dir");
             for index in 0..files {
@@ -583,9 +602,10 @@ mod tests {
             (
                 status.outbox.pending,
                 status.outbox.accepted,
-                status.outbox.rejected
+                status.outbox.rejected,
+                status.outbox.stalled
             ),
-            (2, 1, 3)
+            (2, 1, 3, 4)
         );
         let checks = integration.check().expect("checks");
         assert_eq!(outcome(&checks, CheckKind::Outbox), CheckOutcome::Warning);

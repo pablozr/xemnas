@@ -43,7 +43,7 @@ Pacote distribuível (ZIP versionado em `dist\`):
 | Diretório de dados | `XEMNAS_DATA_DIR` (se definido) ou `%LOCALAPPDATA%\xemnas` |
 | Banco SQLite | `<dados>\state\app.db` (migrations forward-only, versão atual 9) |
 | API local | somente loopback; token por sessão em `<dados>\api-token`; porta em `<dados>\discovery.json` |
-| Outbox de capturas | `XEMNAS_OUTBOX_DIR` ou `<dados>\outbox` (`pending/`, `accepted/`, `rejected/`) |
+| Outbox de capturas | `XEMNAS_OUTBOX_DIR` ou `<dados>\outbox` (`pending/`, `accepted/`, `rejected/`, `stalled/`) |
 
 ## Integração com o OpenCode
 
@@ -71,7 +71,7 @@ Variáveis relevantes: `OPENCODE_URL` (padrão `http://127.0.0.1:4096`), `XEMNAS
 
 ## Recovery
 
-- Jobs interrompidos voltam para `queued` na reinicialização quando idempotentes; capturas na outbox são importadas depois (com desktop fechado inclusive) sem duplicar (chaves de idempotência + dedup por constraint).
+- Jobs interrompidos voltam para `queued` na reinicialização quando idempotentes; capturas na outbox são importadas depois (com desktop fechado inclusive) sem duplicar (chaves de idempotência + dedup por constraint). Um item recusado 5 vezes por projeto não cadastrado vai intacto para `stalled/` e só volta para `pending/` por ação explícita (`outbox::retry_stalled`); diagnósticos em `rejected/` são removidos após 30 dias.
 - `cargo test` inclui testes de crash/restart; E2Es: `tests\e2e\jobs-recovery.ps1`, `tests\e2e\capture-outbox.ps1`, `tests\e2e\install-clean.ps1`.
 
 ## Limitações conhecidas
