@@ -224,9 +224,9 @@ pub const INTERRUPTED_NON_IDEMPOTENT: &str = "O job foi interrompido por um rein
 
 /// Job kind scheduled by ingest to analyze a persisted capture.
 ///
-/// No handler is registered for this kind until ticket 12, so the job stays
-/// `queued` by design: `claim_next` never drops or silently fails a kind without
-/// a registered handler.
+/// The desktop composition root registers the extraction handler for this
+/// kind. A process without that handler (tests, tools) leaves the job `queued`
+/// by design: `claim_next` never drops or silently fails an unregistered kind.
 pub const ANALYZE_CAPTURE_KIND: &str = "analyze_capture";
 
 /// Fixed diagnostic for a handler panic. The panic content is never used.
