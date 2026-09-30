@@ -7,11 +7,12 @@
 
 use gpui::prelude::*;
 use gpui::{
-    div, px, Animation, AnimationElement, AnimationExt, Div, ElementId, Rgba, SharedString,
+    div, px, Animation, AnimationElement, AnimationExt, AnyElement, Div, ElementId, Rgba,
+    SharedString, SpringAnimation, Stateful,
 };
 
 use crate::ui::theme::{text_style, Theme};
-use crate::ui::tokens::{MotionTokens, SpacingScale, TypeScale};
+use crate::ui::tokens::{MotionTokens, SpacingScale, TypeScale, TypeToken};
 
 /// The quiet title of a side panel: 12 px, muted. The content, not the
 /// panel name, carries the weight.
@@ -30,6 +31,37 @@ pub fn count_chip(theme: &Theme, value: impl Into<SharedString>) -> Div {
         .bg(theme.colors.surface())
         .text_color(theme.colors.text_secondary())
         .child(value.into())
+}
+
+/// Text laid out word by word, so punctuation stays with its word.
+///
+/// GPUI's line wrapper treats `?` as a break opportunity (for URLs), which left
+/// a lone "?" on the last line of a question. Each word here is one flex item,
+/// so "captura?" wraps as a unit. `max_lines` clips extra lines.
+pub fn word_wrapped(text: &str, token: TypeToken, max_lines: Option<usize>) -> Div {
+    let words = text
+        .split_whitespace()
+        .map(|word| div().flex_none().child(word.to_owned()));
+    text_style(div(), token)
+        .w_full()
+        .min_w(px(0.0))
+        .flex()
+        .flex_wrap()
+        .gap_x(px(token.size * 0.27))
+        .when_some(max_lines, |text, lines| {
+            text.max_h(px(token.line_height * lines as f32))
+                .overflow_hidden()
+        })
+        .children(words)
+}
+
+/// The title of a reading pane: display face, word-wrapped.
+pub fn reading_title(text: &str) -> Div {
+    // 500 is a named instance of the variable face; an in-between weight such
+    // as 560 made the text system fall back to the interface family.
+    word_wrapped(text, TypeScale::DISPLAY, None)
+        .font_family(Theme::font_display())
+        .font_weight(gpui::FontWeight::MEDIUM)
 }
 
 /// A status pill: dot plus text, never colour alone.
@@ -74,6 +106,51 @@ pub fn mark_selected<E: ParentElement + Styled>(row: E, theme: &Theme, selected:
             .rounded_full()
             .bg(theme.colors.accent_hover()),
     )
+}
+
+/// Records which item is under the pointer. Returns whether it changed, so
+/// callers only re-render when the hover target really moved.
+pub fn track_hover<T: PartialEq>(slot: &mut Option<T>, key: T, hovered: bool) -> bool {
+    if hovered {
+        if slot.as_ref() == Some(&key) {
+            return false;
+        }
+        *slot = Some(key);
+        true
+    } else if slot.as_ref() == Some(&key) {
+        *slot = None;
+        true
+    } else {
+        false
+    }
+}
+
+/// Eases a row's hover tint in and out with a spring instead of snapping.
+///
+/// GPUI's `.hover()` style swaps instantly; the spring keeps its state under
+/// `key`, so the tint animates toward `hovered` on every change. Selected rows
+/// keep their own fill (`enabled == false`).
+pub fn hover_tint(
+    row: Stateful<Div>,
+    key: impl Into<ElementId>,
+    hovered: bool,
+    enabled: bool,
+    theme: &Theme,
+) -> AnyElement {
+    let hover = theme.colors.hover_veil();
+    let rest = hover.alpha(0.0);
+    row.with_spring(
+        key,
+        SpringAnimation::new(MotionTokens::HOVER_SPRING).to(hovered && enabled),
+        move |row, phase| {
+            if enabled {
+                row.bg(phase.interpolate_between_clamped(0.0..=1.0, rest, hover))
+            } else {
+                row
+            }
+        },
+    )
+    .into_any_element()
 }
 
 /// Fades content in when `key` changes (a new selection, a new destination).

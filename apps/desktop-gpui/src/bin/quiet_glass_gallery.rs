@@ -258,7 +258,7 @@ impl Render for Gallery {
             .gap(px(SpacingScale::S5))
             .p(px(SpacingScale::S8))
             .bg(theme.colors.canvas())
-            .font_family(Theme::FONT_INTERFACE)
+            .font_family(Theme::font_interface())
             .text_color(theme.colors.text_primary())
             .child(header)
             .child(section(&theme, "Ações", button_rows))

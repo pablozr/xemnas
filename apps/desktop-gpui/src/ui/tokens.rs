@@ -420,6 +420,10 @@ impl TypeToken {
 
 /// The typographic scale.
 ///
+/// Weights are named instances (400/500/600) only: GPUI selects a face by
+/// weight and does not set the variable `wght` axis, so 520 or 560 silently
+/// snapped to the nearest instance.
+///
 /// Stepped down one notch from the first pass (body 15 → 14, headings
 /// 24/18/15 → 20/16/14): at 15 px the product read like a document editor,
 /// while the reference tools (Linear, Zed) set their chrome at 13 px and let
@@ -428,24 +432,24 @@ impl TypeToken {
 pub struct TypeScale;
 
 impl TypeScale {
-    /// `type.display` — 26 / 34, weight 560: the decision title.
-    pub const DISPLAY: TypeToken = TypeToken::new(26.0, 34.0, 560.0);
-    /// `type.heading-1` — 20 / 28, weight 580: the title of a reading pane.
-    pub const HEADING_1: TypeToken = TypeToken::new(20.0, 28.0, 580.0);
-    /// `type.heading-2` — 16 / 24, weight 560: a proposed choice, empty states.
-    pub const HEADING_2: TypeToken = TypeToken::new(16.0, 24.0, 560.0);
-    /// `type.heading-3` — 14 / 20, weight 560: section headings.
-    pub const HEADING_3: TypeToken = TypeToken::new(14.0, 20.0, 560.0);
+    /// `type.display` — 26 / 34, weight 500: the decision title.
+    pub const DISPLAY: TypeToken = TypeToken::new(26.0, 34.0, 500.0);
+    /// `type.heading-1` — 20 / 28, weight 600: the title of a reading pane.
+    pub const HEADING_1: TypeToken = TypeToken::new(20.0, 28.0, 600.0);
+    /// `type.heading-2` — 16 / 24, weight 500: a proposed choice, empty states.
+    pub const HEADING_2: TypeToken = TypeToken::new(16.0, 24.0, 500.0);
+    /// `type.heading-3` — 14 / 20, weight 600: section headings.
+    pub const HEADING_3: TypeToken = TypeToken::new(14.0, 20.0, 600.0);
     /// `type.body` — 14 / 22, weight 400: reading text.
     pub const BODY: TypeToken = TypeToken::new(14.0, 22.0, 400.0);
     /// `type.body-small` — 13 / 19, weight 400: chrome and list text.
     pub const BODY_SMALL: TypeToken = TypeToken::new(13.0, 19.0, 400.0);
-    /// `type.row-title` — 13 / 19, weight 520: the name in a list row.
-    pub const ROW_TITLE: TypeToken = TypeToken::new(13.0, 19.0, 520.0);
-    /// `type.label` — 12 / 16, weight 540: panel titles and field labels.
-    pub const LABEL: TypeToken = TypeToken::new(12.0, 16.0, 540.0);
-    /// `type.meta` — 11 / 16, weight 450: dates, counts, paths.
-    pub const META: TypeToken = TypeToken::new(11.0, 16.0, 450.0);
+    /// `type.row-title` — 13 / 19, weight 500: the name in a list row.
+    pub const ROW_TITLE: TypeToken = TypeToken::new(13.0, 19.0, 500.0);
+    /// `type.label` — 12 / 16, weight 500: panel titles and field labels.
+    pub const LABEL: TypeToken = TypeToken::new(12.0, 16.0, 500.0);
+    /// `type.meta` — 11 / 16, weight 400: dates, counts, paths.
+    pub const META: TypeToken = TypeToken::new(11.0, 16.0, 400.0);
     /// `type.code` — 12.5 / 20, weight 400.
     pub const CODE: TypeToken = TypeToken::new(12.5, 20.0, 400.0);
 }
@@ -540,6 +544,11 @@ impl MotionTokens {
     pub const EASING_ENTER: [f32; 4] = [0.16, 1.0, 0.3, 1.0];
     /// `easing.exit` = cubic-bezier(0.4, 0, 1, 1).
     pub const EASING_EXIT: [f32; 4] = [0.4, 0.0, 1.0, 1.0];
+
+    /// Hover spring: critically damped (no overshoot), settles in ~200 ms, and
+    /// keeps its velocity when the pointer leaves mid-way, so a fast sweep
+    /// across a list reads as one soft wave instead of flickering rows.
+    pub const HOVER_SPRING: gpui::SpringConfig = gpui::SpringConfig::new(500.0, 44.7, 1.0);
 
     /// The documented `easing.enter` as a GPUI easing function.
     ///

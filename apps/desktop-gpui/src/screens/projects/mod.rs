@@ -24,7 +24,9 @@ use crate::ui::controls::{action_button, button_foreground, icon_action, ButtonK
 use crate::ui::feedback::{error_state, status_dot, StatusKind};
 use crate::ui::glass::focus_ring;
 use crate::ui::icons::{icon, IconName};
-use crate::ui::patterns::{count_chip, mark_selected, panel_title, section_label};
+use crate::ui::patterns::{
+    count_chip, hover_tint, mark_selected, panel_title, section_label, track_hover,
+};
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{SpacingScale, TypeScale};
@@ -117,6 +119,8 @@ enum IoOutcome {
 /// generic over it so no concrete storage type leaks into the UI layer. The
 /// `Send` bound is what lets the use case cross into the background executor.
 pub struct ProjectsScreen<R: ProjectRepository + Send + 'static> {
+    /// Row under the pointer, driving the hover spring.
+    hovered: Option<String>,
     /// Parked here while no operation runs; `take()`n for the duration of a
     /// background task and put back with the outcome.
     projects: Option<Projects<R>>,
@@ -151,6 +155,7 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             screen.set_query(&event.0, cx);
         });
         Self {
+            hovered: None,
             projects: Some(projects),
             list: ListState::Loading,
             in_flight: InFlight::None,
@@ -500,7 +505,6 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             .map(|(_, handle)| handle.clone())
             .unwrap_or_else(|| self.confirm_focus.clone());
         // Hover must not erase the persistent selection state.
-        let hover = theme.colors.hover_veil();
         let row = div()
             .id((ElementId::from("project-entry"), id.clone()))
             .relative()
@@ -508,8 +512,7 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             .px(px(SpacingScale::S4))
             .flex()
             .items_center()
-            .gap(px(SpacingScale::S3))
-            .when(!selected, |row| row.hover(move |style| style.bg(hover)));
+            .gap(px(SpacingScale::S3));
         mark_selected(row, theme, selected)
             .role(Role::Button)
             .aria_label(format!("Selecionar {}", summary.name()))
@@ -573,8 +576,24 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
         let rows: Vec<AnyElement> = visible
             .iter()
             .map(|item| {
-                self.render_row(&theme, item, selected_id, cx)
-                    .into_any_element()
+                let id = item.id().as_str().to_string();
+                let selected = selected_id == Some(id.as_str());
+                let hovered = self.hovered.as_deref() == Some(id.as_str());
+                let key = id.clone();
+                let row = self
+                    .render_row(&theme, item, selected_id, cx)
+                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                        if track_hover(&mut this.hovered, key.clone(), *hovered) {
+                            cx.notify();
+                        }
+                    }));
+                hover_tint(
+                    row,
+                    ElementId::Name(format!("project-hover-{id}").into()),
+                    hovered,
+                    !selected,
+                    &theme,
+                )
             })
             .collect();
         let open = icon_action(
@@ -650,11 +669,105 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
         sidebar.into_any_element()
     }
 
+    /// Focus target when the project panel opens: its first action.
+    pub fn panel_focus(&self) -> FocusHandle {
+        self.remove_focus.clone()
+    }
+
+    /// Properties and the remove action of the selected project, shown in the
+    /// panel under the breadcrumb. The panel frame belongs to the shell.
+    pub fn render_project_panel(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let theme = Theme::current(cx);
+        let summary = self.selected_project()?;
+        let id = summary.id().as_str().to_string();
+        let pending = self.pending_removal.as_deref() == Some(id.as_str());
+        let actions: AnyElement = if pending {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(SpacingScale::S3))
+                .child(
+                    text_style(div(), TypeScale::BODY_SMALL)
+                        .text_color(theme.colors.text_secondary())
+                        .child("Remover da lista? A pasta permanece no disco."),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap(px(SpacingScale::S2))
+                        .child(
+                            detail_action(&theme, "projects-cancel", "Cancelar", false)
+                                .track_focus(&self.cancel_focus)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.cancel_remove(window, cx)
+                                })),
+                        )
+                        .child(
+                            detail_action(&theme, "projects-confirm", "Remover", true)
+                                .track_focus(&self.confirm_focus)
+                                .on_click({
+                                    let id = id.clone();
+                                    cx.listener(move |this, _, window, cx| {
+                                        this.confirm_remove(id.clone(), window, cx)
+                                    })
+                                }),
+                        ),
+                )
+                .into_any_element()
+        } else {
+            div()
+                .flex()
+                .child(
+                    detail_action(&theme, "projects-remove", "Remover da lista", false)
+                        .track_focus(&self.remove_focus)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.request_remove(id.clone(), window, cx)
+                        })),
+                )
+                .into_any_element()
+        };
+        Some(
+            div()
+                .id("project-detail")
+                .w(px(360.0))
+                .p(px(SpacingScale::S4))
+                .flex()
+                .flex_col()
+                .gap(px(SpacingScale::S1))
+                .child(section_label(&theme, "Projeto"))
+                .child(
+                    text_style(div(), TypeScale::HEADING_3)
+                        .pb(px(SpacingScale::S1))
+                        .truncate()
+                        .child(summary.name().to_string()),
+                )
+                .child(detail_line(
+                    &theme,
+                    "Localização",
+                    summary.location().to_string(),
+                ))
+                .child(detail_line(
+                    &theme,
+                    "Adicionado",
+                    date_time(summary.registered_at()),
+                ))
+                .child(
+                    div()
+                        .mt(px(SpacingScale::S2))
+                        .pt(px(SpacingScale::S3))
+                        .border_t_1()
+                        .border_color(theme.colors.hairline_divider())
+                        .child(actions),
+                )
+                .into_any_element(),
+        )
+    }
+
     /// Project properties and tracking controls without a duplicate sidebar.
     pub fn render_details(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
         let visible = self.visible_rows();
-        let selected = self.selected_project();
         let content: AnyElement = match &self.list {
             ListState::Loading => loading_state(&theme).into_any_element(),
             ListState::Error(failure) => error_state(
@@ -671,99 +784,9 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             ListState::Ready(_) if !self.query.is_empty() && visible.is_empty() => {
                 no_matches_state(&theme, &self.query).into_any_element()
             }
-            ListState::Ready(_) => match selected {
-                Some(summary) => {
-                    let id = summary.id().as_str().to_string();
-                    let pending = self.pending_removal.as_deref() == Some(id.as_str());
-                    let actions: AnyElement = if pending {
-                        div()
-                            .w_full()
-                            .flex()
-                            .items_center()
-                            .gap(px(SpacingScale::S2))
-                            .child(
-                                text_style(div(), TypeScale::BODY_SMALL)
-                                    .flex_1()
-                                    .text_color(theme.colors.text_secondary())
-                                    .child("Remover da lista? A pasta permanece no disco."),
-                            )
-                            .child(
-                                detail_action(&theme, "projects-cancel", "Cancelar", false)
-                                    .track_focus(&self.cancel_focus)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.cancel_remove(window, cx)
-                                    })),
-                            )
-                            .child(
-                                detail_action(&theme, "projects-confirm", "Remover", true)
-                                    .track_focus(&self.confirm_focus)
-                                    .on_click({
-                                        let id = id.clone();
-                                        cx.listener(move |this, _, window, cx| {
-                                            this.confirm_remove(id.clone(), window, cx)
-                                        })
-                                    }),
-                            )
-                            .into_any_element()
-                    } else {
-                        detail_action(&theme, "projects-remove", "Remover da lista", false)
-                            .track_focus(&self.remove_focus)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.request_remove(id.clone(), window, cx)
-                            }))
-                            .into_any_element()
-                    };
-                    div()
-                        .id("project-detail")
-                        .w_full()
-                        .h_full()
-                        .flex()
-                        .flex_col()
-                        .child(
-                            div()
-                                .w_full()
-                                .px(px(SpacingScale::S8))
-                                .py(px(SpacingScale::S8))
-                                .flex()
-                                .flex_col()
-                                .max_w(px(760.0))
-                                .child(section_label(&theme, "Propriedades"))
-                                .child(detail_line(
-                                    &theme,
-                                    "Localização",
-                                    summary.location().to_string(),
-                                ))
-                                .child(
-                                    div()
-                                        .w_full()
-                                        .border_t_1()
-                                        .border_color(theme.colors.hairline_divider()),
-                                )
-                                .child(detail_line(
-                                    &theme,
-                                    "Adicionado",
-                                    date_time(summary.registered_at()),
-                                ))
-                                .child(
-                                    div()
-                                        .w_full()
-                                        .mt(px(SpacingScale::S4))
-                                        .border_t_1()
-                                        .border_color(theme.colors.hairline_divider()),
-                                )
-                                .child(
-                                    div()
-                                        .w_full()
-                                        .py(px(SpacingScale::S3))
-                                        .flex()
-                                        .items_center()
-                                        .child(actions),
-                                ),
-                        )
-                        .into_any_element()
-                }
-                None => div().into_any_element(),
-            },
+            // A selected project is read through its destinations; its
+            // properties live in the project panel opened from the breadcrumb.
+            ListState::Ready(_) => div().into_any_element(),
         };
         div()
             .id("projects-detail-scroll")
@@ -795,13 +818,13 @@ impl<R: ProjectRepository + Send + 'static> Render for ProjectsScreen<R> {
 fn detail_line(theme: &Theme, label: &'static str, value: String) -> Div {
     div()
         .w_full()
-        .py(px(SpacingScale::S3))
+        .py(px(SpacingScale::S1))
         .flex()
         .items_baseline()
-        .gap(px(SpacingScale::S4))
+        .gap(px(SpacingScale::S3))
         .child(
             text_style(div(), TypeScale::LABEL)
-                .w(px(112.0))
+                .w(px(84.0))
                 .flex_none()
                 .text_color(theme.colors.text_muted())
                 .child(label),

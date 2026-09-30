@@ -8,7 +8,10 @@ use crate::ui::controls::{action_button, button_foreground, ButtonKind};
 use crate::ui::{
     glass::focus_ring,
     icons::{icon, IconName},
-    patterns::{count_chip, fade_in, mark_selected, panel_title, section_label, status_pill},
+    patterns::{
+        count_chip, fade_in, hover_tint, mark_selected, panel_title, reading_title, section_label,
+        status_pill, track_hover, word_wrapped,
+    },
     search_field::{SearchChanged, SearchField},
     theme::{text_style, Theme},
     tokens::{SpacingScale, TypeScale},
@@ -70,6 +73,8 @@ enum Action {
 
 /// All storage work runs off the UI thread; project/query generations reject stale reads.
 pub struct DecisionsScreen<S: DecisionStore + InboxStore + Send + 'static> {
+    /// Row under the pointer, driving the hover spring.
+    hovered: Option<String>,
     backend: Option<Backend<S>>,
     project: Option<String>,
     generation: u64,
@@ -136,6 +141,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
             cx.notify();
         });
         Self {
+            hovered: None,
             backend: Some(Backend { decisions, export }),
             project: None,
             generation: 0,
@@ -614,7 +620,9 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                 .or_insert_with(|| cx.focus_handle().tab_stop(true))
                 .clone();
             let key_id = id.clone();
-            let hover = t.colors.hover_veil();
+            let hovered = self.hovered.as_deref() == Some(id.as_str());
+            let hover_key = id.clone();
+            let hover_id = gpui::ElementId::Name(format!("decision-hover-{id}").into());
             let row = div()
                 .id(format!("decision-{id}"))
                 .relative()
@@ -623,7 +631,11 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                 .flex()
                 .flex_col()
                 .gap(px(SpacingScale::S1))
-                .when(!active, |row| row.hover(move |style| style.bg(hover)))
+                .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                    if track_hover(&mut this.hovered, hover_key.clone(), *hovered) {
+                        cx.notify();
+                    }
+                }))
                 .role(Role::Button)
                 .aria_label(question.clone())
                 .aria_selected(active)
@@ -641,40 +653,37 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                         }
                     }),
                 );
-            list = list.child(
-                mark_selected(row, &t, active)
-                    // Date and version lead; the state only appears when it
-                    // differs from the confirmed default the index is filtered to.
-                    .children(status.map(|status| {
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(SpacingScale::S2))
-                            .child(
-                                text_style(div(), TypeScale::META)
-                                    .text_color(t.colors.text_muted())
-                                    .child(meta.clone()),
-                            )
-                            .child(div().flex_1())
-                            .when(status != DecisionStatus::Accepted, |line| {
-                                line.child(status_pill(&t, t.colors.text_muted(), "Substituída"))
-                            })
-                            .children(version.map(|version| count_chip(&t, format!("v{version}"))))
-                    }))
-                    .child(
-                        text_style(div(), TypeScale::ROW_TITLE)
-                            .line_clamp(2)
-                            .text_color(t.colors.text_primary())
-                            .child(question),
-                    )
-                    .when(status.is_none(), |row| {
-                        row.child(
+            let row = mark_selected(row, &t, active)
+                // Date and version lead; the state only appears when it
+                // differs from the confirmed default the index is filtered to.
+                .children(status.map(|status| {
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(SpacingScale::S2))
+                        .child(
                             text_style(div(), TypeScale::META)
                                 .text_color(t.colors.text_muted())
-                                .child(meta),
+                                .child(meta.clone()),
                         )
-                    }),
-            );
+                        .child(div().flex_1())
+                        .when(status != DecisionStatus::Accepted, |line| {
+                            line.child(status_pill(&t, t.colors.text_muted(), "Substituída"))
+                        })
+                        .children(version.map(|version| count_chip(&t, format!("v{version}"))))
+                }))
+                .child(
+                    word_wrapped(&question, TypeScale::ROW_TITLE, Some(2))
+                        .text_color(t.colors.text_primary()),
+                )
+                .when(status.is_none(), |row| {
+                    row.child(
+                        text_style(div(), TypeScale::META)
+                            .text_color(t.colors.text_muted())
+                            .child(meta),
+                    )
+                });
+            list = list.child(hover_tint(row, hover_id, hovered, !active, &t));
         }
         if self.cursor.is_some() && !searching {
             list = list.child(self.button(
@@ -766,7 +775,22 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                 .child(text_style(div(),TypeScale::BODY_SMALL).mt(px(12.0)).text_color(t.colors.text_muted()).child("Confirme uma escolha na Revisão para preservar o documento, suas evidências e seu histórico." )).into_any_element();
         };
         if self.history {
-            let mut history=div().flex().flex_col().gap(px(16.0)).child(text_style(div(),TypeScale::HEADING_1).child("Histórico de versões"))
+            let back = self.button(
+                "document-back".into(),
+                "Voltar ao documento".into(),
+                Action::Document,
+                false,
+                cx,
+            );
+            let mut history = div()
+                .w_full()
+                .max_w(px(READING_WIDTH))
+                .mx_auto()
+                .flex()
+                .flex_col()
+                .gap(px(16.0))
+                .child(div().flex().child(back))
+                .child(text_style(div(), TypeScale::HEADING_1).child("Histórico de versões"))
                 .child(text_style(div(),TypeScale::BODY_SMALL).text_color(t.colors.text_muted()).child("Cada versão conserva o documento completo. Abra uma versão para ler seu conteúdo."));
             for revision in &detail.revisions {
                 history = history.child(
@@ -824,15 +848,84 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
             }
         }
         let current = self.version.is_none();
+        let revisions = detail.revisions.len();
+        let history_link = self.button(
+            "history-open".into(),
+            format!(
+                "{} · {revisions}",
+                if revisions == 1 {
+                    "Versão"
+                } else {
+                    "Versões"
+                }
+            ),
+            Action::History,
+            false,
+            cx,
+        );
+        let actions: Vec<AnyElement> = if current {
+            vec![
+                self.button(
+                    "export-open".into(),
+                    "Exportar…".into(),
+                    Action::Export(ExportFormat::Markdown),
+                    false,
+                    cx,
+                ),
+                self.button(
+                    "revise-open".into(),
+                    "Revisar".into(),
+                    Action::Revise,
+                    true,
+                    cx,
+                ),
+            ]
+        } else {
+            vec![self.button(
+                "current-version".into(),
+                "Voltar à versão atual".into(),
+                Action::Document,
+                false,
+                cx,
+            )]
+        };
         let badge = if detail.summary.status == DecisionStatus::Accepted {
             status_pill(&t, t.colors.status_success(), "Confirmada")
         } else {
             status_pill(&t, t.colors.text_muted(), "Substituída")
         };
         let mut document=div().w_full().max_w(px(READING_WIDTH)).mx_auto().flex().flex_col().gap(px(SpacingScale::S6))
-            .when(!current,|view|view.child(text_style(div(),TypeScale::BODY_SMALL).p(px(12.0)).rounded(px(6.0)).bg(t.colors.selection()).child("Versão histórica · somente leitura. Volte a Documento para revisar ou exportar a versão atual.")))
-            .child(div().flex().items_center().gap(px(10.0)).child(badge).child(text_style(div(),TypeScale::META).text_color(t.colors.text_muted()).child(format!("v{} · {}",detail.summary.version,short_date(&detail.summary.updated_at)))))
-            .child(text_style(div(),TypeScale::DISPLAY).child(detail.summary.question.clone()))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap(px(SpacingScale::S2))
+                    .child(badge)
+                    .child(
+                        text_style(div(), TypeScale::META)
+                            .text_color(t.colors.text_muted())
+                            .child(format!(
+                                "v{} · {}",
+                                detail.summary.version,
+                                short_date(&detail.summary.updated_at)
+                            )),
+                    )
+                    .child(history_link)
+                    .child(div().flex_1())
+                    .children(actions),
+            )
+            .when(!current, |view| {
+                view.child(
+                    text_style(div(), TypeScale::BODY_SMALL)
+                        .px(px(SpacingScale::S3))
+                        .py(px(SpacingScale::S2))
+                        .rounded(t.radius.control())
+                        .bg(t.colors.selection())
+                        .child("Versão histórica, somente leitura. Revisar e exportar usam a versão atual."),
+                )
+            })
+            .child(reading_title(&detail.summary.question))
             .child(div().flex().flex_col().gap(px(SpacingScale::S2)).border_l_2().border_color(t.colors.accent_hover()).pl(px(SpacingScale::S4))
                 .child(section_label(&t,"Escolha confirmada").text_color(t.colors.accent_hover()))
                 .child(text_style(div(),TypeScale::HEADING_2).child(detail.summary.choice.clone())))
@@ -1201,59 +1294,11 @@ impl<S: DecisionStore + InboxStore + Send + 'static> Render for DecisionsScreen<
                 cx,
             )
         } else {
-            let can_act = self.detail.is_some() && self.version.is_none();
-            let toolbar = div()
-                .h(px(48.0))
-                .flex_none()
-                .px(px(SpacingScale::S4))
-                .flex()
-                .items_center()
-                .gap(px(SpacingScale::S1))
-                .border_b_1()
-                .border_color(t.colors.hairline_divider())
-                .child(self.button(
-                    "document-tab".into(),
-                    "Documento".into(),
-                    Action::Document,
-                    !self.history,
-                    cx,
-                ))
-                .child(self.button(
-                    "history-tab".into(),
-                    format!(
-                            "Histórico · {}",
-                            self.detail
-                                .as_ref()
-                                .map(|detail| detail.revisions.len())
-                                .unwrap_or(0)
-                        ),
-                    Action::History,
-                    self.history,
-                    cx,
-                ))
-                .child(div().flex_1())
-                .when(can_act, |bar| {
-                    bar.child(self.button(
-                        "export-open".into(),
-                        "Exportar…".into(),
-                        Action::Export(ExportFormat::Markdown),
-                        false,
-                        cx,
-                    ))
-                    .child(self.button(
-                        "revise-open".into(),
-                        "Revisar".into(),
-                        Action::Revise,
-                        true,
-                        cx,
-                    ))
-                });
             let document = self.document(cx);
             div()
                 .size_full()
                 .flex()
                 .flex_col()
-                .child(toolbar)
                 .child(
                     div()
                         .id(format!(

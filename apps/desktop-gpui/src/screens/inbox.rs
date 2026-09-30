@@ -18,7 +18,8 @@ use crate::ui::controls::{action_button, ButtonKind};
 use crate::ui::glass::focus_ring;
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
-    count_chip, fade_in, mark_selected, panel_title, section_label, status_pill,
+    count_chip, fade_in, hover_tint, mark_selected, panel_title, reading_title, section_label,
+    status_pill, track_hover, word_wrapped,
 };
 use crate::ui::search_field::SearchField;
 use crate::ui::theme::{text_style, Theme};
@@ -40,6 +41,8 @@ enum ReviewAction {
 
 /// A paginated candidate list and its source-reading pane.
 pub struct InboxScreen<S: InboxStore + Send + 'static> {
+    /// Row under the pointer, driving the hover spring.
+    hovered: Option<String>,
     inbox: Option<Inbox<S>>,
     rows: Vec<CandidateSummary>,
     cursor: Option<String>,
@@ -72,6 +75,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
     /// Composes the application use case without opening storage in the view.
     pub fn new(cx: &mut Context<Self>, inbox: Inbox<S>) -> Self {
         Self {
+            hovered: None,
             inbox: Some(inbox),
             rows: Vec::new(),
             cursor: None,
@@ -440,12 +444,13 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             .into_any_element()
     }
 
-    fn row(&self, row: &CandidateSummary, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn row(&self, row: &CandidateSummary, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
         let selected = self.selected.as_deref() == Some(&row.id);
         let id = row.id.clone();
         let key_id = id.clone();
-        let hover = theme.colors.hover_veil();
+        let hover_key = id.clone();
+        let hovered = self.hovered.as_deref() == Some(row.id.as_str());
         let element = div()
             .id((ElementId::from("candidate"), row.id.clone()))
             .relative()
@@ -454,7 +459,11 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             .flex()
             .flex_col()
             .gap(px(SpacingScale::S1))
-            .when(!selected, |row| row.hover(move |style| style.bg(hover)))
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                if track_hover(&mut this.hovered, hover_key.clone(), *hovered) {
+                    cx.notify();
+                }
+            }))
             .role(Role::Button)
             .aria_label(row.question.clone())
             .aria_selected(selected)
@@ -488,10 +497,8 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                     }),
             )
             .child(
-                text_style(div(), TypeScale::ROW_TITLE)
-                    .text_color(theme.colors.text_primary())
-                    .line_clamp(2)
-                    .child(row.question.clone()),
+                word_wrapped(&row.question, TypeScale::ROW_TITLE, Some(2))
+                    .text_color(theme.colors.text_primary()),
             )
             .child(
                 text_style(div(), TypeScale::BODY_SMALL)
@@ -503,7 +510,13 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
         if let Some((_, focus)) = self.row_focus.iter().find(|(id, _)| *id == row.id) {
             element = element.track_focus(focus);
         }
-        element
+        hover_tint(
+            element,
+            ElementId::Name(format!("candidate-hover-{}", row.id).into()),
+            hovered,
+            !selected,
+            &theme,
+        )
     }
 
     fn button(
@@ -631,11 +644,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                             .child(short_date(&detail.summary.received_at)),
                     ),
             )
-            .child(
-                text_style(div(), TypeScale::DISPLAY)
-                    .text_color(theme.colors.text_primary())
-                    .child(detail.summary.question.clone()),
-            )
+            .child(reading_title(&detail.summary.question).text_color(theme.colors.text_primary()))
             .child(
                 div()
                     .flex()
