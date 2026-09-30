@@ -60,6 +60,10 @@ Variáveis relevantes: `OPENCODE_URL` (padrão `http://127.0.0.1:4096`), `XEMNAS
 
 **Ativação (uma vez, sem publicar):** o OpenCode carrega plugins de arquivos locais — crie `~/.config/opencode/plugins/xemnas.ts` reexportando o build (`export { XemnasOpenCodeAdapter as Xemnas } from "<repo>/adapters/opencode/dist/src/index.js"`; caminho relativo a partir de `plugins/` é `../../../orca/projects/xemnas/...`). O wrapper deve ter **um único export** (o factory), para o OpenCode não registrar os exports utilitários do módulo. Reinicie a sessão do OpenCode após criar o arquivo.
 
+## Context Pack (Fase 3)
+
+O backend monta um **Context Pack** para uma tarefa: decisões vigentes e premissas/regras válidas numa data, escolhidas por busca lexical, com citações (decisão e versão, evidências, relações) e limite de tamanho. Exportar para Markdown ou JSON exige ação explícita e destino escolhido. Decisões podem ser substituídas sem apagar a anterior. Detalhes e contrato para a UI: [`docs/fase-3/01-context-pack-manual.md`](docs/fase-3/01-context-pack-manual.md) e [ADR-0003](docs/adr/0003-fase-3-contexto-recuperavel.md).
+
 ## Privacidade
 
 - **Local por padrão.** Nenhum dado sai da máquina sem consentimento explícito e perfil configurado (§13 da spec).
@@ -76,7 +80,7 @@ Variáveis relevantes: `OPENCODE_URL` (padrão `http://127.0.0.1:4096`), `XEMNAS
 
 ## Limitações conhecidas
 
-- A interface (telas Inbox/Decisions/Settings/Diagnostics e navegação por teclado) é entregue em paralelo — o backend dos fluxos já está completo e aprovado.
+- A interface (telas Inbox/Decisions/Settings/Diagnostics, Context Pack e navegação por teclado) é entregue em paralelo — o backend dos fluxos já está completo.
 - A redação é por padrões conhecidos (mesmas regras do adapter): um segredo em formato não reconhecido ainda é persistido. Os arquivos em `outbox/accepted/` guardam o envelope como o adapter o escreveu, até a retenção removê-los.
 - Busca é lexical (FTS5) — sem embeddings/vector graph (spec: provar filtros antes de embeddings).
 - `superseded` está modelado no schema, sem ação/UI ainda.

@@ -32,6 +32,10 @@ _Avoid_: Source, proof
 Uma possível escolha durável inferida do trabalho real, ainda sem autoridade até confirmação humana.
 _Avoid_: Decision, suggestion
 
+**Decision Relation**:
+Uma ligação tipada e criada por humano entre duas Engineering Decisions: uma substitui, depende de ou conflita com a outra. Substituir nunca apaga a decisão anterior.
+_Avoid_: Link, graph edge
+
 **Engineering Decision**:
 Uma escolha humana confirmada, com escopo, rationale, premissas, evidências e condições de reconsideração.
 _Avoid_: ADR, recommendation
