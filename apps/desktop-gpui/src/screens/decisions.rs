@@ -27,6 +27,14 @@ struct Backend<S> {
     decisions: Decisions<S>,
     export: Export<S>,
 }
+struct IndexEntry {
+    id: String,
+    question: String,
+    meta: String,
+    month: String,
+    version: Option<i64>,
+    status: Option<DecisionStatus>,
+}
 enum Outcome {
     Page(Result<DecisionPage, String>, bool),
     Search(Result<Vec<DecisionSearchHit>, String>),
@@ -92,6 +100,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
     pub fn new(cx: &mut Context<Self>, decisions: Decisions<S>, export: Export<S>) -> Self {
         let search = cx.new(|cx| {
             let mut field = SearchField::new(cx);
+            field.set_theme(Theme::charcoal());
             field.set_width(240.0);
             field.set_context("Buscar nas decisões", cx);
             field
@@ -441,14 +450,37 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
         selected: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let t = Theme::quiet_glass();
+        let t = Theme::charcoal();
         let focus = self
             .focus
             .entry(id.clone())
             .or_insert_with(|| cx.focus_handle().tab_stop(true))
             .clone();
         let key_action = action.clone();
+        let primary = matches!(action, Action::Revise | Action::SaveExport(_));
+        let disclosure = if let Action::Context(index) = action {
+            Some(self.contexts[index])
+        } else {
+            None
+        };
+        let counted = matches!(action, Action::History | Action::Context(_));
+        let (caption, count) = if counted {
+            label
+                .rsplit_once('·')
+                .map(|(caption, count)| (caption.trim().to_owned(), Some(count.trim().to_owned())))
+                .unwrap_or((label.clone(), None))
+        } else {
+            (label.clone(), None)
+        };
         let icon = match &action {
+            Action::Document => Some(Icon::file(&t, 14.0, !selected).into_any_element()),
+            Action::History => Some(Icon::clock(&t, 14.0, !selected).into_any_element()),
+            Action::Context(0) => Some(Icon::folder(&t, 14.0, true).into_any_element()),
+            Action::Context(1) => Some(Icon::layers(&t, 14.0).into_any_element()),
+            Action::Context(2) => Some(Icon::activity(&t, 14.0).into_any_element()),
+            Action::Context(_) => Some(Icon::clock(&t, 14.0, true).into_any_element()),
+            Action::Filter => Some(Icon::filter(&t, 14.0).into_any_element()),
+            Action::ExpandSource => Some(Icon::expand(&t, 14.0).into_any_element()),
             Action::Revise => Some(Icon::edit(&t, 14.0).into_any_element()),
             Action::CopySource => Some(Icon::copy(&t, 14.0).into_any_element()),
             Action::Export(_) if label == "Exportar…" => {
@@ -464,13 +496,25 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
             .items_center()
             .gap(px(5.0))
             .rounded(px(6.0))
-            .bg(if selected {
+            .border_1()
+            .border_color(if primary {
+                t.colors.decision_accent()
+            } else if matches!(action, Action::Export(_) | Action::More | Action::Retry) {
+                t.colors.decision_line()
+            } else {
+                t.colors.canvas()
+            })
+            .bg(if primary {
+                t.colors.decision_accent()
+            } else if selected {
                 t.colors.decision_selected()
             } else {
-                t.colors.decision_layer()
+                t.colors.canvas()
             })
             .text_color(if self.busy {
                 t.colors.text_disabled()
+            } else if primary {
+                t.colors.accent_on_emphasis()
             } else {
                 t.colors.text_secondary()
             })
@@ -480,7 +524,13 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
             .track_focus(&focus)
             .focus_visible(focus_ring(&t))
             .cursor_pointer()
-            .hover(move |style| style.bg(t.colors.decision_selected()))
+            .hover(move |style| {
+                style.bg(if primary {
+                    t.colors.accent_emphasis()
+                } else {
+                    t.colors.decision_selected()
+                })
+            })
             .on_click(cx.listener(move |this, _, window, cx| this.act(action.clone(), window, cx)))
             .on_key_down(
                 cx.listener(move |this, event: &gpui::KeyDownEvent, window, cx| {
@@ -491,11 +541,25 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                 }),
             )
             .children(icon)
-            .child(label)
+            .child(caption)
+            .children(count.map(|count| {
+                text_style(div(), TypeScale::META)
+                    .px(px(5.0))
+                    .rounded(px(4.0))
+                    .bg(t.colors.decision_layer())
+                    .text_color(t.colors.text_muted())
+                    .child(count)
+            }))
+            .when(disclosure.is_some(), |button| {
+                button
+                    .w_full()
+                    .child(div().flex_1())
+                    .child(Icon::disclosure(&t, 12.0, disclosure.unwrap_or(false)))
+            })
             .into_any_element()
     }
     fn index(&mut self, compact: bool, cx: &mut Context<Self>) -> AnyElement {
-        let t = Theme::quiet_glass();
+        let t = Theme::charcoal();
         let searching = !self.query.trim().is_empty();
         let count = if searching {
             self.hits.len()
@@ -521,33 +585,41 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
             .min_h(px(0.0))
             .overflow_y_scroll()
             .p(px(12.0));
-        let entries: Vec<(String, String, String, String)> = if searching {
+        let entries: Vec<IndexEntry> = if searching {
             self.hits
                 .iter()
-                .map(|hit| {
-                    (
-                        hit.decision_id.clone(),
-                        hit.question.clone(),
-                        hit.snippet.clone(),
-                        String::new(),
-                    )
+                .map(|hit| IndexEntry {
+                    id: hit.decision_id.clone(),
+                    question: hit.question.clone(),
+                    meta: hit.snippet.replace(['[', ']'], ""),
+                    month: String::new(),
+                    version: None,
+                    status: None,
                 })
                 .collect()
         } else {
             self.rows
                 .iter()
-                .map(|row| {
-                    (
-                        row.decision_id.clone(),
-                        row.question.clone(),
-                        format!("{} · v{}", short_date(&row.confirmed_at), row.version),
-                        month_label(&row.confirmed_at),
-                    )
+                .map(|row| IndexEntry {
+                    id: row.decision_id.clone(),
+                    question: row.question.clone(),
+                    meta: short_date(&row.confirmed_at),
+                    month: month_label(&row.confirmed_at),
+                    version: Some(row.version),
+                    status: Some(row.status),
                 })
                 .collect()
         };
         let mut group = String::new();
-        for (id, question, meta, month) in entries {
+        for IndexEntry {
+            id,
+            question,
+            meta,
+            month,
+            version,
+            status,
+        } in entries
+        {
             if month != group {
                 group = month.clone();
                 list = list.child(
@@ -572,9 +644,10 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                     .mb(px(5.0))
                     .px(px(10.0))
                     .py(px(12.0))
-                    .border_l_2()
+                    .relative()
+                    .border_1()
                     .border_color(if active {
-                        t.colors.decision_accent()
+                        t.colors.glass_edge_lavender()
                     } else {
                         t.colors.decision_rail()
                     })
@@ -593,7 +666,19 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                     .track_focus(&focus)
                     .focus_visible(focus_ring(&t))
                     .cursor_pointer()
-                    .hover(move |style| style.bg(t.colors.decision_layer()))
+                    .hover(move |style| {
+                        style
+                            .bg(if active {
+                                t.colors.decision_selected()
+                            } else {
+                                t.colors.decision_layer()
+                            })
+                            .border_color(if active {
+                                t.colors.glass_edge_lavender()
+                            } else {
+                                t.colors.decision_line()
+                            })
+                    })
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.act(Action::Select(id.clone()), window, cx)
                     }))
@@ -605,15 +690,68 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                             }
                         },
                     ))
+                    .when(active, |row| {
+                        row.child(
+                            div()
+                                .absolute()
+                                .left(px(0.0))
+                                .top(px(15.0))
+                                .bottom(px(15.0))
+                                .w(px(2.0))
+                                .rounded_full()
+                                .bg(t.colors.decision_accent()),
+                        )
+                    })
+                    .children(status.map(|status| {
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .child(div().size(px(5.0)).rounded_full().bg(
+                                if status == DecisionStatus::Accepted {
+                                    t.colors.decision_confirmed()
+                                } else {
+                                    t.colors.text_muted()
+                                },
+                            ))
+                            .child(
+                                text_style(div(), TypeScale::META)
+                                    .text_color(t.colors.text_muted())
+                                    .child(if status == DecisionStatus::Accepted {
+                                        "Confirmada"
+                                    } else {
+                                        "Substituída"
+                                    }),
+                            )
+                            .child(div().flex_1())
+                            .children(version.map(|version| {
+                                text_style(div(), TypeScale::META)
+                                    .px(px(5.0))
+                                    .rounded(px(4.0))
+                                    .bg(t.colors.decision_layer())
+                                    .text_color(t.colors.decision_accent())
+                                    .child(format!("v{version}"))
+                            }))
+                    }))
                     .child(
                         text_style(div(), TypeScale::BODY_SMALL)
+                            .text_size(px(12.0))
+                            .line_height(px(20.0))
+                            .line_clamp(2)
                             .text_color(t.colors.text_primary())
                             .child(question),
                     )
                     .child(
-                        text_style(div(), TypeScale::META)
-                            .text_color(t.colors.text_muted())
-                            .child(meta),
+                        div()
+                            .flex()
+                            .items_start()
+                            .gap(px(5.0))
+                            .when(!searching, |meta| meta.child(Icon::clock(&t, 11.0, true)))
+                            .child(
+                                text_style(div(), TypeScale::META)
+                                    .text_color(t.colors.text_muted())
+                                    .child(meta),
+                            ),
                     ),
             );
         }
@@ -653,14 +791,46 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                     .flex()
                     .flex_col()
                     .gap(px(12.0))
-                    .child(text_style(div(), TypeScale::HEADING_3).child("Índice de decisões"))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(Icon::list(&t, 15.0))
+                            .child(
+                                text_style(div(), TypeScale::HEADING_3)
+                                    .flex_1()
+                                    .child("Índice de decisões"),
+                            )
+                            .child(
+                                text_style(div(), TypeScale::META)
+                                    .px(px(6.0))
+                                    .py(px(2.0))
+                                    .rounded(px(4.0))
+                                    .bg(t.colors.decision_layer())
+                                    .text_color(t.colors.text_muted())
+                                    .child(count.to_string()),
+                            ),
+                    )
+                    .child(
+                        text_style(div(), TypeScale::META)
+                            .text_color(t.colors.text_muted())
+                            .child("Escolhas preservadas neste projeto."),
+                    )
                     .child(
                         text_style(div(), TypeScale::META)
                             .text_color(t.colors.text_muted())
                             .child(if self.busy {
                                 "Carregando…".into()
                             } else if searching {
-                                format!("{count} {} · limite de 50", if count == 1 { "resultado" } else { "resultados" })
+                                format!(
+                                    "{count} {} · limite de 50",
+                                    if count == 1 {
+                                        "resultado"
+                                    } else {
+                                        "resultados"
+                                    }
+                                )
                             } else {
                                 format!("{count} carregadas · ordem de confirmação")
                             }),
@@ -677,10 +847,26 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                     }),
             )
             .child(list)
+            .child(
+                div()
+                    .flex_none()
+                    .p(px(16.0))
+                    .border_t_1()
+                    .border_color(t.colors.decision_line())
+                    .child(
+                        text_style(div(), TypeScale::META)
+                            .text_color(t.colors.text_muted())
+                            .child(if searching {
+                                "Busca em pergunta, escolha e justificativa."
+                            } else {
+                                "Histórico e fontes preservados. Quantidade de itens carregados."
+                            }),
+                    ),
+            )
             .into_any_element()
     }
     fn document(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let t = Theme::quiet_glass();
+        let t = Theme::charcoal();
         let Some(mut detail) = self.detail.clone() else {
             return div().p(px(40.0)).child(text_style(div(),TypeScale::HEADING_2).child(if self.busy{"Carregando decisão…"}else if !self.query.trim().is_empty(){"Nenhuma decisão encontrada"}else{"Decisões que permanecem"}))
                 .child(text_style(div(),TypeScale::BODY_SMALL).mt(px(12.0)).text_color(t.colors.text_muted()).child("Confirme uma escolha na Revisão para preservar o documento, suas evidências e seu histórico." )).into_any_element();
@@ -770,7 +956,9 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
             .when(!current,|view|view.child(text_style(div(),TypeScale::BODY_SMALL).p(px(12.0)).rounded(px(6.0)).bg(t.colors.decision_selected()).child("Versão histórica · somente leitura. Volte a Documento para revisar ou exportar a versão atual.")))
             .child(div().flex().items_center().gap(px(10.0)).child(badge).child(text_style(div(),TypeScale::META).text_color(t.colors.text_muted()).child(format!("v{} · {}",detail.summary.version,short_date(&detail.summary.updated_at)))))
             .child(text_style(div(),TypeScale::HEADING_1).text_size(px(28.0)).line_height(px(37.0)).font_weight(gpui::FontWeight::MEDIUM).child(detail.summary.question.clone()))
-            .child(text_style(div(),TypeScale::HEADING_2).border_l_2().border_color(t.colors.decision_accent()).pl(px(18.0)).child(detail.summary.choice.clone()))
+            .child(div().flex().flex_col().gap(px(9.0)).border_l_2().border_color(t.colors.decision_accent()).pl(px(18.0))
+                .child(text_style(div(),TypeScale::META).text_color(t.colors.decision_accent()).child("ESCOLHA CONFIRMADA"))
+                .child(text_style(div(),TypeScale::HEADING_2).child(detail.summary.choice.clone())))
             .child(div().flex().flex_col().gap(px(10.0)).child(text_style(div(),TypeScale::META).text_color(t.colors.text_muted()).child("JUSTIFICATIVA"))
                 .child(text_style(div(),TypeScale::BODY_SMALL).line_height(px(24.0)).text_color(t.colors.text_secondary()).child(detail.rationale.clone())));
         let mut context = div()
@@ -797,11 +985,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                 .gap(px(10.0))
                 .child(self.button(
                     format!("context-{index}"),
-                    format!(
-                        "{} {label} · {}",
-                        if self.contexts[index] { "⌄" } else { "›" },
-                        items.len()
-                    ),
+                    format!("{label} · {}", items.len()),
                     Action::Context(index),
                     false,
                     cx,
@@ -823,7 +1007,29 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
             }
             context = context.child(section);
         }
-        document = document.child(context).child(self.evidence(cx));
+        document = document
+            .child(
+                div()
+                    .border_t_1()
+                    .border_color(t.colors.decision_line())
+                    .pt(px(18.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(12.0))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(Icon::layers(&t, 15.0))
+                            .child(
+                                text_style(div(), TypeScale::HEADING_3)
+                                    .child("Contexto da decisão"),
+                            ),
+                    )
+                    .child(context.border_t_0().pt(px(0.0))),
+            )
+            .child(self.evidence(cx));
         document = document.child(
             div()
                 .border_t_1()
@@ -833,9 +1039,16 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                 .flex_col()
                 .gap(px(5.0))
                 .child(
-                    text_style(div(), TypeScale::META)
-                        .text_color(t.colors.text_muted())
-                        .child("PROVENIÊNCIA"),
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(7.0))
+                        .child(Icon::link(&t, 13.0))
+                        .child(
+                            text_style(div(), TypeScale::META)
+                                .text_color(t.colors.text_muted())
+                                .child("PROVENIÊNCIA"),
+                        ),
                 )
                 .child(
                     text_style(div(), TypeScale::META)
@@ -858,7 +1071,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
         document.into_any_element()
     }
     fn evidence(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let t = Theme::quiet_glass();
+        let t = Theme::charcoal();
         let mut panel = div()
             .flex()
             .flex_col()
@@ -867,8 +1080,33 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
             .border_color(t.colors.decision_line())
             .pt(px(20.0))
             .child(
-                text_style(div(), TypeScale::HEADING_3)
-                    .child(format!("Evidências · {}", self.sources.len())),
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(Icon::link(&t, 15.0))
+                    .child(
+                        text_style(div(), TypeScale::HEADING_3)
+                            .flex_1()
+                            .child("Evidências"),
+                    )
+                    .child(
+                        text_style(div(), TypeScale::META)
+                            .px(px(7.0))
+                            .py(px(3.0))
+                            .rounded(px(5.0))
+                            .bg(t.colors.decision_layer())
+                            .text_color(t.colors.text_muted())
+                            .child(format!(
+                                "{} {}",
+                                self.sources.len(),
+                                if self.sources.len() == 1 {
+                                    "fonte"
+                                } else {
+                                    "fontes"
+                                }
+                            )),
+                    ),
             );
         if self.sources.is_empty() {
             return panel
@@ -929,13 +1167,41 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
             .get(self.source)
             .and_then(|source| source.artifact.clone())
         {
+            let caption = self
+                .lines
+                .get(self.source)
+                .and_then(Option::as_ref)
+                .map(|lines| evidence::caption(&artifact, lines));
             terminal = terminal.child(
                 div()
                     .flex()
                     .justify_end()
                     .gap(px(6.0))
                     .p(px(8.0))
+                    .items_center()
+                    .border_b_1()
+                    .border_color(t.colors.decision_line())
                     .bg(t.colors.decision_rail())
+                    .children(caption.map(|(path, description)| {
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.0))
+                            .px(px(5.0))
+                            .child(
+                                crate::ui::theme::code_style(div(), TypeScale::META)
+                                    .truncate()
+                                    .text_color(t.colors.text_secondary())
+                                    .child(path),
+                            )
+                            .child(
+                                text_style(div(), TypeScale::META)
+                                    .text_color(t.colors.text_muted())
+                                    .child(description),
+                            )
+                    }))
                     .child(self.button(
                         "copy-source".into(),
                         "Copiar trecho".into(),
@@ -956,7 +1222,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                     )),
             );
             if let Some(lines) = self.lines.get(self.source).and_then(Option::as_ref) {
-                terminal = terminal.child(evidence::snippet_with_height(
+                terminal = terminal.child(evidence::snippet_body(
                     &artifact,
                     format!(
                         "decision-code-{}-{}",
@@ -979,7 +1245,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
         panel.into_any_element()
     }
     fn export_preview(&mut self, max_height: f32, cx: &mut Context<Self>) -> AnyElement {
-        let t = Theme::quiet_glass();
+        let t = Theme::charcoal();
         let document = self.preview.clone().expect("preview mounted");
         let json = document.format == ExportFormat::Json;
         let mut panel = div().size_full().flex().flex_col().child(
@@ -1096,7 +1362,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> Render for DecisionsScreen<
             self.restore_focus = false;
             window.focus(&self.reader_focus, cx);
         }
-        let t = Theme::quiet_glass();
+        let t = Theme::charcoal();
         let compact = window.viewport_size().width < px(1300.0);
         self.search.update(cx, |field, _| {
             field.set_width(if compact { 208.0 } else { 256.0 })
@@ -1249,13 +1515,13 @@ fn load_document<S: DecisionStore + InboxStore>(
     Ok((detail, sources))
 }
 fn short_date(value: &str) -> String {
-    let date = value.get(..10).unwrap_or(value);
-    let parts = date.split('-').collect::<Vec<_>>();
-    if parts.len() == 3 {
-        format!("{}/{}/{}", parts[2], parts[1], parts[0])
-    } else {
-        date.into()
-    }
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|date| {
+            date.with_timezone(&chrono::Local)
+                .format("%d/%m/%Y")
+                .to_string()
+        })
+        .unwrap_or_else(|_| "Data indisponível".into())
 }
 fn month_label(value: &str) -> String {
     let months = [
@@ -1272,13 +1538,12 @@ fn month_label(value: &str) -> String {
         "Novembro",
         "Dezembro",
     ];
-    let month = value
-        .get(5..7)
-        .and_then(|value| value.parse::<usize>().ok())
-        .and_then(|month| month.checked_sub(1))
-        .and_then(|month| months.get(month));
-    match month {
-        Some(month) => format!("{month} {}", value.get(..4).unwrap_or("")),
-        None => "Data não registrada".into(),
+    use chrono::Datelike;
+    match chrono::DateTime::parse_from_rfc3339(value) {
+        Ok(date) => {
+            let date = date.with_timezone(&chrono::Local);
+            format!("{} {}", months[date.month0() as usize], date.year())
+        }
+        Err(_) => "Data não registrada".into(),
     }
 }

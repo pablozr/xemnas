@@ -57,7 +57,7 @@ fn kind_label(kind: &str) -> &str {
 }
 
 pub(super) fn snippet(artifact: &ArtifactView, id: String, source: &SourceLines) -> AnyElement {
-    snippet_with_height(artifact, id, source, 240.0)
+    snippet_with_theme(artifact, id, source, 240.0, Theme::quiet_glass(), true)
 }
 
 pub(super) fn snippet_with_height(
@@ -66,7 +66,49 @@ pub(super) fn snippet_with_height(
     source: &SourceLines,
     max_height: f32,
 ) -> AnyElement {
-    let theme = Theme::quiet_glass();
+    snippet_with_theme(artifact, id, source, max_height, Theme::charcoal(), true)
+}
+
+pub(super) fn snippet_body(
+    artifact: &ArtifactView,
+    id: String,
+    source: &SourceLines,
+    height: f32,
+) -> AnyElement {
+    snippet_with_theme(artifact, id, source, height, Theme::charcoal(), false)
+}
+
+pub(super) fn caption(artifact: &ArtifactView, source: &SourceLines) -> (String, String) {
+    let metadata = metadata(artifact);
+    let path = metadata
+        .get("file")
+        .or_else(|| metadata.get("path"))
+        .and_then(|value| value.as_str())
+        .map(str::to_owned)
+        .unwrap_or_else(|| label(artifact));
+    let start = metadata
+        .get("start_line")
+        .or_else(|| metadata.get("line_start"))
+        .and_then(|value| value.as_u64())
+        .filter(|start| *start > 0);
+    let range = match start {
+        Some(start) => format!(
+            "linhas {start}–{}",
+            start.saturating_add(source.lines.len().saturating_sub(1) as u64)
+        ),
+        None => format!("{} linhas do trecho", source.lines.len()),
+    };
+    (path, format!("{} · {range}", kind_label(&artifact.kind)))
+}
+
+fn snippet_with_theme(
+    artifact: &ArtifactView,
+    id: String,
+    source: &SourceLines,
+    max_height: f32,
+    theme: Theme,
+    show_header: bool,
+) -> AnyElement {
     let metadata = metadata(artifact);
     let path = metadata
         .get("file")
@@ -117,40 +159,66 @@ pub(super) fn snippet_with_height(
     .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
     .h(px(height))
     .w_full();
+    let content = if !show_header && !code && artifact.kind != "export_document" {
+        div()
+            .id(format!("{body_id}-prose"))
+            .max_h(px(max_height))
+            .w_full()
+            .overflow_y_scroll()
+            .child(
+                text_style(div(), TypeScale::BODY_SMALL)
+                    .line_height(px(23.0))
+                    .text_color(theme.colors.text_secondary())
+                    .child(artifact.content.clone()),
+            )
+            .into_any_element()
+    } else {
+        code_list.into_any_element()
+    };
     div()
         .w_full()
         .min_w(px(0.0))
         .flex()
         .flex_col()
         .bg(theme.colors.rail())
-        .child(
-            div()
-                .p(px(SpacingScale::S3))
-                .flex()
-                .flex_col()
-                .gap(px(SpacingScale::S1))
-                .border_b_1()
-                .border_color(theme.colors.hairline_divider())
-                .child(
-                    text_style(div(), TypeScale::BODY_SMALL)
-                        .child(path.map(str::to_owned).unwrap_or_else(|| label(artifact))),
-                )
-                .child(
-                    text_style(div(), TypeScale::META)
-                        .text_color(theme.colors.text_muted())
-                        .child(format!(
-                            "{} · {}",
-                            kind_label(&artifact.kind),
-                            if start.is_some() {
-                                "linhas da fonte"
-                            } else if code {
-                                "linhas do trecho"
-                            } else {
-                                "texto da captura"
-                            }
-                        )),
-                ),
-        )
+        .when(show_header, |viewer| {
+            viewer.child(
+                div()
+                    .p(px(SpacingScale::S3))
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S1))
+                    .border_b_1()
+                    .border_color(theme.colors.hairline_divider())
+                    .child(
+                        text_style(div(), TypeScale::BODY_SMALL)
+                            .child(path.map(str::to_owned).unwrap_or_else(|| label(artifact))),
+                    )
+                    .child(
+                        text_style(div(), TypeScale::META)
+                            .text_color(theme.colors.text_muted())
+                            .child(format!(
+                                "{} · {}",
+                                kind_label(&artifact.kind),
+                                if start.is_some() {
+                                    format!(
+                                        "linhas {}–{}",
+                                        start.unwrap_or(1),
+                                        start.unwrap_or(1).saturating_add(
+                                            source.lines.len().saturating_sub(1) as u64
+                                        )
+                                    )
+                                } else if artifact.kind == "export_document" {
+                                    "conteúdo exato para salvar".into()
+                                } else if code {
+                                    "linhas do trecho".into()
+                                } else {
+                                    "texto da captura".into()
+                                }
+                            )),
+                    ),
+            )
+        })
         .child(
             div()
                 .id(body_id)
@@ -159,7 +227,7 @@ pub(super) fn snippet_with_height(
                 .overflow_hidden()
                 .p(px(SpacingScale::S4))
                 .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
-                .child(code_list),
+                .child(content),
         )
         .into_any_element()
 }
