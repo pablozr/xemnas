@@ -13,6 +13,6 @@ Este diretório contém os artefatos usados para definir e construir o produto. 
 
 ## Plano
 
-`adr/` registra decisões arquiteturais; `fase-3/` registra o trabalho posterior ao MVP (ADR-0003).
+`adr/` registra decisões arquiteturais; `fase-3/` registra o trabalho posterior ao MVP (ADR-0003); `fase-4/` guarda propostas ainda não iniciadas.
 
 `mvp-plan/` contém o briefing e tickets pequenos para execução sequencial. Não são issues e não devem ser publicados automaticamente. Ao fechar uma pendência registrada, anote no próprio ticket o que foi feito e o commit.
