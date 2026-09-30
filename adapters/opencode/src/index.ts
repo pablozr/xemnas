@@ -30,6 +30,7 @@ import {
 } from "./outbox.js";
 import {
   createHttpMessageSource,
+  isExtractionSession,
   type MessageSource,
   type OpenCodeFileDiff,
   type OpenCodeMessage,
@@ -216,6 +217,21 @@ export function createAdapter(deps: AdapterDeps): Adapter {
     });
 
   async function reconcileSession(sessionId: string): Promise<SessionOutcome> {
+    // Extraction sessions created by the xemnas desktop are never captured
+    // (ADR-0004). An unreadable title does not block a real capture.
+    if (deps.source.getSessionTitle !== undefined) {
+      let title: string | null = null;
+      try {
+        title = await deps.source.getSessionTitle(sessionId);
+      } catch {
+        title = null;
+      }
+      if (isExtractionSession(title)) {
+        log.info("extraction-session-skipped", { session_id: sessionId });
+        return { session_id: sessionId, sent: 0, skipped: 0, stopped: false };
+      }
+    }
+
     const checkpoint = deps.checkpoints.get(sessionId);
 
     let messages: OpenCodeMessage[];

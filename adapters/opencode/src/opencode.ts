@@ -74,6 +74,18 @@ export interface ListMessagesOptions {
   maxPages?: number;
 }
 
+/**
+ * Title prefix of the sessions the xemnas desktop creates in OpenCode to run
+ * an extraction (ADR-0004). Those sessions are never captured: capturing them
+ * would turn every extraction into a new capture.
+ */
+export const EXTRACTION_SESSION_TITLE = "xemnas · extração";
+
+/** Whether a session title marks a xemnas extraction session. */
+export function isExtractionSession(title: string | null | undefined): boolean {
+  return typeof title === "string" && title.startsWith(EXTRACTION_SESSION_TITLE);
+}
+
 /** Source of messages and diffs for one OpenCode session. */
 export interface MessageSource {
   /** Returns messages ascending by id, filtered to `id > afterId`. */
@@ -83,6 +95,8 @@ export interface MessageSource {
   ): Promise<OpenCodeMessage[]>;
   /** Returns the file diffs associated with a message. */
   getDiff(sessionId: string, messageId: string): Promise<OpenCodeFileDiff[]>;
+  /** Returns the session title, or `null` when unknown. Optional. */
+  getSessionTitle?(sessionId: string): Promise<string | null>;
 }
 
 function toPart(value: unknown): OpenCodePart | null {
@@ -232,6 +246,18 @@ export function createHttpMessageSource(
     `${options.baseUrl}/session/${encodeURIComponent(sessionId)}/diff?messageID=${encodeURIComponent(messageId)}`;
 
   return {
+    async getSessionTitle(sessionId) {
+      const raw = await getJson(
+        fetchImpl,
+        `${options.baseUrl}/session/${encodeURIComponent(sessionId)}`,
+        timeoutMs,
+      );
+      const title =
+        typeof raw === "object" && raw !== null
+          ? (raw as Record<string, unknown>).title
+          : null;
+      return typeof title === "string" ? title : null;
+    },
     async listMessages(sessionId, listOptions) {
       const pageSize = Math.max(1, listOptions.limit);
       const maxPages = Math.max(
@@ -312,6 +338,8 @@ export interface FakeMessageSourceOptions {
   messages?: Record<string, MessageWithParts[]>;
   /** Documented `FileDiff` items keyed by `${sessionId}:${messageId}`. */
   diffs?: Record<string, RawFileDiff[]>;
+  /** Session titles keyed by session id. */
+  titles?: Record<string, string>;
 }
 
 /**
@@ -326,7 +354,11 @@ export function createFakeMessageSource(
 ): MessageSource {
   const messages = options.messages ?? {};
   const diffs = options.diffs ?? {};
+  const titles = options.titles ?? {};
   return {
+    async getSessionTitle(sessionId) {
+      return titles[sessionId] ?? null;
+    },
     async listMessages(sessionId, listOptions) {
       const all = (messages[sessionId] ?? [])
         .map(parseMessageWithParts)
