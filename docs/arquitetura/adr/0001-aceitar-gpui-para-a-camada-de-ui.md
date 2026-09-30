@@ -2,7 +2,7 @@
 
 - **Status:** Aceita no Gate 0 (2026-09-28). Revisável sob as condições abaixo.
 - **Contexto:** MVP-SPEC §15, Gate 0 — "reduzir o maior risco técnico antes de acoplar o produto".
-- **Decisores:** agente executor do plano `docs/mvp-plan/`, com evidências do spike.
+- **Decisores:** agente executor do plano `docs/roadmap/mvp/`, com evidências do spike.
 
 ## Contexto
 
@@ -11,7 +11,7 @@ design system Quiet Glass, lista virtualizada de 10 mil itens, foco de teclado v
 aceitação pelo Narrator. Escolher errado aqui acopla toda a aplicação a uma abstração que
 precisaria ser trocada por inteiro depois.
 
-O produto já havia fixado a hipótese em `docs/stack-e-arquitetura-rust-gpui.md`
+O produto já havia fixado a hipótese em `docs/arquitetura/stack-e-arquitetura-rust-gpui.md`
 ("GPUI com versão/commit fixado"). O Gate 0 existe para confirmá-la com medições, não
 para repeti-la.
 
@@ -30,7 +30,7 @@ PR zed#56065), que é o que fornece a árvore de acessibilidade que o Narrator c
 
 O que esta decisão **não** decide:
 
-- não define o layout de módulos (Gate 1 — `issues/04-fundacao-modular.md`);
+- não define o layout de módulos (Gate 1 — `docs/roadmap/mvp/issues/04-fundacao-modular.md`);
 - não aprova o spike como arquitetura — ele é descartável e será reescrito como crates;
 - não escolhe banco, contrato, segurança, jobs ou distribuição;
 - não promete macOS ou Linux.
@@ -78,7 +78,7 @@ GATE0 RESULT=PASS
   `window-focus-visible.png` mostra o anel de foco pintado. Capturas em
   `%TEMP%\xemnas-spike\evidence\`.
 - **Fallback sem blur:** o spike não contém nenhuma chamada de blur/backdrop — todas as
-  superfícies são sólidas, como exige `design-system-quiet-glass.md` §"Glass".
+  superfícies são sólidas, como exige `docs/design/design-system-quiet-glass.md` §"Glass".
 - **API local:** mesmo servidor loopback autenticado — `401` sem token, `200` com token,
   `200` no health.
 

@@ -1,9 +1,11 @@
 # Ideias de produto em discussão
 
+**Status:** Aberta. A aba Contexto já foi entregue; o resto segue em discussão.
+
 Anotações de 30/09/2026, depois do merge das fases 3 a 5. Nada aqui é escopo
-aprovado; é material para decidir depois do dogfood (`docs/dogfood-log.md`). A
-visão de longo prazo continua em `docs/visao-consolidada-do-produto.md` e a
-pesquisa de provedores de IA em `docs/design-review/research-ai-providers.md`.
+aprovado; é material para decidir depois do dogfood (`docs/operacao/dogfood-log.md`). A
+visão de longo prazo continua em `docs/produto/visao-consolidada-do-produto.md` e a
+pesquisa de provedores de IA em `docs/pesquisas/provedores-e-modelos-de-ia.md`.
 
 ## 1. Capturar e revisar: o modelo está certo?
 
@@ -74,7 +76,7 @@ hoje não têm interface.
   sozinho: a pessoa escolhe o destino e revisa o preview.
 - **"Por que isto é assim?" a partir de um arquivo.** Escolher um caminho e ver as
   decisões que o afetam. Depende do grafo de entidades da Fase 4
-  (`docs/fase-4/00-plano-grafo-de-entidades.md`).
+  (`docs/roadmap/fase-4/00-plano-grafo-de-entidades.md`).
 - **Medir se o contexto foi usado.** Contar quando o agente cita uma referência
   `D:xxxx` ou abre uma decisão pelo MCP. Mostra se a memória está pagando o custo.
 - **Resumo semanal.** O que foi decidido, o que mudou e o que está pendente, para

@@ -2,7 +2,7 @@
 
 - **Status:** aceito
 - **Data:** 2026-09-30
-- **Contexto:** o backend do MVP está completo (tickets 01–19) e o ticket 20 aguarda o dogfood. O roteiro de `stack-e-arquitetura-rust-gpui.md` põe a Fase 3 (Context Claims, relações, Context Packs manuais, timeline) antes do acesso por agentes (Fase 5, MCP). SCOPE-001 exige decisão explícita para sair do escopo do MVP; o usuário aprovou iniciar a Fase 3 em paralelo ao fechamento do MVP.
+- **Contexto:** o backend do MVP está completo (tickets 01–19) e o ticket 20 aguarda o dogfood. O roteiro de `docs/arquitetura/stack-e-arquitetura-rust-gpui.md` põe a Fase 3 (Context Claims, relações, Context Packs manuais, timeline) antes do acesso por agentes (Fase 5, MCP). SCOPE-001 exige decisão explícita para sair do escopo do MVP; o usuário aprovou iniciar a Fase 3 em paralelo ao fechamento do MVP.
 - **Decisão:** implementar no backend, nesta ordem:
   1. **Relações entre decisões** (`supersedes`, `depends_on`, `conflicts_with`), criadas só por ação humana. Substituir uma decisão marca a anterior como `superseded` e registra a relação; nada é apagado.
   2. **Context Claims** tipados (`assumption`, `constraint`, `goal`, `convention`), com `valid_from`/`valid_until` e status `active`/`retired`. Nascem por ação explícita do usuário, opcionalmente a partir de uma Engineering Decision (citada como origem). Nenhuma IA cria ou confirma Claims nesta fase.

@@ -523,7 +523,7 @@ Settings
 
 Primeiro design system GPUI necessário: typography, spacing, colors, button, icon button, text field, select, checkbox, tabs, list row, virtual list, modal, popover, tooltip, toast, progress, empty/error states e focus ring.
 
-A direção visual canônica e os tokens iniciais estão definidos em `design-system-quiet-glass.md`, acompanhados por `design-system-reference.png`. A implementação deve centralizar as receitas de glass e não espalhar cores ou efeitos diretamente pelas views.
+A direção visual canônica e os tokens iniciais estão definidos em `../design/design-system-quiet-glass.md`, acompanhados por `../design/design-system-reference.png`. A implementação deve centralizar as receitas de glass e não espalhar cores ou efeitos diretamente pelas views.
 
 ## Fases de implementação
 

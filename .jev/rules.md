@@ -164,7 +164,7 @@ severity: error
 
 ### Rule
 
-Implementar somente o ticket atual e o escopo aprovado; funcionalidades futuras exigem decisão explícita do usuário registrada em ADR (`docs/adr/`) antes do código.
+Implementar somente o ticket atual e o escopo aprovado; funcionalidades futuras exigem decisão explícita do usuário registrada em ADR (`docs/arquitetura/adr/`) antes do código.
 
 ### Violation
 

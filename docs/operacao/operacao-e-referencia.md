@@ -56,17 +56,17 @@ npm test                      # testes de contrato do envelope
 npm run send-fixture          # envia fixture pela outbox (modo CLI)
 ```
 
-Variáveis relevantes: `OPENCODE_URL` (padrão `http://127.0.0.1:4096`), `XEMNAS_DATA_DIR`, `XEMNAS_OUTBOX_DIR`. A injeção de contexto é ligada por projeto no app (desligada, medir ou ativa); o plugin só aceita `XEMNAS_CONTEXT_TIMEOUT_MS` como ajuste opcional (ver [`docs/fase-3/02-injecao-de-contexto.md`](docs/fase-3/02-injecao-de-contexto.md)).
+Variáveis relevantes: `OPENCODE_URL` (padrão `http://127.0.0.1:4096`), `XEMNAS_DATA_DIR`, `XEMNAS_OUTBOX_DIR`. A injeção de contexto é ligada por projeto no app (desligada, medir ou ativa); o plugin só aceita `XEMNAS_CONTEXT_TIMEOUT_MS` como ajuste opcional (ver [`docs/roadmap/fase-3/02-injecao-de-contexto.md`](docs/roadmap/fase-3/02-injecao-de-contexto.md)).
 
 **Ativação (uma vez, sem publicar):** o OpenCode carrega plugins de arquivos locais — crie `~/.config/opencode/plugins/xemnas.ts` reexportando o build (`export { XemnasOpenCodeAdapter as Xemnas } from "<repo>/adapters/opencode/dist/src/index.js"`; caminho relativo a partir de `plugins/` é `../../../orca/projects/xemnas/...`). O wrapper deve ter **um único export** (o factory), para o OpenCode não registrar os exports utilitários do módulo. Reinicie a sessão do OpenCode após criar o arquivo.
 
 ## Context Pack (Fase 3)
 
-O backend monta um **Context Pack** para uma tarefa: decisões vigentes e premissas/regras válidas numa data, escolhidas por busca lexical, com citações (decisão e versão, evidências, relações) e limite de tamanho. Exportar para Markdown ou JSON exige ação explícita e destino escolhido. Decisões podem ser substituídas sem apagar a anterior. No OpenCode, o plugin pode anexar ao pedido um bloco compacto (cerca de 300 tokens, sem repetir na sessão), desligado por padrão, ligado por projeto nas configurações do app, com modo sombra para medir antes de ativar. Detalhes e contrato para a UI: [`docs/fase-3/01-context-pack-manual.md`](docs/fase-3/01-context-pack-manual.md) e [ADR-0003](docs/adr/0003-fase-3-contexto-recuperavel.md).
+O backend monta um **Context Pack** para uma tarefa: decisões vigentes e premissas/regras válidas numa data, escolhidas por busca lexical, com citações (decisão e versão, evidências, relações) e limite de tamanho. Exportar para Markdown ou JSON exige ação explícita e destino escolhido. Decisões podem ser substituídas sem apagar a anterior. No OpenCode, o plugin pode anexar ao pedido um bloco compacto (cerca de 300 tokens, sem repetir na sessão), desligado por padrão, ligado por projeto nas configurações do app, com modo sombra para medir antes de ativar. Detalhes e contrato para a UI: [`docs/roadmap/fase-3/01-context-pack-manual.md`](docs/roadmap/fase-3/01-context-pack-manual.md) e [ADR-0003](docs/arquitetura/adr/0003-fase-3-contexto-recuperavel.md).
 
 ## MCP para agentes (somente leitura)
 
-`xemnas-mcp` é um servidor MCP sobre stdio com duas ferramentas: `get_decision` (abre a decisão pela referência `D:xxxx` que aparece no bloco injetado) e `search_context` (busca decisões vigentes e regras do projeto). Ele consulta o app aberto pela API local e nunca altera nada. Compilação e configuração no OpenCode e no Claude Code: [`docs/fase-5/01-mcp-leitura.md`](docs/fase-5/01-mcp-leitura.md).
+`xemnas-mcp` é um servidor MCP sobre stdio com duas ferramentas: `get_decision` (abre a decisão pela referência `D:xxxx` que aparece no bloco injetado) e `search_context` (busca decisões vigentes e regras do projeto). Ele consulta o app aberto pela API local e nunca altera nada. Compilação e configuração no OpenCode e no Claude Code: [`docs/roadmap/fase-5/01-mcp-leitura.md`](docs/roadmap/fase-5/01-mcp-leitura.md).
 
 ## Privacidade
 
@@ -93,7 +93,7 @@ O backend monta um **Context Pack** para uma tarefa: decisões vigentes e premis
 - Smart App Control pode bloquear binários novos não assinados (erros `os error 4551`, DLLs de proc-macro em `target\debug\deps`, `E0463` em compilações): apague o artefato bloqueado (e o fingerprint em `target\debug\.fingerprint`) e recompile — o novo arquivo costuma ganhar veredito novo. Desligar a SAC é decisão do usuário (é irreversível sem reinstalar o Windows).
 
 - Testes de provedor pago são opt-in; a suíte padrão usa fake/fixtures.
-- Estado de conclusão do MVP e dogfood: ver [`docs/mvp-plan/issues/20-dogfood-e-conclusao.md`](docs/mvp-plan/issues/20-dogfood-e-conclusao.md) e [`docs/dogfood-log.md`](docs/dogfood-log.md).
+- Estado de conclusão do MVP e dogfood: ver [`docs/roadmap/mvp/issues/20-dogfood-e-conclusao.md`](docs/roadmap/mvp/issues/20-dogfood-e-conclusao.md) e [`docs/operacao/dogfood-log.md`](docs/operacao/dogfood-log.md).
 
 ## Desenvolvimento (validação)
 

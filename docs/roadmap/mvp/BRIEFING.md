@@ -4,13 +4,13 @@
 
 Provar, no Windows, o ciclo OpenCode → Capture Envelope → persistência deduplicada → extração → Decision Inbox → confirmação humana → Engineering Decision pesquisável e exportável, sem interromper o trabalho nem enviar dados externos sem consentimento.
 
-O aceite global são os 20 critérios de `../MVP-SPEC.md`, seção 17.
+O aceite global são os 20 critérios de `../../produto/MVP-SPEC.md`, seção 17.
 
 ## Contexto e decisões verificadas
 
 - Diretório: raiz do Project, ainda greenfield; não há código ou manifests.
-- Fontes: `../MVP-SPEC.md` (autoridade), `../CONTEXT.md` (vocabulário), `../design-system-quiet-glass.md` (UI) e `../stack-e-arquitetura-rust-gpui.md` (complementar).
-- `../arquitetura-proposta-app-desktop.md` é histórico e não deve ser usado para escolher .NET/Avalonia.
+- Fontes: `../../produto/MVP-SPEC.md` (autoridade), `../../produto/CONTEXT.md` (vocabulário), `../../design/design-system-quiet-glass.md` (UI) e `../../arquitetura/stack-e-arquitetura-rust-gpui.md` (complementar).
+- `../../arquitetura/historico/arquitetura-proposta-app-desktop.md` é histórico e não deve ser usado para escolher .NET/Avalonia.
 - Gate 0 decide explicitamente aceitar GPUI ou trocar **somente** a camada de UI. Gate 1 só começa após essa decisão.
 
 ## Contratos e restrições

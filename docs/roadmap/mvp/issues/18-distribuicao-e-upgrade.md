@@ -11,7 +11,7 @@
 
 ## Decisões registradas
 
-- **Formato de distribuição: ZIP + scripts PowerShell** (`tools/package.ps1` + `tests/e2e/install-clean.ps1`), sem toolchain nova (MSI/Inno exigiriam dependência de build nova). Registrado na **ADR-0002** (`docs/adr/0002-distribuicao-windows-zip-scripts.md`, escrita por mim junto ao fechamento).
+- **Formato de distribuição: ZIP + scripts PowerShell** (`tools/package.ps1` + `tests/e2e/install-clean.ps1`), sem toolchain nova (MSI/Inno exigiriam dependência de build nova). Registrado na **ADR-0002** (`docs/arquitetura/adr/0002-distribuicao-windows-zip-scripts.md`, escrita por mim junto ao fechamento).
 - **Coerência build↔exe estrutural no `package.ps1`** (review r1): parâmetro `-Configuration` removido; constantes únicas `$profileName`/`$profileArgs` alimentam build E staging (par trocado em conjunto); `throw` se o bin do perfil não existir; **hash SHA-256 staged == bin construído** antes de fechar o ZIP. Perfil fixo `release`, `--locked`, versão de `[workspace.package]`, staging limpo, exit≠0 em falha.
 - **"Reprodutibilidade" = escopo honesto** (documentado no script): `--locked` + versão única de origem + um comando só + CI repete o mesmo caminho; **bit-identical NÃO prometido** (timestamps de ZIP, metadados do Windows). Sem pin de toolchain (decisão minha).
 - **Instalação limpa (`install-clean.ps1`)**: extrai ZIP → executa com `XEMNAS_DATA_DIR` isolado → espera `/v1/health` (port de `discovery.json`, bearer de `api-token`) → asserts `app.db` + `schema_migrations` v8 → `WM_CLOSE` elegante → asserts de remoção de `discovery.json`/`api-token` → remove diretórios de install+data e prova que sumiram (desinstalação limpa). Aceita `-ExePath`/`-SkipPackage`.

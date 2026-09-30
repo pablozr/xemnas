@@ -1,5 +1,7 @@
 # Escolha de provedor e modelo para a extração
 
+**Status:** Aberta. Não implementada.
+
 Pesquisa de 30/09/2026. Parte do que está aqui vem de resumos de busca, porque
 `developers.openai.com`, `opencode.ai` e sites de notícia estavam bloqueados no
 ambiente da pesquisa. Endpoints e escopos marcados com **(confirmar)** precisam
@@ -147,4 +149,4 @@ fica coberta via OpenRouter ou OpenCode, sem adapter próprio agora.
 - Integrações abertas usadas como referência técnica: [justrach/harness#129](https://github.com/justrach/harness/issues/129), [zegadb/desktop#27](https://github.com/zegadb/desktop/issues/27)
 - [OpenCode — provedores](https://opencode.ai/docs/providers/), [SDK](https://opencode.ai/docs/sdk/), [structured output (anomalyco/opencode#10456)](https://github.com/anomalyco/opencode/issues/10456)
 - [OpenCode com plano ChatGPT Plus/Pro](https://agent.space/blog/opencode-chatgpt-subscription)
-- Código atual: `crates/application/src/profile.rs`, `crates/ai-provider/src/lib.rs`, `docs/mvp-plan/issues/13-perfil-ia-consentido.md`
+- Código atual: `crates/application/src/profile.rs`, `crates/ai-provider/src/lib.rs`, `docs/roadmap/mvp/issues/13-perfil-ia-consentido.md`

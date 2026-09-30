@@ -62,4 +62,4 @@ claude mcp add xemnas -- C:/caminho/para/xemnas-mcp.exe
 - Confirmar o formato de configuração MCP na versão real do OpenCode.
 - Incluir `xemnas-mcp.exe` no pacote ZIP (`tools/package.ps1`), validando no Windows.
 - Registro de acesso dos agentes (`agent_access_log` do documento de arquitetura) para auditoria, se o uso real pedir.
-- Filtros por componente e arquivo nas ferramentas quando o grafo de entidades existir (`docs/fase-4/00-plano-grafo-de-entidades.md`).
+- Filtros por componente e arquivo nas ferramentas quando o grafo de entidades existir (`docs/roadmap/fase-4/00-plano-grafo-de-entidades.md`).

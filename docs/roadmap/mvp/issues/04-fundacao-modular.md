@@ -17,7 +17,7 @@ Membros: `apps/desktop-gpui` (bin), `crates/{domain,application,integration-cont
 
 Guarda ARCH-001 em `tests/architecture/tests/architecture.rs`, rodando dentro de `cargo test --workspace`, com 11 testes:
 
-- `only_allowed_dependency_edges` — arestas por `path` conforme `docs/stack-e-arquitetura-rust-gpui.md` L113-145.
+- `only_allowed_dependency_edges` — arestas por `path` conforme `docs/arquitetura/stack-e-arquitetura-rust-gpui.md` L113-145.
 - `domain_has_no_infrastructure_or_ui_dependencies` / `application_has_no_infrastructure_or_ui_dependencies` — `gpui`, `gpui_platform`, `rusqlite`, `axum`, `tower-http`, `reqwest`, `ureq`, `openai`, `async-openai` banidos nos dois crates.
 - `domain_and_application_have_no_http_dependencies`.
 - `gpui_dependency_confined_to_desktop_app`.

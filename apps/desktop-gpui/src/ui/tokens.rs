@@ -1,8 +1,9 @@
 //! Quiet Glass design tokens.
 //!
 //! This module is the **only** place in the desktop app allowed to contain raw
-//! color values. It transcribes `docs/design-system-quiet-glass.md` verbatim:
-//! color tokens, the typographic scale, spacing, radii and motion. Views and
+//! color values: color tokens, the typographic scale, spacing, radii and
+//! motion, following `docs/design/VISUAL-IDENTITY.md` (the rule) and
+//! `docs/design/design-system-quiet-glass.md` (the original reference). Views and
 //! primitives consume these tokens through [`crate::ui::theme::Theme`] and must
 //! never write a color literal themselves (enforced by the architecture guard
 //! in `tests/architecture`).

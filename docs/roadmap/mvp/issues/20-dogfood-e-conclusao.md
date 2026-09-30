@@ -6,14 +6,14 @@
 
 **Status: blocked (backend pronto; faltam: semana de dogfood real, UI do front e decisão do usuário)**
 
-- [x] Ruído, perdas, latência e tempo de revisão **têm fonte e registro prontos** (`DiagnosticsDocument.metrics` + [`docs/dogfood-log.md`](../dogfood-log.md)); números reais dependem do uso da semana; falhas críticas registradas na tabela do registro.
+- [x] Ruído, perdas, latência e tempo de revisão **têm fonte e registro prontos** (`DiagnosticsDocument.metrics` + [`docs/operacao/dogfood-log.md`](../../../operacao/dogfood-log.md)); números reais dependem do uso da semana; falhas críticas registradas na tabela do registro.
 - [x] Critérios finais **reexecutados e auditoria registrada abaixo**; decisão de conclusão **pendente** (é decisão do usuário após o dogfood — §19.13: nunca decidir produto pelo usuário).
 
 ## Decisões registradas
 
 - **Métricas de Gate 5 no diagnóstico (delta aprovado)**: seção `metrics` aditiva — `latency_capture_to_candidate_ms{samples,p50,p95}` (join capture↔candidato), `review_time_ms{samples,p50,p95}` (candidato→confirmação), `noise{decided_total,dismissed_ratio}`, `losses{assessments_failed,assessments_skipped,jobs_failed,outbox_rejected}`; percentis via `ORDER BY … OFFSET ROUND((n−1)·p)` sem crate extra; timestamps malformados descartados; vazio ⇒ `0/None`; sanitização cobre a seção (varredura de `SECRET-MARKER-*` no JSON inteiro).
 - **README.md criado na raiz** (critério 20): instalação/build/pacote, mapa de dados (`XEMNAS_DATA_DIR` → `%LOCALAPPDATA%\xemnas`, `state/app.db`, `api-token`/`discovery.json`, outbox), integração do adapter, privacidade, recovery, limitações conhecidas, comandos de validação.
-- **`docs/dogfood-log.md`**: metodologia de coleta (campo `metrics` + diário diário + tabela de falhas) e o formulário da decisão de conclusão — a semana só começa com UI utilizável e sessão OpenCode real.
+- **`docs/operacao/dogfood-log.md`**: metodologia de coleta (campo `metrics` + diário diário + tabela de falhas) e o formulário da decisão de conclusão — a semana só começa com UI utilizável e sessão OpenCode real.
 - Auditoria de critérios: ver **Evidências**.
 
 ## Evidências — auditoria §17 (reexecutada em 2026-09-29)
@@ -45,7 +45,7 @@
 
 ## Dívida registrada / bloqueios da conclusão
 
-1. **Semana de dogfood real** — exige UI utilizável + sessão OpenCode real; registro pronto em `docs/dogfood-log.md`.
+1. **Semana de dogfood real** — exige UI utilizável + sessão OpenCode real; registro pronto em `docs/operacao/dogfood-log.md`.
 2. **UI do front** — critérios 9, 10, 12, 16, 17 e as telas Inbox/Decisions/Export/Diagnostics; contratos públicos entregues nos tickets 15–20 (`Inbox`, `Decisions`, `Export`, `Diagnostics` + tipos).
 3. **Correções do front pendentes** — `ui/icons.rs:57` (guard), teste WCAG, `cargo fmt` em `apps/**`.
 4. **Decisão de conclusão = usuário** (formulário no dogfood-log).

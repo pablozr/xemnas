@@ -4,7 +4,7 @@
 
 **Status: done (backend, adapter e telas: modo por projeto na aba Contexto `40ead8a`, métricas em Configurações › Diagnóstico `03e47b3`)**
 
-**Autorização:** decidido pelo usuário em 2026-09-30, sem ADR, com base na pesquisa abaixo. A injeção começa desligada em todo projeto e o modo sombra existe para provar utilidade antes de ligar (limite do `IDEA.md`).
+**Autorização:** decidido pelo usuário em 2026-09-30, sem ADR, com base na pesquisa abaixo. A injeção começa desligada em todo projeto e o modo sombra existe para provar utilidade antes de ligar (limite de autoridade em `docs/produto/visao-consolidada-do-produto.md`).
 
 ## Por que assim
 

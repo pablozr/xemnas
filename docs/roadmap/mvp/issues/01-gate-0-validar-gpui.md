@@ -30,7 +30,7 @@ arquitetura). Validação do Gate, executada na raiz do spike:
 - **Foco visível:** anel pintado na captura
   `%TEMP%\xemnas-spike\evidence\window-focus-visible.png`.
 - **Fallback sem blur:** o spike não contém nenhuma chamada de blur/backdrop — superfícies
-  sólidas, conforme `docs/design-system-quiet-glass.md`.
+  sólidas, conforme `docs/design/design-system-quiet-glass.md`.
 - **Narrator:** árvore UIA lida por `tools/gate0-evidence.ps1` — 28 nós, incluindo
   `ListItem`s, `Confirm decision`, `Adjust decision` e a `Navigation` por nome.
 

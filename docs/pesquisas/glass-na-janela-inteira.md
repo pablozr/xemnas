@@ -1,5 +1,8 @@
 # Glass na janela inteira: pesquisa e direção
 
+**Status:** Base de decisão. O glass ficou opcional (`XEMNAS_BACKDROP`); a regra
+vigente está em `docs/design/VISUAL-IDENTITY.md`.
+
 Pesquisa de 30/09/2026, depois do primeiro teste com Acrylic na barra de título e na lateral. Pergunta: como estender o material ao app todo sem perder legibilidade nem cair no "vidro em tudo".
 
 ## O que as referências fazem

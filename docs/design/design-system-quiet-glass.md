@@ -2,9 +2,9 @@
 
 **Status:** direção visual aprovada  
 **Superfície inicial:** aplicativo desktop Rust + GPUI  
-**Referência visual canônica:** [design-system-reference.png](./design-system-reference.png)
+**Referência visual canônica:** [design-system-reference.png](design-system-reference.png)
 
-![Referência visual do Quiet Glass](./design-system-reference.png)
+![Referência visual do Quiet Glass](design-system-reference.png)
 
 ## Essência
 
@@ -233,7 +233,7 @@ e exige pelo menos **4.5:1** para `accent.on-emphasis`. A referência canônica
 do produto atual. `glass.fill-strong` permanece para a camada de highlight,
 não para o corpo do controle.
 
-Estado verificado em: `issues/05-primitives-quiet-glass.md`.
+Estado verificado em: `docs/roadmap/mvp/issues/05-primitives-quiet-glass.md`.
 
 ### Fallback técnico
 

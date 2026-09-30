@@ -5,7 +5,7 @@
 **Plataforma inicial:** Windows  
 **UI:** Rust + GPUI  
 **Primeira integração:** OpenCode  
-**Design system:** [Quiet Glass](./design-system-quiet-glass.md)  
+**Design system:** [Quiet Glass](../design/design-system-quiet-glass.md)  
 
 Este documento é a fonte de verdade para agentes que forem planejar e implementar o MVP. Em caso de conflito, as decisões e limites aqui descritos prevalecem sobre documentos exploratórios anteriores.
 
@@ -413,7 +413,7 @@ Settings
 
 ### Design visual
 
-Implementar o [Quiet Glass Design System](./design-system-quiet-glass.md) e usar [esta referência canônica](./design-system-reference.png).
+Implementar o [Quiet Glass Design System](../design/design-system-quiet-glass.md) e usar [esta referência canônica](../design/design-system-reference.png).
 
 Direção resumida:
 
@@ -936,7 +936,7 @@ Automação observa, extrai e aconselha. Autoridade decisória permanece humana.
 
 ## 19. Regras operacionais para agentes implementadores
 
-1. Leia integralmente este documento, `design-system-quiet-glass.md` e `stack-e-arquitetura-rust-gpui.md` antes de alterar código.
+1. Leia integralmente este documento, `../design/design-system-quiet-glass.md` e `../arquitetura/stack-e-arquitetura-rust-gpui.md` antes de alterar código.
 2. Execute os gates na ordem. Não antecipe funcionalidades futuras.
 3. Quando uma escolha relevante não estiver resolvida, escreva uma ADR curta em vez de escondê-la na implementação.
 4. Não substitua tecnologias aprovadas por preferência pessoal sem evidência e decisão explícita.

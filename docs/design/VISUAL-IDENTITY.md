@@ -2,8 +2,8 @@
 
 Este é o padrão visual do aplicativo desktop GPUI. Mudanças de identidade precisam
 ser explícitas; não inventar telas, dados ou ações para preencher espaço. A
-referência extensa em `docs/design-system-quiet-glass.md` pode existir localmente,
-mas `docs/` é ignorado pelo Git: este arquivo é a regra versionável.
+referência extensa original está em `docs/design/design-system-quiet-glass.md`;
+onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
 
 ## Hierarquia e material
 
@@ -33,7 +33,7 @@ mas `docs/` é ignorado pelo Git: este arquivo é a regra versionável.
   8 px de margem, raio de 10 px, borda e sombra de card; painéis internos não
   têm fundo próprio (`color.pane`); evidência e código ficam sólidos;
   superfícies transitórias usam `color.floating`. O GPUI não tem blur por
-  elemento. Pesquisa: `docs/design-review/glass-research.md`.
+  elemento. Pesquisa: `docs/pesquisas/glass-na-janela-inteira.md`.
 - Feedback: confirmações são toasts que saem sozinhos; erros recuperáveis são
   uma faixa no topo com a ação real de repetir; listas carregando mostram
   esqueleto; superfícies vazias usam `empty_panel` (marca, rótulo, título, o que

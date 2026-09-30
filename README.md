@@ -98,15 +98,15 @@ cargo build --release --locked -p desktop-gpui --bin xemnas
 ```
 
 Distributable ZIP: `.\tools\package.ps1`. Demo flags, data locations and the cross build are
-covered in [docs/operacao.md](docs/operacao.md) (Portuguese).
+covered in [docs/operacao/operacao-e-referencia.md](docs/operacao/operacao-e-referencia.md) (Portuguese).
 
 ## Integrations
 
 | | |
 | --- | --- |
-| **OpenCode** | Plugin in [`adapters/opencode`](adapters/opencode): captures on idle, validates the envelope and sends it to the app or the outbox. No domain rules, never calls a model. [Setup](docs/operacao.md#integração-com-o-opencode) |
-| **MCP** | `xemnas-mcp` ([`apps/mcp-server`](apps/mcp-server)): read-only `get_decision` and `search_context` over stdio. Works with OpenCode and Claude Code. [Setup](docs/fase-5/01-mcp-leitura.md) |
-| **Context Pack** | Decisions in force and rules valid at a date, with citations and a size budget. [Details](docs/fase-3/01-context-pack-manual.md) |
+| **OpenCode** | Plugin in [`adapters/opencode`](adapters/opencode): captures on idle, validates the envelope and sends it to the app or the outbox. No domain rules, never calls a model. [Setup](docs/operacao/operacao-e-referencia.md#integração-com-o-opencode) |
+| **MCP** | `xemnas-mcp` ([`apps/mcp-server`](apps/mcp-server)): read-only `get_decision` and `search_context` over stdio. Works with OpenCode and Claude Code. [Setup](docs/roadmap/fase-5/01-mcp-leitura.md) |
+| **Context Pack** | Decisions in force and rules valid at a date, with citations and a size budget. [Details](docs/roadmap/fase-3/01-context-pack-manual.md) |
 
 ## Privacy
 
@@ -136,10 +136,11 @@ A modular Rust monolith whose layering is enforced by an architecture test.
 
 Project documents are written in Portuguese.
 
-- [MVP specification](docs/MVP-SPEC.md) and [domain vocabulary](docs/CONTEXT.md)
-- [Stack and architecture](docs/stack-e-arquitetura-rust-gpui.md) · [ADRs](docs/adr/)
-- [Quiet Glass design system](docs/design-system-quiet-glass.md)
-- [Operations, local data and known limitations](docs/operacao.md)
+- [MVP specification](docs/produto/MVP-SPEC.md) and [domain vocabulary](docs/produto/CONTEXT.md)
+- [Stack and architecture](docs/arquitetura/stack-e-arquitetura-rust-gpui.md) · [ADRs](docs/arquitetura/adr/)
+- [Visual identity](docs/design/VISUAL-IDENTITY.md) and [Quiet Glass design system](docs/design/design-system-quiet-glass.md)
+- [Operations, local data and known limitations](docs/operacao/operacao-e-referencia.md)
+- [Research and future ideas](docs/pesquisas/README.md) · [Full documentation map](docs/README.md)
 
 ## Contributing
 
