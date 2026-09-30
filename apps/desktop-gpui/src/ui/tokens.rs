@@ -350,6 +350,16 @@ impl ColorTokens {
         rgb(0x9790AC).alpha(0.22)
     }
 
+    /// `diff.added` — row tint behind an added line in a diff hunk.
+    pub fn diff_added(&self) -> Rgba {
+        rgb(0x83C59A).alpha(0.10)
+    }
+
+    /// `diff.removed` — row tint behind a removed line in a diff hunk.
+    pub fn diff_removed(&self) -> Rgba {
+        rgb(0xD96776).alpha(0.10)
+    }
+
     /// `glow.warm` — a wide, very low-alpha aura behind a featured surface.
     pub fn glow_warm(&self) -> Rgba {
         rgb(0xD7C9AF).alpha(0.05)
@@ -408,29 +418,36 @@ impl TypeToken {
     }
 }
 
-/// The nine typographic tokens from the design system.
+/// The typographic scale.
+///
+/// Stepped down one notch from the first pass (body 15 → 14, headings
+/// 24/18/15 → 20/16/14): at 15 px the product read like a document editor,
+/// while the reference tools (Linear, Zed) set their chrome at 13 px and let
+/// only the reading surface grow.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TypeScale;
 
 impl TypeScale {
-    /// `type.display` — 32 / 40, weight 560.
-    pub const DISPLAY: TypeToken = TypeToken::new(32.0, 40.0, 560.0);
-    /// `type.heading-1` — 24 / 32, weight 600.
-    pub const HEADING_1: TypeToken = TypeToken::new(24.0, 32.0, 600.0);
-    /// `type.heading-2` — 18 / 26, weight 560.
-    pub const HEADING_2: TypeToken = TypeToken::new(18.0, 26.0, 560.0);
-    /// `type.heading-3` — 15 / 22, weight 560.
-    pub const HEADING_3: TypeToken = TypeToken::new(15.0, 22.0, 560.0);
-    /// `type.body` — 15 / 23, weight 400.
-    pub const BODY: TypeToken = TypeToken::new(15.0, 23.0, 400.0);
-    /// `type.body-small` — 13 / 19, weight 400.
+    /// `type.display` — 26 / 34, weight 560: the decision title.
+    pub const DISPLAY: TypeToken = TypeToken::new(26.0, 34.0, 560.0);
+    /// `type.heading-1` — 20 / 28, weight 580: the title of a reading pane.
+    pub const HEADING_1: TypeToken = TypeToken::new(20.0, 28.0, 580.0);
+    /// `type.heading-2` — 16 / 24, weight 560: a proposed choice, empty states.
+    pub const HEADING_2: TypeToken = TypeToken::new(16.0, 24.0, 560.0);
+    /// `type.heading-3` — 14 / 20, weight 560: section headings.
+    pub const HEADING_3: TypeToken = TypeToken::new(14.0, 20.0, 560.0);
+    /// `type.body` — 14 / 22, weight 400: reading text.
+    pub const BODY: TypeToken = TypeToken::new(14.0, 22.0, 400.0);
+    /// `type.body-small` — 13 / 19, weight 400: chrome and list text.
     pub const BODY_SMALL: TypeToken = TypeToken::new(13.0, 19.0, 400.0);
-    /// `type.label` — 12 / 16, weight 520.
-    pub const LABEL: TypeToken = TypeToken::new(12.0, 16.0, 520.0);
-    /// `type.meta` — 11 / 16, weight 450.
+    /// `type.row-title` — 13 / 19, weight 520: the name in a list row.
+    pub const ROW_TITLE: TypeToken = TypeToken::new(13.0, 19.0, 520.0);
+    /// `type.label` — 12 / 16, weight 540: panel titles and field labels.
+    pub const LABEL: TypeToken = TypeToken::new(12.0, 16.0, 540.0);
+    /// `type.meta` — 11 / 16, weight 450: dates, counts, paths.
     pub const META: TypeToken = TypeToken::new(11.0, 16.0, 450.0);
-    /// `type.code` — 13 / 20, weight 400.
-    pub const CODE: TypeToken = TypeToken::new(13.0, 20.0, 400.0);
+    /// `type.code` — 12.5 / 20, weight 400.
+    pub const CODE: TypeToken = TypeToken::new(12.5, 20.0, 400.0);
 }
 
 /// The `4 px` spacing scale (`space.1` … `space.16`).

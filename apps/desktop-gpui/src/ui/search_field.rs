@@ -15,7 +15,6 @@ use gpui::{
     UTF16Selection, UnderlineStyle, Window,
 };
 
-use crate::ui::glass::focus_ring;
 use crate::ui::icons::Icon;
 use crate::ui::search_edit::SearchEdit;
 use crate::ui::theme::{text_style, Theme};
@@ -815,18 +814,22 @@ impl Render for SearchField {
             .gap(px(SpacingScale::S2))
             .rounded(theme.radius.control())
             .border_1()
+            // Neutral at rest: a field is not a selection, so lavender only
+            // arrives with focus. The focused border already is the ring.
             .border_color(if focused {
-                theme.colors.accent_subtle()
+                theme.colors.accent_default()
             } else {
-                theme.colors.glass_edge_lavender()
+                theme.colors.glass_border_control()
             })
             .bg(if focused {
-                theme.colors.glass_fill_medium()
+                theme.colors.glass_fill_card_hover()
             } else {
-                theme.colors.glass_surface_lavender()
+                theme.colors.glass_fill_card()
+            })
+            .when(!focused, |field| {
+                field.hover(move |style| style.border_color(theme.colors.glass_border_card_hover()))
             })
             .track_focus(&self.focus)
-            .focus_visible(focus_ring(&theme))
             .key_context("SearchField")
             .role(Role::TextInput)
             .aria_label(self.placeholder)

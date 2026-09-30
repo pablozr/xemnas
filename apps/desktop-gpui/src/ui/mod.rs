@@ -9,6 +9,7 @@ pub mod controls;
 pub mod feedback;
 pub mod glass;
 pub mod icons;
+pub mod patterns;
 pub mod search_edit;
 pub mod search_field;
 pub mod theme;
