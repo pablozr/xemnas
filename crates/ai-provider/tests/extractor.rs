@@ -429,16 +429,8 @@ fn hostile_output_is_rejected_and_writes_nothing() {
             r#"{"proposals":[{"question":"q","choice":"c","rationale":"r","confidence":1.5,"confidence_reason":"x","evidence_refs":["artifact-1"],"diff_summary":{"files":[],"artifacts":1}}]}"#.to_string(),
         ),
         (
-            "unknown evidence ref",
-            r#"{"proposals":[{"question":"q","choice":"c","rationale":"r","confidence":0.7,"confidence_reason":"x","evidence_refs":["missing"],"diff_summary":{"files":[],"artifacts":1}}]}"#.to_string(),
-        ),
-        (
             "empty file path",
             r#"{"proposals":[{"question":"q","choice":"c","rationale":"r","confidence":0.7,"confidence_reason":"x","evidence_refs":["artifact-1"],"diff_summary":{"files":[""],"artifacts":1}}]}"#.to_string(),
-        ),
-        (
-            "artifact count mismatch",
-            r#"{"proposals":[{"question":"q","choice":"c","rationale":"r","confidence":0.7,"confidence_reason":"x","evidence_refs":["artifact-1"],"diff_summary":{"files":[],"artifacts":7}}]}"#.to_string(),
         ),
     ];
 
@@ -453,6 +445,25 @@ fn hostile_output_is_rejected_and_writes_nothing() {
         let result = run_extraction(&store, &extractor, "capture-1", &RunContext::for_tests());
         assert!(result.is_err(), "{name}: must be rejected");
         assert_eq!(store.record_count(), 0, "{name}: no row may be written");
+    }
+}
+
+#[test]
+fn references_and_counts_are_reconciled_with_the_capture() {
+    // The model often miscounts artifacts or invents ids; the app owns both.
+    let cases = [
+        r#"{"proposals":[{"question":"q","choice":"c","rationale":"r","confidence":0.7,"confidence_reason":"x","evidence_refs":["missing"],"diff_summary":{"files":[],"artifacts":1}}]}"#,
+        r#"{"proposals":[{"question":"q","choice":"c","rationale":"r","confidence":0.7,"confidence_reason":"x","evidence_refs":["artifact-1"],"diff_summary":{"files":[],"artifacts":7}}]}"#,
+    ];
+    for inner in cases {
+        let server = start_server("HTTP/1.1 200 OK", chat_body(inner));
+        let profile = granted_profile(server.port, 64);
+        let extractor =
+            OpenAiCompatibleExtractor::new(&profile, "sk-synthetic".to_string()).expect("new");
+        let store = TestStore::new(evidence(SCHEMA_DIFF));
+        run_extraction(&store, &extractor, "capture-1", &RunContext::for_tests())
+            .expect("reconciled");
+        assert_eq!(store.record_count(), 1);
     }
 }
 

@@ -236,24 +236,35 @@ where
         }
     };
 
+    // The app owns the facts about the capture: the model's file list,
+    // artifact count and references are reconciled with the evidence, and a
+    // proposal that still fails validation is dropped on its own instead of
+    // taking the whole batch down.
     let mut validated: Vec<(CandidateProposal, Vec<RelevanceSignal>)> = Vec::new();
+    let mut rejected: Option<ExtractError> = None;
     for proposal in proposals {
+        let proposal = reconcile_with_evidence(proposal, &evidence);
         match validate_proposal(&proposal, &evidence, &signals) {
             Ok(canonical) => validated.push((proposal, canonical)),
             Err(error) => {
-                record_assessment(
-                    store,
-                    context,
-                    capture_id,
-                    &hash,
-                    &started_at,
-                    AssessmentOutcome::Failed,
-                    0,
-                    0,
-                    Some(error.code()),
-                )?;
-                return Err(error);
+                rejected.get_or_insert(error);
             }
+        }
+    }
+    if validated.is_empty() {
+        if let Some(error) = rejected {
+            record_assessment(
+                store,
+                context,
+                capture_id,
+                &hash,
+                &started_at,
+                AssessmentOutcome::Failed,
+                0,
+                0,
+                Some(error.code()),
+            )?;
+            return Err(error);
         }
     }
 
@@ -304,6 +315,39 @@ where
         None,
     )?;
     Ok(report)
+}
+
+/// Replaces what the extractor cannot know better than the app: the diff
+/// summary is recomputed from the evidence, and evidence references are kept
+/// only when they name a real artifact (a reference that merely contains an
+/// id, such as `artifact <id>`, counts). With no usable reference left, the
+/// whole capture is cited.
+pub(crate) fn reconcile_with_evidence(
+    mut proposal: CandidateProposal,
+    evidence: &DecisionEvidence,
+) -> CandidateProposal {
+    proposal.diff_summary = relevance::diff_summary(evidence);
+    let mut references: Vec<String> = Vec::new();
+    for reference in &proposal.evidence_refs {
+        let reference = reference.trim();
+        let found = evidence.artifacts.iter().find(|artifact| {
+            artifact.artifact_id == reference || reference.contains(&artifact.artifact_id)
+        });
+        if let Some(artifact) = found {
+            if !references.contains(&artifact.artifact_id) {
+                references.push(artifact.artifact_id.clone());
+            }
+        }
+    }
+    if references.is_empty() {
+        references = evidence
+            .artifacts
+            .iter()
+            .map(|artifact| artifact.artifact_id.clone())
+            .collect();
+    }
+    proposal.evidence_refs = references;
+    proposal
 }
 
 /// Sorts artifacts deterministically and applies the defensive bounds.

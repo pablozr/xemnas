@@ -443,7 +443,7 @@ impl CandidateExtractor for BadExtractor {
 }
 
 #[test]
-fn invalid_proposals_reject_the_whole_batch() {
+fn invalid_proposals_are_rejected() {
     let mutators: &[fn(&mut CandidateProposal)] = &[
         |proposal| proposal.question = "   ".to_string(),
         |proposal| proposal.choice = String::new(),
@@ -453,15 +453,6 @@ fn invalid_proposals_reject_the_whole_batch() {
         |proposal| proposal.confidence = f64::NAN,
         |proposal| proposal.signals.clear(),
         |proposal| proposal.signals = vec![RelevanceSignal::DelegatedToAgent],
-        |proposal| proposal.evidence_refs = vec!["artifact-missing".to_string()],
-        |proposal| proposal.diff_summary = "{ not json".to_string(),
-        |proposal| proposal.diff_summary = "[]".to_string(),
-        |proposal| {
-            proposal.diff_summary = serde_json::json!({"files": [1], "artifacts": 0}).to_string()
-        },
-        |proposal| {
-            proposal.diff_summary = serde_json::json!({"files": [], "artifacts": 999}).to_string()
-        },
     ];
 
     for mutate in mutators {
@@ -475,13 +466,83 @@ fn invalid_proposals_reject_the_whole_batch() {
         );
         assert!(
             matches!(result, Err(ExtractError::Validation(_))),
-            "an invalid proposal must reject the batch"
+            "an invalid proposal is not persisted"
         );
-        assert!(
-            store.records().is_empty(),
-            "no partial batch may be persisted"
-        );
+        assert!(store.records().is_empty(), "nothing may be persisted");
     }
+}
+
+#[test]
+fn facts_about_the_capture_come_from_the_evidence_not_the_model() {
+    let mutators: &[fn(&mut CandidateProposal)] = &[
+        |proposal| proposal.evidence_refs = vec!["artifact-missing".to_string()],
+        |proposal| proposal.evidence_refs.clear(),
+        |proposal| proposal.diff_summary = "{ not json".to_string(),
+        |proposal| proposal.diff_summary = "[]".to_string(),
+        |proposal| {
+            proposal.diff_summary = serde_json::json!({"files": [1], "artifacts": 0}).to_string()
+        },
+        |proposal| {
+            proposal.diff_summary = serde_json::json!({"files": [], "artifacts": 999}).to_string()
+        },
+    ];
+
+    for mutate in mutators {
+        let evidence = evidence(DURABLE[0]);
+        let store = FakeStore::with(evidence.clone());
+        let report = run_extraction(
+            &store,
+            &BadExtractor { mutate: *mutate },
+            &evidence.capture_id,
+            &RunContext::for_tests(),
+        )
+        .expect("the app reconciles what it knows");
+        assert_eq!(report.inserted, 1);
+        let record = &store.records()[0];
+        let summary: serde_json::Value =
+            serde_json::from_str(&record.diff_summary).expect("summary json");
+        assert_eq!(
+            summary["artifacts"],
+            serde_json::json!(evidence.artifacts.len())
+        );
+        let refs: Vec<String> = serde_json::from_str(&record.evidence_refs).expect("refs json");
+        assert!(!refs.is_empty());
+        assert!(refs.iter().all(|reference| evidence
+            .artifacts
+            .iter()
+            .any(|a| &a.artifact_id == reference)));
+    }
+}
+
+/// Returns one valid proposal and one without a question.
+struct MixedExtractor;
+
+impl CandidateExtractor for MixedExtractor {
+    fn extract(
+        &self,
+        input: &DecisionEvidence,
+        signals: &[RelevanceSignal],
+    ) -> Result<Vec<CandidateProposal>, ExtractError> {
+        let good = valid_proposal(input, signals);
+        let mut bad = valid_proposal(input, signals);
+        bad.question = String::new();
+        Ok(vec![bad, good])
+    }
+}
+
+#[test]
+fn one_bad_proposal_does_not_drop_the_good_ones() {
+    let evidence = evidence(DURABLE[0]);
+    let store = FakeStore::with(evidence.clone());
+    let report = run_extraction(
+        &store,
+        &MixedExtractor,
+        &evidence.capture_id,
+        &RunContext::for_tests(),
+    )
+    .expect("the valid proposal survives");
+    assert_eq!(report.inserted, 1);
+    assert_eq!(store.records().len(), 1);
 }
 
 /// Returns the filter signals reordered by the given function.

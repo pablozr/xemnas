@@ -44,12 +44,26 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(90);
 pub const KEYRING_SERVICE: &str = "xemnas.ai-profile";
 
 /// System prompt describing the strict JSON contract expected back.
-pub(crate) const SYSTEM_PROMPT: &str = "You extract durable engineering decisions from a capture. \
+pub(crate) const SYSTEM_PROMPT: &str = "You read one turn of a coding session (the user's \
+message, the assistant's answer, tool summaries and code diffs) and extract the durable \
+engineering decisions it contains, for a human to confirm later.\n\
+A decision is a choice that will still matter in months: architecture, data model or \
+persistence, public contracts and APIs, dependencies, security and privacy, conventions the \
+team must follow, or an explicit trade-off between alternatives. Not decisions: routine \
+fixes, renames, formatting, tests alone, cosmetic UI tweaks, or restating what code does.\n\
+Rules: propose at most 3 decisions, only the clearest; return an empty list when there is \
+none, which is common and correct. Write every text field in the language of the \
+conversation. question: the problem, as a short question (\"Onde guardar os segredos?\"). \
+choice: what was chosen, in one sentence. rationale: why, including the rejected \
+alternative or trade-off when stated. confidence: 0 to 1, how sure you are that this is a \
+durable decision actually taken (not merely discussed); confidence_reason: one sentence. \
+evidence_refs: copy the ids exactly as written after \"### artifact\" for the artifacts \
+that support the decision. diff_summary: files the decision touched and the number of \
+artifacts (the app recomputes both).\n\
 Reply with a single JSON object only, no prose, matching exactly: \
 {\"proposals\":[{\"question\":string,\"choice\":string,\"rationale\":string,\
 \"confidence\":number,\"confidence_reason\":string,\"evidence_refs\":[string],\
-\"diff_summary\":{\"files\":[string],\"artifacts\":number}}]}. \
-Use only evidence_refs from the provided artifact ids. No extra fields.";
+\"diff_summary\":{\"files\":[string],\"artifacts\":number}}]}. No extra fields.";
 
 /// Bounded retry policy for transient provider failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
