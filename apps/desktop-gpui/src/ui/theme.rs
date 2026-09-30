@@ -64,10 +64,16 @@ pub struct Theme {
 impl Theme {
     /// Reads the palette selected by the global theme control.
     pub fn current(cx: &App) -> Self {
-        cx.try_global::<ThemeMode>()
+        let mut theme = cx
+            .try_global::<ThemeMode>()
             .copied()
             .unwrap_or_default()
-            .theme()
+            .theme();
+        let glass = cx
+            .try_global::<Backdrop>()
+            .is_some_and(|backdrop| backdrop.0);
+        theme.colors = theme.colors.with_glass(glass);
+        theme
     }
     /// Interface family (embedded Inter Variable), as the platform named it.
     pub fn font_interface() -> SharedString {
@@ -101,6 +107,12 @@ impl Theme {
         }
     }
 }
+
+/// Whether the window material currently shows through the chrome. The shell
+/// sets it every frame from the backdrop in use and the system appearance.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Backdrop(pub bool);
+impl Global for Backdrop {}
 
 /// Family names as the platform text system registered the embedded files.
 ///

@@ -36,6 +36,7 @@ struct Palette {
     canvas_raised: Tone,
     canvas_deep: Tone,
     rail: Tone,
+    chrome_glass: Tone,
     surface: Tone,
     surface_hover: Tone,
     selection: Tone,
@@ -55,6 +56,7 @@ const QUIET_GLASS: Palette = Palette {
     canvas_raised: Tone::solid(0x111622),
     canvas_deep: Tone::solid(0x090D15),
     rail: Tone::solid(0x0A0E17),
+    chrome_glass: Tone(0x0A0E17, 0.62),
     surface: Tone::solid(0x181E2A),
     surface_hover: Tone::solid(0x202634),
     selection: Tone::solid(0x1C1A28),
@@ -74,6 +76,7 @@ const CHARCOAL: Palette = Palette {
     canvas_raised: Tone::solid(0x26262C),
     canvas_deep: Tone::solid(0x1B1B1F),
     rail: Tone::solid(0x1B1B1F),
+    chrome_glass: Tone(0x1B1B1F, 0.66),
     surface: Tone::solid(0x26262C),
     surface_hover: Tone::solid(0x302B39),
     selection: Tone::solid(0x302B39),
@@ -94,6 +97,7 @@ const CHARCOAL: Palette = Palette {
 #[derive(Clone, Copy, Debug)]
 pub struct ColorTokens {
     palette: &'static Palette,
+    glass: bool,
 }
 
 impl Default for ColorTokens {
@@ -107,12 +111,42 @@ impl ColorTokens {
     pub const fn quiet_glass() -> Self {
         Self {
             palette: &QUIET_GLASS,
+            glass: false,
         }
     }
 
     /// Neutral charcoal palette.
     pub const fn charcoal() -> Self {
-        Self { palette: &CHARCOAL }
+        Self {
+            palette: &CHARCOAL,
+            glass: false,
+        }
+    }
+
+    /// The same palette with the window material showing through the chrome.
+    pub const fn with_glass(mut self, glass: bool) -> Self {
+        self.glass = glass;
+        self
+    }
+
+    /// `color.chrome` — title bar and project sidebar.
+    ///
+    /// With the system material (Mica Alt or Acrylic) behind the window this is
+    /// a translucent tint of the rail, so the blurred desktop reads through the
+    /// commanding surfaces while every reading surface stays opaque. Without a
+    /// material, or in a light system theme where the material turns pale, it
+    /// is the opaque rail.
+    pub fn chrome(&self) -> Rgba {
+        if self.glass {
+            self.palette.chrome_glass.rgba()
+        } else {
+            self.rail()
+        }
+    }
+
+    /// Whether the chrome is translucent over the window material.
+    pub fn is_glass(&self) -> bool {
+        self.glass
     }
 
     /// `color.canvas` — main continuous background.

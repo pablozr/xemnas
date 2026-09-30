@@ -20,7 +20,7 @@ use crate::ui::glass::focus_ring;
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{count_chip, fade_in, track_hover};
 use crate::ui::search_field::{SearchChanged, SearchField};
-use crate::ui::theme::{text_style, Theme, ThemeMode};
+use crate::ui::theme::{text_style, Backdrop, Theme, ThemeMode};
 use crate::ui::tokens::MotionTokens;
 use crate::ui::tokens::{ControlSize, SpacingScale, TypeScale};
 
@@ -97,6 +97,8 @@ pub struct Shell<R: ProjectRepository + InboxStore + DecisionStore + Send + 'sta
     project_panel: bool,
     panel_dismissed_at: Option<std::time::Instant>,
     demo: bool,
+    /// Whether the window was opened over a system material (Mica/Acrylic).
+    backdrop: bool,
 }
 
 impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R> {
@@ -195,7 +197,13 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
             project_panel: false,
             panel_dismissed_at: None,
             demo: false,
+            backdrop: false,
         }
+    }
+
+    /// Records that the window has a system material behind it.
+    pub fn set_backdrop(&mut self, backdrop: bool) {
+        self.backdrop = backdrop;
     }
 
     /// Identifies opt-in sample data visibly, without changing navigation.
@@ -449,6 +457,16 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
 
 impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render for Shell<R> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The material follows the system appearance; in a light theme it
+        // turns pale under a dark palette, so the chrome stays opaque there.
+        let glass = self.backdrop
+            && matches!(
+                window.appearance(),
+                gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark
+            );
+        if cx.try_global::<Backdrop>().copied() != Some(Backdrop(glass)) {
+            cx.set_global(Backdrop(glass));
+        }
         self.theme = Theme::current(cx);
         let theme = self.theme;
         window.set_window_title(match self.destination {
@@ -463,7 +481,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
             .pl(px(SpacingScale::S4))
             .flex()
             .items_center()
-            .bg(theme.colors.rail())
+            .bg(theme.colors.chrome())
             .border_b_1()
             .border_color(theme.colors.hairline_divider())
             .child(
@@ -527,6 +545,8 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
                         .h_full()
                         .flex()
                         .flex_col()
+                        // Reading surfaces stay opaque over the material.
+                        .bg(theme.colors.canvas())
                         // One bar: the project as breadcrumb (its properties open
                         // in a panel from there), then its destinations.
                         .children(selected.as_ref().map(|project| {
@@ -618,7 +638,9 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
             .size_full()
             .flex()
             .flex_col()
-            .bg(theme.colors.canvas())
+            .when(!theme.colors.is_glass(), |shell| {
+                shell.bg(theme.colors.canvas())
+            })
             .font_family(Theme::font_interface())
             .text_color(theme.colors.text_primary())
             .track_focus(&self.focus)

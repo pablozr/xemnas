@@ -168,7 +168,21 @@ fn run_shell(store: Result<SqliteStore, String>) {
     run_shell_mode(store, false);
 }
 
+/// The window material. Mica Alt by default: it tints and blurs the wallpaper
+/// and stays smooth while dragging. `XEMNAS_BACKDROP=acrylic` blurs the windows
+/// behind instead (livelier, but the system may drop frames on resize);
+/// `none` paints an opaque window.
+fn backdrop_from_env() -> WindowBackgroundAppearance {
+    match std::env::var("XEMNAS_BACKDROP").as_deref() {
+        Ok("acrylic") => WindowBackgroundAppearance::Blurred,
+        Ok("mica") => WindowBackgroundAppearance::MicaBackdrop,
+        Ok("none") => WindowBackgroundAppearance::Opaque,
+        _ => WindowBackgroundAppearance::MicaAltBackdrop,
+    }
+}
+
 fn run_shell_mode(store: Result<SqliteStore, String>, demo: bool) {
+    let backdrop = backdrop_from_env();
     application().run(move |cx: &mut App| {
         xemnas_desktop::fonts::register_embedded(cx);
         cx.bind_keys([
@@ -211,6 +225,7 @@ fn run_shell_mode(store: Result<SqliteStore, String>, demo: bool) {
         let view = cx.new(|cx| {
             let mut shell = Shell::<SqliteStore>::new(cx, projects, inbox, decisions);
             shell.set_demo(demo);
+            shell.set_backdrop(backdrop != WindowBackgroundAppearance::Opaque);
             shell
         });
         let focus = view.read(cx).initial_focus(cx);
@@ -251,7 +266,7 @@ fn run_shell_mode(store: Result<SqliteStore, String>, demo: bool) {
                 // platform without Mica the backdrop is ignored and the same
                 // translucent fill still composites against the opaque canvas,
                 // so contrast is preserved either way.
-                window_background: WindowBackgroundAppearance::MicaAltBackdrop,
+                window_background: backdrop,
                 ..Default::default()
             },
             |window, cx| {

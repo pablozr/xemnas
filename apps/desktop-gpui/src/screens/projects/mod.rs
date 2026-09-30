@@ -622,7 +622,7 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             .h_full()
             .flex()
             .flex_col()
-            .bg(theme.colors.rail())
+            .bg(theme.colors.chrome())
             .border_r_1()
             .border_color(theme.colors.hairline_divider())
             .child(
