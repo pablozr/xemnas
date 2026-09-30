@@ -1,6 +1,8 @@
 # Escolha de provedor e modelo para a extração
 
-**Status:** Em implementação, conforme `docs/arquitetura/adr/0004-provedores-de-ia-conta-chatgpt-e-opencode.md`.
+**Status:** Implementada, conforme `docs/arquitetura/adr/0004-provedores-de-ia-conta-chatgpt-e-opencode.md`
+(backend, filtro de sessões no plugin do OpenCode e Configurações › IA). Fica
+pendente a verificação da assinatura do ID token, registrada no ADR.
 
 Pesquisa de 30/09/2026. Parte do que está aqui vem de resumos de busca, porque
 `developers.openai.com`, `opencode.ai` e sites de notícia estavam bloqueados no

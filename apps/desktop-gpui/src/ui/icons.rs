@@ -105,6 +105,10 @@ pub enum IconName {
     Eye,
     /// A confirmed step or a selected option.
     Check,
+    /// A signed-in account (the ChatGPT plan).
+    User,
+    /// A link that opens outside the app, in the browser.
+    ArrowUpRight,
 }
 
 impl IconName {
@@ -185,6 +189,10 @@ impl IconName {
                 r#"<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/>"#
             ),
             Self::Check => glyph!(r#"<path d="m5 12.5 4.5 4.5L19 7.5"/>"#),
+            Self::User => glyph!(
+                r#"<circle cx="12" cy="8.5" r="3.75"/><path d="M4.75 20a7.25 7.25 0 0 1 14.5 0"/>"#
+            ),
+            Self::ArrowUpRight => glyph!(r#"<path d="M7 17 17 7M8.5 7H17v8.5"/>"#),
         }
     }
 }

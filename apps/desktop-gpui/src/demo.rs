@@ -167,6 +167,39 @@ pub(crate) fn store() -> Result<SqliteStore, Box<dyn std::error::Error>> {
 
 /// In-memory AI settings for the demo: never touches the profile file or the
 /// OS key vault, and starts from the offline default.
+/// Sample model lists for the demo's model picker; nothing is fetched.
+pub(crate) struct SampleCatalog;
+
+impl application::providers::ModelCatalog for SampleCatalog {
+    fn list(
+        &self,
+        profile: &AiProfile,
+        _secret: Option<String>,
+    ) -> Result<Vec<application::providers::ModelInfo>, application::providers::ProviderError> {
+        use application::profile::ProfileKind;
+        let sample: &[(&str, &str)] = match profile.kind {
+            ProfileKind::Fake => &[],
+            ProfileKind::OpenAiCompatible => &[
+                ("llama3.2", "llama3.2"),
+                ("qwen3:8b", "qwen3:8b"),
+                ("gemma3:12b", "gemma3:12b"),
+            ],
+            ProfileKind::ChatGptPlan => &[("gpt-demo", "GPT (demonstração)")],
+            ProfileKind::OpenCode => &[
+                ("anthropic/claude-demo", "Anthropic · Claude (demonstração)"),
+                ("openai/gpt-demo", "OpenAI · GPT (demonstração)"),
+            ],
+        };
+        Ok(sample
+            .iter()
+            .map(|(id, label)| application::providers::ModelInfo {
+                id: (*id).to_owned(),
+                label: (*label).to_owned(),
+            })
+            .collect())
+    }
+}
+
 pub(crate) fn ai_settings() -> AiSettings<MemoryProfile, MemorySecrets> {
     AiSettings::new(MemoryProfile::default(), MemorySecrets::default())
 }

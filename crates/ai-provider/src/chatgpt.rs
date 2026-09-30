@@ -47,7 +47,7 @@ const SCOPES: &str =
 /// The scope that allows inference on the user's plan.
 pub const PLAN_SCOPE: &str = "chatgpt.tokens.use.direct";
 /// Where the user manages plan usage (UI guidelines).
-pub const MANAGE_USAGE_URL: &str = "https://chatgpt.com/settings/usage";
+pub const MANAGE_USAGE_URL: &str = application::providers::CHATGPT_USAGE_URL;
 /// Callback path on the loopback listener.
 const CALLBACK_PATH: &str = "/auth/callback";
 /// Refresh this long before the access token expires.

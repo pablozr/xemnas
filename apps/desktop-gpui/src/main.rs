@@ -64,8 +64,19 @@ fn main() {
                 protocol_version: local_api::PROTOCOL_VERSION,
             }),
         };
-        let services =
-            settings_services(Box::new(ai.clone()), store.as_ref().ok(), environment, ai);
+        // The demo lists sample models and offers no ChatGPT sign-in: it never
+        // touches the network or the OS key vault.
+        let providers = ProviderPorts {
+            catalog: Some(std::sync::Arc::new(demo::SampleCatalog)),
+            account: None,
+        };
+        let services = settings_services(
+            Box::new(ai.clone()),
+            providers,
+            store.as_ref().ok(),
+            environment,
+            ai,
+        );
         run_shell_mode(store, services, true, CaptureStatus::Demo);
         return;
     }
@@ -76,8 +87,12 @@ fn main() {
         Err(error) => {
             // The shell logs the technical detail through `tracing` and paints a
             // product-language error state; the raw error never reaches the UI.
+            let providers =
+                provider_ports(&std::sync::Arc::new(ai_provider::ChatGptSession::default()));
             let services = SettingsServices {
                 ai: Box::new(ai_settings(&paths.ai_profile)),
+                catalog: providers.catalog,
+                account: providers.account,
                 integration: None,
                 diagnostics: None,
             };
@@ -210,6 +225,7 @@ fn main() {
     };
     let services = settings_services(
         Box::new(settings.clone()),
+        provider_ports(&chatgpt),
         Some(&store),
         environment,
         settings,
@@ -233,10 +249,28 @@ fn main() {
     }
 }
 
+/// The provider ports of the settings page (ADR-0004).
+struct ProviderPorts {
+    catalog: Option<std::sync::Arc<dyn application::providers::ModelCatalog>>,
+    account: Option<std::sync::Arc<dyn application::providers::PlanAccount>>,
+}
+
+/// Model catalog and ChatGPT sign-in over the process-wide ChatGPT session,
+/// shared with the extraction jobs so token refreshes never race.
+fn provider_ports(chatgpt: &std::sync::Arc<ai_provider::ChatGptSession>) -> ProviderPorts {
+    ProviderPorts {
+        catalog: Some(std::sync::Arc::new(ai_provider::HttpModelCatalog::new(
+            chatgpt.clone(),
+        ))),
+        account: Some(chatgpt.clone()),
+    }
+}
+
 /// The settings page's use cases. Integration and diagnostics read the
 /// database, so they exist only when it opened.
 fn settings_services<P, K>(
     ai: Box<dyn xemnas_desktop::screens::settings::AiBackend>,
+    providers: ProviderPorts,
     store: Option<&SqliteStore>,
     environment: application::integration::IntegrationEnvironment,
     diagnostics_settings: application::profile::AiSettings<P, K>,
@@ -249,6 +283,8 @@ where
     let outbox_dir = environment.outbox_dir.clone();
     SettingsServices {
         ai,
+        catalog: providers.catalog,
+        account: providers.account,
         integration: store.map(|store| {
             Box::new(IntegrationService::new(
                 application::integration::Integration::new(store.clone(), environment),

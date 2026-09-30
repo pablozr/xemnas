@@ -152,7 +152,24 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   `step`) e só valem para Configurações.
 - Opções exclusivas (extrator, modo de contexto) são cartões com ícone e marca
   de selecionado; campos em grade quando cabem lado a lado. Consentimento é uma
-  sequência de três passos numerados que ficam verdes quando concluídos.
+  sequência de passos numerados (dois ou três, conforme o provedor) que ficam
+  verdes quando concluídos.
+- Extrator em grade 2 × 2: Local, Modelo local ou API, Conta ChatGPT e
+  OpenCode (ADR-0004). Cada provedor mostra só os campos que usa; trocar de
+  provedor não leva endereço nem modelo de um para outro.
+- **Seletor de modelo:** campo de texto sempre editável, com **Listar modelos**
+  ao lado. A lista aparece abaixo como grupo de opções (`mark_selected`,
+  rolagem própria) e clicar preenche o campo; carregando é esqueleto, falha e
+  lista vazia dizem que o modelo ainda pode ser digitado.
+- **Conta ChatGPT** segue as diretrizes do Sign in with ChatGPT: ação primária
+  **Continuar com o ChatGPT**; enquanto o navegador está aberto, o cartão diz
+  isso e oferece Cancelar e Abrir de novo; conectado, mostra o e-mail, o selo
+  **Usando o plano do ChatGPT**, **Gerenciar uso** (ícone de seta para fora,
+  abre o navegador) e Sair da conta. No primeiro login aparece uma vez o aviso
+  "Você está usando o seu plano do ChatGPT" com **Entendi**.
+- Credencial do provedor (chave de API ou senha do OpenCode) é um cartão com
+  selo de estado ("Guardada no cofre", "Opcional neste endereço", "Sem senha")
+  e o campo secreto; o valor guardado nunca volta para a tela.
 - OpenCode mostra o teste de conexão como lista de verificações com resultado
   (OK, Atenção, Falha, Não se aplica) e as mensagens do backend; Diagnóstico
   mostra medianas, perdas, tarefas com reprocessar/cancelar e exporta o JSON

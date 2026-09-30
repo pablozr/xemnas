@@ -1,16 +1,20 @@
 //! Application settings: how candidates are extracted and what leaves the machine.
 //!
 //! The page reads and writes only through [`AiBackend`], implemented by the
-//! `AiSettings` use case. Every call touches the profile file or the OS key
-//! vault, so it runs on the background executor. The stored key is never read
-//! back into the view: the page only learns whether one exists.
+//! `AiSettings` use case, plus the provider ports of ADR-0004 (model catalog
+//! and ChatGPT sign-in). Every call touches the profile file, the OS key vault
+//! or the network, so it runs on the background executor. Stored credentials
+//! are never read back into the view: the page only learns whether they exist.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use application::profile::{
     build_preview, choose_extractor, consent_status, revoke_consent, AiProfile, AiSettings,
     ConsentPreview, ExtractorChoice, ProfileError, ProfileKind, ProfileStore, SecretStore,
+    SignedIn, OPENCODE_DEFAULT_ENDPOINT,
 };
+use application::providers::{ModelCatalog, ModelInfo, PlanAccount};
 use gpui::prelude::*;
 use gpui::{
     div, px, AnyElement, App, Context, Div, Entity, EventEmitter, FocusHandle, Render, Role,
@@ -30,6 +34,8 @@ use crate::ui::tokens::{tint, SpacingScale, TypeScale};
 /// Product copy too long to sit inside the element chains.
 const REVOKE_WARNING: &str = "Isso desliga as chamadas externas e apaga a chave do cofre. \
                               O endereço e o modelo continuam salvos.";
+const REVOKE_ONLY_WARNING: &str =
+    "Isso desliga as chamadas externas. A configuração e a conta continuam salvas.";
 const PAGE_SUBTITLE: &str = "Como as capturas viram candidatos e o que pode sair desta máquina.";
 const LOCAL_ONLY: &str = "Com o extrator local, nenhum conteúdo das capturas sai desta máquina.";
 const KEY_DESCRIPTION: &str =
@@ -43,11 +49,44 @@ const NAV_WIDTH: f32 = 220.0;
 /// Reading column of a settings section.
 const READING_WIDTH: f32 = 720.0;
 
+/// Which credentials the vault holds for the profile, one per provider kind.
+/// Only presence reaches the view, never the values.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Credentials {
+    /// API key of the OpenAI-compatible provider.
+    pub api_key: bool,
+    /// Refresh token of the ChatGPT account.
+    pub chatgpt: bool,
+    /// Password of the OpenCode server.
+    pub opencode: bool,
+}
+
+impl Credentials {
+    /// Whether the credential of `kind` is stored.
+    fn stored(self, kind: ProfileKind) -> bool {
+        match kind {
+            ProfileKind::Fake => false,
+            ProfileKind::OpenAiCompatible => self.api_key,
+            ProfileKind::ChatGptPlan => self.chatgpt,
+            ProfileKind::OpenCode => self.opencode,
+        }
+    }
+}
+
+/// `profile` as if it used `kind`: the credential account and the rules
+/// follow the kind the form shows, before it is saved.
+fn as_kind(profile: &AiProfile, kind: ProfileKind) -> AiProfile {
+    AiProfile {
+        kind,
+        ..profile.clone()
+    }
+}
+
 /// The AI settings operations the page needs, object-safe so the shell stays
 /// generic only over its storage type.
 pub trait AiBackend: Send + 'static {
-    /// Loads (or seeds) the profile and reports whether a key is stored.
-    fn load(&self) -> Result<(AiProfile, bool), ProfileError>;
+    /// Loads (or seeds) the profile and reports which credentials are stored.
+    fn load(&self) -> Result<(AiProfile, Credentials), ProfileError>;
     /// Persists a validated profile.
     fn save(&self, profile: &AiProfile) -> Result<(), ProfileError>;
     /// Stores or replaces the provider key for `account`.
@@ -61,6 +100,16 @@ pub trait AiBackend: Send + 'static {
     ) -> Result<AiProfile, ProfileError>;
     /// Disables external calls and deletes the stored key.
     fn revoke(&self, profile: &AiProfile) -> Result<AiProfile, ProfileError>;
+    /// The stored credential for `account`, for the model catalog only.
+    fn secret(&self, account: &str) -> Result<Option<String>, ProfileError>;
+    /// Stores a completed ChatGPT sign-in.
+    fn store_sign_in(
+        &self,
+        profile: &AiProfile,
+        signed_in: SignedIn,
+    ) -> Result<AiProfile, ProfileError>;
+    /// Forgets the ChatGPT sign-in and deletes its token.
+    fn forget_sign_in(&self, profile: &AiProfile) -> Result<AiProfile, ProfileError>;
 }
 
 impl<S, T> AiBackend for AiSettings<S, T>
@@ -68,10 +117,18 @@ where
     S: ProfileStore + Send + 'static,
     T: SecretStore + Send + 'static,
 {
-    fn load(&self) -> Result<(AiProfile, bool), ProfileError> {
+    fn load(&self) -> Result<(AiProfile, Credentials), ProfileError> {
         let profile = self.load_or_seed()?;
-        let has_secret = self.secret(&profile.id)?.is_some();
-        Ok((profile, has_secret))
+        let stored = |kind| {
+            AiSettings::secret(self, &as_kind(&profile, kind).credential_account())
+                .map(|secret| secret.is_some())
+        };
+        let credentials = Credentials {
+            api_key: stored(ProfileKind::OpenAiCompatible)?,
+            chatgpt: stored(ProfileKind::ChatGptPlan)?,
+            opencode: stored(ProfileKind::OpenCode)?,
+        };
+        Ok((profile, credentials))
     }
     fn save(&self, profile: &AiProfile) -> Result<(), ProfileError> {
         AiSettings::save(self, profile)
@@ -90,16 +147,30 @@ where
     fn revoke(&self, profile: &AiProfile) -> Result<AiProfile, ProfileError> {
         AiSettings::revoke(self, profile)
     }
+    fn secret(&self, account: &str) -> Result<Option<String>, ProfileError> {
+        AiSettings::secret(self, account)
+    }
+    fn store_sign_in(
+        &self,
+        profile: &AiProfile,
+        signed_in: SignedIn,
+    ) -> Result<AiProfile, ProfileError> {
+        AiSettings::store_sign_in(self, profile, signed_in)
+    }
+    fn forget_sign_in(&self, profile: &AiProfile) -> Result<AiProfile, ProfileError> {
+        AiSettings::forget_sign_in(self, profile)
+    }
 }
 
 mod diagnostics;
 mod opencode;
 mod parts;
+mod providers;
 
 pub use diagnostics::{DiagnosticsBackend, DiagnosticsPanel, DiagnosticsService};
 pub use opencode::{IntegrationBackend, IntegrationService, OpenCodePanel};
 
-use parts::{card, card_body, card_footer, field_row, icon_tile, step};
+use parts::{card, card_body, card_footer, icon_tile, step};
 
 /// Emitted when the user leaves the settings page.
 pub struct CloseSettings;
@@ -114,8 +185,17 @@ enum Load {
 enum Action {
     Close,
     Kind(ProfileKind),
+    Preset(usize),
+    ListModels,
+    PickModel(usize),
     Save,
     StoreKey,
+    SignIn,
+    CancelSignIn,
+    ReopenBrowser,
+    SignOut,
+    ManageUsage,
+    DismissPlanNotice,
     Grant,
     AskRevoke,
     CancelRevoke,
@@ -123,13 +203,37 @@ enum Action {
     Retry,
 }
 
-type Operation = Box<dyn FnOnce(&dyn AiBackend) -> Result<(AiProfile, bool), ProfileError> + Send>;
+type Loaded = Result<(AiProfile, Credentials), ProfileError>;
+type Operation = Box<dyn FnOnce(&dyn AiBackend) -> Loaded + Send>;
+/// Runs on the page after an operation reloaded the profile.
+type After = Box<dyn FnOnce(&mut SettingsScreen, &mut Context<SettingsScreen>)>;
 
-/// Settings page with the "IA e privacidade" section.
+/// Models the configured destination offers, for the picker.
+enum Models {
+    Idle,
+    Loading,
+    Ready(Vec<ModelInfo>),
+    Failed(&'static str),
+}
+
+/// The ChatGPT browser sign-in.
+enum SignIn {
+    Idle,
+    Starting,
+    Waiting {
+        url: String,
+        cancel: Box<dyn Fn() + Send + Sync>,
+    },
+}
+
 /// Everything the settings page reads and writes, built by the composition root.
 pub struct SettingsServices {
     /// AI profile, key vault and consent.
     pub ai: Box<dyn AiBackend>,
+    /// Lists the models of the chosen destination; absent, the model is typed.
+    pub catalog: Option<Arc<dyn ModelCatalog>>,
+    /// ChatGPT account sign-in; absent, the ChatGPT option cannot connect.
+    pub account: Option<Arc<dyn PlanAccount>>,
     /// Integration status and connection test; absent without a database.
     pub integration: Option<Box<dyn IntegrationBackend>>,
     /// Diagnostics and job actions; absent without a database.
@@ -191,14 +295,24 @@ pub struct SettingsScreen {
     opencode: Option<Entity<OpenCodePanel>>,
     diagnostics: Option<Entity<DiagnosticsPanel>>,
     backend: Option<Box<dyn AiBackend>>,
+    catalog: Option<Arc<dyn ModelCatalog>>,
+    account: Option<Arc<dyn PlanAccount>>,
     busy: bool,
     load: Load,
     stored: Option<AiProfile>,
-    has_secret: bool,
+    credentials: Credentials,
     kind: ProfileKind,
-    /// Endpoint, model and per-item limit as seeded, to detect edits.
+    /// Endpoint, model and per-item limit as stored, to detect edits.
     original: [String; 3],
+    /// The same fields as last filled by the page (load or a switch of
+    /// provider), so validation errors wait for the user's own typing.
+    baseline: [String; 3],
     fields: [Entity<SearchField>; 3],
+    models: Models,
+    model_focus: Vec<FocusHandle>,
+    sign_in: SignIn,
+    /// Shown once after the first ChatGPT sign-in (usage guidelines).
+    plan_notice: bool,
     key: Entity<SearchField>,
     _subscriptions: Vec<Subscription>,
     error: Option<String>,
@@ -223,12 +337,14 @@ const FIELD_LABELS: [&str; 3] = [
 
 impl SettingsScreen {
     /// Mounts the page; nothing is read until [`Self::open`].
-    pub fn new(
-        cx: &mut Context<Self>,
-        backend: Box<dyn AiBackend>,
-        integration: Option<Box<dyn IntegrationBackend>>,
-        diagnostics: Option<Box<dyn DiagnosticsBackend>>,
-    ) -> Self {
+    pub fn new(cx: &mut Context<Self>, services: SettingsServices) -> Self {
+        let SettingsServices {
+            ai: backend,
+            catalog,
+            account,
+            integration,
+            diagnostics,
+        } = services;
         let opencode = integration.map(|backend| cx.new(|_| OpenCodePanel::new(backend)));
         let diagnostics = diagnostics.map(|backend| cx.new(|_| DiagnosticsPanel::new(backend)));
         let fields = std::array::from_fn(|index| {
@@ -255,13 +371,20 @@ impl SettingsScreen {
             opencode,
             diagnostics,
             backend: Some(backend),
+            catalog,
+            account,
             busy: false,
             load: Load::Loading,
             stored: None,
-            has_secret: false,
+            credentials: Credentials::default(),
             kind: ProfileKind::Fake,
             original: Default::default(),
+            baseline: Default::default(),
             fields,
+            models: Models::Idle,
+            model_focus: Vec::new(),
+            sign_in: SignIn::Idle,
+            plan_notice: false,
             key,
             _subscriptions: subscriptions,
             error: None,
@@ -317,10 +440,10 @@ impl SettingsScreen {
         self.run(Box::new(|backend| backend.load()), None, cx);
     }
 
-    fn seed(&mut self, profile: AiProfile, has_secret: bool, cx: &mut Context<Self>) {
+    fn seed(&mut self, profile: AiProfile, credentials: Credentials, cx: &mut Context<Self>) {
         // The offline default carries a placeholder model name; it is not a
-        // provider setting, so the external form starts empty.
-        let configured = profile.endpoint.is_some();
+        // provider setting, so the provider form starts empty.
+        let configured = profile.kind != ProfileKind::Fake;
         self.original = [
             profile.endpoint.clone().unwrap_or_default(),
             if configured {
@@ -330,13 +453,63 @@ impl SettingsScreen {
             },
             profile.max_input_chars.to_string(),
         ];
-        for (field, value) in self.fields.iter().zip(&self.original) {
-            field.update(cx, |field, cx| field.set_value(value, cx));
+        let values = self.original.clone();
+        self.fill(values, cx);
+        if self.kind != profile.kind {
+            self.models = Models::Idle;
         }
         self.kind = profile.kind;
-        self.has_secret = has_secret;
+        self.key_placeholder(cx);
+        self.credentials = credentials;
         self.stored = Some(profile);
         self.load = Load::Ready;
+    }
+
+    /// Writes the provider form and makes it the new baseline.
+    fn fill(&mut self, values: [String; 3], cx: &mut Context<Self>) {
+        for (field, value) in self.fields.iter().zip(&values) {
+            field.update(cx, |field, cx| field.set_value(value, cx));
+        }
+        self.baseline = values;
+    }
+
+    /// Shows the provider `kind` in the form. Fields keep the stored values
+    /// when the stored profile already uses `kind`; otherwise they start from
+    /// that kind's defaults, so an address never leaks from one kind to another.
+    fn switch_kind(&mut self, kind: ProfileKind, cx: &mut Context<Self>) {
+        if kind == self.kind {
+            return;
+        }
+        self.kind = kind;
+        self.error = None;
+        self.models = Models::Idle;
+        self.confirm_revoke = false;
+        let same = self
+            .stored
+            .as_ref()
+            .is_some_and(|stored| stored.kind == kind);
+        let limit = self.value(2, cx);
+        let values = if same {
+            self.original.clone()
+        } else {
+            let endpoint = match kind {
+                ProfileKind::OpenCode => OPENCODE_DEFAULT_ENDPOINT.to_owned(),
+                _ => String::new(),
+            };
+            [endpoint, String::new(), limit]
+        };
+        self.fill(values, cx);
+        self.key_placeholder(cx);
+    }
+
+    fn key_placeholder(&mut self, cx: &mut Context<Self>) {
+        let placeholder = if self.kind == ProfileKind::OpenCode {
+            "Senha do servidor do OpenCode"
+        } else {
+            "Chave de API do provedor"
+        };
+        self.key
+            .update(cx, |field, cx| field.set_context(placeholder, cx));
     }
 
     fn value(&self, index: usize, cx: &App) -> String {
@@ -349,7 +522,7 @@ impl SettingsScreen {
             return false;
         };
         self.kind != stored.kind
-            || (self.kind == ProfileKind::OpenAiCompatible
+            || (self.kind != ProfileKind::Fake
                 && (0..3).any(|index| self.value(index, cx) != self.original[index]))
     }
 
@@ -368,9 +541,10 @@ impl SettingsScreen {
             .clone()
             .ok_or_else(|| "Configuração ainda não carregada.".to_owned())?;
         profile.kind = self.kind;
-        if self.kind == ProfileKind::OpenAiCompatible {
+        if self.kind != ProfileKind::Fake {
             let endpoint = self.value(0, cx);
-            profile.endpoint = (!endpoint.is_empty()).then_some(endpoint);
+            profile.endpoint =
+                (self.kind != ProfileKind::ChatGptPlan && !endpoint.is_empty()).then_some(endpoint);
             profile.model = self.value(1, cx);
             profile.max_input_chars = self
                 .value(2, cx)
@@ -383,10 +557,22 @@ impl SettingsScreen {
     /// Whether the user typed in the provider form (switching the extractor
     /// alone does not count, so errors wait for input).
     fn typed(&self, cx: &App) -> bool {
-        (0..3).any(|index| self.value(index, cx) != self.original[index])
+        (0..3).any(|index| self.value(index, cx) != self.baseline[index])
     }
 
     fn run(&mut self, operation: Operation, notice: Option<&'static str>, cx: &mut Context<Self>) {
+        self.run_then(operation, notice, None, cx);
+    }
+
+    /// Runs `operation` on the background executor, reseeds the page from
+    /// the profile it returns, then runs `after`.
+    fn run_then(
+        &mut self,
+        operation: Operation,
+        notice: Option<&'static str>,
+        after: Option<After>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(backend) = self.backend.take() else {
             return;
         };
@@ -405,10 +591,13 @@ impl SettingsScreen {
                 this.backend = Some(backend);
                 this.busy = false;
                 match outcome {
-                    Ok((profile, has_secret)) => {
-                        this.seed(profile, has_secret, cx);
+                    Ok((profile, credentials)) => {
+                        this.seed(profile, credentials, cx);
                         if let Some(notice) = notice {
                             this.show_notice(notice.to_owned(), cx);
+                        }
+                        if let Some(after) = after {
+                            after(this, cx);
                         }
                     }
                     Err(error) if this.stored.is_none() => this.load = Load::Failed(failure(error)),
@@ -442,10 +631,36 @@ impl SettingsScreen {
         self.notice = None;
         match action {
             Action::Close => cx.emit(CloseSettings),
-            Action::Kind(kind) => {
-                self.kind = kind;
-                self.error = None;
+            Action::Kind(kind) => self.switch_kind(kind, cx),
+            Action::Preset(index) => {
+                if let Some((_, endpoint)) = providers::LOCAL_PRESETS.get(index) {
+                    self.fields[0].update(cx, |field, cx| field.set_value(endpoint, cx));
+                    self.models = Models::Idle;
+                }
             }
+            Action::ListModels => self.list_models(cx),
+            Action::PickModel(index) => {
+                if let Models::Ready(models) = &self.models {
+                    if let Some(model) = models.get(index) {
+                        let id = model.id.clone();
+                        self.fields[1].update(cx, |field, cx| field.set_value(&id, cx));
+                    }
+                }
+            }
+            Action::SignIn => self.start_sign_in(cx),
+            Action::CancelSignIn => {
+                if let SignIn::Waiting { cancel, .. } = &self.sign_in {
+                    cancel();
+                }
+            }
+            Action::ReopenBrowser => {
+                if let SignIn::Waiting { url, .. } = &self.sign_in {
+                    cx.open_url(url);
+                }
+            }
+            Action::SignOut => self.sign_out(cx),
+            Action::ManageUsage => cx.open_url(application::providers::CHATGPT_USAGE_URL),
+            Action::DismissPlanNotice => self.plan_notice = false,
             Action::Save => {
                 if !self.edited(cx) {
                     return;
@@ -480,17 +695,20 @@ impl SettingsScreen {
                 if key.is_empty() {
                     return;
                 }
-                let account = stored.id.clone();
+                let account = as_kind(stored, self.kind).credential_account();
                 let key = key.to_owned();
-                self.key.update(cx, |field, cx| {
-                    field.set_context("Chave de API do provedor", cx)
-                });
-                self.run(
+                let notice = if self.kind == ProfileKind::OpenCode {
+                    "Senha guardada no cofre do sistema."
+                } else {
+                    "Chave guardada no cofre do sistema."
+                };
+                self.key_placeholder(cx);
+                self.keeping_form(
                     Box::new(move |backend| {
                         backend.set_secret(&account, &key)?;
                         backend.load()
                     }),
-                    Some("Chave guardada no cofre do sistema."),
+                    Some(notice),
                     cx,
                 );
             }
@@ -515,12 +733,17 @@ impl SettingsScreen {
                     return;
                 };
                 self.confirm_revoke = false;
+                let notice = if stored.kind == ProfileKind::OpenAiCompatible {
+                    "Chamadas externas desligadas e chave apagada do cofre."
+                } else {
+                    "Chamadas externas desligadas."
+                };
                 self.run(
                     Box::new(move |backend| {
                         backend.revoke(&stored)?;
                         backend.load()
                     }),
-                    Some("Chamadas externas desligadas e chave apagada do cofre."),
+                    Some(notice),
                     cx,
                 );
             }
@@ -704,10 +927,8 @@ impl SettingsScreen {
                 "Ativo",
                 "Provedor externo ativo",
                 format!(
-                    "Capturas são analisadas por {}, dentro dos limites da prévia.",
-                    build_preview(stored)
-                        .endpoint_host
-                        .unwrap_or_else(|| "provedor configurado".into())
+                    "Capturas são analisadas {}, dentro dos limites da prévia.",
+                    providers::analysed_by(stored)
                 ),
             ),
             ExtractorChoice::ExternalBlocked => (
@@ -769,7 +990,7 @@ impl SettingsScreen {
         let (id, glyph) = match kind {
             ProfileKind::Fake => ("settings-kind-local", IconName::Cpu),
             ProfileKind::OpenAiCompatible => ("settings-kind-external", IconName::Cloud),
-            ProfileKind::ChatGptPlan => ("settings-kind-chatgpt", IconName::Key),
+            ProfileKind::ChatGptPlan => ("settings-kind-chatgpt", IconName::User),
             ProfileKind::OpenCode => ("settings-kind-opencode", IconName::Link),
         };
         let focus = self
@@ -883,17 +1104,28 @@ impl SettingsScreen {
             .stored
             .as_ref()
             .is_some_and(|stored| consent_status(stored).is_ok());
-        let external = self.kind == ProfileKind::OpenAiCompatible;
         let local = self.kind_option(
             ProfileKind::Fake,
             "Local",
-            "Extrator offline. Nada sai desta máquina.",
+            "Heurística offline. Nada sai desta máquina.",
             cx,
         );
         let remote = self.kind_option(
             ProfileKind::OpenAiCompatible,
-            "Compatível com OpenAI",
-            "Envia trechos ao endereço configurado, só com consentimento.",
+            "Modelo local ou API",
+            "Ollama, LM Studio ou um endereço compatível com OpenAI.",
+            cx,
+        );
+        let chatgpt = self.kind_option(
+            ProfileKind::ChatGptPlan,
+            "Conta ChatGPT",
+            "Usa o seu plano do ChatGPT, sem chave de API.",
+            cx,
+        );
+        let opencode = self.kind_option(
+            ProfileKind::OpenCode,
+            "OpenCode",
+            "Usa um modelo já conectado no seu OpenCode.",
             cx,
         );
         let save = self.button(
@@ -912,7 +1144,12 @@ impl SettingsScreen {
         let hint = match (&draft, edited) {
             (Err(message), true) if typed => Some((message.clone(), theme.colors.status_danger())),
             (Err(_), true) => Some((
-                "Informe o endereço e o modelo do provedor para salvar.".to_owned(),
+                match self.kind {
+                    ProfileKind::ChatGptPlan => "Escolha um modelo do plano para salvar.",
+                    ProfileKind::OpenCode => "Escolha um modelo do OpenCode para salvar.",
+                    _ => "Informe o endereço e o modelo do provedor para salvar.",
+                }
+                .to_owned(),
                 theme.colors.text_muted(),
             )),
             (Ok(_), true) if consent_active => Some((
@@ -925,33 +1162,7 @@ impl SettingsScreen {
             )),
             _ => None,
         };
-        let fields = external.then(|| {
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(SpacingScale::S4))
-                .pt(px(SpacingScale::S2))
-                .child(field_row(
-                    theme,
-                    FIELD_LABELS[0],
-                    self.fields[0].clone().into_any_element(),
-                ))
-                .child(
-                    div()
-                        .flex()
-                        .gap(px(SpacingScale::S4))
-                        .child(div().flex_1().min_w(px(0.0)).child(field_row(
-                            theme,
-                            FIELD_LABELS[1],
-                            self.fields[1].clone().into_any_element(),
-                        )))
-                        .child(div().w(px(220.0)).flex_none().child(field_row(
-                            theme,
-                            FIELD_LABELS[2],
-                            self.fields[2].clone().into_any_element(),
-                        ))),
-                )
-        });
+        let fields = (self.kind != ProfileKind::Fake).then(|| self.render_fields(theme, cx));
         let footer = (edited || self.busy).then(|| {
             card_footer(theme)
                 .child(
@@ -978,53 +1189,27 @@ impl SettingsScreen {
                         .w_full()
                         .flex()
                         .gap(px(SpacingScale::S3))
+                        .flex_col()
                         .role(Role::RadioGroup)
                         .aria_label("Extrator")
-                        .child(local)
-                        .child(remote),
+                        .child(
+                            div()
+                                .flex()
+                                .gap(px(SpacingScale::S3))
+                                .child(local)
+                                .child(remote),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .gap(px(SpacingScale::S3))
+                                .child(chatgpt)
+                                .child(opencode),
+                        ),
                 )
                 .children(fields),
         )
         .children(footer)
-    }
-
-    fn render_key(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Div {
-        let typed = !self.key.read(cx).value().trim().is_empty();
-        let store = self.button(
-            "settings-store-key",
-            ButtonKind::Secondary,
-            !self.busy && typed,
-            if self.has_secret {
-                "Substituir chave"
-            } else {
-                "Guardar no cofre"
-            },
-            Action::StoreKey,
-            cx,
-        );
-        let (color, state) = if self.has_secret {
-            (theme.colors.status_success(), "Guardada no cofre")
-        } else {
-            (theme.colors.text_muted(), "Nenhuma chave")
-        };
-        card(theme, IconName::Key, "Chave do provedor", KEY_DESCRIPTION).child(
-            card_body()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(SpacingScale::S2))
-                        .child(status_pill(theme, color, state)),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(SpacingScale::S2))
-                        .child(div().flex_1().child(self.key.clone()))
-                        .child(store),
-                ),
-        )
     }
 
     fn render_preview(&self, theme: &Theme, cx: &App) -> Div {
@@ -1036,13 +1221,14 @@ impl SettingsScreen {
         });
         let body: AnyElement =
             match profile {
-                Some(profile) if profile.kind == ProfileKind::OpenAiCompatible => {
+                Some(profile) if profile.kind != ProfileKind::Fake => {
                     let preview = build_preview(&profile);
                     let unset = || "Não configurado".to_owned();
+                    let note = providers::destination_note(&profile);
                     let stats = [
                         (
                             "Destino",
-                            preview.endpoint_host.clone().unwrap_or_else(unset),
+                            providers::destination(&profile, &preview).unwrap_or_else(unset),
                         ),
                         (
                             "Modelo",
@@ -1148,6 +1334,18 @@ impl SettingsScreen {
                                         }),
                                 ),
                         )
+                        .children(note.map(|(glyph, text)| {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(SpacingScale::S2))
+                                .child(icon(glyph, 14.0, theme.colors.text_muted()))
+                                .child(
+                                    text_style(div(), TypeScale::BODY_SMALL)
+                                        .text_color(theme.colors.text_secondary())
+                                        .child(text),
+                                )
+                        }))
                         .into_any_element()
                 }
                 _ => div()
@@ -1180,7 +1378,8 @@ impl SettingsScreen {
             return div();
         };
         let active = consent_status(&stored).is_ok();
-        let saved = !self.edited(cx) && stored.kind == ProfileKind::OpenAiCompatible;
+        let saved = !self.edited(cx) && stored.kind == self.kind;
+        let ready = self.credential_ready(&stored);
         let mut body = card_body();
         if active {
             let granted = stored
@@ -1215,11 +1414,8 @@ impl SettingsScreen {
                     ),
             );
         } else {
-            let steps = [
-                (saved, "Configuração salva", "Endereço, modelo e limite"),
-                (self.has_secret, "Chave no cofre", "Guardada no sistema"),
-                (false, "Consentimento", "Liga as chamadas externas"),
-            ];
+            let steps = providers::consent_steps(self.kind, saved, ready, &stored);
+            let count = steps.len();
             body =
                 body.child(
                     div()
@@ -1229,7 +1425,7 @@ impl SettingsScreen {
                         .role(Role::List)
                         .children(steps.into_iter().enumerate().map(
                             |(index, (done, title, hint))| {
-                                step(theme, index, done, title, hint, index + 1 < 3)
+                                step(theme, index, done, title, hint, index + 1 < count)
                             },
                         )),
                 );
@@ -1238,13 +1434,17 @@ impl SettingsScreen {
             self.button(
                 "settings-grant",
                 ButtonKind::Primary,
-                !self.busy && saved && self.has_secret,
+                !self.busy && saved && ready,
                 "Consentir e ativar",
                 Action::Grant,
                 cx,
             )
         });
-        let revoke = ((active || self.has_secret) && !self.confirm_revoke).then(|| {
+        // Revoking an API-key profile also deletes the key; the other kinds
+        // keep their credential (sign out and passwords live in their cards).
+        let deletes_key = stored.kind == ProfileKind::OpenAiCompatible;
+        let key_stored = deletes_key && self.kind == stored.kind && self.credentials.api_key;
+        let revoke = ((active || key_stored) && !self.confirm_revoke).then(|| {
             self.button(
                 "settings-revoke",
                 ButtonKind::Ghost,
@@ -1271,7 +1471,11 @@ impl SettingsScreen {
                 "settings-revoke-confirm",
                 ButtonKind::Secondary,
                 !self.busy,
-                "Desligar e apagar chave",
+                if deletes_key {
+                    "Desligar e apagar chave"
+                } else {
+                    "Desligar chamadas externas"
+                },
                 Action::Revoke,
                 cx,
             );
@@ -1289,7 +1493,11 @@ impl SettingsScreen {
                 .child(
                     text_style(div(), TypeScale::BODY_SMALL)
                         .text_color(theme.colors.text_secondary())
-                        .child(REVOKE_WARNING),
+                        .child(if deletes_key {
+                            REVOKE_WARNING
+                        } else {
+                            REVOKE_ONLY_WARNING
+                        }),
                 )
                 .child(
                     div()
@@ -1362,10 +1570,16 @@ impl Render for SettingsScreen {
                 }
                 Load::Ready => {
                     let stored = self.stored.clone().expect("ready implies a stored profile");
-                    let external = self.kind == ProfileKind::OpenAiCompatible;
+                    let external = self.kind != ProfileKind::Fake;
                     let status = self.render_status(&theme, &stored);
                     let extractor = self.render_extractor(&theme, cx);
-                    let key = external.then(|| self.render_key(&theme, cx));
+                    let key = matches!(
+                        self.kind,
+                        ProfileKind::OpenAiCompatible | ProfileKind::OpenCode
+                    )
+                    .then(|| self.render_key(&theme, cx));
+                    let account = (self.kind == ProfileKind::ChatGptPlan)
+                        .then(|| self.render_account(&theme, cx));
                     let preview = self.render_preview(&theme, cx);
                     let consent = external.then(|| self.render_consent(&theme, cx));
                     div()
@@ -1380,6 +1594,7 @@ impl Render for SettingsScreen {
                         }))
                         .child(status)
                         .child(extractor)
+                        .children(account)
                         .children(key)
                         .child(preview)
                         .children(consent)

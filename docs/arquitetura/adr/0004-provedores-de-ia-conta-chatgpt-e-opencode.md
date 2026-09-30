@@ -51,6 +51,7 @@ Segue a documentação oficial (`developers.openai.com/siwc/token-sharing-open-s
 - `application::profile` ganha os dois tipos, campos opcionais da conta ChatGPT e do OpenCode (com `serde(default)` para ler arquivos antigos) e as regras de consentimento por tipo; `ai-provider` ganha o catálogo, o login ChatGPT, o extrator pela Responses API com streaming e o extrator pelo OpenCode.
 - O adapter do OpenCode muda (filtro de sessões de extração) e precisa ser reinstalado.
 - Configurações › IA ganha a escolha entre quatro provedores, a lista de modelos e o painel de login.
+- Entrar com a conta ChatGPT guarda a conta e o token sem trocar o tipo do perfil: o usuário escolhe um modelo do plano e salva para trocar, então um login nunca desliga outro provedor já consentido. Sair revoga o token na OpenAI e apaga o do cofre mesmo se a revogação não for confirmada; o consentimento só cai se o perfil usava a conta.
 - Cada execução continua registrando perfil, adapter, modelo e hashes (§12); o tipo novo aparece como adapter.
 
 ## Alternativas rejeitadas

@@ -299,11 +299,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + ContextStores> Shell<R>
                 shell.show_decision(event.0.clone(), cx)
             })
         });
-        let settings = settings.map(|services| {
-            cx.new(|cx| {
-                SettingsScreen::new(cx, services.ai, services.integration, services.diagnostics)
-            })
-        });
+        let settings = settings.map(|services| cx.new(|cx| SettingsScreen::new(cx, services)));
         let settings_subscription = settings.as_ref().map(|screen| {
             cx.subscribe(screen, |shell, _, _: &CloseSettings, cx| {
                 shell.settings_open = false;

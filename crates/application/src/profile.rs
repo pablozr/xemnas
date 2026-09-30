@@ -144,7 +144,7 @@ impl AiProfile {
     pub fn credential_account(&self) -> String {
         match self.kind {
             ProfileKind::Fake | ProfileKind::OpenAiCompatible => self.id.clone(),
-            ProfileKind::ChatGptPlan => format!("{}.chatgpt", self.id),
+            ProfileKind::ChatGptPlan => chatgpt_account(self),
             ProfileKind::OpenCode => format!("{}.opencode", self.id),
         }
     }
@@ -160,6 +160,11 @@ impl AiProfile {
             ProfileKind::ChatGptPlan => true,
         }
     }
+}
+
+/// Secret-store account of the ChatGPT refresh token, whatever the kind.
+fn chatgpt_account(profile: &AiProfile) -> String {
+    format!("{}.chatgpt", profile.id)
 }
 
 fn require_model(model: &str) -> Result<(), ProfileError> {
@@ -642,7 +647,8 @@ where
     }
 
     /// Stores a completed ChatGPT sign-in: refresh token in the secret store,
-    /// account facts in the profile. Signing into another account than the
+    /// account facts in the profile. The kind stays as it is: the user picks a
+    /// plan model and saves to switch. Signing into another account than the
     /// consented one changes the preview, so consent must be given again.
     pub fn store_sign_in(
         &self,
@@ -650,11 +656,9 @@ where
         signed_in: SignedIn,
     ) -> Result<AiProfile, ProfileError> {
         let mut updated = profile.clone();
-        updated.kind = ProfileKind::ChatGptPlan;
-        updated.endpoint = None;
         updated.chatgpt = Some(signed_in.account);
         self.secrets
-            .set_secret(&updated.credential_account(), &signed_in.refresh_token)?;
+            .set_secret(&chatgpt_account(profile), &signed_in.refresh_token)?;
         self.save(&updated)?;
         Ok(updated)
     }
@@ -663,8 +667,12 @@ where
     /// external calls and keeps the issued client id and host id for the next
     /// sign-in (ADR-0004).
     pub fn forget_sign_in(&self, profile: &AiProfile) -> Result<AiProfile, ProfileError> {
-        let mut updated = revoke_consent(profile);
-        let account = format!("{}.chatgpt", profile.id);
+        let mut updated = if profile.kind == ProfileKind::ChatGptPlan {
+            revoke_consent(profile)
+        } else {
+            profile.clone()
+        };
+        let account = chatgpt_account(profile);
         if let Some(chatgpt) = updated.chatgpt.as_mut() {
             chatgpt.email = None;
             chatgpt.subject = None;
@@ -1248,7 +1256,12 @@ mod tests {
                 },
             )
             .expect("store");
-        assert_eq!(stored.kind, ProfileKind::ChatGptPlan);
+        assert_eq!(stored.kind, ProfileKind::Fake, "signing in does not switch");
+        let stored = AiProfile {
+            kind: ProfileKind::ChatGptPlan,
+            ..stored
+        };
+        settings.save(&stored).expect("switch to the plan");
         assert!(settings.credential_ready(&stored).expect("ready"));
         let preview = settings.preview(&stored);
         let granted = settings.grant(&stored, &preview, "now").expect("grant");

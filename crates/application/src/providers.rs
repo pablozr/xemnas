@@ -6,6 +6,9 @@ use std::time::Duration;
 
 use crate::profile::{AiProfile, ChatGptAccount, SignedIn};
 
+/// Where the user follows how much of the ChatGPT plan xemnas used.
+pub const CHATGPT_USAGE_URL: &str = "https://chatgpt.com/settings/usage";
+
 /// One model the configured destination offers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelInfo {
