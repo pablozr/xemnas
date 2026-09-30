@@ -49,3 +49,18 @@ para o log. Todo acesso a arquivo e cofre roda fora da thread de UI.
 
 Fora desta etapa: teste de conexão com o provedor (não existe caso de uso),
 múltiplos perfis, escolha de catálogo de modelos.
+
+## Estado da implementação (30/09/2026)
+
+IA e privacidade implementada em `apps/desktop-gpui/src/screens/settings.rs`,
+com o campo mascarado em `ui/search_field.rs` (`SearchField::secret`).
+Validado no modo `--demo` (perfil e cofre em memória) renderizado em Linux/Xvfb:
+salvar, bloqueio com motivo, guardar chave, consentir, revogar com confirmação.
+Imagens: [local](settings-ai-local.png), [externo aguardando consentimento](settings-ai-external.png).
+Os controles de janela aparecem quebrados nessas imagens porque usam a fonte
+Segoe Fluent Icons, que só existe no Windows. Não houve verificação nativa no
+Windows nem do cofre de credenciais real nesta etapa.
+
+Para rodar no Linux (só para inspeção): `cargo run -p desktop-gpui --bin xemnas
+--features rfd/xdg-portal,gpui_platform/x11 -- --demo`, com `libxkbcommon-x11-dev`
+e um driver Vulkan (por exemplo `mesa-vulkan-drivers`).

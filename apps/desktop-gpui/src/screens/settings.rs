@@ -124,6 +124,12 @@ pub struct SettingsScreen {
 
 impl EventEmitter<CloseSettings> for SettingsScreen {}
 
+const FIELD_PLACEHOLDERS: [&str; 3] = [
+    "https://api.exemplo.com/v1",
+    "Nome do modelo no provedor",
+    "8192",
+];
+
 const FIELD_LABELS: [&str; 3] = [
     "Endereço do provedor",
     "Modelo",
@@ -137,7 +143,7 @@ impl SettingsScreen {
             cx.new(|cx| {
                 let mut field = SearchField::new(cx);
                 field.stretch();
-                field.set_context(FIELD_LABELS[index], cx);
+                field.set_context(FIELD_PLACEHOLDERS[index], cx);
                 field
             })
         });
@@ -219,6 +225,14 @@ impl SettingsScreen {
 
     /// The profile the form describes, validated by the use case's rules.
     fn draft(&self, cx: &App) -> Result<AiProfile, String> {
+        let profile = self.form(cx)?;
+        profile.validate().map_err(failure)?;
+        Ok(profile)
+    }
+
+    /// The profile as typed, before the use case's validation; the preview
+    /// follows it so the user sees what a half-filled form would send.
+    fn form(&self, cx: &App) -> Result<AiProfile, String> {
         let mut profile = self
             .stored
             .clone()
@@ -233,8 +247,13 @@ impl SettingsScreen {
                 .parse()
                 .map_err(|_| "O limite por item deve ser um número inteiro positivo.".to_owned())?;
         }
-        profile.validate().map_err(failure)?;
         Ok(profile)
+    }
+
+    /// Whether the user typed in the provider form (switching the extractor
+    /// alone does not count, so errors wait for input).
+    fn typed(&self, cx: &App) -> bool {
+        (0..3).any(|index| self.value(index, cx) != self.original[index])
     }
 
     fn run(&mut self, operation: Operation, notice: Option<&'static str>, cx: &mut Context<Self>) {
@@ -376,15 +395,29 @@ impl SettingsScreen {
         action: Action,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
+        let label = label.into();
+        self.button_frame(id, kind, enabled, label.clone(), action, cx)
+            .child(label)
+    }
+
+    /// The wired button without its content, for a leading icon.
+    fn button_frame(
+        &mut self,
+        id: &'static str,
+        kind: ButtonKind,
+        enabled: bool,
+        label: SharedString,
+        action: Action,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
         let theme = Theme::current(cx);
         let focus = self
             .focus
             .entry(id)
             .or_insert_with(|| cx.focus_handle().tab_stop(true))
             .clone();
-        let label = label.into();
         action_button(&theme, id, kind, enabled)
-            .aria_label(label.clone())
+            .aria_label(label)
             .track_focus(&focus)
             .on_click(cx.listener(move |this, _, _, cx| {
                 if enabled {
@@ -397,16 +430,15 @@ impl SettingsScreen {
                     cx.stop_propagation();
                 }
             }))
-            .child(label)
     }
 
     fn render_nav(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Div {
         let back = self
-            .button(
+            .button_frame(
                 "settings-close",
                 ButtonKind::Ghost,
                 true,
-                "Projetos",
+                "Voltar aos projetos".into(),
                 Action::Close,
                 cx,
             )
@@ -414,7 +446,8 @@ impl SettingsScreen {
                 IconName::ArrowLeft,
                 14.0,
                 button_foreground(theme, ButtonKind::Ghost, true),
-            ));
+            ))
+            .child("Projetos");
         div()
             .w(px(NAV_WIDTH))
             .flex_none()
@@ -482,12 +515,8 @@ impl SettingsScreen {
                 "Bloqueado",
                 "Provedor externo bloqueado",
                 format!(
-                    "{}. Até resolver, nenhuma captura é enviada nem analisada.",
-                    capitalize(
-                        consent_status(stored)
-                            .err()
-                            .unwrap_or("consentimento ausente")
-                    )
+                    "{} Até lá, nenhuma captura é enviada nem analisada.",
+                    blocked_reason(consent_status(stored).err().unwrap_or_default())
                 ),
             ),
         };
@@ -538,6 +567,7 @@ impl SettingsScreen {
         div()
             .id(id)
             .flex_1()
+            .min_w(px(0.0))
             .flex()
             .gap(px(SpacingScale::S3))
             .p(px(SpacingScale::S3))
@@ -595,6 +625,8 @@ impl SettingsScreen {
             )
             .child(
                 div()
+                    .flex_1()
+                    .min_w(px(0.0))
                     .flex()
                     .flex_col()
                     .gap(px(2.0))
@@ -639,12 +671,17 @@ impl SettingsScreen {
             Action::Save,
             cx,
         );
+        let typed = self.typed(cx);
         let hint = match (&draft, edited) {
-            (Err(message), true) => Some((message.clone(), true)),
+            (Err(message), true) if typed => Some((message.clone(), theme.colors.status_danger())),
+            (Err(_), true) => Some((
+                "Informe o endereço e o modelo do provedor para salvar.".to_owned(),
+                theme.colors.text_muted(),
+            )),
             (Ok(_), true) if consent_active => Some((
                 "Salvar muda a prévia: o consentimento atual deixa de valer e as chamadas externas param até você consentir de novo."
                     .to_owned(),
-                false,
+                theme.colors.status_warning(),
             )),
             _ => None,
         };
@@ -652,6 +689,7 @@ impl SettingsScreen {
             .child(
                 div()
                     .id("settings-kind")
+                    .w_full()
                     .flex()
                     .gap(px(SpacingScale::S2))
                     .role(Role::RadioGroup)
@@ -664,16 +702,14 @@ impl SettingsScreen {
                     field_row(theme, label, self.fields[index].clone().into_any_element())
                 }))
             })
-            .children(hint.map(|(message, danger)| {
+            .children(hint.map(|(message, color)| {
                 text_style(div(), TypeScale::BODY_SMALL)
-                    .text_color(if danger {
-                        theme.colors.status_danger()
-                    } else {
-                        theme.colors.status_warning()
-                    })
+                    .text_color(color)
                     .child(message)
             }))
-            .child(div().flex().child(save))
+            .when(edited || self.busy, |section| {
+                section.child(div().flex().child(save))
+            })
     }
 
     fn render_key(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Div {
@@ -711,7 +747,12 @@ impl SettingsScreen {
     }
 
     fn render_preview(&self, theme: &Theme, cx: &App) -> Div {
-        let profile = self.draft(cx).ok().or_else(|| self.stored.clone());
+        let profile = self.form(cx).ok().or_else(|| {
+            self.stored.clone().map(|mut profile| {
+                profile.kind = self.kind;
+                profile
+            })
+        });
         let body: AnyElement = match profile {
             Some(profile) if profile.kind == ProfileKind::OpenAiCompatible => {
                 let preview = build_preview(&profile);
@@ -850,8 +891,8 @@ impl SettingsScreen {
                 content.child(
                     div()
                         .flex()
-                        .items_center()
-                        .gap(px(SpacingScale::S2))
+                        .flex_col()
+                        .gap(px(SpacingScale::S3))
                         .p(px(SpacingScale::S3))
                         .rounded(theme.radius.control())
                         .border_1()
@@ -860,12 +901,17 @@ impl SettingsScreen {
                         .role(Role::Alert)
                         .child(
                             text_style(div(), TypeScale::BODY_SMALL)
-                                .flex_1()
                                 .text_color(theme.colors.text_secondary())
                                 .child("Isso desliga as chamadas externas e apaga a chave do cofre. O endereço e o modelo continuam salvos."),
                         )
-                        .child(cancel)
-                        .child(confirm),
+                        .child(
+                            div()
+                                .flex()
+                                .justify_end()
+                                .gap(px(SpacingScale::S2))
+                                .child(cancel)
+                                .child(confirm),
+                        ),
                 )
             } else {
                 let revoke = self.button(
@@ -970,7 +1016,8 @@ impl Render for SettingsScreen {
                     .h_full()
                     .overflow_y_scroll()
                     .px(px(32.0))
-                    .py(px(28.0))
+                    .pt(px(28.0))
+                    .pb(px(56.0))
                     .child(
                         div()
                             .max_w(px(READING_WIDTH))
@@ -1059,6 +1106,22 @@ fn failure(error: ProfileError) -> String {
     }
 }
 
+/// Actionable copy for [`consent_status`]'s sanitized reasons.
+fn blocked_reason(reason: &str) -> String {
+    match reason {
+        "chamadas externas desativadas" | "consentimento ausente" => {
+            "Falta consentir com a prévia abaixo.".into()
+        }
+        "a configuração mudou após o consentimento" => {
+            "A configuração mudou depois do consentimento; consinta de novo.".into()
+        }
+        "configuração do provedor inválida" => {
+            "A configuração do provedor está incompleta ou inválida.".into()
+        }
+        other => format!("{}.", capitalize(other)),
+    }
+}
+
 fn capitalize(text: &str) -> String {
     let mut chars = text.chars();
     chars
@@ -1109,6 +1172,21 @@ mod tests {
         for kind in PREVIEW_CATEGORIES {
             assert_ne!(category_label(kind), "Outro conteúdo", "{kind}");
         }
+    }
+
+    #[test]
+    fn maps_consent_reasons_to_actions() {
+        use application::profile::{consent_status, offline_default_profile, ProfileKind};
+        let mut profile = offline_default_profile();
+        profile.kind = ProfileKind::OpenAiCompatible;
+        profile.model = "m".into();
+        profile.endpoint = Some("https://api.example.test/v1".into());
+        let reason = consent_status(&profile).unwrap_err();
+        assert_eq!(
+            super::blocked_reason(reason),
+            "Falta consentir com a prévia abaixo."
+        );
+        assert_eq!(super::blocked_reason("algo novo"), "Algo novo.");
     }
 
     #[test]
