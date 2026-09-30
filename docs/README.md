@@ -13,7 +13,7 @@ alterações pertinentes. O `README.md` da raiz é a apresentação do projeto e
 | [arquitetura/](arquitetura/) | Stack, módulos e decisões técnicas | [stack-e-arquitetura-rust-gpui.md](arquitetura/stack-e-arquitetura-rust-gpui.md), [adr/](arquitetura/adr/) (decisões registradas), [historico/](arquitetura/historico/) (propostas superadas) |
 | [roadmap/](roadmap/) | Planos e tickets de execução, por fase | [mvp/BRIEFING.md](roadmap/mvp/BRIEFING.md) e [mvp/issues/](roadmap/mvp/issues/) (MVP), [fase-3/](roadmap/fase-3/), [fase-4/](roadmap/fase-4/), [fase-5/](roadmap/fase-5/) |
 | [operacao/](operacao/) | Como rodar, dados locais, integrações, limitações e uso real | [operacao-e-referencia.md](operacao/operacao-e-referencia.md), [teste-captura-opencode.md](operacao/teste-captura-opencode.md), [dogfood-log.md](operacao/dogfood-log.md) |
-| [pesquisas/](pesquisas/) | Pesquisas e ideias para o futuro, com status | [README.md](pesquisas/README.md) (índice) |
+| [pesquisas/](pesquisas/) | Pesquisas e ideias para o futuro, com status | [README.md](pesquisas/README.md) (índice), [automacao-do-grafo-fontes.md](pesquisas/automacao-do-grafo-fontes.md) (auditoria e automação de relações/contexto) |
 | [assets/](assets/) | Imagens usadas pelo README da raiz | — |
 
 ## Precedência
