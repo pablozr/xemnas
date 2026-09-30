@@ -1002,9 +1002,16 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
         }
         self.theme = Theme::current(cx);
         let theme = self.theme;
-        window.set_window_title(match self.destination {
-            Destination::Decisions => "xemnas — Decisões",
-            Destination::Review => "xemnas — Revisão",
+        // The project leads the title so Alt+Tab and the taskbar tell windows
+        // and projects apart.
+        let project_name = self
+            .projects
+            .as_ref()
+            .and_then(|screen| screen.read(cx).selected_project())
+            .map(|project| project.name().to_owned());
+        window.set_window_title(&match project_name {
+            Some(name) => format!("{name} · {} — xemnas", self.destination.label()),
+            None => "xemnas".to_owned(),
         });
 
         let title = div()
@@ -1133,7 +1140,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
                                                     Some(std::time::Instant::now());
                                                 cx.notify();
                                             }))
-                                            .child(panel),
+                                            .child(fade_in(div().child(panel), "project-panel-in")),
                                     )
                                     .with_priority(1)
                                 }))

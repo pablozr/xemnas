@@ -771,14 +771,10 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                     .flex_wrap()
                     .gap(px(SpacingScale::S8))
                     .child(
-                        section(
+                        confidence(
                             theme,
-                            "Confiança da extração",
-                            &format!(
-                                "{:.0}% · {}",
-                                detail.summary.confidence * 100.0,
-                                detail.summary.confidence_reason
-                            ),
+                            detail.summary.confidence as f32,
+                            &detail.summary.confidence_reason,
                         )
                         .flex_1()
                         .min_w(px(220.0)),
@@ -869,15 +865,61 @@ impl<S: InboxStore + Send + 'static> Render for InboxScreen<S> {
                             if !self.loaded { "Atualize para carregar os candidatos." }
                             else if self.rows.is_empty() { "Fila vazia." }
                             else { "Nenhum candidato carregado corresponde à busca." }))))
-                    .child(text_style(div(), TypeScale::META).flex_none().px(px(SpacingScale::S4)).py(px(SpacingScale::S2))
+                    .when(self.cursor.is_some() || self.rows.len() != visible.len(), |rail| rail.child(text_style(div(), TypeScale::META).flex_none().px(px(SpacingScale::S4)).py(px(SpacingScale::S2))
                         .flex().items_center().justify_between()
                         .border_t_1().border_color(theme.colors.hairline_divider()).text_color(theme.colors.text_muted())
                         .child(format!("{} carregados · {} visíveis", self.rows.len(), visible.len()))
-                        .when(self.cursor.is_some(), |footer| footer.child(self.button("inbox-more", "Carregar mais", true, cx)))))
+                        .when(self.cursor.is_some(), |footer| footer.child(self.button("inbox-more", "Carregar mais", true, cx))))))
                 .child(div().flex_1().min_w(px(0.0)).h_full().flex().flex_col()
                     .child(div().flex_1().min_h(px(0.0)).child(if let Some(editor) = self.editor.as_ref().filter(|_| self.detail.as_ref().is_some_and(|detail| matches_query(&detail.summary, &self.query))) { editor.clone().into_any_element() } else { self.reading_pane(cx) }))
                     .when(self.editor.is_none(), |pane| pane.child(self.review_actions(cx)))))
     }
+}
+
+/// The extractor's own estimate, drawn as a short meter beside the number.
+/// Labelled as an estimate: it is not a human assessment.
+fn confidence(theme: Theme, value: f32, reason: &str) -> Div {
+    let value = value.clamp(0.0, 1.0);
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SpacingScale::S2))
+        .child(section_label(&theme, "Confiança da extração"))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(SpacingScale::S3))
+                .child(
+                    div()
+                        .w(px(120.0))
+                        .h(px(4.0))
+                        .rounded_full()
+                        .bg(theme.colors.surface())
+                        .child(
+                            div()
+                                .h_full()
+                                .w(gpui::relative(value))
+                                .rounded_full()
+                                .bg(theme.colors.accent_default()),
+                        ),
+                )
+                .child(
+                    text_style(div(), TypeScale::BODY_SMALL)
+                        .text_color(theme.colors.text_primary())
+                        .child(format!("{:.0}%", value * 100.0)),
+                )
+                .child(
+                    text_style(div(), TypeScale::META)
+                        .text_color(theme.colors.text_muted())
+                        .child("estimativa do extrator"),
+                ),
+        )
+        .child(
+            text_style(div(), TypeScale::BODY)
+                .text_color(theme.colors.text_secondary())
+                .child(reason.to_owned()),
+        )
 }
 
 fn section(theme: Theme, label: &'static str, content: &str) -> Div {
