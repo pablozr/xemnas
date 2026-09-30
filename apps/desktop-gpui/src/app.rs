@@ -17,7 +17,7 @@ use crate::screens::projects::{ProjectChanged, ProjectsScreen};
 use crate::ui::controls::icon_action;
 use crate::ui::feedback::error_state;
 use crate::ui::glass::focus_ring;
-use crate::ui::icons::Icon;
+use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{count_chip, fade_in};
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme, ThemeMode};
@@ -258,11 +258,20 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
     fn nav_tab(&self, destination: Destination, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let selected = self.destination == destination;
-        let icon = match destination {
-            Destination::Review => Icon::list(&theme, 14.0).into_any_element(),
-            Destination::Decisions => Icon::file(&theme, 14.0, !selected).into_any_element(),
-            Destination::Details => Icon::layers(&theme, 14.0).into_any_element(),
+        let foreground = if selected {
+            theme.colors.text_primary()
+        } else {
+            theme.colors.text_muted()
         };
+        let glyph = icon(
+            match destination {
+                Destination::Review => IconName::List,
+                Destination::Decisions => IconName::File,
+                Destination::Details => IconName::Info,
+            },
+            14.0,
+            foreground,
+        );
         let count = (destination == Destination::Review).then(|| {
             self.inbox
                 .as_ref()
@@ -308,7 +317,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
                     }
                 }),
             )
-            .child(icon)
+            .child(glyph)
             .child(destination.label())
             .children(count.map(|count| count_chip(&theme, count)))
     }
@@ -344,7 +353,11 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
                     cx.stop_propagation();
                 }
             }))
-            .child(Icon::contrast(&theme, 16.0))
+            .child(icon(
+                IconName::Contrast,
+                16.0,
+                theme.colors.text_secondary(),
+            ))
     }
 
     fn on_theme_click(

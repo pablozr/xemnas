@@ -1,235 +1,163 @@
 //! Inline SVG icons.
 //!
 //! The product needs a small, consistent icon family. Rather than pull in a
-//! full icon library or register an `AssetSource`, every icon is a byte string
-//! rendered with `gpui::svg().data(...)`, which copies the bytes into an `Arc`
-//! and keys the sprite cache on their hash (gpui/src/elements/svg.rs:53-59) —
-//! the same glyph always lands on the same cache entry.
+//! full icon library or register an `AssetSource`, every icon is a static byte
+//! string rendered with `gpui::svg().data(...)`, which keys the sprite cache
+//! on the bytes' hash (gpui/src/elements/svg.rs) — the same glyph always lands
+//! on the same cache entry.
 //!
 //! ## Why the icons are alpha masks
 //!
-//! `paint_svg` rasterises each icon through `render_alpha_mask`
-//! (gpui/src/window.rs:4829): the SVG is drawn as an **alpha mask** and then
-//! tinted with `style.text.color`. Two consequences, and both are load-bearing:
+//! `paint_svg` rasterises each icon as an **alpha mask** and tints it with
+//! `style.text.color`. Two consequences, and both are load-bearing:
 //!
-//! 1. The `stroke="#rrggbb"` inside the markup is **ignored**. Only the alpha
-//!    channel survives, so one icon source can be tinted by any state colour.
-//! 2. `paint` returns early unless `style.text.color` is `Some`
-//!    (gpui/src/elements/svg.rs:150-152) — an SVG with no text colour set on the
-//!    element is silently skipped and draws nothing at all. Every helper below
-//!    sets `.text_color(..)` on the SVG element itself, and the colour baked
-//!    into the markup is an opaque white mask that keeps the source
-//!    readable when the file is opened in a browser.
+//! 1. The `stroke="white"` inside the markup only feeds the alpha channel, so
+//!    one source can be tinted by any state colour.
+//! 2. `paint` returns early unless `style.text.color` is `Some` — an SVG with
+//!    no colour on the element itself draws nothing. [`icon`] therefore always
+//!    takes the colour explicitly.
 //!
-//! Because the tint comes from the element style, an icon *can* change colour
-//! between states. The first version of this file got that wrong: it baked the
-//! stroke into a `format!` string, which meant the rail's selected item could
-//! not brighten its icon. The rail now really does retint on selection.
+//! ## Colour is the caller's
+//!
+//! Glyphs used to carry their own colour (a dark `edit` that vanished on a
+//! disabled button, a lavender `activity` beside muted siblings). An icon now
+//! takes the colour of the text it sits next to:
+//! [`crate::ui::controls::button_foreground`] for buttons, the label colour
+//! for tabs and rows.
 
 use gpui::prelude::*;
-use gpui::{div, px, Hsla, Rgba, Styled};
+use gpui::{div, px, AnyElement, Hsla};
 
-use crate::ui::theme::Theme;
-
-/// Renders `data` at `size` logical pixels, tinted to `color`.
-fn render(data: &str, size: f32, color: Hsla) -> impl IntoElement {
-    div().flex_none().w(px(size)).h(px(size)).child(
-        gpui::svg()
-            .data(data.as_bytes())
-            .size(px(size))
-            .text_color(color)
-            .into_any_element(),
-    )
-}
-
-/// Builds the markup for a glyph, given its body.
-///
-/// The single point of variation between icons is the inner markup; the
-/// `viewBox`, stroke width, caps and joins are shared, so every glyph is drawn
-/// on the same 24x24 grid with the same 1.75 px stroke and round caps/joins.
-/// That shared frame is what makes the family read as one set.
-///
-fn glyph(body: &str) -> String {
-    format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">{body}</svg>"#
-    )
-}
-
-/// The icon family. One variant per concept, no duplicates.
-pub struct Icon;
-
-impl Icon {
-    /// Temporal index of preserved documents.
-    pub fn list(theme: &Theme, size: f32) -> impl IntoElement {
-        render(
-            &glyph(r#"<path d="M8 6h12M8 12h12M8 18h12M3 6h1M3 12h1M3 18h1"/>"#),
-            size,
-            icon_color(theme, true),
+/// Shared frame: 24×24 grid, 1.75 px round stroke. Keeping it in one place is
+/// what makes the family read as one set.
+macro_rules! glyph {
+    ($body:literal) => {
+        concat!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">"#,
+            $body,
+            "</svg>"
         )
-    }
-    /// Recorded provenance link.
-    pub fn link(theme: &Theme, size: f32) -> impl IntoElement {
-        render(
-            &glyph(
-                r#"<path d="m10 13 4-4M8 16l-1 1a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0M16 8l1-1a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0"/>"#,
-            ),
-            size,
-            icon_color(theme, true),
-        )
-    }
-    /// Expand the source reading viewport.
-    pub fn expand(theme: &Theme, size: f32) -> impl IntoElement {
-        render(
-            &glyph(r#"<path d="M9 3H3v6m12-6h6v6M3 15v6h6m12-6v6h-6"/>"#),
-            size,
-            icon_color(theme, false),
-        )
-    }
-    /// Disclosure chevron with its actual open state.
-    pub fn disclosure(theme: &Theme, size: f32, open: bool) -> impl IntoElement {
-        render(
-            &glyph(if open {
-                r#"<path d="m6 9 6 6 6-6"/>"#
-            } else {
-                r#"<path d="m9 6 6 6-6 6"/>"#
-            }),
-            size,
-            icon_color(theme, true),
-        )
-    }
-    /// Context fields stored alongside a decision.
-    pub fn layers(theme: &Theme, size: f32) -> impl IntoElement {
-        render(
-            &glyph(r#"<path d="m12 3 10 5-10 5L2 8l10-5ZM2 12l10 5 10-5M2 16l10 5 10-5"/>"#),
-            size,
-            icon_color(theme, true),
-        )
-    }
-    /// Change the list's status filter.
-    pub fn filter(theme: &Theme, size: f32) -> impl IntoElement {
-        render(
-            &glyph(r#"<path d="M3 6h18M6 12h12M9 18h6"/>"#),
-            size,
-            icon_color(theme, true),
-        )
-    }
-    /// Export a document to a user-chosen file.
-    pub fn export(theme: &Theme, size: f32) -> impl IntoElement {
-        render(
-            &glyph(r#"<path d="M12 3v12m-4-4 4 4 4-4"/><path d="M5 15v5h14v-5"/>"#),
-            size,
-            icon_color(theme, false),
-        )
-    }
-    /// Copy the recorded source text.
-    pub fn copy(theme: &Theme, size: f32) -> impl IntoElement {
-        render(
-            &glyph(
-                r#"<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/>"#,
-            ),
-            size,
-            icon_color(theme, false),
-        )
-    }
-    /// Revise a versioned document.
-    pub fn edit(theme: &Theme, size: f32) -> impl IntoElement {
-        render(
-            &glyph(r#"<path d="m15 4 5 5-11 11H4v-5L15 4Zm-2 2 5 5"/>"#),
-            size,
-            theme.colors.accent_on_emphasis().into(),
-        )
-    }
-    /// A source file, beside its name in the evidence tab strip.
-    pub fn file(theme: &Theme, size: f32, muted: bool) -> impl IntoElement {
-        render(
-            &glyph(
-                r#"<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>"#,
-            ),
-            size,
-            icon_color(theme, muted),
-        )
-    }
-
-    /// Projects: a folder, the thing a project tracks.
-    pub fn folder(theme: &Theme, size: f32, muted: bool) -> impl IntoElement {
-        render(
-            &glyph(
-                r#"<path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4.2a1.5 1.5 0 0 1 1.2.6l1 1.4h8.6A1.5 1.5 0 0 1 21 9.5v9A1.5 1.5 0 0 1 19.5 20h-15A1.5 1.5 0 0 1 3 18.5z"/>"#,
-            ),
-            size,
-            icon_color(theme, muted),
-        )
-    }
-
-    /// A magnifying glass, for the search field.
-    pub fn search(theme: &Theme, size: f32, muted: bool) -> impl IntoElement {
-        render(
-            &glyph(r#"<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/>"#),
-            size,
-            icon_color(theme, muted),
-        )
-    }
-
-    /// A plus, painted on an emphasis fill so it needs the inverse colour.
-    pub fn plus(theme: &Theme, size: f32) -> impl IntoElement {
-        render(
-            &glyph(r#"<path d="M12 5v14M5 12h14"/>"#),
-            size,
-            theme.colors.accent_on_emphasis().into(),
-        )
-    }
-
-    /// A folder with a plus: the "add a project" action.
-    pub fn folder_plus(theme: &Theme, size: f32) -> impl IntoElement {
-        render(
-            &glyph(
-                r#"<path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4.2a1.5 1.5 0 0 1 1.2.6l1 1.4h8.6A1.5 1.5 0 0 1 21 9.5v9A1.5 1.5 0 0 1 19.5 20h-15A1.5 1.5 0 0 1 3 18.5z"/><path d="M12 11v5M9.5 13.5h5"/>"#,
-            ),
-            size,
-            theme.colors.accent_default().into(),
-        )
-    }
-
-    /// A clock: when a project was registered.
-    pub fn clock(theme: &Theme, size: f32, muted: bool) -> impl IntoElement {
-        render(
-            &glyph(r#"<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>"#),
-            size,
-            icon_color(theme, muted),
-        )
-    }
-
-    /// A half-filled disc: switching between the two palettes.
-    pub fn contrast(theme: &Theme, size: f32) -> impl IntoElement {
-        render(
-            &glyph(
-                r#"<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="white" stroke="none"/>"#,
-            ),
-            size,
-            theme.colors.text_secondary().into(),
-        )
-    }
-
-    /// An activity line, for a busy state.
-    pub fn activity(theme: &Theme, size: f32) -> impl IntoElement {
-        render(
-            &glyph(r#"<path d="M3 12h4l2.5-6 4 12 2.5-6h5"/>"#),
-            size,
-            theme.colors.accent_default().into(),
-        )
-    }
-}
-
-/// The colour an icon draws in, given whether its item is idle.
-///
-/// Active items draw in `text_primary`, idle items in `text_muted`: the icon
-/// carries part of the selected state and the label carries the rest, so the
-/// two never have to be read independently.
-pub fn icon_color(theme: &Theme, muted: bool) -> Hsla {
-    let color: Rgba = if muted {
-        theme.colors.text_muted()
-    } else {
-        theme.colors.text_primary()
     };
-    color.into()
+}
+
+/// The icon family. One glyph per concept.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IconName {
+    /// The review queue.
+    List,
+    /// A decision document or a source file.
+    File,
+    /// Project properties.
+    Info,
+    /// A tracked project folder.
+    Folder,
+    /// Registering a new project folder.
+    FolderPlus,
+    /// Adding something new, on a primary fill.
+    Plus,
+    /// Searching a list.
+    Search,
+    /// Palette switch.
+    Contrast,
+    /// Version history.
+    Clock,
+    /// Context of a decision (the section).
+    Layers,
+    /// Scope: what the decision covers.
+    Target,
+    /// Assumptions held as true.
+    CheckCircle,
+    /// Consequences that follow.
+    Activity,
+    /// Conditions to reconsider the decision.
+    Rotate,
+    /// Evidence and provenance links.
+    Link,
+    /// Status filter.
+    Filter,
+    /// Export to a file.
+    Export,
+    /// Copy source text.
+    Copy,
+    /// Revise a document.
+    Edit,
+    /// Enlarge the source viewport.
+    Expand,
+    /// Collapsed disclosure.
+    ChevronRight,
+    /// Open disclosure.
+    ChevronDown,
+}
+
+impl IconName {
+    fn markup(self) -> &'static str {
+        match self {
+            Self::List => {
+                glyph!(r#"<path d="M8 6h12M8 12h12M8 18h12M3.5 6h.5M3.5 12h.5M3.5 18h.5"/>"#)
+            }
+            Self::File => glyph!(
+                r#"<path d="M14 2.5H6.5a2 2 0 0 0-2 2v15a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V8z"/><path d="M14 2.5V8h5.5"/>"#
+            ),
+            Self::Info => {
+                glyph!(r#"<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.75h.01"/>"#)
+            }
+            Self::Folder => glyph!(
+                r#"<path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4.2a1.5 1.5 0 0 1 1.2.6l1 1.4h8.6A1.5 1.5 0 0 1 21 9.5v9A1.5 1.5 0 0 1 19.5 20h-15A1.5 1.5 0 0 1 3 18.5z"/>"#
+            ),
+            Self::FolderPlus => glyph!(
+                r#"<path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4.2a1.5 1.5 0 0 1 1.2.6l1 1.4h8.6A1.5 1.5 0 0 1 21 9.5v9A1.5 1.5 0 0 1 19.5 20h-15A1.5 1.5 0 0 1 3 18.5z"/><path d="M12 11v5M9.5 13.5h5"/>"#
+            ),
+            Self::Plus => glyph!(r#"<path d="M12 5v14M5 12h14"/>"#),
+            Self::Search => {
+                glyph!(r#"<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/>"#)
+            }
+            Self::Contrast => glyph!(
+                r#"<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="white" stroke="none"/>"#
+            ),
+            Self::Clock => glyph!(r#"<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>"#),
+            Self::Layers => glyph!(
+                r#"<path d="m12 3 9 4.5-9 4.5-9-4.5z"/><path d="m3 12 9 4.5 9-4.5M3 16.5 12 21l9-4.5"/>"#
+            ),
+            Self::Target => glyph!(
+                r#"<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r=".75"/>"#
+            ),
+            Self::CheckCircle => {
+                glyph!(r#"<circle cx="12" cy="12" r="8.5"/><path d="m8.5 12.25 2.5 2.5 4.5-5"/>"#)
+            }
+            Self::Activity => glyph!(r#"<path d="M3 12h4l2.5-6 4 12 2.5-6h5"/>"#),
+            Self::Rotate => glyph!(
+                r#"<path d="M4 12a8 8 0 0 1 13.66-5.66L20 8.5"/><path d="M20 4v4.5h-4.5"/><path d="M20 12a8 8 0 0 1-13.66 5.66L4 15.5"/><path d="M4 20v-4.5h4.5"/>"#
+            ),
+            Self::Link => glyph!(
+                r#"<path d="M10 13.5a4.5 4.5 0 0 0 6.8.5l2.7-2.7a4.5 4.5 0 0 0-6.4-6.4l-1.5 1.5"/><path d="M14 10.5a4.5 4.5 0 0 0-6.8-.5l-2.7 2.7a4.5 4.5 0 0 0 6.4 6.4l1.5-1.5"/>"#
+            ),
+            Self::Filter => glyph!(r#"<path d="M4 6.5h16M7 12h10M10 17.5h4"/>"#),
+            Self::Export => {
+                glyph!(r#"<path d="M12 3.5v11m-4-4 4 4 4-4"/><path d="M5 15.5v4h14v-4"/>"#)
+            }
+            Self::Copy => glyph!(
+                r#"<rect x="8.5" y="8.5" width="11.5" height="11.5" rx="2"/><path d="M15.5 8.5V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7.5a2 2 0 0 0 2 2h2.5"/>"#
+            ),
+            Self::Edit => {
+                glyph!(r#"<path d="M15 4.5 19.5 9 9 19.5H4.5V15z"/><path d="m13 6.5 4.5 4.5"/>"#)
+            }
+            Self::Expand => glyph!(r#"<path d="M9 4H4v5M15 4h5v5M4 15v5h5M20 15v5h-5"/>"#),
+            Self::ChevronRight => glyph!(r#"<path d="m9.5 6 6 6-6 6"/>"#),
+            Self::ChevronDown => glyph!(r#"<path d="m6 9.5 6 6 6-6"/>"#),
+        }
+    }
+}
+
+/// Renders `name` at `size` logical pixels, tinted to `color`.
+pub fn icon(name: IconName, size: f32, color: impl Into<Hsla>) -> AnyElement {
+    div()
+        .flex_none()
+        .size(px(size))
+        .child(
+            gpui::svg()
+                .data(name.markup().as_bytes())
+                .size(px(size))
+                .text_color(color.into()),
+        )
+        .into_any_element()
 }

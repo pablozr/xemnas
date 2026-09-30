@@ -59,6 +59,18 @@ pub enum ButtonKind {
     Ghost,
 }
 
+/// The text (and icon) colour of a product button, so icons placed inside it
+/// always match the label, including the disabled state.
+pub fn button_foreground(theme: &Theme, kind: ButtonKind, enabled: bool) -> Rgba {
+    let colors = theme.colors;
+    match (kind, enabled) {
+        (_, false) => colors.text_disabled(),
+        (ButtonKind::Primary, true) => colors.accent_on_emphasis(),
+        (ButtonKind::Secondary, true) => colors.text_primary(),
+        (ButtonKind::Ghost, true) => colors.text_secondary(),
+    }
+}
+
 /// The product button recipe shared by every screen.
 ///
 /// Screens attach focus, handlers and children; height, radius, colours,
@@ -84,31 +96,17 @@ pub fn action_button(
         .role(Role::Button)
         .focus_visible(focus_ring(theme))
         .cursor_pointer();
-    let button = match kind {
+    let button = button.text_color(button_foreground(theme, kind, enabled));
+    match kind {
         ButtonKind::Primary if enabled => button
             .bg(colors.accent_emphasis())
-            .text_color(colors.accent_on_emphasis())
             .hover(move |style| style.bg(colors.accent_hover())),
-        ButtonKind::Primary => button
-            .bg(colors.surface())
-            .text_color(colors.text_disabled()),
+        ButtonKind::Primary => button.bg(colors.surface()),
         ButtonKind::Secondary => button
             .border_1()
             .border_color(colors.hairline_divider())
-            .text_color(colors.text_primary())
             .hover(move |style| style.bg(colors.hover_veil())),
-        ButtonKind::Ghost => button
-            .text_color(colors.text_secondary())
-            .hover(move |style| {
-                style
-                    .bg(colors.hover_veil())
-                    .text_color(colors.text_primary())
-            }),
-    };
-    if enabled || kind == ButtonKind::Primary {
-        button
-    } else {
-        button.text_color(colors.text_disabled())
+        ButtonKind::Ghost => button.hover(move |style| style.bg(colors.hover_veil())),
     }
 }
 

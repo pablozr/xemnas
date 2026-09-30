@@ -15,7 +15,7 @@ use super::evidence;
 use super::review_editor::{EditorEvent, ReviewEditor};
 use crate::ui::controls::{action_button, ButtonKind};
 use crate::ui::glass::focus_ring;
-use crate::ui::icons::Icon;
+use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
     count_chip, fade_in, mark_selected, panel_title, section_label, status_pill,
 };
@@ -663,7 +663,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                             .flex()
                             .items_center()
                             .gap(px(SpacingScale::S2))
-                            .child(Icon::link(&theme, 14.0))
+                            .child(icon(IconName::Link, 14.0, theme.colors.text_muted()))
                             .child(
                                 text_style(div(), TypeScale::HEADING_3)
                                     .flex_1()

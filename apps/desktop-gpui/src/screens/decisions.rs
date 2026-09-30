@@ -3,10 +3,10 @@ use super::{
     decision_editor::{DecisionEditor, RevisionEvent},
     evidence::{self, SourceLines},
 };
-use crate::ui::controls::{action_button, ButtonKind};
+use crate::ui::controls::{action_button, button_foreground, ButtonKind};
 use crate::ui::{
     glass::focus_ring,
-    icons::Icon,
+    icons::{icon, IconName},
     patterns::{count_chip, fade_in, mark_selected, panel_title, section_label, status_pill},
     search_field::{SearchChanged, SearchField},
     theme::{text_style, Theme},
@@ -476,22 +476,6 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
         } else {
             (label.clone(), None)
         };
-        let icon = match &action {
-            Action::Document => Some(Icon::file(&t, 14.0, !selected).into_any_element()),
-            Action::History => Some(Icon::clock(&t, 14.0, !selected).into_any_element()),
-            Action::Context(0) => Some(Icon::folder(&t, 14.0, true).into_any_element()),
-            Action::Context(1) => Some(Icon::layers(&t, 14.0).into_any_element()),
-            Action::Context(2) => Some(Icon::activity(&t, 14.0).into_any_element()),
-            Action::Context(_) => Some(Icon::clock(&t, 14.0, true).into_any_element()),
-            Action::Filter => Some(Icon::filter(&t, 14.0).into_any_element()),
-            Action::ExpandSource => Some(Icon::expand(&t, 14.0).into_any_element()),
-            Action::Revise => Some(Icon::edit(&t, 14.0).into_any_element()),
-            Action::CopySource => Some(Icon::copy(&t, 14.0).into_any_element()),
-            Action::Export(_) if label == "Exportar…" => {
-                Some(Icon::export(&t, 14.0).into_any_element())
-            }
-            _ => None,
-        };
         let kind = if primary {
             ButtonKind::Primary
         } else if matches!(action, Action::Export(_) | Action::More | Action::Retry) {
@@ -499,11 +483,29 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
         } else {
             ButtonKind::Ghost
         };
+        let foreground = if selected && kind == ButtonKind::Ghost && !self.busy {
+            t.colors.text_primary()
+        } else {
+            button_foreground(&t, kind, !self.busy)
+        };
+        let glyph = match &action {
+            Action::Document => Some(IconName::File),
+            Action::History => Some(IconName::Clock),
+            Action::Context(0) => Some(IconName::Target),
+            Action::Context(1) => Some(IconName::CheckCircle),
+            Action::Context(2) => Some(IconName::Activity),
+            Action::Context(_) => Some(IconName::Rotate),
+            Action::Filter => Some(IconName::Filter),
+            Action::ExpandSource => Some(IconName::Expand),
+            Action::Revise => Some(IconName::Edit),
+            Action::CopySource => Some(IconName::Copy),
+            Action::Export(_) if label == "Exportar…" => Some(IconName::Export),
+            _ => None,
+        };
+        let glyph_icon = glyph.map(|glyph| icon(glyph, 14.0, foreground));
         action_button(&t, id, kind, !self.busy)
             .when(selected && kind == ButtonKind::Ghost, |button| {
-                button
-                    .bg(t.colors.selection())
-                    .text_color(t.colors.text_primary())
+                button.bg(t.colors.selection()).text_color(foreground)
             })
             .aria_label(label.clone())
             .aria_selected(selected)
@@ -517,21 +519,19 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                     }
                 }),
             )
-            .children(icon)
+            .children(glyph_icon)
             .child(caption)
-            .children(count.map(|count| {
-                text_style(div(), TypeScale::META)
-                    .px(px(5.0))
-                    .rounded(px(4.0))
-                    .bg(t.colors.surface())
-                    .text_color(t.colors.text_muted())
-                    .child(count)
-            }))
+            .children(count.map(|count| count_chip(&t, count)))
             .when(disclosure.is_some(), |button| {
-                button
-                    .w_full()
-                    .child(div().flex_1())
-                    .child(Icon::disclosure(&t, 12.0, disclosure.unwrap_or(false)))
+                button.w_full().child(div().flex_1()).child(icon(
+                    if disclosure.unwrap_or(false) {
+                        IconName::ChevronDown
+                    } else {
+                        IconName::ChevronRight
+                    },
+                    12.0,
+                    t.colors.text_muted(),
+                ))
             })
             .into_any_element()
     }
@@ -903,7 +903,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                             .flex()
                             .items_center()
                             .gap(px(8.0))
-                            .child(Icon::layers(&t, 14.0))
+                            .child(icon(IconName::Layers, 14.0, t.colors.text_muted()))
                             .child(
                                 text_style(div(), TypeScale::HEADING_3)
                                     .child("Contexto da decisão"),
@@ -925,7 +925,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                         .flex()
                         .items_center()
                         .gap(px(7.0))
-                        .child(Icon::link(&t, 12.0))
+                        .child(icon(IconName::Link, 12.0, t.colors.text_muted()))
                         .child(section_label(&t, "Proveniência")),
                 )
                 .child(
@@ -954,7 +954,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
             .flex()
             .items_center()
             .gap(px(SpacingScale::S2))
-            .child(Icon::link(&t, 14.0))
+            .child(icon(IconName::Link, 14.0, t.colors.text_muted()))
             .child(
                 text_style(div(), TypeScale::HEADING_3)
                     .flex_1()

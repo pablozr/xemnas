@@ -1,7 +1,7 @@
 //! Presentation of redacted capture artifacts, using recorded provenance only.
 
 use crate::ui::glass::focus_ring;
-use crate::ui::icons::Icon;
+use crate::ui::icons::{icon, IconName};
 use crate::ui::theme::{code_style, text_style, Theme};
 use crate::ui::tokens::{SpacingScale, TypeScale};
 use application::inbox::ArtifactView;
@@ -169,7 +169,15 @@ pub(super) fn tab(
         .aria_selected(selected)
         .focus_visible(focus_ring(theme))
         .cursor_pointer()
-        .child(Icon::file(theme, 14.0, !selected))
+        .child(icon(
+            IconName::File,
+            14.0,
+            if selected {
+                colors.text_primary()
+            } else {
+                colors.text_muted()
+            },
+        ))
         .child(div().max_w(px(200.0)).truncate().child(label(artifact)))
 }
 

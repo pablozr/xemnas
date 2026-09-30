@@ -15,7 +15,7 @@ use gpui::{
     UTF16Selection, UnderlineStyle, Window,
 };
 
-use crate::ui::icons::Icon;
+use crate::ui::icons::{icon, IconName};
 use crate::ui::search_edit::SearchEdit;
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{ControlSize, SpacingScale, TypeScale};
@@ -901,7 +901,15 @@ impl Render for SearchField {
                 }
             }))
             .when(!self.fill_width, |field| {
-                field.child(Icon::search(&theme, 14.0, !focused))
+                field.child(icon(
+                    IconName::Search,
+                    14.0,
+                    if focused {
+                        theme.colors.text_secondary()
+                    } else {
+                        theme.colors.text_muted()
+                    },
+                ))
             })
             .child(
                 text_style(div(), TypeScale::BODY_SMALL)

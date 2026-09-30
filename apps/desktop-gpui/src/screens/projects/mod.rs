@@ -19,10 +19,10 @@ use gpui::{
     PathPromptOptions, Render, Role, Stateful, Subscription, Window,
 };
 
-use crate::ui::controls::{action_button, icon_action, ButtonKind};
+use crate::ui::controls::{action_button, button_foreground, icon_action, ButtonKind};
 use crate::ui::feedback::{error_state, status_dot, StatusKind};
 use crate::ui::glass::focus_ring;
-use crate::ui::icons::Icon;
+use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{count_chip, mark_selected, panel_title, section_label};
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme};
@@ -429,7 +429,11 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                     cx.stop_propagation();
                 }
             }))
-            .child(Icon::plus(theme, 16.0))
+            .child(icon(
+                IconName::Plus,
+                16.0,
+                button_foreground(theme, ButtonKind::Primary, true),
+            ))
             .child("Abrir pasta…");
 
         div()
@@ -460,7 +464,7 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(Icon::folder(theme, 20.0, false)),
+                            .child(icon(IconName::Folder, 20.0, theme.colors.text_secondary())),
                     )
                     .child(section_label(theme, "Primeiro projeto"))
                     .child(
@@ -521,7 +525,15 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                     }
                 }),
             )
-            .child(Icon::folder(theme, 16.0, !selected))
+            .child(icon(
+                IconName::Folder,
+                16.0,
+                if selected {
+                    theme.colors.text_primary()
+                } else {
+                    theme.colors.text_muted()
+                },
+            ))
             .child(
                 div()
                     .flex_1()
@@ -577,7 +589,11 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                 cx.stop_propagation();
             }
         }))
-        .child(Icon::folder_plus(&theme, 16.0));
+        .child(icon(
+            IconName::FolderPlus,
+            16.0,
+            theme.colors.text_secondary(),
+        ));
 
         let sidebar = div()
             .id("projects-sidebar")
