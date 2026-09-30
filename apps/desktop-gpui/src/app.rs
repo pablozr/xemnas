@@ -17,7 +17,7 @@ use crate::screens::projects::{ProjectChanged, ProjectsScreen};
 use crate::ui::feedback::error_state;
 use crate::ui::glass::focus_ring;
 use crate::ui::search_field::{SearchChanged, SearchField};
-use crate::ui::theme::{text_style, Theme};
+use crate::ui::theme::{text_style, Theme, ThemeMode};
 use crate::ui::tokens::{SpacingScale, TypeScale};
 
 actions!(
@@ -46,6 +46,7 @@ pub struct Shell<R: ProjectRepository + InboxStore + DecisionStore + Send + 'sta
     in_decisions: bool,
     in_inbox: bool,
     destination_focus: [FocusHandle; 3],
+    theme_focus: FocusHandle,
     demo: bool,
 }
 
@@ -140,6 +141,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
                 cx.focus_handle().tab_stop(true),
                 cx.focus_handle().tab_stop(true),
             ],
+            theme_focus: cx.focus_handle().tab_stop(true),
             demo: false,
         }
     }
@@ -188,7 +190,6 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
     }
 
     fn switch_destination(&mut self, inbox: bool, window: &mut Window, cx: &mut Context<Self>) {
-        self.theme = Theme::quiet_glass();
         self.in_inbox = inbox;
         self.in_decisions = false;
         window.focus(&self.destination_focus[usize::from(inbox)], cx);
@@ -328,7 +329,6 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
     }
 
     fn switch_decisions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.theme = Theme::charcoal();
         self.in_decisions = true;
         self.in_inbox = false;
         window.focus(&self.destination_focus[2], cx);
@@ -337,10 +337,68 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
         }
         cx.notify();
     }
+
+    fn toggle_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mode = cx
+            .try_global::<ThemeMode>()
+            .copied()
+            .unwrap_or_default()
+            .toggled();
+        cx.set_global(mode);
+        window.refresh();
+        cx.notify();
+    }
+
+    fn theme_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let mode = cx.try_global::<ThemeMode>().copied().unwrap_or_default();
+        text_style(div(), TypeScale::BODY_SMALL)
+            .id("theme-switch")
+            .h(px(30.0))
+            .px(px(10.0))
+            .mr(px(12.0))
+            .flex()
+            .items_center()
+            .gap(px(7.0))
+            .rounded(px(6.0))
+            .border_1()
+            .border_color(theme.colors.hairline_divider())
+            .bg(theme.colors.surface())
+            .text_color(theme.colors.text_secondary())
+            .hover(move |style| style.bg(theme.colors.surface_hover()))
+            .role(Role::Button)
+            .aria_label(format!(
+                "Tema: {}. Alternar para {}",
+                mode.label(),
+                mode.toggled().label()
+            ))
+            .track_focus(&self.theme_focus)
+            .focus_visible(focus_ring(&theme))
+            .cursor_pointer()
+            .on_click(cx.listener(Self::on_theme_click))
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    this.toggle_theme(window, cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .child(crate::ui::icons::Icon::layers(&theme, 14.0))
+            .child(format!("Tema · {}", mode.label()))
+    }
+
+    fn on_theme_click(
+        &mut self,
+        _: &gpui::ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_theme(window, cx);
+    }
 }
 
 impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render for Shell<R> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.theme = Theme::current(cx);
         let theme = self.theme;
         window.set_window_title(if self.in_decisions {
             "xemnas — Decisões"
@@ -370,6 +428,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
                     .child(app_icon(22.0))
                     .child(wordmark(&theme, 15.0, 600.0)),
             )
+            .child(self.theme_button(cx))
             .child(window_controls(&theme, window.is_maximized()));
 
         let selected = self
@@ -377,10 +436,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
             .as_ref()
             .and_then(|screen| screen.read(cx).selected_project());
         let body: gpui::AnyElement = if let Some(projects) = self.projects.clone() {
-            let sidebar = projects.update(cx, |screen, cx| {
-                screen.set_theme(theme, cx);
-                screen.render_sidebar(cx)
-            });
+            let sidebar = projects.update(cx, |screen, cx| screen.render_sidebar(cx));
             let content = if selected.is_some() && self.in_decisions {
                 self.decisions
                     .as_ref()
@@ -458,7 +514,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
             .size_full()
             .flex()
             .flex_col()
-            .bg(theme.colors.layer_fill())
+            .bg(theme.colors.canvas())
             .font_family(Theme::FONT_INTERFACE)
             .text_color(theme.colors.text_primary())
             .track_focus(&self.focus)

@@ -100,7 +100,6 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
     pub fn new(cx: &mut Context<Self>, decisions: Decisions<S>, export: Export<S>) -> Self {
         let search = cx.new(|cx| {
             let mut field = SearchField::new(cx);
-            field.set_theme(Theme::charcoal());
             field.set_width(240.0);
             field.set_context("Buscar nas decisões", cx);
             field
@@ -450,7 +449,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
         selected: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let t = Theme::charcoal();
+        let t = Theme::current(cx);
         let focus = self
             .focus
             .entry(id.clone())
@@ -559,7 +558,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
             .into_any_element()
     }
     fn index(&mut self, compact: bool, cx: &mut Context<Self>) -> AnyElement {
-        let t = Theme::charcoal();
+        let t = Theme::current(cx);
         let searching = !self.query.trim().is_empty();
         let count = if searching {
             self.hits.len()
@@ -866,7 +865,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
             .into_any_element()
     }
     fn document(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let t = Theme::charcoal();
+        let t = Theme::current(cx);
         let Some(mut detail) = self.detail.clone() else {
             return div().p(px(40.0)).child(text_style(div(),TypeScale::HEADING_2).child(if self.busy{"Carregando decisão…"}else if !self.query.trim().is_empty(){"Nenhuma decisão encontrada"}else{"Decisões que permanecem"}))
                 .child(text_style(div(),TypeScale::BODY_SMALL).mt(px(12.0)).text_color(t.colors.text_muted()).child("Confirme uma escolha na Revisão para preservar o documento, suas evidências e seu histórico." )).into_any_element();
@@ -1071,7 +1070,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
         document.into_any_element()
     }
     fn evidence(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let t = Theme::charcoal();
+        let t = Theme::current(cx);
         let mut panel = div()
             .flex()
             .flex_col()
@@ -1231,6 +1230,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                     ),
                     lines,
                     if self.expanded { 460.0 } else { 240.0 },
+                    t,
                 ));
             }
         } else {
@@ -1245,7 +1245,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
         panel.into_any_element()
     }
     fn export_preview(&mut self, max_height: f32, cx: &mut Context<Self>) -> AnyElement {
-        let t = Theme::charcoal();
+        let t = Theme::current(cx);
         let document = self.preview.clone().expect("preview mounted");
         let json = document.format == ExportFormat::Json;
         let mut panel = div().size_full().flex().flex_col().child(
@@ -1351,6 +1351,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                         "export-preview-content".into(),
                         &lines,
                         max_height,
+                        t,
                     )),
             )
             .into_any_element()
@@ -1362,7 +1363,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> Render for DecisionsScreen<
             self.restore_focus = false;
             window.focus(&self.reader_focus, cx);
         }
-        let t = Theme::charcoal();
+        let t = Theme::current(cx);
         let compact = window.viewport_size().width < px(1300.0);
         self.search.update(cx, |field, _| {
             field.set_width(if compact { 208.0 } else { 256.0 })

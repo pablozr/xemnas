@@ -38,7 +38,6 @@ enum RecentState {
 
 /// The Home screen view.
 pub struct HomeScreen<R: ProjectRepository + Send + 'static> {
-    theme: Theme,
     /// Parked while a background task owns it; returned with the outcome.
     projects: Option<Projects<R>>,
     recent: RecentState,
@@ -73,7 +72,6 @@ impl<R: ProjectRepository + Send + 'static> HomeScreen<R> {
     /// Builds Home around an already composed `Projects` use case.
     pub fn new(cx: &mut Context<Self>, projects: Projects<R>) -> Self {
         Self {
-            theme: Theme::quiet_glass(),
             projects: Some(projects),
             recent: RecentState::Loading,
             path_input: String::new(),
@@ -360,7 +358,7 @@ impl<R: ProjectRepository + Send + 'static> HomeScreen<R> {
 
 impl<R: ProjectRepository + Send + 'static> Render for HomeScreen<R> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
+        let theme = Theme::current(cx);
         // Most recent first. `list()` already orders by registration time
         // ascending, so the newest is the tail of the vector.
         let recent: Vec<ProjectSummary> = match &self.recent {

@@ -56,8 +56,13 @@ fn kind_label(kind: &str) -> &str {
     }
 }
 
-pub(super) fn snippet(artifact: &ArtifactView, id: String, source: &SourceLines) -> AnyElement {
-    snippet_with_theme(artifact, id, source, 240.0, Theme::quiet_glass(), true)
+pub(super) fn snippet(
+    artifact: &ArtifactView,
+    id: String,
+    source: &SourceLines,
+    theme: Theme,
+) -> AnyElement {
+    snippet_with_theme(artifact, id, source, 240.0, theme, true)
 }
 
 pub(super) fn snippet_with_height(
@@ -65,8 +70,9 @@ pub(super) fn snippet_with_height(
     id: String,
     source: &SourceLines,
     max_height: f32,
+    theme: Theme,
 ) -> AnyElement {
-    snippet_with_theme(artifact, id, source, max_height, Theme::charcoal(), true)
+    snippet_with_theme(artifact, id, source, max_height, theme, true)
 }
 
 pub(super) fn snippet_body(
@@ -74,8 +80,9 @@ pub(super) fn snippet_body(
     id: String,
     source: &SourceLines,
     height: f32,
+    theme: Theme,
 ) -> AnyElement {
-    snippet_with_theme(artifact, id, source, height, Theme::charcoal(), false)
+    snippet_with_theme(artifact, id, source, height, theme, false)
 }
 
 pub(super) fn caption(artifact: &ArtifactView, source: &SourceLines) -> (String, String) {

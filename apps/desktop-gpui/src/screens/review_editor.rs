@@ -86,7 +86,7 @@ impl ReviewEditor {
 }
 impl Render for ReviewEditor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::quiet_glass();
+        let theme = Theme::current(cx);
         div()
             .id("review-editor")
             .size_full()

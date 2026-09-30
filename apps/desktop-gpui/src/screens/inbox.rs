@@ -365,7 +365,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
     }
 
     fn review_actions(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = Theme::quiet_glass();
+        let theme = Theme::current(cx);
         let Some(detail) = self
             .detail
             .as_ref()
@@ -461,7 +461,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
     }
 
     fn row(&self, row: &CandidateSummary, cx: &mut Context<Self>) -> Stateful<Div> {
-        let theme = Theme::quiet_glass();
+        let theme = Theme::current(cx);
         let selected = self.selected.as_deref() == Some(&row.id);
         let id = row.id.clone();
         let key_id = id.clone();
@@ -525,7 +525,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                             .text_color(theme.colors.text_muted())
                             .child(short_date(&row.received_at)),
                     )
-                    .child(status_badge(row.status)),
+                    .child(status_badge(row.status, theme)),
             )
             .child(text_style(div(), TypeScale::HEADING_3).child(row.question.clone()))
             .child(
@@ -546,7 +546,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
         more: bool,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        let theme = Theme::quiet_glass();
+        let theme = Theme::current(cx);
         text_style(div(), TypeScale::BODY_SMALL)
             .id(id)
             .px(px(SpacingScale::S3))
@@ -580,7 +580,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
     }
 
     fn reading_pane(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = Theme::quiet_glass();
+        let theme = Theme::current(cx);
         let visible_detail = self
             .detail
             .as_ref()
@@ -615,7 +615,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                     .flex()
                     .items_center()
                     .gap(px(SpacingScale::S3))
-                    .child(status_badge(detail.summary.status))
+                    .child(status_badge(detail.summary.status, theme))
                     .child(
                         text_style(div(), TypeScale::META)
                             .text_color(theme.colors.text_muted())
@@ -623,8 +623,8 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                     ),
             )
             .child(text_style(div(), TypeScale::HEADING_1).child(detail.summary.question.clone()))
-            .child(section("Escolha sugerida", &detail.summary.choice))
-            .child(section("Motivo", &detail.rationale))
+            .child(section(theme, "Escolha sugerida", &detail.summary.choice))
+            .child(section(theme, "Motivo", &detail.rationale))
             .child(
                 text_style(div(), TypeScale::HEADING_2)
                     .border_t_1()
@@ -725,6 +725,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                                         artifact,
                                         format!("{}-{}", detail.summary.id, self.source_index),
                                         lines,
+                                        theme,
                                     )
                                 }),
                         ),
@@ -732,11 +733,13 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             })
             .when(detail.artifacts.is_empty(), |pane| {
                 pane.child(section(
+                    theme,
                     "Fontes",
                     "Nenhuma fonte disponível para este candidato.",
                 ))
             })
             .child(section(
+                theme,
                 "Confiança da extração",
                 &format!(
                     "{:.0}% · {}",
@@ -745,6 +748,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                 ),
             ))
             .child(section(
+                theme,
                 "Origem",
                 &format!(
                     "{}\nSessão: {}\nRecebido: {}",
@@ -763,7 +767,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
 
 impl<S: InboxStore + Send + 'static> Render for InboxScreen<S> {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::quiet_glass();
+        let theme = Theme::current(cx);
         let visible: Vec<_> = self
             .rows
             .iter()
@@ -797,18 +801,18 @@ impl<S: InboxStore + Send + 'static> Render for InboxScreen<S> {
     }
 }
 
-fn section(label: &'static str, content: &str) -> Div {
+fn section(theme: Theme, label: &'static str, content: &str) -> Div {
     div()
         .flex()
         .flex_col()
         .gap(px(SpacingScale::S2))
         .border_t_1()
-        .border_color(Theme::quiet_glass().colors.hairline_divider())
+        .border_color(theme.colors.hairline_divider())
         .pt(px(SpacingScale::S4))
         .child(text_style(div(), TypeScale::HEADING_3).child(label))
         .child(
             text_style(div(), TypeScale::BODY)
-                .text_color(Theme::quiet_glass().colors.text_secondary())
+                .text_color(theme.colors.text_secondary())
                 .child(content.to_owned()),
         )
 }
@@ -840,8 +844,7 @@ fn short_date(timestamp: &str) -> String {
     }
 }
 
-fn status_badge(status: CandidateStatus) -> Div {
-    let theme = Theme::quiet_glass();
+fn status_badge(status: CandidateStatus, theme: Theme) -> Div {
     let (label, color) = match status {
         CandidateStatus::Pending => ("Pendente", theme.colors.status_warning()),
         CandidateStatus::Snoozed => ("Adiado", theme.colors.status_info()),

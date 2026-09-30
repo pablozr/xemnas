@@ -51,7 +51,6 @@ impl DecisionEditor {
         let fields = std::array::from_fn(|i| {
             cx.new(|cx| {
                 let mut field = SearchField::new(cx);
-                field.set_theme(Theme::charcoal());
                 field.multiline(if i == 2 { 160.0 } else { 100.0 });
                 field.set_context(LABELS[i], cx);
                 field.set_value(&original[i], cx);
@@ -122,7 +121,7 @@ impl DecisionEditor {
 }
 impl Render for DecisionEditor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let t = Theme::charcoal();
+        let t = Theme::current(cx);
         let edits = self.edits(cx);
         let valid = edits.validate().is_ok();
         let _ = &self.subscriptions;

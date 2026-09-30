@@ -114,7 +114,6 @@ enum IoOutcome {
 /// generic over it so no concrete storage type leaks into the UI layer. The
 /// `Send` bound is what lets the use case cross into the background executor.
 pub struct ProjectsScreen<R: ProjectRepository + Send + 'static> {
-    theme: Theme,
     /// Parked here while no operation runs; `take()`n for the duration of a
     /// background task and put back with the outcome.
     projects: Option<Projects<R>>,
@@ -149,7 +148,6 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             screen.set_query(&event.0, cx);
         });
         Self {
-            theme: Theme::quiet_glass(),
             projects: Some(projects),
             list: ListState::Loading,
             in_flight: InFlight::None,
@@ -576,7 +574,7 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
 impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
     /// Persistent project navigation, shared by all project destinations.
     pub fn render_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = self.theme;
+        let theme = Theme::current(cx);
         let visible = self.visible_rows();
         let total = match &self.list {
             ListState::Ready(list) => list.len(),
@@ -676,15 +674,9 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
         sidebar.into_any_element()
     }
 
-    /// Shares the destination's palette with the persistent navigation rail.
-    pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
-        self.theme = theme;
-        self.search.update(cx, |search, _| search.set_theme(theme));
-    }
-
     /// Project properties and tracking controls without a duplicate sidebar.
     pub fn render_details(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = self.theme;
+        let theme = Theme::current(cx);
         let visible = self.visible_rows();
         let selected = self.selected_project();
         let content: AnyElement = match &self.list {

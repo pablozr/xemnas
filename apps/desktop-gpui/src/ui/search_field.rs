@@ -81,7 +81,7 @@ impl SearchField {
     /// Creates an unfocused, empty search field.
     pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
-            theme: Theme::quiet_glass(),
+            theme: Theme::current(cx),
             placeholder: "Buscar projetos",
             focus: cx.focus_handle().tab_stop(true),
             edit: SearchEdit::default(),
@@ -104,11 +104,6 @@ impl SearchField {
         self.width = width;
         self.show_shortcut = false;
     }
-    /// Uses the material palette of the surrounding destination.
-    pub fn set_theme(&mut self, theme: Theme) {
-        self.theme = theme;
-    }
-
     /// Uses the parent's width when composing a labelled editing form.
     pub fn stretch(&mut self) {
         self.fill_width = true;
@@ -806,7 +801,8 @@ impl Element for MultilineTextElement {
 
 impl Render for SearchField {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
+        self.theme = Theme::current(cx);
+        let theme = Theme::current(cx);
         let focused = self.focus.is_focused(window);
         div()
             .id("title-search")
