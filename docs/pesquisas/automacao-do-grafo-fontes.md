@@ -145,6 +145,31 @@ transação. Achado estático, sem reprodução concorrente nesta sessão.
 
 ## Sequência de evolução recomendada
 
+### Direção acordada com o usuário em 2026-09-30
+
+- Aprovar uma decisão deve disparar a materialização dos vínculos e do contexto,
+  sem exigir visita ao Mapa ou referências escritas no prompt.
+- Arquivos e alterações vêm das ferramentas capturadas (`edit`, `write`,
+  `apply_patch` etc.), dos diffs e do episódio da decisão; não de instruções
+  detalhadas que o usuário precisaria produzir.
+- Recuperação combina grafo, busca textual e embeddings; análise semântica
+  interpreta relações entre poucas decisões candidatas. Similaridade isolada
+  não cria `depends_on`, `conflicts_with` ou `supersedes`.
+- A mesma capacidade de embeddings será considerada para a Knowledge Library
+  global de PDFs, livros e outras referências, preservando os domínios separados.
+- Local first permanece obrigatório. O mínimo desejado é Windows com 8 GB de
+  RAM, CPU e sem GPU dedicada. Python em componente/repositório separado é
+  alternativa a avaliar; não implica hospedagem remota.
+- Custo e latência orientam a seleção. A aprovação e a consulta rápida de contexto
+  não devem esperar OCR, indexação de livros ou inferência semântica longa.
+
+Este registro captura a direção acordada; ainda não escolhe biblioteca, modelo,
+limiares de automação ou política final de autoridade dos vínculos inferidos.
+O ADR-0005 descreve o comportamento implementado e deverá ser revisado no trabalho
+de implementação. Nenhuma destas mudanças já está entregue.
+
+### Ordem de implementação proposta
+
 1. Corrigir evidência, parser, identidade, escopo das regras e contrato temporal.
 2. Na adoção, gravar evento durável para materialização idempotente do grafo,
    incluindo backfill. Exibir falhas/repetição e assegurar contexto imediato quando
