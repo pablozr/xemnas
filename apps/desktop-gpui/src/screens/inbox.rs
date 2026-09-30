@@ -12,6 +12,7 @@ use gpui::{
 };
 
 use super::evidence;
+use super::format::short_date;
 use super::review_editor::{EditorEvent, ReviewEditor};
 use crate::ui::controls::{action_button, ButtonKind};
 use crate::ui::glass::focus_ring;
@@ -482,7 +483,9 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                             .text_color(theme.colors.text_muted())
                             .child(short_date(&row.received_at)),
                     )
-                    .child(status_badge(row.status, theme)),
+                    .when(row.status != CandidateStatus::Pending, |line| {
+                        line.child(status_badge(row.status, theme))
+                    }),
             )
             .child(
                 text_style(div(), TypeScale::ROW_TITLE)
@@ -797,24 +800,6 @@ fn project_label(location: &str) -> &str {
         .rsplit(['/', '\\'])
         .next()
         .unwrap_or(location)
-}
-
-fn short_date(timestamp: &str) -> String {
-    let months = [
-        "jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez",
-    ];
-    let date = timestamp.split('T').next().unwrap_or(timestamp);
-    let parts: Vec<_> = date.split('-').collect();
-    match parts.as_slice() {
-        [year, month, day] => month
-            .parse::<usize>()
-            .ok()
-            .and_then(|m| m.checked_sub(1))
-            .and_then(|m| months.get(m))
-            .map(|month| format!("{day} {month} {year}"))
-            .unwrap_or_else(|| date.to_owned()),
-        _ => date.to_owned(),
-    }
 }
 
 fn status_badge(status: CandidateStatus, theme: Theme) -> Div {

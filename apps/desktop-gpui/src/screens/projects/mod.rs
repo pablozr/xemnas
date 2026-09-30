@@ -19,6 +19,7 @@ use gpui::{
     PathPromptOptions, Render, Role, Stateful, Subscription, Window,
 };
 
+use super::format::date_time;
 use crate::ui::controls::{action_button, button_foreground, icon_action, ButtonKind};
 use crate::ui::feedback::{error_state, status_dot, StatusKind};
 use crate::ui::glass::focus_ring;
@@ -741,7 +742,7 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                                 .child(detail_line(
                                     &theme,
                                     "Adicionado",
-                                    format_registered_at(summary.registered_at()),
+                                    date_time(summary.registered_at()),
                                 ))
                                 .child(
                                     div()
@@ -920,20 +921,12 @@ fn storage_failure(context: StorageContext, error: &ProjectError) -> StorageFail
     context.failure()
 }
 
-/// Formats an RFC 3339 `registered_at` as `YYYY-MM-DD HH:MM` for display.
-fn format_registered_at(value: &str) -> String {
-    match (value.get(..10), value.get(11..16)) {
-        (Some(date), Some(time)) => format!("{date} {time}"),
-        _ => value.to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use application::projects::{ProjectError, ProjectRecord, ProjectRepository};
     use std::cell::RefCell;
 
-    use super::{format_registered_at, inline_message, storage_failure, StorageContext};
+    use super::{inline_message, storage_failure, StorageContext};
 
     struct FakeRepository {
         records: RefCell<Vec<ProjectRecord>>,
@@ -986,15 +979,6 @@ mod tests {
         assert_eq!(failure.title, "Não foi possível concluir a ação");
         assert!(!failure.body.contains("disk"));
         assert!(!failure.recovery.contains("disk"));
-    }
-
-    #[test]
-    fn registered_at_is_trimmed_to_minutes() {
-        assert_eq!(
-            format_registered_at("2026-01-02T03:04:05Z"),
-            "2026-01-02 03:04"
-        );
-        assert_eq!(format_registered_at("short"), "short");
     }
 
     #[test]

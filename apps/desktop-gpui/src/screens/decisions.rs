@@ -1,4 +1,5 @@
 //! Versioned decision documents with an independent chronological index.
+use super::format::short_date;
 use super::{
     decision_editor::{DecisionEditor, RevisionEvent},
     evidence::{self, SourceLines},
@@ -642,28 +643,22 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                 );
             list = list.child(
                 mark_selected(row, &t, active)
+                    // Date and version lead; the state only appears when it
+                    // differs from the confirmed default the index is filtered to.
                     .children(status.map(|status| {
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(6.0))
-                            .child(div().size(px(5.0)).rounded_full().bg(
-                                if status == DecisionStatus::Accepted {
-                                    t.colors.status_success()
-                                } else {
-                                    t.colors.text_muted()
-                                },
-                            ))
+                            .gap(px(SpacingScale::S2))
                             .child(
                                 text_style(div(), TypeScale::META)
                                     .text_color(t.colors.text_muted())
-                                    .child(if status == DecisionStatus::Accepted {
-                                        "Confirmada"
-                                    } else {
-                                        "Substituída"
-                                    }),
+                                    .child(meta.clone()),
                             )
                             .child(div().flex_1())
+                            .when(status != DecisionStatus::Accepted, |line| {
+                                line.child(status_pill(&t, t.colors.text_muted(), "Substituída"))
+                            })
                             .children(version.map(|version| count_chip(&t, format!("v{version}"))))
                     }))
                     .child(
@@ -672,13 +667,13 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                             .text_color(t.colors.text_primary())
                             .child(question),
                     )
-                    .child(
-                        div().flex().items_start().child(
+                    .when(status.is_none(), |row| {
+                        row.child(
                             text_style(div(), TypeScale::META)
                                 .text_color(t.colors.text_muted())
                                 .child(meta),
-                        ),
-                    ),
+                        )
+                    }),
             );
         }
         if self.cursor.is_some() && !searching {
@@ -1359,15 +1354,6 @@ fn load_document<S: DecisionStore + InboxStore>(
         .sources(&detail)
         .map_err(|_| "Não foi possível carregar as fontes desta decisão.".to_owned())?;
     Ok((detail, sources))
-}
-fn short_date(value: &str) -> String {
-    chrono::DateTime::parse_from_rfc3339(value)
-        .map(|date| {
-            date.with_timezone(&chrono::Local)
-                .format("%d/%m/%Y")
-                .to_string()
-        })
-        .unwrap_or_else(|_| "Data indisponível".into())
 }
 fn month_label(value: &str) -> String {
     let months = [

@@ -7,6 +7,7 @@
 mod decision_editor;
 pub mod decisions;
 mod evidence;
+mod format;
 pub mod inbox;
 pub mod projects;
 mod review_editor;
