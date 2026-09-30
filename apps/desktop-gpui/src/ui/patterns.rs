@@ -223,6 +223,89 @@ pub fn error_banner(theme: &Theme, message: &str) -> Div {
         )
 }
 
+/// Placeholder rows while a list loads: the shape of what is coming, softly
+/// breathing, instead of the word "Carregando". Honours reduced motion
+/// through GPUI's animation element.
+pub fn skeleton_list(theme: &Theme, id: &'static str, rows: usize) -> AnyElement {
+    let bar = |width: f32, height: f32| {
+        div()
+            .h(px(height))
+            .w(gpui::relative(width))
+            .rounded(px(3.0))
+            .bg(theme.colors.surface())
+    };
+    div()
+        .id(id)
+        .w_full()
+        .flex()
+        .flex_col()
+        .role(gpui::Role::Status)
+        .aria_label("Carregando")
+        .children((0..rows).map(|row| {
+            let wide = [0.86, 0.72, 0.8, 0.64][row % 4];
+            div()
+                .px(px(SpacingScale::S4))
+                .py(px(SpacingScale::S3))
+                .flex()
+                .flex_col()
+                .gap(px(SpacingScale::S2))
+                .child(bar(0.28, 8.0))
+                .child(bar(wide, 10.0))
+                .child(bar(wide - 0.2, 8.0))
+        }))
+        .with_animation(
+            ElementId::NamedInteger(id.into(), 1),
+            Animation::new(std::time::Duration::from_millis(1400))
+                .repeat()
+                .with_easing(gpui::ease_in_out),
+            |list, delta| list.opacity(0.55 + 0.45 * (1.0 - (2.0 * delta - 1.0).abs())),
+        )
+        .into_any_element()
+}
+
+/// The empty state of a reading surface: a quiet mark, what this place is,
+/// and what makes it fill. No card, no glow.
+pub fn empty_panel(theme: &Theme, glyph: IconName, eyebrow: &str, title: &str, body: &str) -> Div {
+    div()
+        .size_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .max_w(px(420.0))
+                .px(px(SpacingScale::S6))
+                .flex()
+                .flex_col()
+                .items_start()
+                .gap(px(SpacingScale::S3))
+                .child(
+                    div()
+                        .size(px(40.0))
+                        .mb(px(SpacingScale::S2))
+                        .rounded(theme.radius.surface())
+                        .border_1()
+                        .border_color(theme.colors.hairline_divider())
+                        .bg(theme.colors.surface())
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(icon(glyph, 20.0, theme.colors.text_secondary())),
+                )
+                .child(section_label(theme, eyebrow))
+                .child(
+                    text_style(div(), TypeScale::HEADING_1)
+                        .text_color(theme.colors.text_primary())
+                        .child(title.to_owned()),
+                )
+                .child(
+                    text_style(div(), TypeScale::BODY)
+                        .text_color(theme.colors.text_secondary())
+                        .child(body.to_owned()),
+                ),
+        )
+}
+
 /// A status pill: dot plus text, never colour alone.
 pub fn status_pill(theme: &Theme, color: Rgba, label: &'static str) -> Div {
     text_style(div(), TypeScale::META)

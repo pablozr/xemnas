@@ -18,9 +18,9 @@ use crate::ui::controls::{action_button, ButtonKind};
 use crate::ui::glass::focus_ring;
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
-    action_footer, count_chip, error_banner, fade_in, hover_tint, mark_selected, panel_title,
-    reading_title, section_label, status_pill, toast, track_hover, word_wrapped, READING_WIDTH,
-    TOAST_DURATION,
+    action_footer, count_chip, empty_panel, error_banner, fade_in, hover_tint, mark_selected,
+    panel_title, reading_title, section_label, skeleton_list, status_pill, toast, track_hover,
+    word_wrapped, READING_WIDTH, TOAST_DURATION,
 };
 use crate::ui::search_field::SearchField;
 use crate::ui::theme::{text_style, Theme};
@@ -542,6 +542,16 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             .as_ref()
             .filter(|detail| matches_query(&detail.summary, &self.query));
         let Some(detail) = visible_detail else {
+            if self.loaded && self.rows.is_empty() && !self.busy {
+                return empty_panel(
+                    &theme,
+                    IconName::List,
+                    "Fila de revisão",
+                    "Nada aguardando revisão",
+                    "Quando uma sessão do OpenCode registrar uma escolha de engenharia, o extrator propõe um candidato aqui para você confirmar, ajustar ou rejeitar.",
+                )
+                .into_any_element();
+            }
             return div()
                 .size_full()
                 .flex()
@@ -551,7 +561,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                     text_style(div(), TypeScale::BODY_SMALL)
                         .text_color(theme.colors.text_muted())
                         .child(if self.busy {
-                            "Carregando…"
+                            ""
                         } else {
                             "Selecione um candidato para ler as evidências."
                         }),
@@ -783,10 +793,11 @@ impl<S: InboxStore + Send + 'static> Render for InboxScreen<S> {
                     .child(div().px(px(SpacingScale::S4)).pb(px(SpacingScale::S3)).children(self.search.clone()))
                     .child(div().id("inbox-list").flex_1().min_h(px(0.0)).overflow_y_scroll()
                         .children(visible.iter().map(|row| self.row(row, cx)))
-                        .when(visible.is_empty(), |list| list.child(text_style(div(), TypeScale::BODY_SMALL).p(px(SpacingScale::S6))
-                            .text_color(theme.colors.text_muted()).child(if self.busy { "Carregando candidatos…" }
-                            else if !self.loaded { "Atualize para carregar os candidatos." }
-                            else if self.rows.is_empty() { "Nenhum candidato aguardando revisão. Novas capturas aparecerão aqui após a extração." }
+                        .when(visible.is_empty() && self.busy, |list| list.child(skeleton_list(&theme, "inbox-skeleton", 5)))
+                        .when(visible.is_empty() && !self.busy, |list| list.child(text_style(div(), TypeScale::BODY_SMALL).p(px(SpacingScale::S4))
+                            .text_color(theme.colors.text_muted()).child(
+                            if !self.loaded { "Atualize para carregar os candidatos." }
+                            else if self.rows.is_empty() { "Fila vazia." }
                             else { "Nenhum candidato carregado corresponde à busca." }))))
                     .child(text_style(div(), TypeScale::META).flex_none().px(px(SpacingScale::S4)).py(px(SpacingScale::S2))
                         .flex().items_center().justify_between()

@@ -9,9 +9,9 @@ use crate::ui::{
     glass::focus_ring,
     icons::{icon, IconName},
     patterns::{
-        count_chip, error_banner, fade_in, hover_tint, mark_selected, panel_title, reading_title,
-        section_label, status_pill, toast, track_hover, word_wrapped, READING_WIDTH,
-        TOAST_DURATION,
+        count_chip, empty_panel, error_banner, fade_in, hover_tint, mark_selected, panel_title,
+        reading_title, section_label, skeleton_list, status_pill, toast, track_hover, word_wrapped,
+        READING_WIDTH, TOAST_DURATION,
     },
     search_field::{SearchChanged, SearchField},
     theme::{text_style, Theme},
@@ -696,6 +696,9 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                 cx,
             ));
         }
+        if self.busy && count == 0 {
+            list = list.child(skeleton_list(&t, "decision-skeleton", 4));
+        }
         if self.loaded && count == 0 {
             list = list.child(
                 text_style(div(), TypeScale::BODY_SMALL)
@@ -773,8 +776,28 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
     fn document(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let t = Theme::current(cx);
         let Some(mut detail) = self.detail.clone() else {
-            return div().p(px(40.0)).child(text_style(div(),TypeScale::HEADING_2).child(if self.busy{"Carregando decisão…"}else if !self.query.trim().is_empty(){"Nenhuma decisão encontrada"}else{"Decisões que permanecem"}))
-                .child(text_style(div(),TypeScale::BODY_SMALL).mt(px(12.0)).text_color(t.colors.text_muted()).child("Confirme uma escolha na Revisão para preservar o documento, suas evidências e seu histórico." )).into_any_element();
+            if self.busy || !self.loaded {
+                return div().into_any_element();
+            }
+            return if self.query.trim().is_empty() {
+                empty_panel(
+                    &t,
+                    IconName::File,
+                    "Decisões",
+                    "Decisões que permanecem",
+                    "Confirme uma escolha na Revisão para preservar o documento, suas evidências e seu histórico aqui.",
+                )
+            } else {
+                empty_panel(
+                    &t,
+                    IconName::Search,
+                    "Busca",
+                    "Nenhuma decisão encontrada",
+                    "A busca cobre pergunta, escolha e justificativa deste projeto. Tente outra palavra.",
+                )
+            }
+            .min_h(px(420.0))
+            .into_any_element();
         };
         if self.history {
             let back = self.button(
