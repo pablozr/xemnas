@@ -6,6 +6,7 @@ pub mod captures;
 pub mod claims;
 mod clock;
 pub mod context;
+pub mod context_settings;
 pub mod decisions;
 pub mod diagnostics;
 pub mod export;
@@ -31,6 +32,7 @@ pub use context::{
     ContextError, ContextPack, ContextPacks, ContextProvider, ContextRequest, ContextStore,
     PackClaim, PackDecision,
 };
+pub use context_settings::{ContextMode, ContextSettings, ProjectContextSettings};
 pub use decisions::{
     sanitize_match_query, DecisionDetail, DecisionEdits, DecisionFilter, DecisionPage,
     DecisionRevision, DecisionSearchHit, DecisionStatus, DecisionSummary, Decisions,

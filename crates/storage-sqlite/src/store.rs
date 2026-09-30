@@ -52,6 +52,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 12,
         sql: include_str!("migrations/0012_create_context_injections.sql"),
     },
+    Migration {
+        version: 13,
+        sql: include_str!("migrations/0013_create_project_context_settings.sql"),
+    },
 ];
 
 /// A single embedded schema migration.

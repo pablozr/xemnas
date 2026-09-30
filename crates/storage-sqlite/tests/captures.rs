@@ -170,7 +170,8 @@ fn upgrade_reapplies_the_missing_migrations() {
         let connection = Connection::open(&database).expect("open raw connection");
         connection
             .execute_batch(
-                "DROP TABLE context_injection_items; \
+                "DROP TABLE project_context_settings; \
+                 DROP TABLE context_injection_items; \
                  DROP TABLE context_injections; \
                  DROP TABLE claims_fts; \
                  DROP TABLE context_claims; \
@@ -204,10 +205,10 @@ fn upgrade_reapplies_the_missing_migrations() {
         )
         .expect("count distinct migrations");
     assert_eq!(
-        versions, 11,
-        "0004, 0005, 0006 and 0008 to 0012 must be re-applied on upgrade"
+        versions, 12,
+        "0004, 0005, 0006 and 0008 to 0013 must be re-applied on upgrade"
     );
-    assert_eq!(distinct, 11);
+    assert_eq!(distinct, 12);
 
     let _ = std::fs::remove_dir_all(&root);
 }

@@ -5,6 +5,7 @@ mod assessments;
 mod captures;
 mod claims;
 mod context;
+mod context_settings;
 mod decisions;
 mod diagnostics;
 mod extraction;
