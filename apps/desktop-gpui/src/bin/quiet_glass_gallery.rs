@@ -1,52 +1,77 @@
 //! Quiet Glass gallery.
 //!
-//! Evidence binary that renders the reusable primitives in every documented
-//! state so `tools/capture-quiet-glass.ps1` can screenshot them at 1440×1024.
-//! It is intentionally separate from the product binary (`xemnas`).
+//! Evidence binary that renders the product recipes (buttons, tabs, pills,
+//! lists, feedback, type) exactly as the screens use them, so
+//! `tools/capture-quiet-glass.ps1` can screenshot them at 1440×1024. It is
+//! intentionally separate from the product binary (`xemnas`).
 
 use gpui::prelude::*;
 use gpui::{
-    actions, div, px, size, App, Bounds, Context, Div, FocusHandle, IntoElement, KeyBinding,
-    Render, Role, TitlebarOptions, Window, WindowBounds, WindowOptions,
+    actions, div, px, size, App, Bounds, Context, Div, Entity, FocusHandle, IntoElement,
+    KeyBinding, Render, Role, TitlebarOptions, Window, WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
 
-use xemnas_desktop::ui::controls::{
-    icon_button, primary_button, quiet_button, search_field, ControlState,
+use xemnas_desktop::ui::controls::{action_button, button_foreground, icon_action, ButtonKind};
+use xemnas_desktop::ui::icons::{icon, IconName};
+use xemnas_desktop::ui::patterns::{
+    count_chip, empty_panel, error_banner, kbd, mark_selected, panel_title, reading_title,
+    section_label, skeleton_list, status_pill,
 };
-use xemnas_desktop::ui::feedback::{empty_state, error_state, status_dot, StatusKind};
-use xemnas_desktop::ui::glass::{GlassSurface, GlassVariant};
+use xemnas_desktop::ui::search_field::SearchField;
 use xemnas_desktop::ui::theme::{text_style, Theme};
 use xemnas_desktop::ui::tokens::{SpacingScale, TypeScale};
 
 actions!(quiet_glass_gallery, [TabNext]);
 
-const STATES: [(&str, ControlState); 5] = [
-    ("normal", ControlState::Rest),
-    ("hover", ControlState::Hover),
-    ("foco", ControlState::FocusVisible),
-    ("disabled", ControlState::Disabled),
-    ("loading", ControlState::Loading),
+const GLYPHS: [IconName; 22] = [
+    IconName::List,
+    IconName::File,
+    IconName::Info,
+    IconName::Folder,
+    IconName::FolderPlus,
+    IconName::Plus,
+    IconName::Search,
+    IconName::Contrast,
+    IconName::Clock,
+    IconName::Layers,
+    IconName::Target,
+    IconName::CheckCircle,
+    IconName::Activity,
+    IconName::Rotate,
+    IconName::Link,
+    IconName::Filter,
+    IconName::Export,
+    IconName::Copy,
+    IconName::Edit,
+    IconName::Expand,
+    IconName::ChevronRight,
+    IconName::ChevronDown,
 ];
 
 struct Gallery {
-    theme: Theme,
     focus: FocusHandle,
     /// Real tab stops, so a keyboard Tab paints the focus-visible ring on a
-    /// live control (the "foco" column shows the same treatment statically).
+    /// live control.
     tab_stops: Vec<FocusHandle>,
     /// Next tab stop to focus; advanced by [`Gallery::on_tab_next`].
     tab_index: usize,
+    search: Entity<SearchField>,
 }
 
 impl Gallery {
-    fn new(cx: &mut Context<Self>, theme: Theme) -> Self {
+    fn new(cx: &mut Context<Self>) -> Self {
         let tab_stops = (0..3).map(|_| cx.focus_handle().tab_stop(true)).collect();
+        let search = cx.new(|cx| {
+            let mut field = SearchField::new(cx);
+            field.set_context("Buscar decisões", cx);
+            field
+        });
         Self {
-            theme,
             focus: cx.focus_handle(),
             tab_stops,
             tab_index: 0,
+            search,
         }
     }
 
@@ -59,51 +84,6 @@ impl Gallery {
         window.focus(&handle, cx);
         cx.notify();
     }
-
-    fn render_controls(&self) -> Vec<Div> {
-        let theme = &self.theme;
-        let mut cols = Vec::new();
-        for (index, (caption, state)) in STATES.iter().enumerate() {
-            let state = *state;
-            let mut primary = primary_button(
-                theme,
-                ("gallery-primary", index),
-                state,
-                "Confirmar decisão",
-            );
-            let mut adjust = quiet_button(theme, ("gallery-quiet", index), state, "Ajustar", false);
-            let mut copy = icon_button(theme, ("gallery-icon", index), state, "Copiar");
-            if index == 0 {
-                primary = primary.track_focus(&self.tab_stops[0]);
-                adjust = adjust.track_focus(&self.tab_stops[1]);
-                copy = copy.track_focus(&self.tab_stops[2]);
-            }
-            cols.push(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(SpacingScale::S2))
-                    .child(caption_label(theme, caption))
-                    .child(primary)
-                    .child(adjust)
-                    .child(quiet_button(
-                        theme,
-                        ("gallery-danger", index),
-                        state,
-                        "Rejeitar",
-                        true,
-                    ))
-                    .child(copy),
-            );
-        }
-        cols
-    }
-}
-
-fn caption_label(theme: &Theme, caption: &str) -> Div {
-    text_style(div(), TypeScale::META)
-        .text_color(theme.colors.text_muted())
-        .child(caption.to_string())
 }
 
 fn section(theme: &Theme, title: &str, content: impl IntoElement) -> Div {
@@ -111,138 +91,226 @@ fn section(theme: &Theme, title: &str, content: impl IntoElement) -> Div {
         .flex()
         .flex_col()
         .gap(px(SpacingScale::S3))
-        .child(
-            text_style(div(), TypeScale::HEADING_3)
-                .text_color(theme.colors.text_secondary())
-                .child(title.to_string()),
-        )
+        .child(section_label(theme, title))
         .child(content)
 }
 
+fn row() -> Div {
+    div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(px(SpacingScale::S2))
+}
+
 impl Render for Gallery {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::current(cx);
 
-        let button_rows = div()
-            .flex()
-            .gap(px(SpacingScale::S8))
-            .items_start()
-            .children(self.render_controls());
-
-        let search_row = div()
-            .flex()
-            .gap(px(SpacingScale::S4))
-            .items_end()
+        let buttons = row()
             .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(SpacingScale::S2))
-                    .child(caption_label(&theme, "normal"))
-                    .child(search_field(
-                        &theme,
-                        "gallery-search-rest",
-                        ControlState::Rest,
-                        "Buscar decisões",
+                action_button(&theme, "g-confirm", ButtonKind::Primary, true)
+                    .aria_label("Confirmar decisão")
+                    .track_focus(&self.tab_stops[0])
+                    .child("Confirmar")
+                    .child(kbd(
+                        button_foreground(&theme, ButtonKind::Primary, true),
+                        "C",
                     )),
             )
             .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(SpacingScale::S2))
-                    .child(caption_label(&theme, "foco"))
-                    .child(search_field(
-                        &theme,
-                        "gallery-search-focus",
-                        ControlState::FocusVisible,
-                        "Buscar decisões",
+                action_button(&theme, "g-adjust", ButtonKind::Secondary, true)
+                    .aria_label("Ajustar")
+                    .track_focus(&self.tab_stops[1])
+                    .child("Ajustar")
+                    .child(kbd(
+                        button_foreground(&theme, ButtonKind::Secondary, true),
+                        "A",
                     )),
             )
             .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(SpacingScale::S2))
-                    .child(caption_label(&theme, "disabled"))
-                    .child(search_field(
-                        &theme,
-                        "gallery-search-disabled",
-                        ControlState::Disabled,
-                        "Buscar decisões",
-                    )),
+                action_button(&theme, "g-reject", ButtonKind::Secondary, true)
+                    .aria_label("Rejeitar")
+                    .child("Rejeitar"),
+            )
+            .child(
+                action_button(&theme, "g-ghost", ButtonKind::Ghost, true)
+                    .aria_label("Atualizar")
+                    .child("Atualizar"),
+            )
+            .child(
+                action_button(&theme, "g-disabled", ButtonKind::Primary, false)
+                    .aria_label("Salvar indisponível")
+                    .child("Salvar nova versão"),
+            )
+            .child(
+                icon_action(&theme, "g-copy", "Copiar trecho")
+                    .track_focus(&self.tab_stops[2])
+                    .child(icon(IconName::Copy, 16.0, theme.colors.text_secondary())),
             );
 
-        let glass_row = div()
-            .flex()
-            .gap(px(SpacingScale::S5))
-            .items_end()
-            .child(glass_card(&theme, GlassVariant::Low, "Glass Low"))
-            .child(glass_card(&theme, GlassVariant::Selected, "Glass Selected"))
-            .child(glass_card(&theme, GlassVariant::Emphasis, "Glass Emphasis"))
-            .child(glass_card_solid(&theme, "Fallback sólido"));
-
-        let status_row = div()
-            .flex()
-            .gap(px(SpacingScale::S6))
-            .items_center()
-            .child(status_dot(
-                &theme,
-                "gallery-status-success",
-                StatusKind::Success,
-                "Build verde",
-            ))
-            .child(status_dot(
-                &theme,
-                "gallery-status-warning",
-                StatusKind::Warning,
-                "Evidência pendente",
-            ))
-            .child(status_dot(
-                &theme,
-                "gallery-status-danger",
-                StatusKind::Danger,
-                "Job falhou",
-            ))
-            .child(status_dot(
-                &theme,
-                "gallery-status-info",
-                StatusKind::Info,
-                "Somente leitura",
-            ));
-
-        let states_row = div()
-            .flex()
-            .gap(px(SpacingScale::S5))
-            .items_start()
-            .child(div().w(px(430.0)).child(empty_state(
-                &theme,
-                "gallery-empty",
-                "Nenhuma decisão ainda",
-                "Capture o trabalho real para começar a formar candidatas.",
-                "A Inbox aparece quando houver evidência.",
-            )))
-            .child(div().w(px(430.0)).child(error_state(
-                &theme,
-                "gallery-error",
-                "Não foi possível abrir o projeto",
-                "O caminho configurado não existe mais no disco.",
-                "Verifique o caminho e tente novamente.",
-            )));
-
-        let header = div()
-            .flex()
-            .flex_col()
-            .gap(px(SpacingScale::S1))
+        let tabs = row()
             .child(
-                text_style(div(), TypeScale::DISPLAY)
-                    .text_color(theme.colors.text_primary())
-                    .child("Quiet Glass"),
+                text_style(div(), TypeScale::BODY_SMALL)
+                    .h(px(28.0))
+                    .px(px(10.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(SpacingScale::S2))
+                    .rounded(theme.radius.control())
+                    .bg(theme.colors.selection())
+                    .child(icon(IconName::List, 14.0, theme.colors.text_primary()))
+                    .child("Revisão")
+                    .child(count_chip(&theme, "5")),
             )
             .child(
-                text_style(div(), TypeScale::BODY)
+                text_style(div(), TypeScale::BODY_SMALL)
+                    .h(px(28.0))
+                    .px(px(10.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(SpacingScale::S2))
                     .text_color(theme.colors.text_muted())
-                    .child("Primitivas reutilizáveis · Gate 1 · 1440×1024"),
+                    .child(icon(IconName::File, 14.0, theme.colors.text_muted()))
+                    .child("Decisões"),
+            )
+            .child(div().w(px(24.0)))
+            .child(status_pill(
+                &theme,
+                theme.colors.status_warning(),
+                "Pendente",
+            ))
+            .child(status_pill(&theme, theme.colors.status_info(), "Adiado"))
+            .child(status_pill(
+                &theme,
+                theme.colors.status_success(),
+                "Confirmado",
+            ))
+            .child(status_pill(
+                &theme,
+                theme.colors.status_danger(),
+                "Rejeitado",
+            ))
+            .child(count_chip(&theme, "v2"))
+            .child(kbd(theme.colors.text_secondary(), "Ctrl K"));
+
+        let glyphs = row().children(GLYPHS.iter().map(|glyph| {
+            div()
+                .size(px(32.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(theme.radius.control())
+                .border_1()
+                .border_color(theme.colors.hairline_divider())
+                .child(icon(*glyph, 16.0, theme.colors.text_secondary()))
+        }));
+
+        let list = div()
+            .w(px(320.0))
+            .flex()
+            .flex_col()
+            .rounded(theme.radius.surface())
+            .border_1()
+            .border_color(theme.colors.hairline_divider())
+            .bg(theme.colors.rail())
+            .overflow_hidden()
+            .child(
+                div()
+                    .px(px(SpacingScale::S4))
+                    .pt(px(SpacingScale::S3))
+                    .pb(px(SpacingScale::S2))
+                    .flex()
+                    .items_center()
+                    .gap(px(SpacingScale::S2))
+                    .child(panel_title(&theme, "Aguardando revisão"))
+                    .child(count_chip(&theme, "2")),
+            )
+            .children(
+                [
+                    ("Como garantir uma única decisão por captura?", true),
+                    ("Onde armazenar credenciais do provedor?", false),
+                ]
+                .into_iter()
+                .map(|(question, selected)| {
+                    mark_selected(
+                        div()
+                            .relative()
+                            .px(px(SpacingScale::S4))
+                            .py(px(SpacingScale::S3))
+                            .flex()
+                            .flex_col()
+                            .gap(px(SpacingScale::S1))
+                            .child(
+                                text_style(div(), TypeScale::META)
+                                    .text_color(theme.colors.text_muted())
+                                    .child("29 set 2026"),
+                            )
+                            .child(text_style(div(), TypeScale::ROW_TITLE).child(question)),
+                        &theme,
+                        selected,
+                    )
+                }),
+            );
+
+        let feedback = div()
+            .w(px(420.0))
+            .flex()
+            .flex_col()
+            .gap(px(SpacingScale::S3))
+            .child(
+                div()
+                    .rounded(theme.radius.surface())
+                    .overflow_hidden()
+                    .border_1()
+                    .border_color(theme.colors.hairline_divider())
+                    .child(
+                        error_banner(&theme, "Não foi possível carregar a fila.").child(
+                            action_button(&theme, "g-retry", ButtonKind::Secondary, true)
+                                .aria_label("Tentar novamente")
+                                .child("Tentar novamente"),
+                        ),
+                    ),
+            )
+            .child(
+                div()
+                    .rounded(theme.radius.surface())
+                    .border_1()
+                    .border_color(theme.colors.hairline_divider())
+                    .bg(theme.colors.rail())
+                    .child(skeleton_list(&theme, "g-skeleton", 2)),
+            );
+
+        let empty = div()
+            .w(px(460.0))
+            .h(px(240.0))
+            .rounded(theme.radius.surface())
+            .border_1()
+            .border_color(theme.colors.hairline_divider())
+            .child(empty_panel(
+                &theme,
+                IconName::File,
+                "Decisões",
+                "Nenhuma decisão ainda",
+                "Confirme uma escolha na Revisão para preservá-la aqui.",
+            ));
+
+        let type_scale = div()
+            .flex()
+            .flex_col()
+            .gap(px(SpacingScale::S2))
+            .child(reading_title("Como versionar decisões revisadas?"))
+            .child(text_style(div(), TypeScale::HEADING_2).child("Heading 2 · 16 / 24"))
+            .child(text_style(div(), TypeScale::BODY).child("Body · 14 / 22 · leitura"))
+            .child(
+                text_style(div(), TypeScale::BODY_SMALL)
+                    .text_color(theme.colors.text_secondary())
+                    .child("Body small · 13 / 19 · interface"),
+            )
+            .child(
+                xemnas_desktop::ui::theme::code_style(div(), TypeScale::CODE)
+                    .text_color(theme.colors.text_secondary())
+                    .child("history.append(previous_revision);"),
             );
 
         div()
@@ -253,74 +321,44 @@ impl Render for Gallery {
             .key_context("gallery")
             .on_action(cx.listener(Self::on_tab_next))
             .size_full()
+            .overflow_hidden()
             .flex()
             .flex_col()
-            .gap(px(SpacingScale::S5))
+            .gap(px(SpacingScale::S6))
             .p(px(SpacingScale::S8))
             .bg(theme.colors.canvas())
-            .font_family(Theme::FONT_INTERFACE)
+            .font_family(Theme::font_interface())
             .text_color(theme.colors.text_primary())
-            .child(header)
-            .child(section(&theme, "Ações", button_rows))
-            .child(section(&theme, "Busca", search_row))
-            .child(section(&theme, "Superfícies de vidro", glass_row))
-            .child(section(&theme, "Status", status_row))
-            .child(section(&theme, "Estados vazio e erro", states_row))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S1))
+                    .child(reading_title("Quiet Glass"))
+                    .child(
+                        text_style(div(), TypeScale::BODY_SMALL)
+                            .text_color(theme.colors.text_muted())
+                            .child("Receitas do produto · Gate 1 · 1440×1024"),
+                    ),
+            )
+            .child(section(&theme, "Ações", buttons))
+            .child(section(
+                &theme,
+                "Busca",
+                div().w(px(320.0)).child(self.search.clone()),
+            ))
+            .child(section(&theme, "Abas, selos e atalhos", tabs))
+            .child(section(&theme, "Ícones", glyphs))
+            .child(
+                div()
+                    .flex()
+                    .gap(px(SpacingScale::S8))
+                    .child(section(&theme, "Lista", list))
+                    .child(section(&theme, "Erro e carregamento", feedback))
+                    .child(section(&theme, "Tipografia", type_scale)),
+            )
+            .child(section(&theme, "Estado vazio", empty))
     }
-}
-
-fn glass_card(theme: &Theme, variant: GlassVariant, label: &str) -> Div {
-    let surface = GlassSurface::new(variant);
-    let title_color = surface.foreground(theme);
-    // On Glass Emphasis the surface is near-opaque lavender: the only legible
-    // text token is accent.on-emphasis (text.muted over it is ≈1.2:1).
-    let caption_color = if variant == GlassVariant::Emphasis {
-        theme.colors.accent_on_emphasis()
-    } else {
-        theme.colors.text_muted()
-    };
-    surface
-        .render(theme)
-        .w(px(210.0))
-        .h(px(88.0))
-        .p(px(SpacingScale::S4))
-        .flex()
-        .flex_col()
-        .justify_center()
-        .gap(px(SpacingScale::S1))
-        .child(
-            text_style(div(), TypeScale::HEADING_3)
-                .text_color(title_color)
-                .child(label.to_string()),
-        )
-        .child(
-            text_style(div(), TypeScale::META)
-                .text_color(caption_color)
-                .child("fill · borda · highlight"),
-        )
-}
-
-fn glass_card_solid(theme: &Theme, label: &str) -> Div {
-    GlassSurface::new(GlassVariant::Low)
-        .solid()
-        .render(theme)
-        .w(px(210.0))
-        .h(px(88.0))
-        .p(px(SpacingScale::S4))
-        .flex()
-        .flex_col()
-        .justify_center()
-        .gap(px(SpacingScale::S1))
-        .child(
-            text_style(div(), TypeScale::HEADING_3)
-                .text_color(theme.colors.text_primary())
-                .child(label.to_string()),
-        )
-        .child(
-            text_style(div(), TypeScale::META)
-                .text_color(theme.colors.text_muted())
-                .child("sem dependência de blur"),
-        )
 }
 
 fn main() {
@@ -333,7 +371,7 @@ fn main() {
         cx.bind_keys([KeyBinding::new("tab", TabNext, None)]);
 
         let bounds = Bounds::centered(None, size(px(1440.0), px(1024.0)), cx);
-        let view = cx.new(|cx| Gallery::new(cx, Theme::quiet_glass()));
+        let view = cx.new(Gallery::new);
 
         let opened = cx.open_window(
             WindowOptions {

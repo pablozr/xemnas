@@ -690,11 +690,37 @@ impl WorkerHandle {
     }
 }
 
+/// How much background work exists right now, for a status line.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct JobSummary {
+    /// Jobs waiting for a worker.
+    pub queued: usize,
+    /// Jobs a worker is executing.
+    pub running: usize,
+    /// Jobs that ended in failure and were not retried.
+    pub failed: usize,
+}
+
+impl JobSummary {
+    /// Counts records by state. Completed and cancelled jobs are history.
+    pub fn from_records(records: &[JobRecord]) -> Self {
+        records.iter().fold(Self::default(), |mut summary, record| {
+            match record.state {
+                JobState::Queued => summary.queued += 1,
+                JobState::Running => summary.running += 1,
+                JobState::Failed => summary.failed += 1,
+                JobState::Completed | JobState::Cancelled => {}
+            }
+            summary
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         job_panic_is_sanitized, write_sanitized_panic_report, JobError, JobEvent, JobFailure,
-        JobRecord, JobRepository, JobState, Jobs, RecoveryReport, PANIC_MESSAGE,
+        JobRecord, JobRepository, JobState, JobSummary, Jobs, RecoveryReport, PANIC_MESSAGE,
     };
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
@@ -1185,5 +1211,36 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn summary_counts_only_live_and_failed_jobs() {
+        let record = |state| JobRecord {
+            id: "j".into(),
+            kind: "k".into(),
+            payload: String::new(),
+            state,
+            idempotent: true,
+            attempts: 1,
+            last_error: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let records = [
+            record(JobState::Queued),
+            record(JobState::Running),
+            record(JobState::Running),
+            record(JobState::Failed),
+            record(JobState::Completed),
+            record(JobState::Cancelled),
+        ];
+        assert_eq!(
+            JobSummary::from_records(&records),
+            JobSummary {
+                queued: 1,
+                running: 2,
+                failed: 1
+            }
+        );
     }
 }

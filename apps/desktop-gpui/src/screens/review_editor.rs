@@ -1,11 +1,15 @@
 //! Labelled editing form; submitting is explicit and cancellation writes nothing.
+use crate::app::SaveEditor;
 use crate::ui::controls::{action_button, ButtonKind};
+use crate::ui::patterns::{action_footer, form_field, reading_page, section_label};
 use crate::ui::search_field::SearchField;
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{SpacingScale, TypeScale};
 use application::inbox::CandidateEdits;
 use gpui::prelude::*;
 use gpui::{div, px, App, Context, Entity, EventEmitter, FocusHandle, Focusable, Render, Window};
+
+const LABELS: [&str; 3] = ["Pergunta", "Escolha sugerida", "Motivo"];
 
 pub(super) enum EditorEvent {
     Cancel,
@@ -25,12 +29,15 @@ impl ReviewEditor {
     }
     pub(super) fn new(original: CandidateEdits, cx: &mut Context<Self>) -> Self {
         let values = [&original.question, &original.choice, &original.rationale];
-        let labels = ["Pergunta", "Escolha sugerida", "Motivo"];
         let fields = std::array::from_fn(|index| {
             cx.new(|cx| {
                 let mut field = SearchField::new(cx);
-                field.stretch();
-                field.set_context(labels[index], cx);
+                if index == 2 {
+                    field.multiline(120.0);
+                } else {
+                    field.stretch();
+                }
+                field.set_context(LABELS[index], cx);
                 field.set_value(values[index], cx);
                 field
             })
@@ -85,62 +92,62 @@ impl ReviewEditor {
 impl Render for ReviewEditor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::current(cx);
-        div()
-            .id("review-editor")
-            .size_full()
-            .overflow_y_scroll()
-            .p(px(SpacingScale::S8))
+        let hints = [
+            None,
+            Some("A escolha que será registrada se você confirmar."),
+            Some("Por que essa escolha foi feita, nas palavras da equipe."),
+        ];
+        let column = div()
             .flex()
             .flex_col()
             .gap(px(SpacingScale::S6))
-            .child(text_style(div(), TypeScale::HEADING_1).child("Ajustar candidato"))
             .child(
-                text_style(div(), TypeScale::BODY_SMALL)
-                    .text_color(theme.colors.text_muted())
-                    .child("Revise a pergunta, a escolha e o motivo antes de confirmar."),
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S2))
+                    .child(section_label(&theme, "Ajustar candidato"))
+                    .child(
+                        text_style(div(), TypeScale::BODY)
+                            .text_color(theme.colors.text_secondary())
+                            .child("Revise a pergunta, a escolha e o motivo antes de confirmar."),
+                    ),
             )
-            .children(
-                ["Pergunta", "Escolha sugerida", "Motivo"]
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, label)| {
-                        div()
-                            .w_full()
-                            .flex()
-                            .flex_col()
-                            .gap(px(SpacingScale::S2))
-                            .child(text_style(div(), TypeScale::HEADING_3).child(label))
-                            .child(self.fields[index].clone())
-                    }),
-            )
+            .children(LABELS.into_iter().enumerate().map(|(index, label)| {
+                form_field(&theme, label, hints[index], self.fields[index].clone())
+            }));
+        let actions = ["Cancelar", "Salvar ajustes", "Salvar e confirmar"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, label)| {
+                let kind = match index {
+                    0 => ButtonKind::Ghost,
+                    1 => ButtonKind::Secondary,
+                    _ => ButtonKind::Primary,
+                };
+                action_button(&theme, ("editor-action", index), kind, !self.busy)
+                    .px(px(SpacingScale::S4))
+                    .aria_label(label)
+                    .track_focus(&self.focus[index])
+                    .on_click(cx.listener(move |this, _, _, cx| this.submit(index, cx)))
+                    .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                            this.submit(index, cx);
+                            cx.stop_propagation();
+                        }
+                    }))
+                    .child(label)
+            });
+        div()
+            .id("review-editor")
+            .key_context("Editor")
+            .on_action(cx.listener(|this, _: &SaveEditor, _, cx| this.submit(2, cx)))
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(reading_page("review-editor-fields", column))
             .child(
-                div().flex().flex_wrap().gap(px(SpacingScale::S2)).children(
-                    ["Cancelar", "Salvar ajustes", "Salvar e confirmar"]
-                        .into_iter()
-                        .enumerate()
-                        .map(|(index, label)| {
-                            let kind = match index {
-                                0 => ButtonKind::Ghost,
-                                1 => ButtonKind::Secondary,
-                                _ => ButtonKind::Primary,
-                            };
-                            action_button(&theme, ("editor-action", index), kind, !self.busy)
-                                .px(px(SpacingScale::S4))
-                                .aria_label(label)
-                                .track_focus(&self.focus[index])
-                                .on_click(cx.listener(move |this, _, _, cx| this.submit(index, cx)))
-                                .on_key_down(cx.listener(
-                                    move |this, event: &gpui::KeyDownEvent, _, cx| {
-                                        if matches!(event.keystroke.key.as_str(), "enter" | "space")
-                                        {
-                                            this.submit(index, cx);
-                                            cx.stop_propagation();
-                                        }
-                                    },
-                                ))
-                                .child(label)
-                        }),
-                ),
+                action_footer(&theme, self.busy.then_some(("Salvando…", false))).children(actions),
             )
     }
 }

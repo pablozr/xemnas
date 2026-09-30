@@ -15,13 +15,30 @@ use gpui::{
 use gpui_platform::application;
 use storage_sqlite::{default_data_dir, default_db_path, SqliteStore};
 
-use xemnas_desktop::app::{FocusSearch, Shell, TabNext, TabPrev};
+use std::sync::Arc;
+use xemnas_desktop::app::{
+    ActivitySource, AdjustItem, CaptureStatus, ConfirmItem, FocusSearch, GoDecisions, GoReview,
+    NextItem, PaletteClose, PaletteDown, PaletteRun, PaletteUp, PrevItem, RejectItem, SaveEditor,
+    Shell, SnoozeItem, TabNext, TabPrev, TogglePalette,
+};
 use xemnas_desktop::ui::search_field::{
     Backspace, Clear, Copy, Cut, Delete, End, Home, Left, Paste, Right, SelectAll, SelectLeft,
     SelectRight,
 };
 
 mod demo;
+
+// Windows resources (icon ID 1 + version info) compiled once by
+// tools/brand-icon.ps1 and handed straight to the linker: no build script runs,
+// which this machine's Application Control policy would block on every rebuild.
+// Cargo runs rustc from the workspace root, so the path is relative to it.
+#[cfg(all(target_os = "windows", target_env = "msvc"))]
+#[link(
+    name = "apps/desktop-gpui/assets/brand/xemnas.res",
+    kind = "static",
+    modifiers = "+verbatim,-bundle"
+)]
+extern "C" {}
 
 fn main() {
     if let Err(error) = telemetry::init() {
@@ -36,6 +53,7 @@ fn main() {
             demo::store().map_err(|error| error.to_string()),
             Box::new(demo::ai_settings()),
             true,
+            CaptureStatus::Demo,
         );
         return;
     }
@@ -45,7 +63,7 @@ fn main() {
         Err(error) => {
             // The shell logs the technical detail through `tracing` and paints a
             // product-language error state; the raw error never reaches the UI.
-            run_shell(Err(error.to_string()), ai_settings());
+            run_shell(Err(error.to_string()), ai_settings(), CaptureStatus::Unavailable);
             return;
         }
     };
@@ -145,7 +163,12 @@ fn main() {
         }
     };
 
-    run_shell(Ok(store), settings);
+    let capture = if api.is_some() {
+        CaptureStatus::Listening
+    } else {
+        CaptureStatus::Unavailable
+    };
+    run_shell(Ok(store), settings, capture);
 
     // Graceful shutdown mirrors startup: stop the API first so the discovery
     // and per-session token files are removed, then stop the jobs worker.
@@ -165,8 +188,8 @@ fn main() {
 }
 
 /// Composes the desktop use cases from the ready store, or a startup failure.
-fn run_shell(store: Result<SqliteStore, String>, settings: AiSettings) {
-    run_shell_mode(store, Box::new(settings), false);
+fn run_shell(store: Result<SqliteStore, String>, settings: AiSettings, capture: CaptureStatus) {
+    run_shell_mode(store, Box::new(settings), false, capture);
 }
 
 /// The stored AI profile beside the database, under the data directory.
@@ -183,17 +206,54 @@ fn ai_settings() -> AiSettings {
     )
 }
 
+/// The window material. Mica Alt by default: it tints and blurs the wallpaper
+/// and stays smooth while dragging. `XEMNAS_BACKDROP=acrylic` blurs the windows
+/// behind instead (livelier, but the system may drop frames on resize);
+/// `none` paints an opaque window.
+fn backdrop_from_env() -> WindowBackgroundAppearance {
+    match std::env::var("XEMNAS_BACKDROP").as_deref() {
+        Ok("acrylic") => WindowBackgroundAppearance::Blurred,
+        Ok("mica") => WindowBackgroundAppearance::MicaBackdrop,
+        Ok("none") => WindowBackgroundAppearance::Opaque,
+        _ => WindowBackgroundAppearance::MicaAltBackdrop,
+    }
+}
+
 fn run_shell_mode(
     store: Result<SqliteStore, String>,
     settings: Box<dyn xemnas_desktop::screens::settings::AiBackend>,
     demo: bool,
+    capture: CaptureStatus,
 ) {
+    let backdrop = backdrop_from_env();
+    // The status line reads the jobs table through the application port.
+    let activity: Option<ActivitySource> = store.as_ref().ok().map(|store| {
+        let store = store.clone();
+        Arc::new(move || {
+            application::jobs::JobRepository::list(&store)
+                .ok()
+                .map(|records| application::jobs::JobSummary::from_records(&records))
+        }) as ActivitySource
+    });
     application().run(move |cx: &mut App| {
         xemnas_desktop::fonts::register_embedded(cx);
         cx.bind_keys([
             KeyBinding::new("tab", TabNext, None),
             KeyBinding::new("shift-tab", TabPrev, None),
-            KeyBinding::new("ctrl-k", FocusSearch, Some("xemnas")),
+            KeyBinding::new("ctrl-k", TogglePalette, Some("xemnas")),
+            KeyBinding::new("ctrl-f", FocusSearch, Some("xemnas")),
+            // Single-key shortcuts never fire while a text field has focus.
+            KeyBinding::new("j", NextItem, Some("xemnas && !SearchField")),
+            KeyBinding::new("down", NextItem, Some("xemnas && !SearchField")),
+            KeyBinding::new("k", PrevItem, Some("xemnas && !SearchField")),
+            KeyBinding::new("up", PrevItem, Some("xemnas && !SearchField")),
+            KeyBinding::new("c", ConfirmItem, Some("xemnas && !SearchField")),
+            KeyBinding::new("r", RejectItem, Some("xemnas && !SearchField")),
+            KeyBinding::new("s", SnoozeItem, Some("xemnas && !SearchField")),
+            KeyBinding::new("a", AdjustItem, Some("xemnas && !SearchField")),
+            KeyBinding::new("ctrl-enter", SaveEditor, Some("Editor")),
+            KeyBinding::new("ctrl-1", GoReview, Some("xemnas")),
+            KeyBinding::new("ctrl-2", GoDecisions, Some("xemnas")),
             KeyBinding::new("backspace", Backspace, Some("SearchField")),
             KeyBinding::new("delete", Delete, Some("SearchField")),
             KeyBinding::new("left", Left, Some("SearchField")),
@@ -207,6 +267,12 @@ fn run_shell_mode(
             KeyBinding::new("home", Home, Some("SearchField")),
             KeyBinding::new("end", End, Some("SearchField")),
             KeyBinding::new("escape", Clear, Some("SearchField")),
+            // Declared after Clear so the palette closes instead of clearing.
+            KeyBinding::new("escape", PaletteClose, Some("Palette > SearchField")),
+            KeyBinding::new("escape", PaletteClose, Some("Palette")),
+            KeyBinding::new("down", PaletteDown, Some("Palette")),
+            KeyBinding::new("up", PaletteUp, Some("Palette")),
+            KeyBinding::new("enter", PaletteRun, Some("Palette")),
         ]);
 
         let compact = demo && std::env::args().any(|argument| argument == "--compact");
@@ -231,6 +297,8 @@ fn run_shell_mode(
             let mut shell =
                 Shell::<SqliteStore>::new(cx, projects, inbox, decisions, Some(settings));
             shell.set_demo(demo);
+            shell.set_backdrop(backdrop != WindowBackgroundAppearance::Opaque);
+            shell.set_activity(capture, activity, cx);
             shell
         });
         let focus = view.read(cx).initial_focus(cx);
@@ -256,9 +324,23 @@ fn run_shell_mode(
                 }),
                 app_id: Some("com.xemnas.desktop".into()),
                 window_min_size: Some(size(px(1180.0), px(760.0))),
-                // Opaque window: the shell paints its own solid canvas. The
-                // Mica Alt backdrop was removed after rendering glitches in use.
-                window_background: WindowBackgroundAppearance::Opaque,
+                // Mica Alt as the window material, the darker Mica variant that
+                // Windows 11 provides specifically so a commanding surface —
+                // the title bar and the navigation rail — reads as distinct from
+                // the content beneath it. This is what the design system
+                // anticipated in `docs/design-system-quiet-glass.md` §
+                // "Fallback técnico" ("No Windows, Mica/blur pode ser usado no
+                // fundo da janela quando o backend do GPUI estiver estável").
+                //
+                // The window itself paints nothing: the shell's canvas is a
+                // translucent `layer.fill` over this backdrop, which is the
+                // three-layer Mica model from the Fluent 2 material spec
+                // (base material → commanding layer → content layer). On a
+                // platform without Mica the backdrop is ignored and the same
+                // translucent fill still composites against the opaque canvas,
+                // so contrast is preserved either way. `XEMNAS_BACKDROP=none`
+                // falls back to the opaque window if a machine trips on it.
+                window_background: backdrop,
                 ..Default::default()
             },
             |window, cx| {

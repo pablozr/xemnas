@@ -1,0 +1,30 @@
+// Windows resources for the xemnas executables.
+// GPUI loads icon ID 1 for the window and taskbar; Explorer shows it too.
+// Rebuild xemnas.res with tools/brand-icon.ps1 after changing this file or
+// xemnas.ico.
+#include <winver.h>
+
+1 ICON "xemnas.ico"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     0,1,0,0
+PRODUCTVERSION  0,1,0,0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "041604B0"
+    BEGIN
+      VALUE "ProductName",     "xemnas"
+      VALUE "FileDescription", "xemnas"
+      VALUE "ProductVersion",  "0.1.0"
+      VALUE "FileVersion",     "0.1.0"
+      VALUE "LegalCopyright",  "MIT License"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x0416, 1200
+  END
+END

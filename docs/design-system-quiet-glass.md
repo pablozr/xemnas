@@ -170,11 +170,17 @@ Evitar raios maiores que 12 px em painéis do desktop. Elementos não devem pare
 
 ## Materiais
 
-### Fundo da janela: opaco
+### Fundo da janela: Mica Alt (com fallback opaco)
 
-A janela usa `WindowBackgroundAppearance::Opaque` e o shell pinta o próprio
-`canvas` sólido. O material Mica Alt foi usado numa fase anterior e removido em
-30/09/2026 por falhas visuais no uso; não há camada translúcida sobre o sistema.
+A janela usa `WindowBackgroundAppearance::MicaAltBackdrop` por padrão;
+`XEMNAS_BACKDROP=acrylic` pede blur das janelas atrás (`Blurred`), `mica` o
+`MicaBackdrop` mais claro e `none` a janela opaca (`Opaque`). O shell pinta por
+cima uma camada translúcida — `color.chrome` na moldura e `layer.fill` no
+conteúdo — no modelo de três camadas do Fluent (material base → camada de
+comando → camada de conteúdo). O Mica Alt foi removido numa fase anterior por
+falhas visuais no uso e **restaurado em 30/09/2026**: o shell não depende dele.
+Com `none`, ou numa máquina sem material, a janela volta a ser opaca e as
+superfícies internas mantêm o mesmo contraste.
 
 **Limite registrado:** GPUI não faz *backdrop blur* por elemento. Superfícies internas (rail, cards, empty state) usam
 a receita translúcida + borda + *inset shadow* descrita abaixo. Para vidro
