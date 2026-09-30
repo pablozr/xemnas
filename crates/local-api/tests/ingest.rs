@@ -1485,3 +1485,47 @@ fn context_endpoint_is_absent_unless_enabled() {
     assert_eq!(status, 404);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn injected_context_blocks_never_become_evidence() {
+    let root = temporary_directory("strip-context");
+    let database = root.join("app.db");
+    let store = SqliteStore::open(&database).expect("open store");
+    let location = register_project(&store, &root);
+    let server = start(
+        &store,
+        local_api::DEFAULT_MAX_BODY_BYTES,
+        Duration::from_secs(5),
+        root.clone(),
+    );
+    let mut envelope = envelope_for(&location);
+    let content = "pedido real\n\n<xemnas-context note=\"x\">\nregra:ab Erros em português\n</xemnas-context>";
+    envelope["artifacts"][0]["content"] = json!(content);
+    envelope["artifacts"][0]["fingerprint"] = json!(sha256_hex(content));
+    let key = envelope_key(&envelope);
+    let (status, body) = post(
+        &server,
+        "/v1/captures",
+        Some(server.token()),
+        Some(&key),
+        None,
+        &body_of(&envelope),
+    );
+    assert_eq!(status, 201, "body: {}", String::from_utf8_lossy(&body));
+    let stored: Vec<String> = {
+        let connection = rusqlite::Connection::open(&database).expect("raw");
+        let mut statement = connection
+            .prepare("SELECT content FROM capture_artifacts")
+            .expect("prepare");
+        statement
+            .query_map([], |row| row.get(0))
+            .expect("query")
+            .collect::<Result<_, _>>()
+            .expect("collect")
+    };
+    assert!(stored.iter().any(|content| content == "pedido real"));
+    assert!(stored
+        .iter()
+        .all(|content| !content.contains("xemnas-context")));
+    let _ = std::fs::remove_dir_all(&root);
+}

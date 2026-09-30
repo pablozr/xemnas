@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use integration_contracts::capture::{artifact_fingerprint, CaptureEnvelope};
 
 use crate::clock::now_rfc3339;
+use crate::injection::strip_context_blocks;
 use crate::jobs::{JobRecord, JobState, ANALYZE_CAPTURE_KIND};
 use crate::projects::{canonicalize_location, ProjectRepository};
 use crate::redact::{redact_json, redact_secrets};
@@ -231,7 +232,7 @@ where
             if artifact_fingerprint(&artifact.content) != artifact.fingerprint {
                 return Err(IngestError::InvalidFingerprint);
             }
-            let content = redact_secrets(&artifact.content);
+            let content = redact_secrets(&strip_context_blocks(&artifact.content));
             let stored = artifact_fingerprint(&content);
             if seen_pairs.insert((artifact.kind.as_str(), stored.clone())) {
                 let metadata = serde_json::to_string(&redact_json(&serde_json::Value::Object(
