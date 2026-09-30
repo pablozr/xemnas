@@ -187,6 +187,7 @@ fn allowed_dependencies(name: &str) -> BTreeSet<&'static str> {
             "local-api",
             "ai-provider",
         ],
+        "mcp-server" => &["application"],
         "architecture" => &[],
         other => {
             panic!("unknown workspace member `{other}`; register it in the architecture guard")

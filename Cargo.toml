@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "apps/desktop-gpui",
+    "apps/mcp-server",
     "crates/domain",
     "crates/application",
     "crates/integration-contracts",
