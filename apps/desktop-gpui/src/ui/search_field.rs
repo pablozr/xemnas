@@ -150,7 +150,7 @@ impl SearchField {
     }
 
     /// Maps a byte offset in the value to the painted text.
-    fn to_display(&self, offset: usize) -> usize {
+    fn display_offset(&self, offset: usize) -> usize {
         if self.secret {
             masked_offset(&self.edit.text, offset)
         } else {
@@ -159,7 +159,7 @@ impl SearchField {
     }
 
     /// Maps a byte offset in the painted text back to the value.
-    fn from_display(&self, offset: usize) -> usize {
+    fn value_offset(&self, offset: usize) -> usize {
         if self.secret {
             unmasked_offset(&self.edit.text, offset)
         } else {
@@ -206,7 +206,7 @@ impl SearchField {
         }
         match (self.layout.as_ref(), self.bounds.as_ref()) {
             (Some(line), Some(bounds)) => self
-                .from_display(line.closest_index_for_x(position.x - bounds.left() + self.scroll_x)),
+                .value_offset(line.closest_index_for_x(position.x - bounds.left() + self.scroll_x)),
             _ => 0,
         }
     }
@@ -401,8 +401,8 @@ impl EntityInputHandler for SearchField {
             ));
         }
         let line = self.layout.as_ref()?;
-        let start = self.to_display(self.edit.from_utf16(range.start));
-        let end = self.to_display(self.edit.from_utf16(range.end));
+        let start = self.display_offset(self.edit.from_utf16(range.start));
+        let end = self.display_offset(self.edit.from_utf16(range.end));
         Some(Bounds::from_corners(
             point(
                 bounds.left() + line.x_for_index(start) - self.scroll_x,
@@ -507,7 +507,7 @@ impl Element for SearchTextElement {
             .edit
             .marked
             .as_ref()
-            .map(|marked| input.to_display(marked.start)..input.to_display(marked.end));
+            .map(|marked| input.display_offset(marked.start)..input.display_offset(marked.end));
         let runs = if let Some(marked) = &marked {
             vec![
                 TextRun {
@@ -539,7 +539,7 @@ impl Element for SearchTextElement {
             window
                 .text_system()
                 .shape_line(content.to_string().into(), font_size, &runs, None);
-        let caret_x = line.x_for_index(input.to_display(input.edit.caret()));
+        let caret_x = line.x_for_index(input.display_offset(input.edit.caret()));
         let scroll_x = if focused {
             (caret_x - bounds.size.width + px(4.0)).max(px(0.0))
         } else {
@@ -550,11 +550,12 @@ impl Element for SearchTextElement {
             fill(
                 Bounds::from_corners(
                     point(
-                        origin_x + line.x_for_index(input.to_display(input.edit.selection.start)),
+                        origin_x
+                            + line.x_for_index(input.display_offset(input.edit.selection.start)),
                         bounds.top(),
                     ),
                     point(
-                        origin_x + line.x_for_index(input.to_display(input.edit.selection.end)),
+                        origin_x + line.x_for_index(input.display_offset(input.edit.selection.end)),
                         bounds.bottom(),
                     ),
                 ),
