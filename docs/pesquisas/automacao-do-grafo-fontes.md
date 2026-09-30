@@ -168,6 +168,10 @@ limiares de automação ou política final de autoridade dos vínculos inferidos
 O ADR-0005 descreve o comportamento implementado e deverá ser revisado no trabalho
 de implementação. Nenhuma destas mudanças já está entregue.
 
+O levantamento de mercado, custos e latência desta direção está em
+[memoria-semantica-local-first.md](memoria-semantica-local-first.md), com notas
+específicas para runtimes, biblioteca de documentos e produtos existentes.
+
 ### Ordem de implementação proposta
 
 1. Corrigir evidência, parser, identidade, escopo das regras e contrato temporal.
