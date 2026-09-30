@@ -197,15 +197,19 @@ fn run_shell_mode(store: Result<SqliteStore, String>, demo: bool) {
             size(px(1440.0), px(1024.0))
         };
         let bounds = Bounds::centered(None, dimensions, cx);
-        let (projects, inbox) = match store {
+        let (projects, inbox, decisions) = match store {
             Ok(store) => (
                 Ok(application::projects::Projects::new(store.clone())),
-                Some(application::inbox::Inbox::new(store)),
+                Some(application::inbox::Inbox::new(store.clone())),
+                Some((
+                    application::decisions::Decisions::new(store.clone()),
+                    application::export::Export::new(store),
+                )),
             ),
-            Err(error) => (Err(error), None),
+            Err(error) => (Err(error), None, None),
         };
         let view = cx.new(|cx| {
-            let mut shell = Shell::<SqliteStore>::new(cx, projects, inbox);
+            let mut shell = Shell::<SqliteStore>::new(cx, projects, inbox, decisions);
             shell.set_demo(demo);
             shell
         });

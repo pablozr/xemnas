@@ -1,5 +1,7 @@
 //! Desktop navigation between tracked projects and the candidate reading Inbox.
 
+use application::decisions::{DecisionStore, Decisions};
+use application::export::Export;
 use application::inbox::{Inbox, InboxStore};
 use application::projects::{ProjectRepository, Projects};
 use gpui::prelude::*;
@@ -9,6 +11,7 @@ use gpui::{
 };
 
 use crate::fonts::{app_icon, wordmark};
+use crate::screens::decisions::DecisionsScreen;
 use crate::screens::inbox::InboxScreen;
 use crate::screens::projects::{ProjectChanged, ProjectsScreen};
 use crate::ui::feedback::error_state;
@@ -30,7 +33,7 @@ actions!(
 );
 
 /// Persistent product screens with contextual search and native window controls.
-pub struct Shell<R: ProjectRepository + InboxStore + Send + 'static> {
+pub struct Shell<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> {
     theme: Theme,
     focus: FocusHandle,
     search: Entity<SearchField>,
@@ -39,17 +42,20 @@ pub struct Shell<R: ProjectRepository + InboxStore + Send + 'static> {
     _inbox_subscription: Option<Subscription>,
     projects: Option<Entity<ProjectsScreen<R>>>,
     inbox: Option<Entity<InboxScreen<R>>>,
+    decisions: Option<Entity<DecisionsScreen<R>>>,
+    in_decisions: bool,
     in_inbox: bool,
-    destination_focus: [FocusHandle; 2],
+    destination_focus: [FocusHandle; 3],
     demo: bool,
 }
 
-impl<R: ProjectRepository + InboxStore + Send + 'static> Shell<R> {
+impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R> {
     /// Mounts both use cases once, retaining their state across navigation.
     pub fn new(
         cx: &mut Context<Self>,
         projects: Result<Projects<R>, String>,
         inbox: Option<Inbox<R>>,
+        decisions: Option<(Decisions<R>, Export<R>)>,
     ) -> Self {
         let screen = match projects {
             Ok(projects) => {
@@ -86,6 +92,17 @@ impl<R: ProjectRepository + InboxStore + Send + 'static> Shell<R> {
                         );
                     });
                 }
+                if let Some(decisions) = &shell.decisions {
+                    decisions.update(cx, |screen, cx| {
+                        screen.set_project(
+                            event
+                                .0
+                                .as_ref()
+                                .map(|project| project.id().as_str().to_owned()),
+                            cx,
+                        )
+                    });
+                }
                 if shell.in_inbox {
                     shell.search.update(cx, |search, cx| {
                         search.set_context("Filtrar candidatos carregados", cx)
@@ -104,6 +121,8 @@ impl<R: ProjectRepository + InboxStore + Send + 'static> Shell<R> {
         let inbox_subscription = inbox
             .as_ref()
             .map(|screen| cx.observe(screen, |_, _, cx| cx.notify()));
+        let decisions = decisions
+            .map(|(decisions, export)| cx.new(|cx| DecisionsScreen::new(cx, decisions, export)));
         Self {
             theme: Theme::quiet_glass(),
             focus: cx.focus_handle(),
@@ -113,8 +132,11 @@ impl<R: ProjectRepository + InboxStore + Send + 'static> Shell<R> {
             _inbox_subscription: inbox_subscription,
             projects: screen,
             inbox,
+            decisions,
+            in_decisions: false,
             in_inbox: true,
             destination_focus: [
+                cx.focus_handle().tab_stop(true),
                 cx.focus_handle().tab_stop(true),
                 cx.focus_handle().tab_stop(true),
             ],
@@ -153,6 +175,12 @@ impl<R: ProjectRepository + InboxStore + Send + 'static> Shell<R> {
             window.focus(&self.initial_focus(cx), cx);
             return;
         }
+        if self.in_decisions {
+            if let Some(screen) = &self.decisions {
+                screen.update(cx, |screen, cx| screen.focus_search(window, cx));
+            }
+            return;
+        }
         if !self.in_inbox {
             self.switch_destination(true, window, cx);
         }
@@ -161,6 +189,7 @@ impl<R: ProjectRepository + InboxStore + Send + 'static> Shell<R> {
 
     fn switch_destination(&mut self, inbox: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.in_inbox = inbox;
+        self.in_decisions = false;
         window.focus(&self.destination_focus[usize::from(inbox)], cx);
         self.search.update(cx, |search, cx| {
             search.set_context(
@@ -182,7 +211,7 @@ impl<R: ProjectRepository + InboxStore + Send + 'static> Shell<R> {
 
     fn destination(&self, inbox: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let selected = self.in_inbox == inbox;
+        let selected = !self.in_decisions && self.in_inbox == inbox;
         text_style(div(), TypeScale::BODY_SMALL)
             .id(if inbox { "nav-inbox" } else { "nav-projects" })
             .h(px(36.0))
@@ -247,12 +276,60 @@ impl<R: ProjectRepository + InboxStore + Send + 'static> Shell<R> {
                 )
             })
     }
+
+    fn decisions_destination(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let selected = self.in_decisions;
+        text_style(div(), TypeScale::BODY_SMALL)
+            .id("nav-decisions")
+            .h(px(36.0))
+            .px(px(12.0))
+            .flex()
+            .items_center()
+            .rounded(px(6.0))
+            .bg(if selected {
+                theme.colors.decision_selected()
+            } else {
+                theme.colors.layer_fill()
+            })
+            .text_color(if selected {
+                theme.colors.text_primary()
+            } else {
+                theme.colors.text_muted()
+            })
+            .role(Role::Button)
+            .aria_label("Decisões")
+            .aria_selected(selected)
+            .track_focus(&self.destination_focus[2])
+            .focus_visible(focus_ring(&theme))
+            .cursor_pointer()
+            .on_click(cx.listener(|this, _, window, cx| this.switch_decisions(window, cx)))
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    this.switch_decisions(window, cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .child("Decisões")
+    }
+
+    fn switch_decisions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.in_decisions = true;
+        self.in_inbox = false;
+        window.focus(&self.destination_focus[2], cx);
+        if let Some(screen) = &self.decisions {
+            screen.update(cx, |screen, cx| screen.refresh(cx));
+        }
+        cx.notify();
+    }
 }
 
-impl<R: ProjectRepository + InboxStore + Send + 'static> Render for Shell<R> {
+impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render for Shell<R> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        window.set_window_title(if self.in_inbox {
+        window.set_window_title(if self.in_decisions {
+            "xemnas — Decisões"
+        } else if self.in_inbox {
             "xemnas — Revisão"
         } else {
             "xemnas — Projetos"
@@ -286,7 +363,12 @@ impl<R: ProjectRepository + InboxStore + Send + 'static> Render for Shell<R> {
             .and_then(|screen| screen.read(cx).selected_project());
         let body: gpui::AnyElement = if let Some(projects) = self.projects.clone() {
             let sidebar = projects.update(cx, |screen, cx| screen.render_sidebar(cx));
-            let content = if selected.is_some() && self.in_inbox {
+            let content = if selected.is_some() && self.in_decisions {
+                self.decisions
+                    .as_ref()
+                    .map(|screen| screen.clone().into_any_element())
+                    .unwrap_or_else(|| div().into_any_element())
+            } else if selected.is_some() && self.in_inbox {
                 self.inbox
                     .as_ref()
                     .map(|screen| screen.clone().into_any_element())
@@ -314,8 +396,11 @@ impl<R: ProjectRepository + InboxStore + Send + 'static> Render for Shell<R> {
                                 .gap(px(SpacingScale::S2))
                                 .border_b_1()
                                 .border_color(theme.colors.hairline_divider())
+                                .when(self.in_decisions, |header| {
+                                    header.bg(theme.colors.decision_canvas())
+                                })
                                 .child(
-                                    text_style(div(), TypeScale::HEADING_1)
+                                    text_style(div(), TypeScale::HEADING_2)
                                         .truncate()
                                         .child(project.name().to_owned()),
                                 )
@@ -330,6 +415,7 @@ impl<R: ProjectRepository + InboxStore + Send + 'static> Render for Shell<R> {
                                         .flex()
                                         .gap(px(SpacingScale::S3))
                                         .child(self.destination(true, cx))
+                                        .child(self.decisions_destination(cx))
                                         .child(self.destination(false, cx)),
                                 )
                         }))
