@@ -225,7 +225,6 @@ fn exported_diagnostics_never_carry_content_markers() {
         std::fs::create_dir_all(&directory).expect("create bucket");
         std::fs::write(directory.join("item.json"), marker).expect("write item");
     }
-    std::env::set_var("XEMNAS_OUTBOX_DIR", &outbox);
 
     let diagnostics = Diagnostics::new(
         store.clone(),
@@ -233,11 +232,10 @@ fn exported_diagnostics_never_carry_content_markers() {
             SeededProfiles::external_with_credential_endpoint(),
             SomeSecrets,
         ),
+        &outbox,
     );
     let document = diagnostics.export().expect("export");
     let json = application::serde_json::to_string_pretty(&document).expect("serialize");
-
-    std::env::remove_var("XEMNAS_OUTBOX_DIR");
 
     // Sanitization by construction: no marker survives anywhere, including the
     // project path and the credential/query embedded in the endpoint.

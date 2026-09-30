@@ -16,6 +16,7 @@ pub mod inbox;
 pub mod integration;
 pub mod jobs;
 pub mod outbox;
+pub mod paths;
 pub mod profile;
 pub mod projects;
 pub mod redact;
@@ -74,6 +75,7 @@ pub use outbox::{
     drain, drain_with, retry_stalled, DrainPolicy, DrainReport, OutboxError,
     DEFAULT_MAX_TRANSIENT_ATTEMPTS, DEFAULT_REJECTED_RETENTION,
 };
+pub use paths::AppPaths;
 pub use profile::{
     build_preview, choose_extractor, grant_consent, offline_default_profile, preview_hash,
     revoke_consent, AiProfile, AiSettings, AiStatus, ConsentPreview, ConsentRecord,

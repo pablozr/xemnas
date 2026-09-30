@@ -3,15 +3,13 @@
 //! Every query returns counts or metadata only; no artifact content, candidate
 //! text or secret is ever selected.
 
-use std::collections::BTreeMap;
-use std::path::Path;
-
-use crate::store::{default_data_dir, SqliteStore};
+use crate::store::SqliteStore;
 use application::diagnostics::{
     AssessmentDiagnosticRow, DiagnosticsCounts, DiagnosticsError, DiagnosticsMetrics,
-    DiagnosticsStore, Distribution, JobDiagnosticRow, LossMetrics, NoiseMetrics, OutboxCounts,
+    DiagnosticsStore, Distribution, JobDiagnosticRow, LossMetrics, NoiseMetrics,
     ReceiptDiagnosticRow,
 };
+use std::collections::BTreeMap;
 
 /// Converts a query failure into a storage error.
 fn storage_error(error: rusqlite::Error) -> DiagnosticsError {
@@ -41,32 +39,6 @@ fn grouped(
         .collect::<Result<Vec<_>, _>>()
         .map_err(storage_error)?;
     Ok(rows.into_iter().collect())
-}
-
-/// Counts `*.json` files directly inside `directory`; a missing directory is 0.
-fn count_files(directory: &Path) -> i64 {
-    std::fs::read_dir(directory)
-        .map(|entries| {
-            entries
-                .filter_map(Result::ok)
-                .filter(|entry| {
-                    entry
-                        .path()
-                        .extension()
-                        .map(|extension| extension.eq_ignore_ascii_case("json"))
-                        .unwrap_or(false)
-                })
-                .count() as i64
-        })
-        .unwrap_or(0)
-}
-
-/// Resolves the outbox root the same way the composition root drains it.
-fn outbox_root() -> std::path::PathBuf {
-    std::env::var_os("XEMNAS_OUTBOX_DIR")
-        .filter(|value| !value.is_empty())
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| default_data_dir().join("outbox"))
 }
 
 /// Builds a percentile distribution over the integer `delta_ms` column of
@@ -235,16 +207,6 @@ impl DiagnosticsStore for SqliteStore {
         Ok(rows)
     }
 
-    fn outbox_counts(&self) -> Result<OutboxCounts, DiagnosticsError> {
-        let root = outbox_root();
-        Ok(OutboxCounts {
-            pending: count_files(&root.join("pending")),
-            accepted: count_files(&root.join("accepted")),
-            rejected: count_files(&root.join("rejected")),
-            stalled: count_files(&root.join("stalled")),
-        })
-    }
-
     fn metrics(&self) -> Result<DiagnosticsMetrics, DiagnosticsError> {
         let connection = self.lock();
 
@@ -275,8 +237,6 @@ impl DiagnosticsStore for SqliteStore {
             )
             .map_err(storage_error)?;
 
-        let outbox_rejected = self.outbox_counts()?.rejected;
-
         Ok(DiagnosticsMetrics {
             latency_capture_to_candidate_ms: latency,
             review_time_ms: review,
@@ -288,7 +248,7 @@ impl DiagnosticsStore for SqliteStore {
                 assessments_failed,
                 assessments_skipped,
                 jobs_failed,
-                outbox_rejected,
+                outbox_rejected: 0,
             },
         })
     }

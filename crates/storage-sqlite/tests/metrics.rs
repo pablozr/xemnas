@@ -227,16 +227,14 @@ fn metrics_are_aggregated_from_seeded_timestamps() {
     let outbox = root.join("outbox");
     std::fs::create_dir_all(outbox.join("rejected")).expect("create rejected dir");
     std::fs::write(outbox.join("rejected").join("item.json"), "{}").expect("write rejected");
-    std::env::set_var("XEMNAS_OUTBOX_DIR", &outbox);
 
     let document = Diagnostics::new(
         store.clone(),
         AiSettings::new(NoProfiles::default(), NoSecrets),
+        &outbox,
     )
     .export()
     .expect("export");
-
-    std::env::remove_var("XEMNAS_OUTBOX_DIR");
 
     // Latency deltas: [1000, 2000, 3000, 5000] ms (the malformed row is dropped).
     let latency = &document.metrics.latency_capture_to_candidate_ms;

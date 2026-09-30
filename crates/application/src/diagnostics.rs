@@ -8,9 +8,11 @@
 //! and job diagnostics expose a stable error code rather than the raw message.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::integration::outbox_status;
 use crate::jobs::INTERRUPTED_NON_IDEMPOTENT;
 use crate::profile::{
     consent_status, endpoint_host, AiSettings, ProfileKind, ProfileStore, SecretStore,
@@ -273,7 +275,7 @@ pub trait DiagnosticsStore {
     /// Database counts.
     fn counts(&self) -> Result<DiagnosticsCounts, DiagnosticsError>;
 
-    /// Operational metrics (latency, review time, noise, losses).
+    /// Operational metrics; `losses.outbox_rejected` is filled by the use case.
     fn metrics(&self) -> Result<DiagnosticsMetrics, DiagnosticsError>;
 
     /// Recent jobs, newest first.
@@ -287,9 +289,6 @@ pub trait DiagnosticsStore {
         &self,
         limit: usize,
     ) -> Result<Vec<AssessmentDiagnosticRow>, DiagnosticsError>;
-
-    /// Outbox file counts.
-    fn outbox_counts(&self) -> Result<OutboxCounts, DiagnosticsError>;
 }
 
 /// Diagnostics use case over a [`DiagnosticsStore`] and the AI settings.
@@ -297,6 +296,7 @@ pub trait DiagnosticsStore {
 pub struct Diagnostics<S, P, K> {
     store: S,
     settings: AiSettings<P, K>,
+    outbox_dir: PathBuf,
 }
 
 impl<S, P, K> Diagnostics<S, P, K>
@@ -305,9 +305,13 @@ where
     P: ProfileStore,
     K: SecretStore,
 {
-    /// Wraps the store and the AI settings.
-    pub fn new(store: S, settings: AiSettings<P, K>) -> Self {
-        Self { store, settings }
+    /// Wraps the store, the AI settings and the outbox root to count.
+    pub fn new(store: S, settings: AiSettings<P, K>, outbox_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            store,
+            settings,
+            outbox_dir: outbox_dir.into(),
+        }
     }
 
     /// Builds the sanitized diagnostics document.
@@ -317,7 +321,7 @@ where
             migrations_version: self.store.migrations_version()?,
         };
         let counts = self.store.counts()?;
-        let metrics = self.store.metrics()?;
+        let mut metrics = self.store.metrics()?;
         let recent_jobs = self
             .store
             .recent_jobs(RECENT_LIMIT)?
@@ -351,7 +355,14 @@ where
                 error_code: row.error_code,
             })
             .collect();
-        let outbox = self.store.outbox_counts()?;
+        let status = outbox_status(&self.outbox_dir);
+        let outbox = OutboxCounts {
+            pending: status.pending,
+            accepted: status.accepted,
+            rejected: status.rejected,
+            stalled: status.stalled,
+        };
+        metrics.losses.outbox_rejected = outbox.rejected;
 
         let mut ai_profile = AiProfileDiagnostic {
             kind: "unavailable".to_string(),

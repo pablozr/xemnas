@@ -145,34 +145,16 @@ fn configure(connection: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// Returns the directory where xemnas keeps its data.
-///
-/// `XEMNAS_DATA_DIR` wins when set to a non-empty value; otherwise the
-/// platform data directory `%LOCALAPPDATA%\xemnas` is used (falling back to the
-/// system temporary directory when `LOCALAPPDATA` is unavailable). The returned
-/// directory is created if necessary; creation failures are ignored because the
-/// signature cannot report them.
+/// Returns the data directory from [`application::AppPaths::from_env`], creating it.
 pub fn default_data_dir() -> PathBuf {
-    let directory = match std::env::var_os("XEMNAS_DATA_DIR") {
-        Some(value) if !value.is_empty() => PathBuf::from(value),
-        _ => std::env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir)
-            .join("xemnas"),
-    };
+    let directory = application::AppPaths::from_env().data_dir;
     let _ = std::fs::create_dir_all(&directory);
     directory
 }
 
-/// Returns the canonical database path used by the desktop app.
-///
-/// This is `default_data_dir()/state/app.db`, the `app-data/state/app.db`
-/// location documented in `docs/stack-e-arquitetura-rust-gpui.md`. The
-/// `state` parent directory is created by [`SqliteStore::open`], so callers
-/// only need to pass this path. `XEMNAS_DATA_DIR` therefore overrides the whole
-/// path exactly as it overrides [`default_data_dir`].
+/// Returns the database path from [`application::AppPaths::from_env`].
 pub fn default_db_path() -> PathBuf {
-    default_data_dir().join("state").join("app.db")
+    application::AppPaths::from_env().database
 }
 
 /// Applies every migration that is not recorded yet, in order and transactionally.
