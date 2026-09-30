@@ -3,6 +3,7 @@
 - Faça um commit local assim que cada alteração estiver concluída e validada proporcionalmente.
 - Use commits pequenos, separados por assunto; evite acumular alterações para um commit grande.
 - Inclua todo código, testes e documentação pertinentes à alteração. Preserve mudanças anteriores do usuário.
+- Documentos temporários de pesquisa ou plano de tela (`docs/design-review/research-*.md`, `next-screen-*.md` e afins) existem só até a implementação: ao concluir a tela ou o recurso, leve o que for duradouro para `VISUAL-IDENTITY.md`, o design system ou a doc técnica e apague o temporário no mesmo commit, junto com imagens e protótipos que só ele usava.
 - Versione `/docs/` junto com as alterações pertinentes. Ao fechar uma pendência registrada em `docs/mvp-plan/issues/`, anote no próprio ticket o que foi feito e o commit.
 - Registre limitações de validação quando o ambiente impedir algum check, na mensagem do commit e no resumo ao usuário.
 - Push só para a branch de trabalho da sessão, quando o usuário pedir ou o ambiente exigir; nunca para `master`. Pull request e merge dependem de pedido explícito do usuário. O pedido de commits automáticos não autoriza push por si só.
