@@ -149,16 +149,6 @@ impl Icon {
             icon_color(theme, muted),
         )
     }
-    /// Home: a roof over a body.
-    pub fn home(theme: &Theme, size: f32, muted: bool) -> impl IntoElement {
-        render(
-            &glyph(
-                r#"<path d="M3 10.5 12 3l9 7.5"/><path d="M5.5 9.5V20a1 1 0 0 0 1 1H10v-5.5h4V21h3.5a1 1 0 0 0 1-1V9.5"/>"#,
-            ),
-            size,
-            icon_color(theme, muted),
-        )
-    }
 
     /// Projects: a folder, the thing a project tracks.
     pub fn folder(theme: &Theme, size: f32, muted: bool) -> impl IntoElement {
@@ -200,59 +190,12 @@ impl Icon {
         )
     }
 
-    /// An eye: the product watches, it does not edit.
-    pub fn eye(theme: &Theme, size: f32) -> impl IntoElement {
-        render(
-            &glyph(
-                r#"<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12"/><circle cx="12" cy="12" r="3"/>"#,
-            ),
-            size,
-            theme.colors.accent_default().into(),
-        )
-    }
-
     /// A clock: when a project was registered.
     pub fn clock(theme: &Theme, size: f32, muted: bool) -> impl IntoElement {
         render(
             &glyph(r#"<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>"#),
             size,
             icon_color(theme, muted),
-        )
-    }
-
-    /// A trash can, for the quiet remove action.
-    pub fn trash(theme: &Theme, size: f32) -> impl IntoElement {
-        render(
-            &glyph(
-                r#"<path d="M4 7h16M9.5 7V5.5A1.5 1.5 0 0 1 11 4h2a1.5 1.5 0 0 1 1.5 1.5V7"/><path d="M6.5 7l.8 12a1.5 1.5 0 0 0 1.5 1.4h6.4a1.5 1.5 0 0 0 1.5-1.4l.8-12"/>"#,
-            ),
-            size,
-            theme.colors.status_danger().into(),
-        )
-    }
-
-    /// A chevron, for disclosure and "go on".
-    pub fn chevron_right(theme: &Theme, size: f32, muted: bool) -> impl IntoElement {
-        render(
-            &glyph(r#"<path d="m9.5 5.5 6.5 6.5-6.5 6.5"/>"#),
-            size,
-            icon_color(theme, muted),
-        )
-    }
-
-    /// A check, marking a value that has been chosen.
-    ///
-    /// Painted in `accent_default`, not `status_success`. This mark answers
-    /// "is this the one you picked?", which is a fact about the form; a green
-    /// would answer "is the system healthy?", and those are different sentences.
-    /// On this screen the check appears on every registered folder, so a green
-    /// one made every row look like a health badge — the single loudest source
-    /// of colour in a screen that is otherwise achromatic.
-    pub fn check(theme: &Theme, size: f32) -> impl IntoElement {
-        render(
-            &glyph(r#"<path d="m5 12.5 4.5 4.5L19 7.5"/>"#),
-            size,
-            theme.colors.accent_default().into(),
         )
     }
 
