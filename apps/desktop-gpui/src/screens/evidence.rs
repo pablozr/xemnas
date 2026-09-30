@@ -51,11 +51,21 @@ fn kind_label(kind: &str) -> &str {
         "user_text" => "Mensagem do usuário",
         "assistant_text" => "Resposta do assistente",
         "tool_summary" => "Resultado de ferramenta",
+        "export_document" => "Documento de exportação",
         _ => "Fonte da captura",
     }
 }
 
 pub(super) fn snippet(artifact: &ArtifactView, id: String, source: &SourceLines) -> AnyElement {
+    snippet_with_height(artifact, id, source, 240.0)
+}
+
+pub(super) fn snippet_with_height(
+    artifact: &ArtifactView,
+    id: String,
+    source: &SourceLines,
+    max_height: f32,
+) -> AnyElement {
     let theme = Theme::quiet_glass();
     let metadata = metadata(artifact);
     let path = metadata
@@ -70,7 +80,7 @@ pub(super) fn snippet(artifact: &ArtifactView, id: String, source: &SourceLines)
     let code = artifact.kind == "diff_hunk" || metadata.get("language").is_some();
     let lines = source.lines.clone();
     let body_id = format!("{id}-body");
-    let height = (lines.len() as f32 * TypeScale::CODE.line_height).min(240.0);
+    let height = (lines.len() as f32 * TypeScale::CODE.line_height).min(max_height);
     let code_list = uniform_list(id, lines.len(), move |range, _, _| {
         range
             .map(|offset| {

@@ -59,6 +59,32 @@ fn glyph(body: &str) -> String {
 pub struct Icon;
 
 impl Icon {
+    /// Export a document to a user-chosen file.
+    pub fn export(theme: &Theme, size: f32) -> impl IntoElement {
+        render(
+            &glyph(r#"<path d="M12 3v12m-4-4 4 4 4-4"/><path d="M5 15v5h14v-5"/>"#),
+            size,
+            icon_color(theme, false),
+        )
+    }
+    /// Copy the recorded source text.
+    pub fn copy(theme: &Theme, size: f32) -> impl IntoElement {
+        render(
+            &glyph(
+                r#"<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/>"#,
+            ),
+            size,
+            icon_color(theme, false),
+        )
+    }
+    /// Revise a versioned document.
+    pub fn edit(theme: &Theme, size: f32) -> impl IntoElement {
+        render(
+            &glyph(r#"<path d="m15 4 5 5-11 11H4v-5L15 4Zm-2 2 5 5"/>"#),
+            size,
+            icon_color(theme, false),
+        )
+    }
     /// A source file, beside its name in the evidence tab strip.
     pub fn file(theme: &Theme, size: f32, muted: bool) -> impl IntoElement {
         render(

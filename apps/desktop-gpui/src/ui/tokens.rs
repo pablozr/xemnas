@@ -20,6 +20,34 @@ use gpui::{px, rgb, rgba, Pixels, Rgba};
 pub struct ColorTokens;
 
 impl ColorTokens {
+    /// Graphite document canvas used by the Decisions destination.
+    pub fn decision_canvas(&self) -> Rgba {
+        rgb(0x17171B)
+    }
+    /// Quiet index rail.
+    pub fn decision_rail(&self) -> Rgba {
+        rgb(0x111114)
+    }
+    /// Auxiliary document layer.
+    pub fn decision_layer(&self) -> Rgba {
+        rgb(0x1D1D23)
+    }
+    /// Selected index item and compact active tab.
+    pub fn decision_selected(&self) -> Rgba {
+        rgb(0x24222D)
+    }
+    /// Neutral separator.
+    pub fn decision_line(&self) -> Rgba {
+        rgb(0x2A2A32)
+    }
+    /// Mineral lavender document marker.
+    pub fn decision_accent(&self) -> Rgba {
+        rgb(0xB3A5CB)
+    }
+    /// Confirmed decision indicator.
+    pub fn decision_confirmed(&self) -> Rgba {
+        rgb(0x8CB69A)
+    }
     /// `color.canvas` — main continuous background.
     pub fn canvas(&self) -> Rgba {
         rgb(0x0D111A)
