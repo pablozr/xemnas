@@ -135,7 +135,8 @@ impl ColorTokens {
         self
     }
 
-    /// `color.chrome` — title bar and project sidebar.
+    /// `color.chrome` — the window frame: painted once on the shell root, so
+    /// title bar, sidebar and the gutter around the content card share it.
     ///
     /// With the system material (Mica Alt or Acrylic) behind the window this is
     /// a translucent tint of the rail, so the blurred desktop reads through the

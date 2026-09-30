@@ -643,7 +643,9 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
                     .items_center()
                     .gap(px(SpacingScale::S2))
                     .rounded(theme.radius.control())
-                    .when(active, |row| row.bg(theme.colors.selection()))
+                    // On the floating surface `selection` is nearly the panel colour;
+                    // a lavender veil reads as the highlight on both materials.
+                    .when(active, |row| row.bg(theme.colors.glass_fill_medium()))
                     .text_color(foreground)
                     .cursor_pointer()
                     .on_mouse_move(cx.listener(move |this, _, _, cx| {
@@ -1021,7 +1023,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
             .pl(px(SpacingScale::S4))
             .flex()
             .items_center()
-            .bg(theme.colors.chrome())
+            .when(!theme.colors.is_glass(), |bar| bar.bg(theme.colors.rail()))
             .when(!theme.colors.is_glass(), |bar| {
                 bar.border_b_1()
                     .border_color(theme.colors.hairline_divider())
@@ -1208,8 +1210,13 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
             .size_full()
             .flex()
             .flex_col()
-            .when(!theme.colors.is_glass(), |shell| {
-                shell.bg(theme.colors.canvas())
+            // Over the material the frame tint is painted once, for the whole
+            // window: title bar, sidebar and the gutter around the content card
+            // are one surface, so no strip shows raw material beside a tinted one.
+            .bg(if theme.colors.is_glass() {
+                theme.colors.chrome()
+            } else {
+                theme.colors.canvas()
             })
             .font_family(Theme::font_interface())
             .text_color(theme.colors.text_primary())

@@ -628,7 +628,9 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             .h_full()
             .flex()
             .flex_col()
-            .bg(theme.colors.chrome())
+            .when(!theme.colors.is_glass(), |sidebar| {
+                sidebar.bg(theme.colors.rail())
+            })
             .when(!theme.colors.is_glass(), |sidebar| {
                 sidebar
                     .border_r_1()
