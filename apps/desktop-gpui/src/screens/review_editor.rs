@@ -1,12 +1,12 @@
 //! Labelled editing form; submitting is explicit and cancellation writes nothing.
-use crate::ui::glass::focus_ring;
+use crate::ui::controls::{action_button, ButtonKind};
 use crate::ui::search_field::SearchField;
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{SpacingScale, TypeScale};
 use application::inbox::CandidateEdits;
 use gpui::prelude::*;
 use gpui::{
-    div, px, App, Context, Entity, EventEmitter, FocusHandle, Focusable, Render, Role, Window,
+    div, px, App, Context, Entity, EventEmitter, FocusHandle, Focusable, Render, Window,
 };
 
 pub(super) enum EditorEvent {
@@ -121,32 +121,15 @@ impl Render for ReviewEditor {
                         .into_iter()
                         .enumerate()
                         .map(|(index, label)| {
-                            text_style(div(), TypeScale::BODY_SMALL)
-                                .id(("editor-action", index))
+                            let kind = match index {
+                                0 => ButtonKind::Ghost,
+                                1 => ButtonKind::Secondary,
+                                _ => ButtonKind::Primary,
+                            };
+                            action_button(&theme, ("editor-action", index), kind, !self.busy)
                                 .px(px(SpacingScale::S4))
-                                .h(px(40.0))
-                                .flex()
-                                .items_center()
-                                .rounded(theme.radius.control())
-                                .border_1()
-                                .border_color(theme.colors.glass_border())
-                                .bg(if index == 2 {
-                                    theme.colors.accent_emphasis()
-                                } else {
-                                    theme.colors.rail()
-                                })
-                                .text_color(if self.busy {
-                                    theme.colors.text_disabled()
-                                } else if index == 2 {
-                                    theme.colors.accent_on_emphasis()
-                                } else {
-                                    theme.colors.text_primary()
-                                })
-                                .role(Role::Button)
                                 .aria_label(label)
                                 .track_focus(&self.focus[index])
-                                .focus_visible(focus_ring(&theme))
-                                .cursor_pointer()
                                 .on_click(cx.listener(move |this, _, _, cx| this.submit(index, cx)))
                                 .on_key_down(cx.listener(
                                     move |this, event: &gpui::KeyDownEvent, _, cx| {

@@ -3,6 +3,7 @@ use super::{
     decision_editor::{DecisionEditor, RevisionEvent},
     evidence::{self, SourceLines},
 };
+use crate::ui::controls::{action_button, ButtonKind};
 use crate::ui::{
     glass::focus_ring,
     icons::Icon,
@@ -487,49 +488,22 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
             }
             _ => None,
         };
-        text_style(div(), TypeScale::BODY_SMALL)
-            .id(id)
-            .h(px(32.0))
-            .px(px(10.0))
-            .flex()
-            .items_center()
-            .gap(px(5.0))
-            .rounded(px(6.0))
-            .border_1()
-            .border_color(if primary {
-                t.colors.decision_accent()
-            } else if matches!(action, Action::Export(_) | Action::More | Action::Retry) {
-                t.colors.decision_line()
-            } else {
-                t.colors.canvas()
+        let kind = if primary {
+            ButtonKind::Primary
+        } else if matches!(action, Action::Export(_) | Action::More | Action::Retry) {
+            ButtonKind::Secondary
+        } else {
+            ButtonKind::Ghost
+        };
+        action_button(&t, id, kind, !self.busy)
+            .when(selected && kind == ButtonKind::Ghost, |button| {
+                button
+                    .bg(t.colors.decision_selected())
+                    .text_color(t.colors.text_primary())
             })
-            .bg(if primary {
-                t.colors.decision_accent()
-            } else if selected {
-                t.colors.decision_selected()
-            } else {
-                t.colors.canvas()
-            })
-            .text_color(if self.busy {
-                t.colors.text_disabled()
-            } else if primary {
-                t.colors.accent_on_emphasis()
-            } else {
-                t.colors.text_secondary()
-            })
-            .role(Role::Button)
             .aria_label(label.clone())
             .aria_selected(selected)
             .track_focus(&focus)
-            .focus_visible(focus_ring(&t))
-            .cursor_pointer()
-            .hover(move |style| {
-                style.bg(if primary {
-                    t.colors.accent_emphasis()
-                } else {
-                    t.colors.decision_selected()
-                })
-            })
             .on_click(cx.listener(move |this, _, window, cx| this.act(action.clone(), window, cx)))
             .on_key_down(
                 cx.listener(move |this, event: &gpui::KeyDownEvent, window, cx| {

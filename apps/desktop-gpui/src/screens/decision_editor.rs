@@ -1,4 +1,5 @@
 //! Explicit revision form. Unchanged fields retain their original snapshots.
+use crate::ui::controls::{action_button, ButtonKind};
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::TypeScale;
@@ -130,11 +131,9 @@ impl Render for DecisionEditor {
                 .child(text_style(div(),TypeScale::HEADING_3).flex_1().child("Revisar decisão"))
                 .children([false,true].into_iter().enumerate().map(|(i,save)|{
                     let enabled=!self.busy&&(!save||valid);
-                    text_style(div(),TypeScale::BODY_SMALL).id(("revision-action",i)).h(px(32.0)).px(px(12.0)).flex().items_center().rounded(px(6.0))
-                        .border_1().border_color(t.colors.decision_line())
-                        .bg(if save&&enabled{t.colors.decision_accent()}else{t.colors.decision_layer()})
-                        .text_color(if save&&enabled{t.colors.accent_on_emphasis()}else if enabled{t.colors.text_primary()}else{t.colors.text_disabled()})
-                        .role(gpui::Role::Button).aria_label(if save{"Salvar nova versão"}else{"Cancelar revisão"}).track_focus(&self.focus[i]).cursor_pointer()
+                    let kind=if save{ButtonKind::Primary}else{ButtonKind::Ghost};
+                    action_button(&t,("revision-action",i),kind,enabled)
+                        .aria_label(if save{"Salvar nova versão"}else{"Cancelar revisão"}).track_focus(&self.focus[i])
                         .on_click(cx.listener(move|this,_,_,cx|this.submit(save,cx)))
                         .on_key_down(cx.listener(move|this,event:&gpui::KeyDownEvent,_,cx|{if matches!(event.keystroke.key.as_str(),"enter"|"space"){this.submit(save,cx);cx.stop_propagation();}}))
                         .child(if save&&self.busy{"Salvando…"}else if save{"Salvar nova versão"}else{"Cancelar"})

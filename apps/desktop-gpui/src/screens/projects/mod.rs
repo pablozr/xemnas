@@ -20,6 +20,7 @@ use gpui::{
 };
 
 use crate::ui::feedback::{error_state, status_dot, StatusKind};
+use crate::ui::controls::{action_button, icon_action, ButtonKind};
 use crate::ui::glass::focus_ring;
 use crate::ui::icons::Icon;
 use crate::ui::search_field::{SearchChanged, SearchField};
@@ -416,23 +417,10 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
 
     /// First-run composition: one real action, framed without invented data.
     fn render_empty(&self, theme: &Theme, cx: &mut Context<Self>) -> Stateful<Div> {
-        let button = div()
-            .id("projects-empty-open")
-            .h(px(44.0))
+        let button = action_button(theme, "projects-empty-open", ButtonKind::Primary, true)
             .px(px(SpacingScale::S4))
-            .flex()
-            .items_center()
-            .gap(px(SpacingScale::S2))
-            .rounded(px(8.0))
-            .border_1()
-            .border_color(theme.colors.glass_edge_lavender())
-            .bg(theme.colors.glass_surface_lavender())
-            .hover(move |style| style.border_color(theme.colors.accent_subtle()))
-            .role(Role::Button)
             .aria_label("Abrir pasta no seletor do sistema")
-            .cursor_pointer()
             .track_focus(&self.empty_focus)
-            .focus_visible(focus_ring(theme))
             .on_click(cx.listener(|this, _, _, cx| this.open_folder(cx)))
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                 if matches!(event.keystroke.key.as_str(), "enter" | "space") {
@@ -440,12 +428,8 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                     cx.stop_propagation();
                 }
             }))
-            .child(Icon::folder_plus(theme, 18.0))
-            .child(
-                text_style(div(), TypeScale::LABEL)
-                    .text_color(theme.colors.text_primary())
-                    .child("Abrir pasta…"),
-            );
+            .child(Icon::plus(theme, 16.0))
+            .child("Abrir pasta…");
 
         let light = BoxShadow::new(px(0.0), px(0.0), theme.colors.glow_lavender().into())
             .blur_radius(px(48.0))
@@ -589,23 +573,8 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                     .into_any_element()
             })
             .collect();
-        let open = div()
-            .id("projects-open-folder")
-            .size(px(36.0))
-            .justify_center()
-            .flex()
-            .items_center()
-            .gap(px(SpacingScale::S3))
-            .rounded(px(8.0))
-            .bg(theme.colors.glass_surface_lavender())
-            .border_1()
-            .border_color(theme.colors.glass_edge_lavender())
-            .hover(move |style| style.border_color(theme.colors.accent_subtle()))
-            .role(Role::Button)
-            .aria_label("Abrir pasta no seletor do sistema")
-            .cursor_pointer()
+        let open = icon_action(&theme, "projects-open-folder", "Abrir pasta no seletor do sistema")
             .track_focus(&self.register_focus)
-            .focus_visible(focus_ring(&theme))
             .on_click(cx.listener(|this, _, _, cx| this.open_folder(cx)))
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                 if matches!(event.keystroke.key.as_str(), "enter" | "space") {
@@ -613,7 +582,7 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                     cx.stop_propagation();
                 }
             }))
-            .child(Icon::folder_plus(&theme, 18.0));
+            .child(Icon::folder_plus(&theme, 16.0));
 
         let sidebar = div()
             .id("projects-sidebar")
@@ -849,31 +818,12 @@ fn detail_action(
     label: &'static str,
     destructive: bool,
 ) -> Stateful<Div> {
-    let hover = theme.colors.glass_fill_medium();
-    div()
-        .id(id)
-        .h(px(40.0))
-        .px(px(SpacingScale::S3))
-        .rounded(px(8.0))
-        .border_1()
-        .border_color(theme.colors.glass_edge_lavender())
-        .flex()
-        .flex_none()
-        .items_center()
-        .role(Role::Button)
-        .aria_label(label)
-        .cursor_pointer()
-        .focus_visible(focus_ring(theme))
-        .hover(move |style| style.bg(hover))
-        .child(
-            text_style(div(), TypeScale::LABEL)
-                .text_color(if destructive {
-                    theme.colors.status_danger()
-                } else {
-                    theme.colors.text_secondary()
-                })
-                .child(label),
-        )
+    let button = action_button(theme, id, ButtonKind::Secondary, true).aria_label(label);
+    if destructive {
+        button.text_color(theme.colors.status_danger()).child(label)
+    } else {
+        button.child(label)
+    }
 }
 
 /// The "your search matched nothing" state.

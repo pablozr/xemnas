@@ -13,6 +13,7 @@ use gpui::{
 
 use super::evidence;
 use super::review_editor::{EditorEvent, ReviewEditor};
+use crate::ui::controls::{action_button, ButtonKind};
 use crate::ui::glass::focus_ring;
 use crate::ui::icons::Icon;
 use crate::ui::search_field::SearchField;
@@ -404,45 +405,15 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                 .into_iter()
                 .enumerate()
                 .map(|(index, action)| {
-                    let primary = index == 3;
-                    text_style(div(), TypeScale::BODY_SMALL)
-                        .id(("review-action", index))
-                        .h(px(40.0))
-                        .px(px(SpacingScale::S5))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(theme.radius.control())
-                        .border_1()
-                        .border_color(if primary {
-                            theme.colors.accent_emphasis()
-                        } else {
-                            theme.colors.glass_border()
-                        })
-                        .bg(if primary {
-                            theme.colors.accent_emphasis()
-                        } else {
-                            theme.colors.rail()
-                        })
-                        .text_color(if self.busy {
-                            theme.colors.text_disabled()
-                        } else if primary {
-                            theme.colors.accent_on_emphasis()
-                        } else {
-                            theme.colors.text_primary()
-                        })
-                        .hover(move |style| {
-                            style.bg(if primary {
-                                theme.colors.glass_fill_emphasis()
-                            } else {
-                                theme.colors.hover_veil()
-                            })
-                        })
-                        .role(Role::Button)
+                    let kind = if index == 3 {
+                        ButtonKind::Primary
+                    } else {
+                        ButtonKind::Secondary
+                    };
+                    action_button(&theme, ("review-action", index), kind, !self.busy)
+                        .px(px(SpacingScale::S4))
                         .aria_label(labels[index])
                         .track_focus(&self.action_focus[index])
-                        .focus_visible(focus_ring(&theme))
-                        .cursor_pointer()
                         .on_click(
                             cx.listener(move |this, _, window, cx| this.review(action, window, cx)),
                         )
@@ -547,28 +518,13 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let theme = Theme::current(cx);
-        text_style(div(), TypeScale::BODY_SMALL)
-            .id(id)
-            .px(px(SpacingScale::S3))
-            .h(px(36.0))
-            .flex()
-            .items_center()
-            .rounded(theme.radius.control())
-            .role(Role::Button)
+        action_button(&theme, id, ButtonKind::Ghost, !self.busy)
             .aria_label(label)
             .track_focus(if more {
                 &self.more_focus
             } else {
                 &self.refresh_focus
             })
-            .focus_visible(focus_ring(&theme))
-            .cursor_pointer()
-            .text_color(if self.busy {
-                theme.colors.text_disabled()
-            } else {
-                theme.colors.text_secondary()
-            })
-            .hover(move |style| style.bg(theme.colors.hover_veil()))
             .on_click(cx.listener(move |this, _, _, cx| this.page(more, cx)))
             .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
                 if matches!(event.keystroke.key.as_str(), "enter" | "space") {
