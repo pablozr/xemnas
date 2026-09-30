@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::context::{ContextPack, PackClaim, PackDecision};
+use crate::context::{ContextError, ContextPack, PackClaim, PackDecision};
 
 /// Default token budget for one injected block.
 pub const DEFAULT_BUDGET_TOKENS: usize = 300;
@@ -61,6 +61,68 @@ pub struct CompactBlock {
     pub tokens: usize,
     /// Relevant items left out by the budget.
     pub omitted: usize,
+}
+
+/// Whether a block is only measured or actually appended to the prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum InjectionMode {
+    /// Computed and recorded, but not sent to the agent.
+    Shadow,
+    /// Appended to the agent prompt.
+    Inject,
+}
+
+impl InjectionMode {
+    /// Persisted literal.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Shadow => "shadow",
+            Self::Inject => "inject",
+        }
+    }
+
+    /// Parses a persisted literal.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "shadow" => Some(Self::Shadow),
+            "inject" => Some(Self::Inject),
+            _ => None,
+        }
+    }
+}
+
+/// Audit row of one delivered block; never holds prompt text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InjectionRecord {
+    /// Record identifier (UUID v7).
+    pub injection_id: String,
+    /// Agent session the block was computed for.
+    pub session_id: String,
+    /// Project read.
+    pub project_id: String,
+    /// Delivery mode.
+    pub mode: InjectionMode,
+    /// Estimated tokens of the block.
+    pub tokens: usize,
+    /// Relevant items left out by the budget.
+    pub omitted: usize,
+    /// RFC 3339 time.
+    pub created_at: String,
+    /// Items in the block, in order.
+    pub items: Vec<DeliveredItem>,
+}
+
+/// Persistence port for injection audit and per-session deduplication.
+pub trait InjectionStore {
+    /// Items already delivered to `session_id` in `mode`.
+    fn delivered(
+        &self,
+        session_id: &str,
+        mode: InjectionMode,
+    ) -> Result<BTreeSet<DeliveredItem>, ContextError>;
+
+    /// Records one delivered block.
+    fn record_injection(&self, record: &InjectionRecord) -> Result<(), ContextError>;
 }
 
 /// Rough token estimate: one token per four characters, rounded up.

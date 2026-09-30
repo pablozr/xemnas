@@ -9,6 +9,7 @@ mod decisions;
 mod diagnostics;
 mod extraction;
 mod inbox;
+mod injections;
 mod integration;
 mod jobs;
 mod projects;
