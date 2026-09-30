@@ -16,8 +16,8 @@ use gpui_platform::application;
 use storage_sqlite::{default_data_dir, default_db_path, SqliteStore};
 
 use xemnas_desktop::app::{
-    AdjustItem, ConfirmItem, FocusSearch, NextItem, PrevItem, RejectItem, SaveEditor, Shell,
-    SnoozeItem, TabNext, TabPrev,
+    AdjustItem, ConfirmItem, FocusSearch, GoDecisions, GoReview, NextItem, PrevItem, RejectItem,
+    SaveEditor, Shell, SnoozeItem, TabNext, TabPrev,
 };
 use xemnas_desktop::ui::search_field::{
     Backspace, Clear, Copy, Cut, Delete, End, Home, Left, Paste, Right, SelectAll, SelectLeft,
@@ -202,6 +202,8 @@ fn run_shell_mode(store: Result<SqliteStore, String>, demo: bool) {
             KeyBinding::new("s", SnoozeItem, Some("xemnas && !SearchField")),
             KeyBinding::new("a", AdjustItem, Some("xemnas && !SearchField")),
             KeyBinding::new("ctrl-enter", SaveEditor, Some("Editor")),
+            KeyBinding::new("ctrl-1", GoReview, Some("xemnas")),
+            KeyBinding::new("ctrl-2", GoDecisions, Some("xemnas")),
             KeyBinding::new("backspace", Backspace, Some("SearchField")),
             KeyBinding::new("delete", Delete, Some("SearchField")),
             KeyBinding::new("left", Left, Some("SearchField")),

@@ -23,6 +23,7 @@ use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Backdrop, Theme, ThemeMode};
 use crate::ui::tokens::MotionTokens;
 use crate::ui::tokens::{ControlSize, SpacingScale, TypeScale};
+use crate::ui::tooltip::tooltip;
 
 actions!(
     xemnas,
@@ -46,7 +47,11 @@ actions!(
         /// Opens the adjust form for the candidate being read.
         AdjustItem,
         /// Submits the open editor with its primary action.
-        SaveEditor
+        SaveEditor,
+        /// Opens Revisão.
+        GoReview,
+        /// Opens Decisões.
+        GoDecisions
     ]
 );
 
@@ -86,6 +91,13 @@ impl Destination {
         match self {
             Self::Review => "Revisão",
             Self::Decisions => "Decisões",
+        }
+    }
+
+    fn shortcut(self) -> &'static str {
+        match self {
+            Self::Review => "Ctrl 1",
+            Self::Decisions => "Ctrl 2",
         }
     }
 }
@@ -350,6 +362,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
             .role(Role::Button)
             .aria_label(format!("{name}: propriedades do projeto"))
             .aria_expanded(open)
+            .tooltip(tooltip("Propriedades do projeto", None))
             .track_focus(&self.project_focus)
             .focus_visible(focus_ring(&theme))
             .cursor_pointer()
@@ -427,6 +440,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
             .child(glyph)
             .child(destination.label())
             .children(count.map(|count| count_chip(&theme, count)))
+            .tooltip(tooltip(destination.label(), Some(destination.shortcut())))
             .with_spring(
                 ElementId::Name(format!("{}-hover", destination.id()).into()),
                 SpringAnimation::new(MotionTokens::HOVER_SPRING).to(hovered && !selected),
@@ -467,6 +481,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
             mode.toggled().label()
         );
         icon_action(&theme, "theme-switch", &label)
+            .tooltip(tooltip(format!("Tema: {}", mode.toggled().label()), None))
             .mr(px(SpacingScale::S2))
             .track_focus(&self.theme_focus)
             .on_click(cx.listener(Self::on_theme_click))
@@ -686,6 +701,12 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
             .on_action(cx.listener(Self::on_tab_next))
             .on_action(cx.listener(Self::on_tab_prev))
             .on_action(cx.listener(Self::on_focus_search))
+            .on_action(cx.listener(|this, _: &GoReview, window, cx| {
+                this.switch_to(Destination::Review, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &GoDecisions, window, cx| {
+                this.switch_to(Destination::Decisions, window, cx)
+            }))
             .on_action(cx.listener(|this, _: &NextItem, window, cx| this.on_move(1, window, cx)))
             .on_action(cx.listener(|this, _: &PrevItem, window, cx| this.on_move(-1, window, cx)))
             .on_action(

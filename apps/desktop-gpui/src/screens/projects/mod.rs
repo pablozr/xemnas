@@ -30,6 +30,7 @@ use crate::ui::patterns::{
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{SpacingScale, TypeScale};
+use crate::ui::tooltip::tooltip;
 
 /// The project currently visible in the workspace, including empty selections.
 pub struct ProjectChanged(pub Option<ProjectSummary>);
@@ -601,6 +602,7 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             "projects-open-folder",
             "Abrir pasta no seletor do sistema",
         )
+        .tooltip(tooltip("Abrir pasta…", None))
         .track_focus(&self.register_focus)
         .on_click(cx.listener(|this, _, _, cx| this.open_folder(cx)))
         .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
