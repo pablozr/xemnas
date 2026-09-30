@@ -3,6 +3,7 @@
 
 mod assessments;
 mod captures;
+mod claims;
 mod decisions;
 mod diagnostics;
 mod extraction;

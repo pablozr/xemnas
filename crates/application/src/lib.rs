@@ -3,6 +3,7 @@
 
 pub mod analysis;
 pub mod captures;
+pub mod claims;
 mod clock;
 pub mod decisions;
 pub mod diagnostics;
@@ -23,6 +24,7 @@ pub use captures::{
     CaptureApi, CaptureArtifactRecord, CaptureCheckpointRecord, CaptureError, CaptureIngest,
     CaptureReceiptRecord, CaptureRepository, CaptureWrite, IngestError, IngestOutcome, Receipt,
 };
+pub use claims::{ClaimRecord, ClaimStore, Claims, ClaimsError, NewClaim};
 pub use decisions::{
     sanitize_match_query, DecisionDetail, DecisionEdits, DecisionFilter, DecisionPage,
     DecisionRevision, DecisionSearchHit, DecisionStatus, DecisionSummary, Decisions,

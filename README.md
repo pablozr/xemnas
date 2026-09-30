@@ -41,7 +41,7 @@ Pacote distribuível (ZIP versionado em `dist\`):
 | Item | Caminho |
 | --- | --- |
 | Diretório de dados | `XEMNAS_DATA_DIR` (se definido) ou `%LOCALAPPDATA%\xemnas` |
-| Banco SQLite | `<dados>\state\app.db` (migrations forward-only, versão atual 10) |
+| Banco SQLite | `<dados>\state\app.db` (migrations forward-only, versão atual 11) |
 | API local | somente loopback; token por sessão em `<dados>\api-token`; porta em `<dados>\discovery.json` |
 | Outbox de capturas | `XEMNAS_OUTBOX_DIR` ou `<dados>\outbox` (`pending/`, `accepted/`, `rejected/`, `stalled/`) |
 

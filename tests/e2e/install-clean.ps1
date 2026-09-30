@@ -7,7 +7,7 @@
     fresh temporary directory, launches the installed `xemnas.exe` with an
     isolated `XEMNAS_DATA_DIR`, waits for `GET /v1/health` to answer `ok` using
     the port from `discovery.json` and the bearer token from `api-token`,
-    verifies `schema_migrations` reached version 10, closes the window gracefully,
+    verifies `schema_migrations` reached version 11, closes the window gracefully,
     and then uninstalls by removing the extraction directory and the data dir.
 
     Writes RESULT=PASS/FAIL and exits 0/1. Pure ASCII on purpose.
@@ -156,7 +156,7 @@ print(json.dumps({"versions": versions, "max": max(versions) if versions else 0}
     $schemaPath = Join-Path $dataDir 'schema.py'
     [IO.File]::WriteAllText($schemaPath, $schemaProgram, [Text.UTF8Encoding]::new($false))
     $schema = (& $python.Source $schemaPath $dbPath | Out-String).Trim() | ConvertFrom-Json
-    Assert ($schema.max -eq 10) "schema_migrations reached version 10 (max=$($schema.max))"
+    Assert ($schema.max -eq 11) "schema_migrations reached version 11 (max=$($schema.max))"
 
     # --- graceful shutdown --------------------------------------------------
 
