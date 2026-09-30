@@ -142,7 +142,13 @@ export function rawMessage(
   sessionId = "session",
 ): MessageWithParts {
   return {
-    info: { id, role, sessionID: sessionId, time: { created: 2 } },
+    // Assistant messages are finished unless a test says otherwise.
+    info: {
+      id,
+      role,
+      sessionID: sessionId,
+      time: role === "assistant" ? { created: 2, completed: 3 } : { created: 2 },
+    },
     parts,
   };
 }

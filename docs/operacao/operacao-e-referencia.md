@@ -49,14 +49,16 @@ Pacote distribuível (ZIP versionado em `dist\`):
 
 O adapter em [`adapters/opencode/`](adapters/opencode/) é um plugin fino: disparo em idle → reconcile pela API pública do OpenCode → validação do **Capture Envelope** → `POST /v1/captures` (ou escrita na outbox quando o desktop está fechado). Ele não contém regras de domínio e nunca chama modelo.
 
+**Captura automática (padrão).** O OpenCode entrega ao plugin um `client` já vinculado à instância, ao diretório e à autorização da sessão, com requisições em processo. O adapter usa esse client para ler mensagens e diffs — não é preciso configurar porta nem `OPENCODE_URL`. A paginação segue o cursor opaco do header `Link` (nunca sintetizado) no mesmo client, e uma falha do client é erro fatal: o adapter **não** cai para uma URL HTTP alternativa, para não capturar de outra instância. `OPENCODE_URL` só é usada como caminho legado/diagnóstico quando o plugin roda sem client utilizável (fixtures e testes).
+
 ```powershell
 cd adapters/opencode
 npm ci
-npm test                      # testes de contrato do envelope
+npm test                      # testes de contrato e captura automática
 npm run send-fixture          # envia fixture pela outbox (modo CLI)
 ```
 
-Variáveis relevantes: `OPENCODE_URL` (padrão `http://127.0.0.1:4096`), `XEMNAS_DATA_DIR`, `XEMNAS_OUTBOX_DIR`. A injeção de contexto é ligada por projeto no app (desligada, medir ou ativa); o plugin só aceita `XEMNAS_CONTEXT_TIMEOUT_MS` como ajuste opcional (ver [`docs/roadmap/fase-3/02-injecao-de-contexto.md`](docs/roadmap/fase-3/02-injecao-de-contexto.md)).
+Variáveis relevantes: `XEMNAS_DATA_DIR`, `XEMNAS_OUTBOX_DIR` e `OPENCODE_URL` (override **legado** da fonte HTTP de diagnóstico; padrão `http://127.0.0.1:4096`). A injeção de contexto é ligada por projeto no app (desligada, medir ou ativa); o plugin só aceita `XEMNAS_CONTEXT_TIMEOUT_MS` como ajuste opcional (ver [`docs/roadmap/fase-3/02-injecao-de-contexto.md`](docs/roadmap/fase-3/02-injecao-de-contexto.md)).
 
 **Ativação (uma vez, sem publicar):** o OpenCode carrega plugins de arquivos locais — crie `~/.config/opencode/plugins/xemnas.ts` reexportando o build (`export { XemnasOpenCodeAdapter as Xemnas } from "<repo>/adapters/opencode/dist/src/index.js"`; caminho relativo a partir de `plugins/` é `../../../orca/projects/xemnas/...`). O wrapper deve ter **um único export** (o factory), para o OpenCode não registrar os exports utilitários do módulo. Reinicie a sessão do OpenCode após criar o arquivo.
 

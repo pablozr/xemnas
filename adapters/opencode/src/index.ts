@@ -29,7 +29,9 @@ import {
   type OutboxWriter,
 } from "./outbox.js";
 import {
+  createClientMessageSource,
   createHttpMessageSource,
+  isPluginClient,
   type MessageSource,
   type OpenCodeFileDiff,
   type OpenCodeMessage,
@@ -234,7 +236,18 @@ export function createAdapter(deps: AdapterDeps): Adapter {
     let sent = 0;
     let skipped = 0;
 
-    for (const turn of turns) {
+    for (const [index, turn] of turns.entries()) {
+      // The newest turn waits while its answer is still being written:
+      // capturing it early would advance the checkpoint and lose the rest of
+      // the answer. A turn with no answer at all (aborted) is captured as is.
+      const last = turn.assistants[turn.assistants.length - 1];
+      if (index === turns.length - 1 && last !== undefined && !last.completed) {
+        log.info("turn-in-progress", {
+          session_id: sessionId,
+          message_id: turn.user.id,
+        });
+        break;
+      }
       let diffs: OpenCodeFileDiff[] = [];
       try {
         diffs = await deps.source.getDiff(sessionId, turn.user.id);
@@ -402,16 +415,17 @@ export function createAdapter(deps: AdapterDeps): Adapter {
  *
  * The factory receives the plugin input's `directory`, which becomes the
  * envelope's `project.canonical_path`; canonicalization and the allow-list
- * check happen on the server (MVP-SPEC §7.3).
+ * check happen on the server (MVP-SPEC §7.3). It also receives the full plugin
+ * input so the caller can prefer the native OpenCode client when present.
  */
 export function createOpenCodePlugin(
-  buildAdapter: (directory: string) => Adapter,
+  buildAdapter: (directory: string, input: OpenCodePluginInput) => Adapter,
   buildChatHook?: (directory: string) => ChatMessageHook,
 ): OpenCodePlugin {
   return async (input: OpenCodePluginInput): Promise<OpenCodePluginHooks> => {
     const directory =
       typeof input.directory === "string" ? input.directory : "";
-    const adapter = buildAdapter(directory);
+    const adapter = buildAdapter(directory, input);
     const hooks: OpenCodePluginHooks = {
       event: async ({ event }): Promise<void> => {
         adapter.handleEvent(event);
@@ -427,14 +441,28 @@ export function createOpenCodePlugin(
 function buildDefaultAdapter(
   config: AdapterConfig,
   directory: string,
+  client?: unknown,
 ): Adapter {
+  // Prefer the client OpenCode hands to the plugin: it is bound to the exact
+  // instance, directory and authorization, and fetches in-process. Only when
+  // no usable client is present do we fall back to the legacy `OPENCODE_URL`
+  // HTTP source (diagnostic/fixture path). A present-but-failing client is
+  // never silently swapped for the HTTP source — that could capture from a
+  // different instance.
+  const source = isPluginClient(client)
+    ? createClientMessageSource({
+        client,
+        directory,
+        timeoutMs: config.requestTimeoutMs,
+      })
+    : createHttpMessageSource({
+        baseUrl: config.opencodeUrl,
+        timeoutMs: config.requestTimeoutMs,
+      });
   return createAdapter({
     config,
     directory,
-    source: createHttpMessageSource({
-      baseUrl: config.opencodeUrl,
-      timeoutMs: config.requestTimeoutMs,
-    }),
+    source,
     client: createCaptureClient({
       resolveEndpoint: createLocalApiEndpointResolver(config),
       timeoutMs: config.requestTimeoutMs,
@@ -461,7 +489,8 @@ function buildDefaultChatHook(
 export const XemnasOpenCodeAdapter: OpenCodePlugin = (input) => {
   const config = resolveConfig();
   return createOpenCodePlugin(
-    (directory) => buildDefaultAdapter(config, directory),
+    (directory, pluginInput) =>
+      buildDefaultAdapter(config, directory, pluginInput.client),
     (directory) => buildDefaultChatHook(config, directory),
   )(input);
 };

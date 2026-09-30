@@ -43,7 +43,9 @@ function message(
   role: string,
   parts: unknown[],
 ): Record<string, unknown> {
-  return { info: { id, role, sessionID: sessionId, time: { created: 1 } }, parts };
+  // Assistant messages are finished, as OpenCode reports after the turn.
+  const time = role === "assistant" ? { created: 1, completed: 2 } : { created: 1 };
+  return { info: { id, role, sessionID: sessionId, time }, parts };
 }
 
 function writeFixture(

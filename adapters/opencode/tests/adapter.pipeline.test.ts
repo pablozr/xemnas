@@ -145,6 +145,23 @@ test("a first reconciliation sends every new turn and advances the checkpoint", 
   );
 });
 
+test("the newest turn waits until its answer is finished", async () => {
+  const writing = rawMessage("msg-0004", "assistant", [textPart("msg-0004", "Wri")], sessionId);
+  writing.info.time = { created: 2 };
+  const harness = buildHarness({
+    messages: [user1, assistant1, user2, writing],
+  });
+  const outcome = await harness.adapter.reconcileSession(sessionId);
+
+  assert.equal(outcome.sent, 1, "only the finished turn is sent");
+  assert.equal(harness.seen[0].source.message_id, "msg-0001");
+  assert.equal(
+    harness.store.get(sessionId).last_message_id,
+    "msg-0001",
+    "the checkpoint stays before the unfinished turn",
+  );
+});
+
 test("a second reconciliation with an up-to-date checkpoint sends nothing", async () => {
   const harness = buildHarness({
     messages: [user1, assistant1, user2, assistant2],

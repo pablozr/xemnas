@@ -40,6 +40,12 @@ export interface OpenCodeMessage {
   id: string;
   role: string;
   parts: OpenCodePart[];
+  /**
+   * `false` only for an assistant message the server reports as still being
+   * written (`info.time` present without `completed`). Absent timing is treated
+   * as finished, so fixtures and older servers keep working.
+   */
+  completed: boolean;
 }
 
 /** Normalized view of one OpenCode file diff (a before/after line snapshot). */
@@ -83,6 +89,63 @@ export interface MessageSource {
   ): Promise<OpenCodeMessage[]>;
   /** Returns the file diffs associated with a message. */
   getDiff(sessionId: string, messageId: string): Promise<OpenCodeFileDiff[]>;
+}
+
+/**
+ * Structural request accepted by the plugin's `session.messages`/`session.diff`.
+ *
+ * Mirrors the generated SDK options (`path`, `query`, `signal`) without taking
+ * a dependency on the SDK package: the object the OpenCode runtime hands to the
+ * plugin already carries a client bound to the right instance, directory and
+ * authorization.
+ */
+export interface PluginClientRequest {
+  path: { id: string };
+  query?: Record<string, unknown>;
+  signal?: AbortSignal;
+}
+
+/** Structural result of one plugin client call (`data`/`error`/`response`). */
+export interface PluginClientResult {
+  data?: unknown;
+  error?: unknown;
+  response?: {
+    ok: boolean;
+    status: number;
+    headers: { get(name: string): string | null };
+  };
+}
+
+/** Structural view of the OpenCode session sub-client. */
+export interface PluginSessionClient {
+  messages(request: PluginClientRequest): Promise<PluginClientResult>;
+  diff(request: PluginClientRequest): Promise<PluginClientResult>;
+}
+
+/** Structural view of the OpenCode client passed to the plugin factory. */
+export interface OpenCodePluginClient {
+  session: PluginSessionClient;
+}
+
+/**
+ * Returns whether `value` is a usable OpenCode plugin client.
+ *
+ * Only the two methods this adapter reads are required; anything else (an
+ * absent client, a partial stub, a future shape) is treated as unavailable so
+ * the caller can fall back to the legacy HTTP source.
+ */
+export function isPluginClient(value: unknown): value is OpenCodePluginClient {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const session = (value as { session?: unknown }).session;
+  if (typeof session !== "object" || session === null) {
+    return false;
+  }
+  const methods = session as Record<string, unknown>;
+  return (
+    typeof methods.messages === "function" && typeof methods.diff === "function"
+  );
 }
 
 function toPart(value: unknown): OpenCodePart | null {
@@ -135,7 +198,24 @@ export function parseMessageWithParts(value: unknown): OpenCodeMessage | null {
         .map(toPart)
         .filter((part): part is OpenCodePart => part !== null)
     : [];
-  return { id: infoRecord.id, role: infoRecord.role, parts };
+  return {
+    id: infoRecord.id,
+    role: infoRecord.role,
+    parts,
+    completed: isCompleted(infoRecord),
+  };
+}
+
+/** Whether a message is finished: see [`OpenCodeMessage.completed`]. */
+function isCompleted(info: Record<string, unknown>): boolean {
+  if (info.role !== "assistant") {
+    return true;
+  }
+  const time = info.time;
+  if (typeof time !== "object" || time === null) {
+    return true;
+  }
+  return typeof (time as Record<string, unknown>).completed === "number";
 }
 
 /**
@@ -178,8 +258,16 @@ interface MessagePage {
   nextUrl: string | null;
 }
 
-/** Extracts the `rel="next"` target from a `Link` header, if present. */
-function parseNextLink(header: string | null, baseUrl: string): string | null {
+/** Base used to resolve relative `Link` targets without dereferencing them. */
+const LINK_BASE = "http://localhost";
+
+/**
+ * Parses the `rel="next"` target from a `Link` header into a `URL`.
+ *
+ * The target is only ever inspected (path, query) — it is never fetched: the
+ * in-process plugin client already knows the instance, directory and auth.
+ */
+function linkNextUrl(header: string | null, base: string): URL | null {
   if (header === null) {
     return null;
   }
@@ -187,13 +275,49 @@ function parseNextLink(header: string | null, baseUrl: string): string | null {
     const match = /<([^>]+)>\s*;\s*rel\s*=\s*"?next"?/i.exec(part.trim());
     if (match !== null) {
       try {
-        return new URL(match[1], baseUrl).toString();
+        return new URL(match[1], base);
       } catch {
         return null;
       }
     }
   }
   return null;
+}
+
+/** Extracts the `rel="next"` target from a `Link` header, if present. */
+function parseNextLink(header: string | null, baseUrl: string): string | null {
+  return linkNextUrl(header, baseUrl)?.toString() ?? null;
+}
+
+/** Path of the documented message-listing route for one session. */
+function messageRoute(sessionId: string): string {
+  return `/session/${encodeURIComponent(sessionId)}/message`;
+}
+
+/**
+ * Extracts the opaque `before` cursor from a `Link: rel="next"` header.
+ *
+ * The server's cursor is opaque (`JSON.stringify({id, time})` base64url), so it
+ * is never synthesized. The link target must be the same session's message
+ * route over HTTP(S); a link that would switch session or scheme is ignored
+ * rather than followed.
+ */
+export function nextBeforeFromLink(
+  header: string | null,
+  sessionId: string,
+): string | null {
+  const target = linkNextUrl(header, LINK_BASE);
+  if (target === null) {
+    return null;
+  }
+  if (target.protocol !== "http:" && target.protocol !== "https:") {
+    return null;
+  }
+  if (target.pathname !== messageRoute(sessionId)) {
+    return null;
+  }
+  const before = target.searchParams.get("before");
+  return before !== null && before.length > 0 ? before : null;
 }
 
 async function fetchMessagePage(
@@ -218,6 +342,61 @@ async function fetchMessagePage(
   }
 }
 
+/** One page of raw items plus the token for the next (older) page. */
+interface PageResult {
+  items: unknown[];
+  next: string | null;
+}
+
+/**
+ * Walks pages newest→oldest, deduplicating by id and stopping at the
+ * checkpoint, then returns the collected messages ascending and filtered.
+ *
+ * `fetchPage(null)` reads the newest page; a non-null token is whatever the
+ * previous page returned (an HTTP URL or an opaque `before` cursor). The
+ * parsing/dedup/checkpoint rules are shared by the HTTP and client sources so
+ * they cannot drift.
+ */
+async function collectMessages(
+  options: ListMessagesOptions,
+  maxPages: number,
+  fetchPage: (token: string | null) => Promise<PageResult>,
+): Promise<OpenCodeMessage[]> {
+  const collected: OpenCodeMessage[] = [];
+  const seen = new Set<string>();
+  let token: string | null = null;
+
+  for (let page = 0; page < maxPages; page++) {
+    const result = await fetchPage(token);
+    let reachedCheckpoint = false;
+    for (const item of result.items) {
+      const message = parseMessageWithParts(item);
+      if (message === null || seen.has(message.id)) {
+        continue;
+      }
+      seen.add(message.id);
+      collected.push(message);
+      if (
+        options.afterId !== null &&
+        compareIds(message.id, options.afterId) <= 0
+      ) {
+        reachedCheckpoint = true;
+      }
+    }
+    if (reachedCheckpoint || result.next === null) {
+      break;
+    }
+    token = result.next;
+  }
+
+  collected.sort((left, right) => compareIds(left.id, right.id));
+  return options.afterId === null
+    ? collected
+    : collected.filter(
+        (message) => compareIds(message.id, options.afterId ?? "") > 0,
+      );
+}
+
 /** Creates the real HTTP-backed message source. */
 export function createHttpMessageSource(
   options: HttpMessageSourceOptions,
@@ -238,39 +417,11 @@ export function createHttpMessageSource(
         1,
         listOptions.maxPages ?? DEFAULT_MAX_MESSAGE_PAGES,
       );
-      const collected: OpenCodeMessage[] = [];
-      const seen = new Set<string>();
-      let url: string | null = firstPageUrl(sessionId, pageSize);
-
-      for (let page = 0; page < maxPages && url !== null; page++) {
+      return collectMessages(listOptions, maxPages, async (token) => {
+        const url = token ?? firstPageUrl(sessionId, pageSize);
         const result = await fetchMessagePage(fetchImpl, url, timeoutMs);
-        let reachedCheckpoint = false;
-        for (const item of result.items) {
-          const message = parseMessageWithParts(item);
-          if (message === null || seen.has(message.id)) {
-            continue;
-          }
-          seen.add(message.id);
-          collected.push(message);
-          if (
-            listOptions.afterId !== null &&
-            compareIds(message.id, listOptions.afterId) <= 0
-          ) {
-            reachedCheckpoint = true;
-          }
-        }
-        if (reachedCheckpoint) {
-          break;
-        }
-        url = result.nextUrl;
-      }
-
-      collected.sort((left, right) => compareIds(left.id, right.id));
-      return listOptions.afterId === null
-        ? collected
-        : collected.filter(
-            (message) => compareIds(message.id, listOptions.afterId ?? "") > 0,
-          );
+        return { items: result.items, next: result.nextUrl };
+      });
     },
 
     async getDiff(sessionId, messageId) {
@@ -304,6 +455,161 @@ async function getJson(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Runs `call` with a real deadline.
+ *
+ * The call receives an abort signal, and the result races a timer: a client
+ * that ignores the signal (or never settles) cannot pin the reconciliation
+ * forever. The timer is always cleared, and a call that settles after the
+ * deadline is swallowed so it never becomes an unhandled rejection.
+ */
+async function withTimeout<T>(
+  call: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error(`opencode client timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+  // If the call throws synchronously the race never observes the deadline;
+  // keep it handled so clearing the timer cannot leave a stray rejection.
+  deadline.catch(() => {});
+
+  try {
+    const pending = call(controller.signal);
+    // Discard a late outcome: the race has already settled the caller.
+    pending.catch(() => {});
+    return await Promise.race([pending, deadline]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+/**
+ * Unwraps a plugin client result.
+ *
+ * A transport error, a non-2xx response or a missing payload is an error, **not
+ * an empty page**: a failed read must never masquerade as "no messages" and
+ * advance the checkpoint.
+ */
+function requireClientData(result: PluginClientResult): unknown {
+  if (typeof result !== "object" || result === null) {
+    throw new Error("opencode client returned no result");
+  }
+  const response = result.response;
+  if (response === undefined || !response.ok) {
+    throw new Error(`opencode responded ${response?.status ?? "unknown"}`);
+  }
+  if (result.error !== undefined && result.error !== null) {
+    throw new Error("opencode client returned an error");
+  }
+  if (result.data === undefined) {
+    throw new Error("opencode client returned no data");
+  }
+  return result.data;
+}
+
+/**
+ * Unwraps a plugin client result whose payload must be an array.
+ *
+ * Both native operations (`messages`, `diff`) document an array response;
+ * anything else (`null`, an object, a scalar) is an invalid payload and must be
+ * an error rather than silently treated as an empty list.
+ */
+function requireClientArray(
+  result: PluginClientResult,
+  what: string,
+): unknown[] {
+  const data = requireClientData(result);
+  if (!Array.isArray(data)) {
+    throw new Error(`opencode returned a non-array ${what} payload`);
+  }
+  return data;
+}
+
+/** Options for the plugin-client-backed message source. */
+export interface PluginClientMessageSourceOptions {
+  /** Client supplied by OpenCode, already bound to directory/auth. */
+  client: OpenCodePluginClient;
+  /** Project directory forwarded as the `directory` query parameter. */
+  directory: string;
+  /** Request timeout, in milliseconds. */
+  timeoutMs?: number;
+}
+
+/**
+ * Creates a message source backed by the plugin's native OpenCode client.
+ *
+ * The client runs the request in-process against the server that owns the
+ * session (its directory and authorization), so the adapter never re-derives a
+ * base URL nor dereferences the pagination `Link`: it only extracts the opaque
+ * `before` cursor and re-calls the same client. Pagination, dedup and checkpoint
+ * filtering are shared with the HTTP source via [`collectMessages`].
+ */
+export function createClientMessageSource(
+  options: PluginClientMessageSourceOptions,
+): MessageSource {
+  const timeoutMs = options.timeoutMs ?? 5_000;
+
+  return {
+    async listMessages(sessionId, listOptions) {
+      const pageSize = Math.max(1, listOptions.limit);
+      const maxPages = Math.max(
+        1,
+        listOptions.maxPages ?? DEFAULT_MAX_MESSAGE_PAGES,
+      );
+      return collectMessages(listOptions, maxPages, async (before) => {
+        const query: Record<string, unknown> = {
+          directory: options.directory,
+          limit: pageSize,
+        };
+        if (before !== null) {
+          query.before = before;
+        }
+        const result = await withTimeout(
+          (signal) =>
+            options.client.session.messages({
+              path: { id: sessionId },
+              query,
+              signal,
+            }),
+          timeoutMs,
+        );
+        const items = requireClientArray(result, "messages");
+        return {
+          items,
+          next: nextBeforeFromLink(
+            result.response?.headers.get("link") ?? null,
+            sessionId,
+          ),
+        };
+      });
+    },
+
+    async getDiff(sessionId, messageId) {
+      const result = await withTimeout(
+        (signal) =>
+          options.client.session.diff({
+            path: { id: sessionId },
+            query: { directory: options.directory, messageID: messageId },
+            signal,
+          }),
+        timeoutMs,
+      );
+      const data = requireClientArray(result, "diff");
+      return data
+        .map(parseFileDiff)
+        .filter((diff): diff is OpenCodeFileDiff => diff !== null);
+    },
+  };
 }
 
 /** Options for the deterministic in-memory source used by tests. */

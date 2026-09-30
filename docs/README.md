@@ -12,7 +12,7 @@ alterações pertinentes. O `README.md` da raiz é a apresentação do projeto e
 | [design/](design/) | Identidade visual e design system do app desktop | [VISUAL-IDENTITY.md](design/VISUAL-IDENTITY.md) (regra vigente), [design-system-quiet-glass.md](design/design-system-quiet-glass.md) (referência original) |
 | [arquitetura/](arquitetura/) | Stack, módulos e decisões técnicas | [stack-e-arquitetura-rust-gpui.md](arquitetura/stack-e-arquitetura-rust-gpui.md), [adr/](arquitetura/adr/) (decisões registradas), [historico/](arquitetura/historico/) (propostas superadas) |
 | [roadmap/](roadmap/) | Planos e tickets de execução, por fase | [mvp/BRIEFING.md](roadmap/mvp/BRIEFING.md) e [mvp/issues/](roadmap/mvp/issues/) (MVP), [fase-3/](roadmap/fase-3/), [fase-4/](roadmap/fase-4/), [fase-5/](roadmap/fase-5/) |
-| [operacao/](operacao/) | Como rodar, dados locais, integrações, limitações e uso real | [operacao-e-referencia.md](operacao/operacao-e-referencia.md), [dogfood-log.md](operacao/dogfood-log.md) |
+| [operacao/](operacao/) | Como rodar, dados locais, integrações, limitações e uso real | [operacao-e-referencia.md](operacao/operacao-e-referencia.md), [teste-captura-opencode.md](operacao/teste-captura-opencode.md), [dogfood-log.md](operacao/dogfood-log.md) |
 | [pesquisas/](pesquisas/) | Pesquisas e ideias para o futuro, com status | [README.md](pesquisas/README.md) (índice) |
 | [assets/](assets/) | Imagens usadas pelo README da raiz | — |
 
