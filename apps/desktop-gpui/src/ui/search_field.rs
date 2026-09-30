@@ -72,6 +72,22 @@ pub struct SearchField {
     wrapped: Vec<VisualLine>,
     scroll_y: Pixels,
     last_caret: Option<usize>,
+    secret: bool,
+}
+
+/// Glyph painted in place of each character of a masked field.
+const MASK: char = '•';
+
+/// Byte offset in the masked text for a byte offset in `text`.
+fn masked_offset(text: &str, offset: usize) -> usize {
+    text[..offset].chars().count() * MASK.len_utf8()
+}
+
+/// Byte offset in `text` for a byte offset in its masked form.
+fn unmasked_offset(text: &str, offset: usize) -> usize {
+    text.char_indices()
+        .nth(offset / MASK.len_utf8())
+        .map_or(text.len(), |(index, _)| index)
 }
 
 impl EventEmitter<SearchChanged> for SearchField {}
@@ -95,6 +111,7 @@ impl SearchField {
             wrapped: Vec::new(),
             scroll_y: px(0.0),
             last_caret: None,
+            secret: false,
         }
     }
 
@@ -114,6 +131,40 @@ impl SearchField {
         self.stretch();
         self.multiline_height = Some(height);
         self.edit.multiline = true;
+    }
+
+    /// Masks the value for a credential: paints one dot per character and
+    /// refuses copy and cut, so the text only leaves through [`Self::value`].
+    pub fn secret(&mut self) {
+        self.stretch();
+        self.secret = true;
+    }
+
+    /// Text as painted: the value itself, or one mask glyph per character.
+    fn display_text(&self) -> String {
+        if self.secret {
+            self.edit.text.chars().map(|_| MASK).collect()
+        } else {
+            self.edit.text.clone()
+        }
+    }
+
+    /// Maps a byte offset in the value to the painted text.
+    fn to_display(&self, offset: usize) -> usize {
+        if self.secret {
+            masked_offset(&self.edit.text, offset)
+        } else {
+            offset
+        }
+    }
+
+    /// Maps a byte offset in the painted text back to the value.
+    fn from_display(&self, offset: usize) -> usize {
+        if self.secret {
+            unmasked_offset(&self.edit.text, offset)
+        } else {
+            offset
+        }
     }
 
     /// Seeds a single-line value while preserving all normal editing mechanics.
@@ -154,9 +205,8 @@ impl SearchField {
             return wrapped_index(&self.wrapped, position).min(self.edit.text.len());
         }
         match (self.layout.as_ref(), self.bounds.as_ref()) {
-            (Some(line), Some(bounds)) => {
-                line.closest_index_for_x(position.x - bounds.left() + self.scroll_x)
-            }
+            (Some(line), Some(bounds)) => self
+                .from_display(line.closest_index_for_x(position.x - bounds.left() + self.scroll_x)),
             _ => 0,
         }
     }
@@ -246,14 +296,14 @@ impl SearchField {
         }
     }
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.edit.selection.is_empty() {
+        if !self.secret && !self.edit.selection.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(
                 self.edit.text[self.edit.selection.clone()].to_string(),
             ));
         }
     }
     fn cut(&mut self, _: &Cut, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.edit.selection.is_empty() {
+        if !self.secret && !self.edit.selection.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(
                 self.edit.text[self.edit.selection.clone()].to_string(),
             ));
@@ -351,8 +401,8 @@ impl EntityInputHandler for SearchField {
             ));
         }
         let line = self.layout.as_ref()?;
-        let start = self.edit.from_utf16(range.start);
-        let end = self.edit.from_utf16(range.end);
+        let start = self.to_display(self.edit.from_utf16(range.start));
+        let end = self.to_display(self.edit.from_utf16(range.end));
         Some(Bounds::from_corners(
             point(
                 bounds.left() + line.x_for_index(start) - self.scroll_x,
@@ -433,10 +483,11 @@ impl Element for SearchTextElement {
     ) -> TextPaint {
         let input = self.input.read(cx);
         let focused = input.focus.is_focused(window);
+        let display = input.display_text();
         let content = if input.edit.text.is_empty() && !focused {
             input.placeholder
         } else {
-            &input.edit.text
+            &display
         };
         let style = window.text_style();
         let text_color = if input.edit.text.is_empty() {
@@ -452,7 +503,12 @@ impl Element for SearchTextElement {
             underline: None,
             strikethrough: None,
         };
-        let runs = if let Some(marked) = &input.edit.marked {
+        let marked = input
+            .edit
+            .marked
+            .as_ref()
+            .map(|marked| input.to_display(marked.start)..input.to_display(marked.end));
+        let runs = if let Some(marked) = &marked {
             vec![
                 TextRun {
                     len: marked.start,
@@ -483,7 +539,7 @@ impl Element for SearchTextElement {
             window
                 .text_system()
                 .shape_line(content.to_string().into(), font_size, &runs, None);
-        let caret_x = line.x_for_index(input.edit.caret());
+        let caret_x = line.x_for_index(input.to_display(input.edit.caret()));
         let scroll_x = if focused {
             (caret_x - bounds.size.width + px(4.0)).max(px(0.0))
         } else {
@@ -494,11 +550,11 @@ impl Element for SearchTextElement {
             fill(
                 Bounds::from_corners(
                     point(
-                        origin_x + line.x_for_index(input.edit.selection.start),
+                        origin_x + line.x_for_index(input.to_display(input.edit.selection.start)),
                         bounds.top(),
                     ),
                     point(
-                        origin_x + line.x_for_index(input.edit.selection.end),
+                        origin_x + line.x_for_index(input.to_display(input.edit.selection.end)),
                         bounds.bottom(),
                     ),
                 ),
@@ -932,5 +988,22 @@ impl Render for SearchField {
                     )
                 },
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{masked_offset, unmasked_offset, MASK};
+
+    #[test]
+    fn mask_offsets_round_trip_over_multibyte_characters() {
+        let text = "aé€z";
+        let masked: String = text.chars().map(|_| MASK).collect();
+        for (index, _) in text.char_indices().chain([(text.len(), ' ')]) {
+            let display = masked_offset(text, index);
+            assert!(masked.is_char_boundary(display));
+            assert_eq!(unmasked_offset(text, display), index);
+        }
+        assert_eq!(unmasked_offset(text, masked.len() + 3), text.len());
     }
 }
