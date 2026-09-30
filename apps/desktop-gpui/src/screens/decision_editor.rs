@@ -1,4 +1,5 @@
 //! Explicit revision form. Unchanged fields retain their original snapshots.
+use crate::app::SaveEditor;
 use crate::ui::controls::{action_button, ButtonKind};
 use crate::ui::patterns::{action_footer, form_field, reading_page, section_label};
 use crate::ui::search_field::{SearchChanged, SearchField};
@@ -192,6 +193,8 @@ impl Render for DecisionEditor {
                 })
         });
         div()
+            .key_context("Editor")
+            .on_action(cx.listener(|this, _: &SaveEditor, _, cx| this.submit(true, cx)))
             .size_full()
             .flex()
             .flex_col()

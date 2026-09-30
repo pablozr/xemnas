@@ -32,7 +32,21 @@ actions!(
         /// Focuses the previous control.
         TabPrev,
         /// Focuses the current destination's search field.
-        FocusSearch
+        FocusSearch,
+        /// Selects the next item of the current list.
+        NextItem,
+        /// Selects the previous item of the current list.
+        PrevItem,
+        /// Confirms the candidate being read.
+        ConfirmItem,
+        /// Rejects the candidate being read.
+        RejectItem,
+        /// Snoozes or resumes the candidate being read.
+        SnoozeItem,
+        /// Opens the adjust form for the candidate being read.
+        AdjustItem,
+        /// Submits the open editor with its primary action.
+        SaveEditor
     ]
 );
 
@@ -247,6 +261,30 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Shell<R
             self.switch_to(Destination::Review, window, cx);
         }
         window.focus(&self.search.read(cx).focus_handle(cx), cx);
+    }
+
+    fn on_move(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
+        match self.destination {
+            Destination::Review => {
+                if let Some(screen) = &self.inbox {
+                    screen.update(cx, |screen, cx| screen.move_selection(delta, window, cx));
+                }
+            }
+            Destination::Decisions => {
+                if let Some(screen) = &self.decisions {
+                    screen.update(cx, |screen, cx| screen.move_selection(delta, window, cx));
+                }
+            }
+        }
+    }
+
+    fn on_review_key(&mut self, action: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.destination != Destination::Review {
+            return;
+        }
+        if let Some(screen) = &self.inbox {
+            screen.update(cx, |screen, cx| screen.run_shortcut(action, window, cx));
+        }
     }
 
     fn switch_to(&mut self, destination: Destination, window: &mut Window, cx: &mut Context<Self>) {
@@ -648,6 +686,20 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + Send + 'static> Render 
             .on_action(cx.listener(Self::on_tab_next))
             .on_action(cx.listener(Self::on_tab_prev))
             .on_action(cx.listener(Self::on_focus_search))
+            .on_action(cx.listener(|this, _: &NextItem, window, cx| this.on_move(1, window, cx)))
+            .on_action(cx.listener(|this, _: &PrevItem, window, cx| this.on_move(-1, window, cx)))
+            .on_action(
+                cx.listener(|this, _: &RejectItem, window, cx| this.on_review_key(0, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &SnoozeItem, window, cx| this.on_review_key(1, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &AdjustItem, window, cx| this.on_review_key(2, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &ConfirmItem, window, cx| this.on_review_key(3, window, cx)),
+            )
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 if event.keystroke.key == "escape" && this.project_panel {
                     this.close_project_panel(window, cx);

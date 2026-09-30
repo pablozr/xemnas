@@ -1,4 +1,5 @@
 //! Labelled editing form; submitting is explicit and cancellation writes nothing.
+use crate::app::SaveEditor;
 use crate::ui::controls::{action_button, ButtonKind};
 use crate::ui::patterns::{action_footer, form_field, reading_page, section_label};
 use crate::ui::search_field::SearchField;
@@ -139,6 +140,8 @@ impl Render for ReviewEditor {
             });
         div()
             .id("review-editor")
+            .key_context("Editor")
+            .on_action(cx.listener(|this, _: &SaveEditor, _, cx| this.submit(2, cx)))
             .size_full()
             .flex()
             .flex_col()

@@ -856,7 +856,7 @@ impl Render for SearchField {
                     return;
                 }
                 match event.keystroke.key.as_str() {
-                    "enter" if this.edit.marked.is_none() => {
+                    "enter" if this.edit.marked.is_none() && !event.keystroke.modifiers.control => {
                         this.edit.replace(None, "\n");
                         this.changed(cx);
                     }

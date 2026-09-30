@@ -15,7 +15,10 @@ use gpui::{
 use gpui_platform::application;
 use storage_sqlite::{default_data_dir, default_db_path, SqliteStore};
 
-use xemnas_desktop::app::{FocusSearch, Shell, TabNext, TabPrev};
+use xemnas_desktop::app::{
+    AdjustItem, ConfirmItem, FocusSearch, NextItem, PrevItem, RejectItem, SaveEditor, Shell,
+    SnoozeItem, TabNext, TabPrev,
+};
 use xemnas_desktop::ui::search_field::{
     Backspace, Clear, Copy, Cut, Delete, End, Home, Left, Paste, Right, SelectAll, SelectLeft,
     SelectRight,
@@ -189,6 +192,16 @@ fn run_shell_mode(store: Result<SqliteStore, String>, demo: bool) {
             KeyBinding::new("tab", TabNext, None),
             KeyBinding::new("shift-tab", TabPrev, None),
             KeyBinding::new("ctrl-k", FocusSearch, Some("xemnas")),
+            // Single-key shortcuts never fire while a text field has focus.
+            KeyBinding::new("j", NextItem, Some("xemnas && !SearchField")),
+            KeyBinding::new("down", NextItem, Some("xemnas && !SearchField")),
+            KeyBinding::new("k", PrevItem, Some("xemnas && !SearchField")),
+            KeyBinding::new("up", PrevItem, Some("xemnas && !SearchField")),
+            KeyBinding::new("c", ConfirmItem, Some("xemnas && !SearchField")),
+            KeyBinding::new("r", RejectItem, Some("xemnas && !SearchField")),
+            KeyBinding::new("s", SnoozeItem, Some("xemnas && !SearchField")),
+            KeyBinding::new("a", AdjustItem, Some("xemnas && !SearchField")),
+            KeyBinding::new("ctrl-enter", SaveEditor, Some("Editor")),
             KeyBinding::new("backspace", Backspace, Some("SearchField")),
             KeyBinding::new("delete", Delete, Some("SearchField")),
             KeyBinding::new("left", Left, Some("SearchField")),

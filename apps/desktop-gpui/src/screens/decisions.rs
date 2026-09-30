@@ -320,6 +320,40 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
             });
         }).detach();
     }
+    /// Moves the index selection (loaded rows, or search hits while searching).
+    pub fn move_selection(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editor.is_some() || self.preview.is_some() {
+            return;
+        }
+        let ids: Vec<String> = if self.query.trim().is_empty() {
+            self.rows
+                .iter()
+                .map(|row| row.decision_id.clone())
+                .collect()
+        } else {
+            self.hits
+                .iter()
+                .map(|hit| hit.decision_id.clone())
+                .collect()
+        };
+        if ids.is_empty() {
+            return;
+        }
+        let current = self
+            .selected
+            .as_ref()
+            .and_then(|id| ids.iter().position(|row| row == id));
+        let next = match current {
+            Some(index) => (index as isize + delta).clamp(0, ids.len() as isize - 1) as usize,
+            None => 0,
+        };
+        let id = ids[next].clone();
+        if let Some(focus) = self.focus.get(&format!("row-{id}")).cloned() {
+            window.focus(&focus, cx);
+        }
+        self.select(id, cx);
+    }
+
     fn act(&mut self, action: Action, window: &mut Window, cx: &mut Context<Self>) {
         if self.busy {
             return;

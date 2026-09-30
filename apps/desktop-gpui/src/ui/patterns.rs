@@ -306,6 +306,21 @@ pub fn empty_panel(theme: &Theme, glyph: IconName, eyebrow: &str, title: &str, b
         )
 }
 
+/// A keyboard shortcut hint placed inside a button, tinted like its label.
+pub fn kbd(color: Rgba, key: &'static str) -> Div {
+    text_style(div(), TypeScale::META)
+        .flex_none()
+        .min_w(px(16.0))
+        .px(px(4.0))
+        .rounded(px(3.0))
+        .border_1()
+        .border_color(color.alpha(0.28))
+        .text_color(color.alpha(0.72))
+        .flex()
+        .justify_center()
+        .child(key)
+}
+
 /// A status pill: dot plus text, never colour alone.
 pub fn status_pill(theme: &Theme, color: Rgba, label: &'static str) -> Div {
     text_style(div(), TypeScale::META)

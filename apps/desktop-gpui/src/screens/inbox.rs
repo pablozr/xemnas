@@ -7,18 +7,18 @@ use application::inbox::{
 };
 use gpui::prelude::*;
 use gpui::{
-    div, px, AnyElement, Context, Div, ElementId, Entity, FocusHandle, Render, Role, Stateful,
-    Subscription, Window,
+    div, px, AnyElement, Context, Div, ElementId, Entity, FocusHandle, Render, Role, ScrollHandle,
+    Stateful, Subscription, Window,
 };
 
 use super::evidence;
 use super::format::short_date;
 use super::review_editor::{EditorEvent, ReviewEditor};
-use crate::ui::controls::{action_button, ButtonKind};
+use crate::ui::controls::{action_button, button_foreground, ButtonKind};
 use crate::ui::glass::focus_ring;
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
-    action_footer, count_chip, empty_panel, error_banner, fade_in, hover_tint, mark_selected,
+    action_footer, count_chip, empty_panel, error_banner, fade_in, hover_tint, kbd, mark_selected,
     panel_title, reading_title, section_label, skeleton_list, status_pill, toast, track_hover,
     word_wrapped, READING_WIDTH, TOAST_DURATION,
 };
@@ -69,6 +69,7 @@ pub struct InboxScreen<S: InboxStore + Send + 'static> {
     notice: Option<&'static str>,
     /// Notice whose dismissal timer is already running.
     notice_scheduled: Option<&'static str>,
+    list_scroll: ScrollHandle,
 }
 
 impl<S: InboxStore + Send + 'static> InboxScreen<S> {
@@ -100,6 +101,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             action_focus: std::array::from_fn(|_| cx.focus_handle().tab_stop(true)),
             notice: None,
             notice_scheduled: None,
+            list_scroll: ScrollHandle::new(),
         }
     }
 
@@ -292,6 +294,51 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
         .detach();
     }
 
+    /// Moves the selection through the visible queue and keeps it in view.
+    pub fn move_selection(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editor.is_some() {
+            return;
+        }
+        let visible: Vec<String> = self
+            .rows
+            .iter()
+            .filter(|row| matches_query(row, &self.query))
+            .map(|row| row.id.clone())
+            .collect();
+        if visible.is_empty() {
+            return;
+        }
+        let current = self
+            .selected
+            .as_ref()
+            .and_then(|id| visible.iter().position(|row| row == id));
+        let next = match current {
+            Some(index) => (index as isize + delta).clamp(0, visible.len() as isize - 1) as usize,
+            None => 0,
+        };
+        let id = visible[next].clone();
+        if let Some((_, focus)) = self.row_focus.iter().find(|(key, _)| *key == id) {
+            window.focus(focus, cx);
+        }
+        self.list_scroll.scroll_to_item(next);
+        self.select(id, cx);
+    }
+
+    /// Keyboard shortcut for a review action, in footer order:
+    /// 0 reject, 1 snooze/resume, 2 adjust, 3 confirm.
+    pub fn run_shortcut(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editor.is_some() || self.detail.is_none() {
+            return;
+        }
+        let action = [
+            ReviewAction::Reject,
+            ReviewAction::Snooze,
+            ReviewAction::Edit,
+            ReviewAction::Confirm,
+        ][index.min(3)];
+        self.review(action, window, cx);
+    }
+
     fn review(&mut self, action: ReviewAction, window: &mut Window, cx: &mut Context<Self>) {
         if self.busy {
             return;
@@ -430,6 +477,10 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                             },
                         ))
                         .child(labels[index])
+                        .child(kbd(
+                            button_foreground(&theme, kind, !self.busy),
+                            ["R", "S", "A", "C"][index],
+                        ))
                 }),
             )
             .into_any_element()
@@ -791,7 +842,7 @@ impl<S: InboxStore + Send + 'static> Render for InboxScreen<S> {
                         .child(div().flex_1())
                         .child(self.button("inbox-refresh", "Atualizar", false, cx)))
                     .child(div().px(px(SpacingScale::S4)).pb(px(SpacingScale::S3)).children(self.search.clone()))
-                    .child(div().id("inbox-list").flex_1().min_h(px(0.0)).overflow_y_scroll()
+                    .child(div().id("inbox-list").flex_1().min_h(px(0.0)).overflow_y_scroll().track_scroll(&self.list_scroll)
                         .children(visible.iter().map(|row| self.row(row, cx)))
                         .when(visible.is_empty() && self.busy, |list| list.child(skeleton_list(&theme, "inbox-skeleton", 5)))
                         .when(visible.is_empty() && !self.busy, |list| list.child(text_style(div(), TypeScale::BODY_SMALL).p(px(SpacingScale::S4))
