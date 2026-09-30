@@ -48,6 +48,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 8,
         sql: include_str!("migrations/0008_create_decisions.sql"),
     },
+    Migration {
+        version: 9,
+        sql: include_str!("migrations/0009_add_adapter_version.sql"),
+    },
 ];
 
 /// A single embedded schema migration.

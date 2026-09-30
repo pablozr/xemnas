@@ -78,6 +78,7 @@ fn seed_capture(store: &SqliteStore, capture_id: &str, artifacts: Vec<CaptureArt
         },
         checkpoint: CaptureCheckpointRecord {
             adapter: "opencode".to_string(),
+            adapter_version: "0.1.0".to_string(),
             session_id: "session-1".to_string(),
             message_id: "message-1".to_string(),
             capture_id: capture_id.to_string(),
@@ -310,8 +311,8 @@ fn migration_0005_applies_on_fresh_and_upgraded_databases() {
             |row| row.get(0),
         )
         .expect("count distinct");
-    assert_eq!(versions, 7);
-    assert_eq!(distinct, 7);
+    assert_eq!(versions, 8);
+    assert_eq!(distinct, 8);
 
     let _ = std::fs::remove_dir_all(&root);
 }

@@ -132,10 +132,12 @@ impl CaptureRepository for SqliteStore {
         transaction
             .execute(
                 "INSERT INTO adapter_checkpoints \
-                 (adapter, session_id, message_id, capture_id, observed_at, updated_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+                 (adapter, session_id, message_id, capture_id, observed_at, updated_at, \
+                  adapter_version) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
                  ON CONFLICT(adapter, session_id) DO UPDATE SET \
                      message_id = excluded.message_id, \
+                     adapter_version = excluded.adapter_version, \
                      capture_id = excluded.capture_id, \
                      observed_at = excluded.observed_at, \
                      updated_at = excluded.updated_at",
@@ -146,6 +148,7 @@ impl CaptureRepository for SqliteStore {
                     write.checkpoint.capture_id,
                     write.checkpoint.observed_at,
                     write.checkpoint.updated_at,
+                    write.checkpoint.adapter_version,
                 ],
             )
             .map_err(storage_error)?;

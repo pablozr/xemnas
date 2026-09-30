@@ -103,6 +103,7 @@ pub(crate) fn store() -> Result<SqliteStore, Box<dyn std::error::Error>> {
                 },
                 checkpoint: CaptureCheckpointRecord {
                     adapter: "demo".into(),
+                    adapter_version: "0.1.0".into(),
                     session_id: format!("session-{capture}"),
                     message_id: capture.clone(),
                     capture_id: capture.clone(),

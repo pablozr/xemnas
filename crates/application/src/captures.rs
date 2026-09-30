@@ -59,6 +59,8 @@ pub struct CaptureArtifactRecord {
 pub struct CaptureCheckpointRecord {
     /// Adapter name, for example `opencode`.
     pub adapter: String,
+    /// Adapter version reported by the envelope that advanced the checkpoint.
+    pub adapter_version: String,
     /// Adapter session identifier.
     pub session_id: String,
     /// Last accepted message identifier for the session.
@@ -288,6 +290,7 @@ where
         };
         let checkpoint = CaptureCheckpointRecord {
             adapter: envelope.source.adapter.clone(),
+            adapter_version: envelope.source.adapter_version.clone(),
             session_id: envelope.source.session_id.clone(),
             message_id: envelope.source.message_id.clone(),
             capture_id: envelope.capture_id.clone(),

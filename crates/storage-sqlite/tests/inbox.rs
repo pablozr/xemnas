@@ -118,6 +118,7 @@ fn seed_capture(store: &SqliteStore, capture_id: &str, message_id: &str) {
         },
         checkpoint: CaptureCheckpointRecord {
             adapter: "opencode".to_string(),
+            adapter_version: "0.1.0".to_string(),
             session_id: "session-1".to_string(),
             message_id: message_id.to_string(),
             capture_id: capture_id.to_string(),

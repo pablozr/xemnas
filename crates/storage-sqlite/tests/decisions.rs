@@ -77,6 +77,7 @@ fn seed_project_and_capture(store: &SqliteStore) {
         },
         checkpoint: CaptureCheckpointRecord {
             adapter: "opencode".to_string(),
+            adapter_version: "0.1.0".to_string(),
             session_id: "session-1".to_string(),
             message_id: "message-1".to_string(),
             capture_id: "capture-1".to_string(),
@@ -149,7 +150,7 @@ fn migration_0008_applies_on_fresh_and_upgraded_databases() {
             row.get(0)
         })
         .expect("count");
-    assert_eq!(versions, 7);
+    assert_eq!(versions, 8);
 
     let _ = std::fs::remove_dir_all(&root);
 }

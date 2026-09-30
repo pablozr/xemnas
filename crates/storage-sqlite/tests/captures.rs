@@ -65,6 +65,7 @@ fn write(
     let timestamp = "2026-01-01T00:00:00Z".to_string();
     let checkpoint = CaptureCheckpointRecord {
         adapter: "opencode".to_string(),
+        adapter_version: "0.1.0".to_string(),
         session_id: "session-1".to_string(),
         message_id: "message-1".to_string(),
         capture_id: capture_id.to_string(),
@@ -200,10 +201,10 @@ fn upgrade_reapplies_the_missing_migrations() {
         )
         .expect("count distinct migrations");
     assert_eq!(
-        versions, 7,
-        "0004, 0005, 0006 and 0008 must be re-applied on upgrade"
+        versions, 8,
+        "0004, 0005, 0006, 0008 and 0009 must be re-applied on upgrade"
     );
-    assert_eq!(distinct, 7);
+    assert_eq!(distinct, 8);
 
     let _ = std::fs::remove_dir_all(&root);
 }

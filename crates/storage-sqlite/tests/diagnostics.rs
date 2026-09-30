@@ -167,6 +167,7 @@ fn exported_diagnostics_never_carry_content_markers() {
             },
             checkpoint: CaptureCheckpointRecord {
                 adapter: "opencode".to_string(),
+                adapter_version: "0.1.0".to_string(),
                 session_id: "session-1".to_string(),
                 message_id: "message-1".to_string(),
                 capture_id: "capture-1".to_string(),
@@ -258,7 +259,7 @@ fn exported_diagnostics_never_carry_content_markers() {
     }
 
     // Structural information is present and correct.
-    assert_eq!(document.schema.migrations_version, 8);
+    assert_eq!(document.schema.migrations_version, 9);
     assert!(
         json.contains("\"metrics\""),
         "the metrics section is part of the sanitized sweep"
