@@ -25,8 +25,9 @@ mas `docs/` é ignorado pelo Git: este arquivo é a regra versionável.
   2 px (`mark_selected`). Foco visível é um anel inset que não desloca o layout.
 - Cada paleta (Quiet Glass e Carvão) é uma tabela `Palette` em `tokens.rs`;
   toda cor nova precisa existir nas duas.
-- Glass é o material do Windows (Mica Alt por padrão; `XEMNAS_BACKDROP=acrylic`,
-  `mica` ou `none`), só com o sistema em modo escuro. Camadas, conforme o
+- A janela é opaca por padrão. Glass (material do Windows) é experimental e só
+  liga com `XEMNAS_BACKDROP=mica-alt`, `mica` ou `acrylic`, com o sistema em
+  modo escuro. Camadas, conforme o
   Fluent: barra de título e lateral formam uma moldura translúcida sem emendas
   (`color.chrome`); o conteúdo é um card flutuante (`color.content`, ~88%) com
   8 px de margem, raio de 10 px, borda e sombra de card; painéis internos não
@@ -43,9 +44,9 @@ mas `docs/` é ignorado pelo Git: este arquivo é a regra versionável.
   Atalhos de uma tecla não disparam com um campo de texto em foco. Controles
   só de ícone têm tooltip.
 - Mica pode compor o fundo da janela no Windows; isso **não** garante backdrop
-  blur por componente. Superfícies internas precisam funcionar sem blur. Com
-  `XEMNAS_BACKDROP=none`, ou numa máquina sem material, a janela é opaca e nada
-  quebra: nenhuma superfície depende do blur.
+  blur por componente. Superfícies internas precisam funcionar sem blur. No
+  padrão opaco, ou numa máquina sem material, nada quebra: nenhuma superfície
+  depende do blur.
 - Cada informação tem um lugar: contagem na lista lateral, título da seção na
   própria seção; não repetir a mesma informação no título e no rodapé.
 

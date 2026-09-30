@@ -170,17 +170,14 @@ Evitar raios maiores que 12 px em painéis do desktop. Elementos não devem pare
 
 ## Materiais
 
-### Fundo da janela: Mica Alt (com fallback opaco)
+### Fundo da janela: opaco (material opcional)
 
-A janela usa `WindowBackgroundAppearance::MicaAltBackdrop` por padrão;
-`XEMNAS_BACKDROP=acrylic` pede blur das janelas atrás (`Blurred`), `mica` o
-`MicaBackdrop` mais claro e `none` a janela opaca (`Opaque`). O shell pinta por
-cima uma camada translúcida — `color.chrome` na moldura e `layer.fill` no
-conteúdo — no modelo de três camadas do Fluent (material base → camada de
-comando → camada de conteúdo). O Mica Alt foi removido numa fase anterior por
-falhas visuais no uso e **restaurado em 30/09/2026**: o shell não depende dele.
-Com `none`, ou numa máquina sem material, a janela volta a ser opaca e as
-superfícies internas mantêm o mesmo contraste.
+A janela é `WindowBackgroundAppearance::Opaque` por padrão. O material do
+Windows (Mica Alt) foi removido por falhas visuais, restaurado em 30/09/2026 com
+moldura de vidro e card flutuante, e voltou a ser opcional no mesmo dia: a faixa
+de material e a borda do card pareciam um defeito de renderização. Para
+experimentar, `XEMNAS_BACKDROP=mica-alt`, `mica` ou `acrylic` ligam o material e
+a moldura de vidro (só com o sistema em modo escuro).
 
 **Limite registrado:** GPUI não faz *backdrop blur* por elemento. Superfícies internas (rail, cards, empty state) usam
 a receita translúcida + borda + *inset shadow* descrita abaixo. Para vidro
@@ -247,7 +244,7 @@ Glass não pode depender obrigatoriamente de blur real. Em plataformas ou cenas 
 - preservar o mesmo contraste;
 - nunca bloquear o produto por ausência de blur.
 
-A janela é opaca em todas as plataformas; Mica, acrílico ou blur não são usados. Superfícies internas continuam com receita própria e previsível.
+A janela é opaca por padrão; o material só entra por `XEMNAS_BACKDROP`. Superfícies internas continuam com receita própria e previsível.
 
 ## Layout desktop
 

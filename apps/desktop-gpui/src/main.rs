@@ -215,16 +215,16 @@ fn ai_settings(profile: &std::path::Path) -> AiSettings {
     )
 }
 
-/// The window material. Mica Alt by default: it tints and blurs the wallpaper
-/// and stays smooth while dragging. `XEMNAS_BACKDROP=acrylic` blurs the windows
-/// behind instead (livelier, but the system may drop frames on resize);
-/// `none` paints an opaque window.
+/// The window material. Opaque by default: the system material showed a
+/// strip of raw backdrop and a floating-card edge that read as a rendering
+/// fault. `XEMNAS_BACKDROP=mica-alt|mica|acrylic` opts back into a material
+/// for experiments; the glass frame only switches on in that case.
 fn backdrop_from_env() -> WindowBackgroundAppearance {
     match std::env::var("XEMNAS_BACKDROP").as_deref() {
         Ok("acrylic") => WindowBackgroundAppearance::Blurred,
         Ok("mica") => WindowBackgroundAppearance::MicaBackdrop,
-        Ok("none") => WindowBackgroundAppearance::Opaque,
-        _ => WindowBackgroundAppearance::MicaAltBackdrop,
+        Ok("mica-alt") => WindowBackgroundAppearance::MicaAltBackdrop,
+        _ => WindowBackgroundAppearance::Opaque,
     }
 }
 
@@ -333,22 +333,7 @@ fn run_shell_mode(
                 }),
                 app_id: Some("com.xemnas.desktop".into()),
                 window_min_size: Some(size(px(1180.0), px(760.0))),
-                // Mica Alt as the window material, the darker Mica variant that
-                // Windows 11 provides specifically so a commanding surface —
-                // the title bar and the navigation rail — reads as distinct from
-                // the content beneath it. This is what the design system
-                // anticipated in `docs/design-system-quiet-glass.md` §
-                // "Fallback técnico" ("No Windows, Mica/blur pode ser usado no
-                // fundo da janela quando o backend do GPUI estiver estável").
-                //
-                // The window itself paints nothing: the shell's canvas is a
-                // translucent `layer.fill` over this backdrop, which is the
-                // three-layer Mica model from the Fluent 2 material spec
-                // (base material → commanding layer → content layer). On a
-                // platform without Mica the backdrop is ignored and the same
-                // translucent fill still composites against the opaque canvas,
-                // so contrast is preserved either way. `XEMNAS_BACKDROP=none`
-                // falls back to the opaque window if a machine trips on it.
+                // Opaque unless `XEMNAS_BACKDROP` asks for a material.
                 window_background: backdrop,
                 ..Default::default()
             },
