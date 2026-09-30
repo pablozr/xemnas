@@ -58,6 +58,8 @@ npm run send-fixture          # envia fixture pela outbox (modo CLI)
 
 Variáveis relevantes: `OPENCODE_URL` (padrão `http://127.0.0.1:4096`), `XEMNAS_DATA_DIR`, `XEMNAS_OUTBOX_DIR`.
 
+**Ativação (uma vez, sem publicar):** o OpenCode carrega plugins de arquivos locais — crie `~/.config/opencode/plugins/xemnas.ts` reexportando o build (`export { XemnasOpenCodeAdapter as Xemnas } from "<repo>/adapters/opencode/dist/src/index.js"`; caminho relativo a partir de `plugins/` é `../../../orca/projects/xemnas/...`). O wrapper deve ter **um único export** (o factory), para o OpenCode não registrar os exports utilitários do módulo. Reinicie a sessão do OpenCode após criar o arquivo.
+
 ## Privacidade
 
 - **Local por padrão.** Nenhum dado sai da máquina sem consentimento explícito e perfil configurado (§13 da spec).
