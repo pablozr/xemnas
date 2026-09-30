@@ -9,7 +9,7 @@ use gpui::{div, px, Div, ElementId, Role, Stateful};
 
 use crate::ui::glass::{GlassSurface, GlassVariant};
 use crate::ui::theme::{text_style, Theme};
-use crate::ui::tokens::{RadiusScale, SpacingScale, TypeScale};
+use crate::ui::tokens::{SpacingScale, TypeScale};
 
 /// The four semantic statuses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -104,6 +104,9 @@ pub fn empty_state(
 }
 
 /// The error-state pattern: danger accent, explanation and a recovery hint.
+///
+/// It carries no button of its own: a retry control only belongs where the
+/// caller wires it to a real operation, never as decoration.
 pub fn error_state(
     theme: &Theme,
     id: impl Into<ElementId>,
@@ -146,21 +149,5 @@ pub fn error_state(
             text_style(div(), TypeScale::LABEL)
                 .text_color(theme.colors.status_danger())
                 .child(recovery.to_string()),
-        )
-        .child(
-            div()
-                .id("gallery-error-retry")
-                .mt(px(SpacingScale::S2))
-                .h(px(SpacingScale::S10))
-                .px(px(SpacingScale::S3))
-                .flex()
-                .items_center()
-                .rounded(px(RadiusScale::CONTROL))
-                .border_1()
-                .border_color(theme.colors.glass_border())
-                .text_color(theme.colors.text_primary())
-                .role(Role::Button)
-                .aria_label("Tentar novamente")
-                .child(text_style(div(), TypeScale::LABEL).child("Tentar novamente")),
         )
 }
