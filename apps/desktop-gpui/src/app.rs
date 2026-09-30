@@ -5,6 +5,7 @@ use application::export::Export;
 use application::inbox::{Inbox, InboxStore};
 use application::jobs::JobSummary;
 use application::projects::{ProjectRepository, Projects};
+use application::relations::DecisionRelations;
 use gpui::prelude::*;
 use gpui::{
     actions, deferred, div, px, AnimationExt, App, BoxShadow, Context, ElementId, Entity,
@@ -213,7 +214,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + ContextStores> Shell<R>
         cx: &mut Context<Self>,
         projects: Result<Projects<R>, String>,
         inbox: Option<Inbox<R>>,
-        decisions: Option<(Decisions<R>, Export<R>)>,
+        decisions: Option<(Decisions<R>, Export<R>, DecisionRelations<R>)>,
         context: Option<ContextServices<R>>,
         settings: Option<SettingsServices>,
     ) -> Self {
@@ -289,8 +290,9 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + ContextStores> Shell<R>
         let inbox_subscription = inbox
             .as_ref()
             .map(|screen| cx.observe(screen, |_, _, cx| cx.notify()));
-        let decisions = decisions
-            .map(|(decisions, export)| cx.new(|cx| DecisionsScreen::new(cx, decisions, export)));
+        let decisions = decisions.map(|(decisions, export, relations)| {
+            cx.new(|cx| DecisionsScreen::new(cx, decisions, export, relations))
+        });
         let context = context.map(|services| cx.new(|cx| ContextScreen::new(cx, services)));
         let context_subscription = context.as_ref().map(|screen| {
             cx.subscribe(screen, |shell, _, event: &OpenDecision, cx| {

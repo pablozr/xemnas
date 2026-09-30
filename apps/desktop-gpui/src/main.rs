@@ -364,6 +364,7 @@ fn run_shell_mode(
                 Some((
                     application::decisions::Decisions::new(store.clone()),
                     application::export::Export::new(store.clone()),
+                    application::relations::DecisionRelations::new(store.clone()),
                 )),
                 Some(xemnas_desktop::screens::context::ContextServices {
                     decisions: application::decisions::Decisions::new(store.clone()),

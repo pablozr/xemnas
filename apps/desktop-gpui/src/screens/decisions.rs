@@ -24,6 +24,8 @@ use application::decisions::{
 };
 use application::export::{Export, ExportDocument, ExportError, ExportFormat};
 use application::inbox::InboxStore;
+use application::relations::{DecisionRelations, RelationDirection, RelationStore};
+use domain::relations::RelationKind;
 use gpui::prelude::*;
 use gpui::{
     div, px, AnyElement, ClipboardItem, Context, Entity, FocusHandle, Focusable, Render, Role,
@@ -34,6 +36,16 @@ use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 struct Backend<S> {
     decisions: Decisions<S>,
     export: Export<S>,
+    relations: DecisionRelations<S>,
+}
+/// A relation of the open decision, with the other decision's question.
+#[derive(Clone)]
+struct LinkItem {
+    kind: RelationKind,
+    direction: RelationDirection,
+    other_id: String,
+    question: String,
+    superseded: bool,
 }
 struct IndexEntry {
     id: String,
@@ -50,6 +62,8 @@ enum Outcome {
     Revised(Result<(DecisionDetail, Vec<DecisionSource>), String>),
     Preview(Result<ExportDocument, String>),
     Saved(Result<Option<String>, ExportError>, Option<PathBuf>),
+    Links(String, Vec<LinkItem>),
+    Linked(Result<&'static str, String>),
 }
 #[derive(Clone)]
 enum Action {
@@ -68,10 +82,12 @@ enum Action {
     Source(usize),
     Context(usize),
     Filter,
+    Relate(Option<RelationKind>),
+    Link(String),
 }
 
 /// All storage work runs off the UI thread; project/query generations reject stale reads.
-pub struct DecisionsScreen<S: DecisionStore + InboxStore + Send + 'static> {
+pub struct DecisionsScreen<S: DecisionStore + InboxStore + RelationStore + Send + 'static> {
     /// Row under the pointer, driving the hover spring.
     hovered: Option<String>,
     backend: Option<Backend<S>>,
@@ -106,10 +122,19 @@ pub struct DecisionsScreen<S: DecisionStore + InboxStore + Send + 'static> {
     focus: BTreeMap<String, FocusHandle>,
     reader_focus: FocusHandle,
     restore_focus: bool,
+    /// Relations of the open decision, once loaded.
+    links: Option<Vec<LinkItem>>,
+    /// The relation kind being created, while the picker is open.
+    relating: Option<RelationKind>,
 }
-impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
+impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsScreen<S> {
     /// Mounts the persistent document reader and its project-scoped search.
-    pub fn new(cx: &mut Context<Self>, decisions: Decisions<S>, export: Export<S>) -> Self {
+    pub fn new(
+        cx: &mut Context<Self>,
+        decisions: Decisions<S>,
+        export: Export<S>,
+        relations: DecisionRelations<S>,
+    ) -> Self {
         let search = cx.new(|cx| {
             let mut field = SearchField::new(cx);
             field.set_width(240.0);
@@ -143,7 +168,11 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
         });
         Self {
             hovered: None,
-            backend: Some(Backend { decisions, export }),
+            backend: Some(Backend {
+                decisions,
+                export,
+                relations,
+            }),
             project: None,
             generation: 0,
             busy: false,
@@ -174,6 +203,8 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
             focus: BTreeMap::new(),
             reader_focus: cx.focus_handle(),
             restore_focus: false,
+            links: None,
+            relating: None,
         }
     }
     /// Focuses the index search while the reader is active.
@@ -195,6 +226,45 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
         self.preview = None;
         self.overwrite = None;
         self.expanded = false;
+        self.links = None;
+        self.relating = None;
+    }
+    /// Loads the relations of the open decision in a second pass, so the
+    /// document shows as soon as it is read.
+    fn load_links(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.selected.clone() else {
+            return;
+        };
+        self.run(cx, move |backend| {
+            let links = backend
+                .relations
+                .of(&id)
+                .map(|views| {
+                    views
+                        .into_iter()
+                        .map(|view| {
+                            let other = backend.decisions.detail(&view.other_id).ok();
+                            LinkItem {
+                                kind: view.kind,
+                                direction: view.direction,
+                                question: other
+                                    .as_ref()
+                                    .map(|detail| detail.summary.question.clone())
+                                    .unwrap_or_else(|| "Decisão indisponível".into()),
+                                superseded: other.is_some_and(|detail| {
+                                    detail.summary.status == DecisionStatus::Superseded
+                                }),
+                                other_id: view.other_id,
+                            }
+                        })
+                        .collect()
+                })
+                .unwrap_or_else(|error| {
+                    tracing::error!(error = %error, operation = "relations", "list failed");
+                    Vec::new()
+                });
+            Outcome::Links(id, links)
+        });
     }
     /// Clears cross-project state before loading the selected project's records.
     pub fn set_project(&mut self, project: Option<String>, cx: &mut Context<Self>) {
@@ -306,9 +376,12 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                         if !append{if let Some(id)=next{this.select(id,cx);}else{this.clear_document();}}
                     }
                     Outcome::Search(Ok(hits))=>{this.hits=hits;this.loaded=true;if let Some(hit)=this.hits.first(){this.select(hit.decision_id.clone(),cx);}else{this.clear_document();}}
-                    Outcome::Detail(Ok((detail,sources)))=>this.install(detail,sources),
+                    Outcome::Detail(Ok((detail,sources)))=>{this.install(detail,sources);this.load_links(cx);}
+                    Outcome::Links(id,links)=>{if this.selected.as_deref()==Some(id.as_str()){this.links=Some(links);}}
+                    Outcome::Linked(Ok(message))=>{this.relating=None;this.notice=Some(message.into());this.refresh(cx);}
+                    Outcome::Linked(Err(error))=>this.error=Some(error),
                     Outcome::Revised(Ok((detail,sources)))=>{for row in &mut this.rows{if row.decision_id==detail.summary.decision_id{*row=detail.summary.clone();}}
-                        this.editor=None;this.editor_subscription=None;this.restore_focus=true;this.install(detail,sources);this.notice=Some("Nova versão salva. Histórico preservado.".into());}
+                        this.editor=None;this.editor_subscription=None;this.restore_focus=true;this.install(detail,sources);this.load_links(cx);this.notice=Some("Nova versão salva. Histórico preservado.".into());}
                     Outcome::Preview(Ok(document))=>{this.preview=Some(document);this.overwrite=None;}
                     Outcome::Saved(Ok(Some(path)),_)=>{this.preview=None;this.overwrite=None;this.restore_focus=true;this.notice=Some(format!("Exportado para {path}"));}
                     Outcome::Saved(Ok(None),_)=>{},
@@ -410,6 +483,29 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                     cx.write_to_clipboard(ClipboardItem::new_string(artifact.content.clone()));
                     self.notice = Some("Trecho copiado.".into());
                 }
+            }
+            Action::Relate(kind) => self.relating = kind,
+            Action::Link(target) => {
+                let (Some(kind), Some(source)) = (self.relating, self.selected.clone()) else {
+                    return;
+                };
+                self.run(cx, move |backend| {
+                    let linked = match kind {
+                        RelationKind::Supersedes => backend.relations.supersede(&source, &target),
+                        _ => backend.relations.relate(&source, &target, kind),
+                    };
+                    Outcome::Linked(linked.map(|_| relation_notice(kind)).map_err(|error| {
+                        match error {
+                            application::decisions::DecisionsError::InvalidRelation(reason) => {
+                                format!("Relação não permitida: {reason}.")
+                            }
+                            application::decisions::DecisionsError::Conflict => {
+                                "Uma das decisões mudou de estado. A lista foi atualizada.".into()
+                            }
+                            _ => "Não foi possível registrar a relação.".into(),
+                        }
+                    }))
+                });
             }
             Action::Filter => {
                 if self.editor.is_some() || self.preview.is_some() || !self.query.trim().is_empty()
@@ -554,6 +650,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
             Action::Context(2) => Some(IconName::Activity),
             Action::Context(_) => Some(IconName::Rotate),
             Action::Filter => Some(IconName::Filter),
+            Action::Relate(Some(_)) if label == "Relacionar" => Some(IconName::Plus),
             Action::ExpandSource => Some(IconName::Expand),
             Action::Revise => Some(IconName::Edit),
             Action::CopySource => Some(IconName::Copy),
@@ -1073,7 +1170,8 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                     )
                     .child(context.border_t_0().pt(px(0.0))),
             )
-            .child(self.evidence(cx));
+            .child(self.evidence(cx))
+            .child(self.relations_section(cx));
         document = document.child(
             div()
                 .border_t_1()
@@ -1109,6 +1207,250 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
                 ),
         );
         document.into_any_element()
+    }
+    fn relations_section(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let t = Theme::current(cx);
+        let colors = t.colors;
+        let accepted = self
+            .detail
+            .as_ref()
+            .is_some_and(|detail| detail.summary.status == DecisionStatus::Accepted);
+        let links = self.links.clone().unwrap_or_default();
+        let open = (accepted && self.relating.is_none()).then(|| {
+            self.button(
+                "relate-open".into(),
+                "Relacionar".into(),
+                Action::Relate(Some(RelationKind::DependsOn)),
+                false,
+                cx,
+            )
+        });
+        let header = div()
+            .flex()
+            .items_center()
+            .gap(px(SpacingScale::S2))
+            .child(icon(IconName::Link, 14.0, colors.text_muted()))
+            .child(
+                text_style(div(), TypeScale::HEADING_3)
+                    .flex_1()
+                    .child("Relações"),
+            )
+            .when(!links.is_empty(), |row| {
+                row.child(count_chip(&t, links.len().to_string()))
+            })
+            .children(open);
+        let mut panel = div()
+            .border_t_1()
+            .border_color(colors.hairline_divider())
+            .pt(px(SpacingScale::S4))
+            .flex()
+            .flex_col()
+            .gap(px(SpacingScale::S2))
+            .child(header);
+        if links.is_empty() && self.relating.is_none() {
+            panel = panel.child(
+                text_style(div(), TypeScale::BODY_SMALL)
+                    .text_color(colors.text_muted())
+                    .child(if accepted {
+                        "Sem relações. Ligue esta decisão às que ela substitui, das quais \
+                         depende ou com que conflita."
+                    } else {
+                        "Sem relações registradas."
+                    }),
+            );
+        }
+        let rows: Vec<AnyElement> = links
+            .iter()
+            .enumerate()
+            .map(|(index, link)| {
+                let target = link.other_id.clone();
+                div()
+                    .id(("relation", index))
+                    .flex()
+                    .items_center()
+                    .gap(px(SpacingScale::S3))
+                    .px(px(SpacingScale::S3))
+                    .py(px(SpacingScale::S2))
+                    .rounded(t.radius.control())
+                    .border_1()
+                    .border_color(colors.hairline_divider())
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(colors.glass_fill_medium()))
+                    .active(move |style| style.bg(colors.glass_fill_strong()))
+                    .role(Role::Button)
+                    .aria_label(format!(
+                        "{}: {}",
+                        relation_label(link.kind, link.direction),
+                        link.question
+                    ))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.act(Action::Select(target.clone()), window, cx)
+                    }))
+                    .child(
+                        text_style(div(), TypeScale::META)
+                            .w(px(112.0))
+                            .flex_none()
+                            .text_color(relation_color(&t, link.kind))
+                            .child(relation_label(link.kind, link.direction)),
+                    )
+                    .child(
+                        text_style(div(), TypeScale::BODY_SMALL)
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .truncate()
+                            .child(link.question.clone()),
+                    )
+                    .when(link.superseded, |row| {
+                        row.child(status_pill(&t, colors.text_muted(), "Substituída"))
+                    })
+                    .child(icon(IconName::ChevronRight, 14.0, colors.text_muted()))
+                    .into_any_element()
+            })
+            .collect();
+        panel = panel.children(rows);
+        if let Some(kind) = self.relating {
+            let picker = self.relation_picker(kind, &links, cx);
+            panel = panel.child(picker);
+        }
+        panel.into_any_element()
+    }
+    fn relation_picker(
+        &mut self,
+        kind: RelationKind,
+        links: &[LinkItem],
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let t = Theme::current(cx);
+        let colors = t.colors;
+        let current = self.selected.clone().unwrap_or_default();
+        let candidates: Vec<(String, String)> = self
+            .rows
+            .iter()
+            .filter(|row| {
+                row.decision_id != current
+                    && row.status == DecisionStatus::Accepted
+                    && !links
+                        .iter()
+                        .any(|link| link.other_id == row.decision_id && link.kind == kind)
+            })
+            .map(|row| (row.decision_id.clone(), row.question.clone()))
+            .collect();
+        let hint = match kind {
+            RelationKind::DependsOn => "Esta decisão só vale enquanto a escolhida valer.",
+            RelationKind::ConflictsWith => {
+                "As duas não podem valer juntas; a relação aparece nas duas."
+            }
+            RelationKind::Supersedes => {
+                "A escolhida passa a Substituída, sai do contexto do agente e fica no histórico."
+            }
+        };
+        let mut chips: Vec<AnyElement> = Vec::new();
+        for (option, id, label) in [
+            (RelationKind::DependsOn, "relate-kind-depends", "Depende de"),
+            (
+                RelationKind::ConflictsWith,
+                "relate-kind-conflicts",
+                "Conflita com",
+            ),
+            (
+                RelationKind::Supersedes,
+                "relate-kind-supersedes",
+                "Substitui",
+            ),
+        ] {
+            chips.push(self.button(
+                id.into(),
+                label.into(),
+                Action::Relate(Some(option)),
+                option == kind,
+                cx,
+            ));
+        }
+        let cancel = self.button(
+            "relate-cancel".into(),
+            "Cancelar".into(),
+            Action::Relate(None),
+            false,
+            cx,
+        );
+        let list = if candidates.is_empty() {
+            text_style(div(), TypeScale::BODY_SMALL)
+                .text_color(colors.text_secondary())
+                .child("Nenhuma outra decisão em vigor carregada para relacionar.")
+                .into_any_element()
+        } else {
+            div()
+                .id("relate-candidates")
+                .max_h(px(240.0))
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .role(Role::List)
+                .children(
+                    candidates
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, (id, question))| {
+                            div()
+                                .id(("relate-candidate", index))
+                                .flex()
+                                .items_center()
+                                .gap(px(SpacingScale::S2))
+                                .px(px(SpacingScale::S2))
+                                .py(px(SpacingScale::S2))
+                                .rounded(t.radius.control())
+                                .cursor_pointer()
+                                .hover(move |style| style.bg(colors.glass_fill_medium()))
+                                .active(move |style| style.bg(colors.glass_fill_strong()))
+                                .role(Role::Button)
+                                .aria_label(format!("Relacionar com: {question}"))
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.act(Action::Link(id.clone()), window, cx)
+                                }))
+                                .child(icon(IconName::File, 14.0, colors.text_muted()))
+                                .child(
+                                    text_style(div(), TypeScale::BODY_SMALL)
+                                        .flex_1()
+                                        .min_w(px(0.0))
+                                        .truncate()
+                                        .child(question),
+                                )
+                        }),
+                )
+                .into_any_element()
+        };
+        div()
+            .p(px(SpacingScale::S3))
+            .flex()
+            .flex_col()
+            .gap(px(SpacingScale::S3))
+            .rounded(t.radius.surface())
+            .border_1()
+            .border_color(if kind == RelationKind::Supersedes {
+                colors.status_warning()
+            } else {
+                colors.glass_border_card()
+            })
+            .bg(colors.glass_fill_card())
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(SpacingScale::S1))
+                    .id("relate-kinds")
+                    .role(Role::RadioGroup)
+                    .aria_label("Tipo de relação")
+                    .children(chips)
+                    .child(div().flex_1())
+                    .child(cancel),
+            )
+            .child(
+                text_style(div(), TypeScale::META)
+                    .text_color(colors.text_muted())
+                    .child(hint),
+            )
+            .child(list)
+            .into_any_element()
     }
     fn evidence(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let t = Theme::current(cx);
@@ -1350,7 +1692,7 @@ impl<S: DecisionStore + InboxStore + Send + 'static> DecisionsScreen<S> {
             .into_any_element()
     }
 }
-impl<S: DecisionStore + InboxStore + Send + 'static> Render for DecisionsScreen<S> {
+impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> Render for DecisionsScreen<S> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.restore_focus {
             self.restore_focus = false;
@@ -1487,5 +1829,32 @@ fn month_label(value: &str) -> String {
             format!("{} {}", months[date.month0() as usize], date.year())
         }
         Err(_) => "Data não registrada".into(),
+    }
+}
+
+/// How a relation reads from the open decision.
+fn relation_label(kind: RelationKind, direction: RelationDirection) -> &'static str {
+    match (kind, direction) {
+        (RelationKind::Supersedes, RelationDirection::Outgoing) => "Substitui",
+        (RelationKind::Supersedes, RelationDirection::Incoming) => "Substituída por",
+        (RelationKind::DependsOn, RelationDirection::Outgoing) => "Depende de",
+        (RelationKind::DependsOn, RelationDirection::Incoming) => "É base de",
+        (RelationKind::ConflictsWith, _) => "Conflita com",
+    }
+}
+
+fn relation_color(theme: &Theme, kind: RelationKind) -> gpui::Rgba {
+    match kind {
+        RelationKind::Supersedes => theme.colors.accent_hover(),
+        RelationKind::DependsOn => theme.colors.status_info(),
+        RelationKind::ConflictsWith => theme.colors.status_warning(),
+    }
+}
+
+fn relation_notice(kind: RelationKind) -> &'static str {
+    match kind {
+        RelationKind::Supersedes => "Decisão substituída. A anterior segue no histórico.",
+        RelationKind::DependsOn => "Dependência registrada.",
+        RelationKind::ConflictsWith => "Conflito registrado nas duas decisões.",
     }
 }
