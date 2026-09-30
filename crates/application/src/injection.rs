@@ -2,7 +2,15 @@
 
 use std::collections::BTreeSet;
 
-use crate::context::{ContextError, ContextPack, PackClaim, PackDecision};
+use crate::claims::ClaimStore;
+use crate::clock::now_rfc3339;
+use crate::context::{
+    ContextError, ContextPack, ContextPacks, ContextProvider, ContextRequest, ContextStore,
+    PackClaim, PackDecision, MAX_BUDGET_CHARS, MAX_TASK_CHARS,
+};
+use crate::decisions::DecisionStore;
+use crate::projects::{canonicalize_location, ProjectRepository};
+use crate::relations::RelationStore;
 
 /// Default token budget for one injected block.
 pub const DEFAULT_BUDGET_TOKENS: usize = 300;
@@ -123,6 +131,130 @@ pub trait InjectionStore {
 
     /// Records one delivered block.
     fn record_injection(&self, record: &InjectionRecord) -> Result<(), ContextError>;
+}
+
+/// Longest accepted agent session identifier.
+pub const MAX_SESSION_ID_CHARS: usize = 200;
+
+/// What the adapter asks for on each agent turn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InjectionRequest {
+    /// Directory the agent works in.
+    pub canonical_path: String,
+    /// Agent session identifier.
+    pub session_id: String,
+    /// User prompt; used only for matching and never stored.
+    pub prompt: String,
+    /// Delivery mode.
+    pub mode: InjectionMode,
+    /// Token budget; [`DEFAULT_BUDGET_TOKENS`] when `None`.
+    pub budget_tokens: Option<usize>,
+}
+
+/// Result of one turn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InjectionOutcome {
+    /// Block to append; always `None` in shadow mode or when nothing is new.
+    pub block: Option<String>,
+    /// Estimated tokens of the computed block (also in shadow mode).
+    pub tokens: usize,
+    /// Items in the computed block.
+    pub items: usize,
+    /// Relevant items left out by the budget.
+    pub omitted: usize,
+}
+
+impl InjectionOutcome {
+    fn empty() -> Self {
+        Self {
+            block: None,
+            tokens: 0,
+            items: 0,
+            omitted: 0,
+        }
+    }
+}
+
+/// Computes, deduplicates and records the block for one agent turn.
+#[derive(Debug, Clone)]
+pub struct ContextInjection<S> {
+    store: S,
+}
+
+impl<S> ContextInjection<S>
+where
+    S: InjectionStore
+        + ContextStore
+        + DecisionStore
+        + RelationStore
+        + ClaimStore
+        + ProjectRepository
+        + Clone,
+{
+    /// Wraps the store.
+    pub fn new(store: S) -> Self {
+        Self { store }
+    }
+
+    /// Prepares the block for one turn; an unregistered directory or a prompt
+    /// without searchable words yields an empty outcome, not an error.
+    ///
+    /// # Errors
+    ///
+    /// `invalid_request` for a malformed session or budget, `storage` otherwise.
+    pub fn prepare(&self, request: InjectionRequest) -> Result<InjectionOutcome, ContextError> {
+        let session = request.session_id.trim();
+        if session.is_empty() || session.chars().count() > MAX_SESSION_ID_CHARS {
+            return Err(ContextError::InvalidRequest("sessão inválida".into()));
+        }
+        let budget = request.budget_tokens.unwrap_or(DEFAULT_BUDGET_TOKENS);
+        if !(MIN_BUDGET_TOKENS..=MAX_BUDGET_TOKENS).contains(&budget) {
+            return Err(ContextError::InvalidRequest(
+                "o orçamento deve ficar entre 50 e 2.000 tokens".into(),
+            ));
+        }
+        let prompt: String = request.prompt.trim().chars().take(MAX_TASK_CHARS).collect();
+        if prompt.is_empty() {
+            return Ok(InjectionOutcome::empty());
+        }
+        let Ok(location) = canonicalize_location(&request.canonical_path) else {
+            return Ok(InjectionOutcome::empty());
+        };
+        let Some(project) = self
+            .store
+            .find_by_location(&location)
+            .map_err(|error| ContextError::Storage(error.to_string()))?
+        else {
+            return Ok(InjectionOutcome::empty());
+        };
+
+        let pack = ContextPacks::new(self.store.clone()).build_pack(ContextRequest {
+            project_id: project.id.clone(),
+            task: prompt,
+            as_of: None,
+            budget_chars: Some(MAX_BUDGET_CHARS),
+        })?;
+        let delivered = self.store.delivered(session, request.mode)?;
+        let Some(block) = render_compact(&pack, budget, &delivered) else {
+            return Ok(InjectionOutcome::empty());
+        };
+        self.store.record_injection(&InjectionRecord {
+            injection_id: uuid::Uuid::now_v7().to_string(),
+            session_id: session.to_string(),
+            project_id: project.id,
+            mode: request.mode,
+            tokens: block.tokens,
+            omitted: block.omitted,
+            created_at: now_rfc3339(),
+            items: block.items.clone(),
+        })?;
+        Ok(InjectionOutcome {
+            tokens: block.tokens,
+            items: block.items.len(),
+            omitted: block.omitted,
+            block: (request.mode == InjectionMode::Inject).then_some(block.text),
+        })
+    }
 }
 
 /// Rough token estimate: one token per four characters, rounded up.
