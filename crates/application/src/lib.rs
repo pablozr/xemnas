@@ -16,6 +16,7 @@ pub mod paths;
 pub mod profile;
 pub mod projects;
 pub mod redact;
+pub mod relations;
 
 pub use analysis::{AnalysisOutcome, AnalyzeCapture, ExtractorFactory};
 pub use captures::{
@@ -75,6 +76,9 @@ pub use profile::{
 };
 pub use projects::{
     canonicalize_location, ProjectError, ProjectRecord, ProjectRepository, Projects,
+};
+pub use relations::{
+    DecisionRelations, RelationDirection, RelationInsert, RelationRow, RelationStore, RelationView,
 };
 pub use serde_json;
 

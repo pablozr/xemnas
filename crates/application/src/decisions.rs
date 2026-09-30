@@ -18,7 +18,7 @@ pub const MAX_ARRAY_ITEM_CHARS: usize = 1_000;
 pub enum DecisionStatus {
     /// The decision is current.
     Accepted,
-    /// The decision was replaced by a newer one (model only; no MVP action).
+    /// The decision was replaced by a newer one.
     Superseded,
 }
 
@@ -48,8 +48,10 @@ pub enum DecisionsError {
     Storage(String),
     /// No decision with the requested id exists.
     NotFound,
-    /// Another revision was saved first: the editor's version is stale.
+    /// Another revision was saved first, or the decision is no longer accepted.
     Conflict,
+    /// The requested relation is not allowed.
+    InvalidRelation(String),
     /// The submitted revision failed validation.
     InvalidEdits(String),
     /// The search query was empty after sanitization.
@@ -67,6 +69,7 @@ impl DecisionsError {
             Self::Storage(_) => "storage",
             Self::NotFound => "not_found",
             Self::Conflict => "conflict",
+            Self::InvalidRelation(_) => "invalid_relation",
             Self::InvalidEdits(_) => "invalid_edits",
             Self::InvalidQuery(_) => "invalid_query",
             Self::InvalidFilter(_) => "invalid_filter",
@@ -81,7 +84,8 @@ impl std::fmt::Display for DecisionsError {
             Self::Storage(message) => write!(formatter, "falha de armazenamento: {message}"),
             Self::NotFound => formatter.write_str("decisão não encontrada"),
             Self::Conflict => formatter
-                .write_str("a decisão recebeu outra versão; atualize antes de salvar novamente"),
+                .write_str("a decisão mudou ou não está mais vigente; atualize e tente de novo"),
+            Self::InvalidRelation(message) => write!(formatter, "relação inválida: {message}"),
             Self::InvalidEdits(message) => write!(formatter, "revisão inválida: {message}"),
             Self::InvalidQuery(message) => write!(formatter, "consulta inválida: {message}"),
             Self::InvalidFilter(message) => write!(formatter, "filtro inválido: {message}"),
