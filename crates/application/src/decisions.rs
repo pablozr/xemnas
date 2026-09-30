@@ -666,8 +666,32 @@ impl<S: DecisionStore> Decisions<S> {
 
     /// Revises a decision: snapshots the new version and updates the live row.
     pub fn revise(&self, id: &str, edits: DecisionEdits) -> Result<DecisionDetail, DecisionsError> {
+        self.revise_checked(id, None, edits)
+    }
+
+    /// Saves a revision only if the version displayed by the editor is still current.
+    pub fn revise_version(
+        &self,
+        id: &str,
+        expected_version: i64,
+        edits: DecisionEdits,
+    ) -> Result<DecisionDetail, DecisionsError> {
+        self.revise_checked(id, Some(expected_version), edits)
+    }
+
+    fn revise_checked(
+        &self,
+        id: &str,
+        expected: Option<i64>,
+        edits: DecisionEdits,
+    ) -> Result<DecisionDetail, DecisionsError> {
         let edits = edits.validate()?;
         let row = self.store.get(id)?.ok_or(DecisionsError::NotFound)?;
+        if expected.is_some_and(|expected| row.version != expected) {
+            return Err(DecisionsError::InvalidEdits(
+                "a decisão recebeu outra versão".into(),
+            ));
+        }
         let content = DecisionContent {
             question: edits.question.unwrap_or(row.question),
             choice: edits.choice.unwrap_or(row.choice),

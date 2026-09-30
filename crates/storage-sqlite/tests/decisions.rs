@@ -369,6 +369,24 @@ fn revise_updates_the_index_and_keeps_the_history() {
     assert_eq!(versions, vec![2, 1], "both snapshots remain readable");
     assert_eq!(detail.evidence.len(), 2);
 
+    let stale = decisions.revise_version(
+        &outcome.decision_id,
+        1,
+        DecisionEdits {
+            rationale: Some("stale editor must not overwrite".into()),
+            ..DecisionEdits::default()
+        },
+    );
+    assert!(stale.is_err());
+    assert_eq!(
+        decisions
+            .detail(&outcome.decision_id)
+            .unwrap()
+            .summary
+            .version,
+        2
+    );
+
     // The index follows the live version: the new term matches, the old does not.
     let hits = decisions
         .search(&SearchQuery {
