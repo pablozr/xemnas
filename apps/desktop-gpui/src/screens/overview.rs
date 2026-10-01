@@ -293,8 +293,8 @@ impl OverviewScreen {
                 .bg(colors.glass_fill_low())
                 .child(icon(
                     match citation.kind.as_str() {
-                        "decision" => IconName::File,
-                        "document" => IconName::List,
+                        "decision" => IconName::Decision,
+                        "document" => IconName::Book,
                         _ => IconName::Shield,
                     },
                     11.0,
@@ -475,7 +475,7 @@ impl OverviewScreen {
                             .aria_label(format!("Abrir {name} no Mapa"))
                             .tooltip(tooltip("Abrir no Mapa", None))
                             .focus_visible(crate::ui::controls::focus_ring(theme))
-                            .child(icon(IconName::Graph, 12.0, colors.text_muted()))
+                            .child(icon(IconName::Component, 12.0, colors.text_muted()))
                             .child(
                                 text_style(div(), TypeScale::META)
                                     .text_color(colors.text_secondary())

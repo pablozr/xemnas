@@ -37,7 +37,7 @@ use crate::ui::controls::{action_button, icon_action, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
     count_chip, empty_panel, error_banner, mark_selected, panel_title, reading_page, section_label,
-    segment, segmented, skeleton_list, status_pill, toast, TOAST_DURATION,
+    segment, segmented, skeleton_list, tag, toast, TOAST_DURATION,
 };
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme};
@@ -1048,7 +1048,7 @@ impl<S: MapStores> MapScreen<S> {
             (View::Overview, IconName::Graph, "Visão geral", None),
             (
                 View::Suggestions,
-                IconName::Rotate,
+                IconName::Lightbulb,
                 "Sugestões",
                 (pending > 0).then(|| pending.to_string()),
             ),
@@ -1228,7 +1228,7 @@ impl<S: MapStores> MapScreen<S> {
         {
             return empty_panel(
                 theme,
-                IconName::Rotate,
+                IconName::Lightbulb,
                 "Sugestões",
                 "Nada para revisar",
                 "Sugestões aparecem quando decisões confirmadas tocam arquivos ou adicionam \
@@ -1310,14 +1310,9 @@ impl<S: MapStores> MapScreen<S> {
                                         .flex()
                                         .items_center()
                                         .gap(px(SpacingScale::S2))
-                                        .child(status_pill(
-                                            theme,
-                                            if record.kind == RelationKind::ConflictsWith {
-                                                colors.status_warning()
-                                            } else {
-                                                colors.status_info()
-                                            },
-                                            verb,
+                                        .child(tag(theme, verb).when(
+                                            record.kind == RelationKind::ConflictsWith,
+                                            |tag| tag.text_color(colors.status_warning()),
                                         ))
                                         .child(
                                             text_style(div(), TypeScale::BODY_SMALL)
@@ -1418,11 +1413,7 @@ impl<S: MapStores> MapScreen<S> {
                                         .flex()
                                         .items_center()
                                         .gap(px(SpacingScale::S2))
-                                        .child(status_pill(
-                                            theme,
-                                            colors.status_info(),
-                                            claim_label(record.kind.as_str()),
-                                        ))
+                                        .child(tag(theme, claim_label(record.kind.as_str())))
                                         .child(
                                             text_style(div(), TypeScale::ROW_TITLE)
                                                 .child(record.statement.clone()),
@@ -2094,7 +2085,7 @@ impl<S: MapStores> MapScreen<S> {
                     move |this, cx| this.open_entity(id.clone(), cx),
                     cx,
                 )
-                .child(icon(IconName::Layers, 16.0, colors.text_muted()))
+                .child(icon(IconName::Component, 16.0, colors.text_muted()))
                 .child(
                     text_style(div(), TypeScale::ROW_TITLE)
                         .flex_1()
@@ -2367,7 +2358,7 @@ impl<S: MapStores> MapScreen<S> {
             (
                 Layout::Blocks,
                 "map-layout-blocks",
-                IconName::Layers,
+                IconName::Blocks,
                 "Blocos",
             ),
             (Layout::Graph, "map-layout-graph", IconName::Graph, "Grafo"),
@@ -2952,7 +2943,7 @@ impl<S: MapStores> Render for MapScreen<S> {
             if self.error.is_some() {
                 empty_panel(
                     &theme,
-                    IconName::Layers,
+                    IconName::Graph,
                     "Mapa",
                     "Não foi possível carregar o mapa",
                     "Tente de novo; seus dados não foram alterados.",
@@ -3469,7 +3460,7 @@ fn kind_plural(kind: EntityKind) -> &'static str {
 
 fn kind_icon(kind: EntityKind) -> IconName {
     match kind {
-        EntityKind::Component => IconName::Layers,
+        EntityKind::Component => IconName::Component,
         EntityKind::Technology => IconName::Cpu,
     }
 }

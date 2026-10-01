@@ -24,8 +24,8 @@ use crate::ui::glass::focus_ring;
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
     action_footer, count_chip, empty_panel, error_banner, fade_in, hover_tint, kbd, mark_selected,
-    panel_title, reading_title, section_label, skeleton_list, status_pill, toast, track_hover,
-    word_wrapped, READING_WIDTH, TOAST_DURATION,
+    panel_title, reading_title, section_header, section_label, skeleton_list, status_pill, tag,
+    toast, track_hover, word_wrapped, READING_WIDTH, TOAST_DURATION,
 };
 use crate::ui::search_field::SearchField;
 use crate::ui::theme::{text_style, Theme};
@@ -800,7 +800,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                 _ => "muda",
             };
             let glyph = match link.entity_kind {
-                EntityKind::Component => IconName::Layers,
+                EntityKind::Component => IconName::Component,
                 EntityKind::Technology => IconName::Cpu,
             };
             list = list.child(
@@ -901,22 +901,12 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                 .flex_col()
                 .gap(px(SpacingScale::S2))
                 .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(SpacingScale::S2))
-                        .child(icon(IconName::Graph, 14.0, colors.text_muted()))
-                        .child(
-                            text_style(div(), TypeScale::HEADING_3)
-                                .flex_1()
-                                .child("No mapa"),
-                        )
-                        .when(!links.links.is_empty(), |row| {
-                            row.child(count_chip(
-                                theme,
-                                format!("{kept} de {}", links.links.len()),
-                            ))
-                        }),
+                    section_header(theme, "No mapa").when(!links.links.is_empty(), |row| {
+                        row.child(count_chip(
+                            theme,
+                            format!("{kept} de {}", links.links.len()),
+                        ))
+                    }),
                 )
                 .when(!links.links.is_empty(), |section| {
                     section.child(
@@ -948,7 +938,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             if self.loaded && self.rows.is_empty() && !self.busy {
                 return empty_panel(
                     &theme,
-                    IconName::List,
+                    IconName::Inbox,
                     "Fila de revisão",
                     "Nada aguardando revisão",
                     "Quando uma sessão do OpenCode registrar uma escolha de engenharia, o extrator propõe um candidato aqui para você confirmar, ajustar ou rejeitar.",
@@ -1043,7 +1033,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                     .gap(px(SpacingScale::S3))
                     .child(status_badge(detail.summary.status, theme))
                     .when(detail.summary.kind == CandidateKind::Rule, |line| {
-                        line.child(status_pill(&theme, theme.colors.status_info(), "Regra"))
+                        line.child(tag(&theme, "Regra"))
                     })
                     .child(
                         text_style(div(), TypeScale::META)
@@ -1093,25 +1083,13 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                     .flex()
                     .flex_col()
                     .gap(px(SpacingScale::S3))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(SpacingScale::S2))
-                            .child(icon(IconName::Link, 14.0, theme.colors.text_muted()))
-                            .child(
-                                text_style(div(), TypeScale::HEADING_3)
-                                    .flex_1()
-                                    .child("Evidências"),
-                            )
-                            .child(count_chip(
-                                &theme,
-                                match detail.artifacts.len() {
-                                    1 => "1 fonte".to_string(),
-                                    n => format!("{n} fontes"),
-                                },
-                            )),
-                    )
+                    .child(section_header(&theme, "Evidências").child(count_chip(
+                        &theme,
+                        match detail.artifacts.len() {
+                            1 => "1 fonte".to_string(),
+                            n => format!("{n} fontes"),
+                        },
+                    )))
                     .child(evidence_block),
             )
             .child(
@@ -1330,7 +1308,7 @@ fn project_label(location: &str) -> &str {
 
 fn status_badge(status: CandidateStatus, theme: Theme) -> Div {
     let (label, color) = match status {
-        CandidateStatus::Pending => ("Pendente", theme.colors.status_warning()),
+        CandidateStatus::Pending => ("Pendente", theme.colors.text_muted()),
         CandidateStatus::Snoozed => ("Adiado", theme.colors.status_info()),
         CandidateStatus::Accepted => ("Confirmado", theme.colors.status_success()),
         CandidateStatus::EditedAndAccepted => {

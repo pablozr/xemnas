@@ -43,10 +43,28 @@ macro_rules! glyph {
 /// The icon family. One glyph per concept.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IconName {
-    /// The review queue.
+    /// Something read as an ordered list (conventions).
     List,
-    /// A decision document or a source file.
+    /// A source file: evidence and the file lens.
     File,
+    /// The review queue: candidates waiting for a person.
+    Inbox,
+    /// A decision: one road taken where the path forked.
+    Decision,
+    /// A component of the project map.
+    Component,
+    /// A project document (docs/, specs/, ADRs, READMEs).
+    Book,
+    /// Trying a task against the context, without saving.
+    Flask,
+    /// A goal the project works toward.
+    Flag,
+    /// The state of a destination at a glance.
+    Gauge,
+    /// Something the app suggests and a person confirms.
+    Lightbulb,
+    /// The map drawn as blocks.
+    Blocks,
     /// Project properties.
     Info,
     /// A tracked project folder.
@@ -61,9 +79,9 @@ pub enum IconName {
     Contrast,
     /// Version history.
     Clock,
-    /// Context of a decision (the section).
+    /// What the agent receives: the Context destination.
     Layers,
-    /// Scope: what the decision covers.
+    /// Scope: what a decision covers.
     Target,
     /// Assumptions held as true.
     CheckCircle,
@@ -71,7 +89,7 @@ pub enum IconName {
     Activity,
     /// Conditions to reconsider the decision.
     Rotate,
-    /// Evidence and provenance links.
+    /// A link between two things on the map.
     Link,
     /// Status filter.
     Filter,
@@ -127,6 +145,33 @@ impl IconName {
             Self::List => {
                 glyph!(r#"<path d="M8 6h12M8 12h12M8 18h12M3.5 6h.5M3.5 12h.5M3.5 18h.5"/>"#)
             }
+            Self::Inbox => glyph!(
+                r#"<path d="M21.5 12.5h-5.5l-2 3h-4l-2-3H2.5"/><path d="M5.6 5.1 2.5 12.5v5a2 2 0 0 0 2 2h15a2 2 0 0 0 2-2v-5l-3.1-7.4a2 2 0 0 0-1.85-1.1H7.45a2 2 0 0 0-1.85 1.1z"/>"#
+            ),
+            Self::Decision => glyph!(
+                r#"<path d="M12 3v3M12 13.5V21"/><path d="M5.5 6h11.3l3.2 3.75-3.2 3.75H5.5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1z"/>"#
+            ),
+            Self::Component => glyph!(
+                r#"<path d="M20.5 7.75 12 3 3.5 7.75v8.5L12 21l8.5-4.75z"/><path d="m3.75 7.9 8.25 4.6 8.25-4.6M12 12.5V21"/>"#
+            ),
+            Self::Book => glyph!(
+                r#"<path d="M12 7v13.5"/><path d="M3.5 5a1 1 0 0 1 1-1H8a4 4 0 0 1 4 4 4 4 0 0 1 4-4h3.5a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H15a3 3 0 0 0-3 3 3 3 0 0 0-3-3H4.5a1 1 0 0 1-1-1z"/>"#
+            ),
+            Self::Flask => glyph!(
+                r#"<path d="M9.5 3h5M10 3v6L4.6 18.5A1.7 1.7 0 0 0 6.1 21h11.8a1.7 1.7 0 0 0 1.5-2.5L14 9V3"/><path d="M7 15h10"/>"#
+            ),
+            Self::Flag => glyph!(
+                r#"<path d="M5 21V4"/><path d="M5 4.5c4-2 6.5 2 10.5 0 1.6-.8 3.5-.5 3.5-.5v9s-1.9-.3-3.5.5c-4 2-6.5-2-10.5 0"/>"#
+            ),
+            Self::Gauge => glyph!(
+                r#"<path d="M4.2 18.5a9 9 0 1 1 15.6 0"/><path d="m12 14 4-4.5"/><circle cx="12" cy="14" r=".75"/>"#
+            ),
+            Self::Lightbulb => glyph!(
+                r#"<path d="M9 18h6M10 21h4"/><path d="M15 14.5c.2-1 .8-1.8 1.6-2.6A5.8 5.8 0 0 0 18 8a6 6 0 0 0-12 0c0 1.4.5 2.8 1.4 3.9.8.8 1.4 1.6 1.6 2.6"/>"#
+            ),
+            Self::Blocks => glyph!(
+                r#"<rect x="3.5" y="3.5" width="7" height="7" rx="1.25"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.25"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.25"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.25"/>"#
+            ),
             Self::File => glyph!(
                 r#"<path d="M14 2.5H6.5a2 2 0 0 0-2 2v15a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V8z"/><path d="M14 2.5V8h5.5"/>"#
             ),

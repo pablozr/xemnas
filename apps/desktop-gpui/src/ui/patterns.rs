@@ -336,6 +336,19 @@ pub fn status_pill(theme: &Theme, color: Rgba, label: &'static str) -> Div {
         .child(label)
 }
 
+/// A kind or a verb ("Regra", "Restrição", "depende de"): the pill's shape
+/// without the dot. The dot belongs to [`status_pill`] and means a state.
+pub fn tag(theme: &Theme, label: impl Into<SharedString>) -> Div {
+    text_style(div(), TypeScale::META)
+        .flex_none()
+        .px(px(SpacingScale::S2))
+        .py(px(2.0))
+        .rounded(px(4.0))
+        .bg(theme.colors.surface())
+        .text_color(theme.colors.text_secondary())
+        .child(label.into())
+}
+
 /// Width of the index rail beside a reading column (Mapa, Contexto).
 pub const INDEX_WIDTH: f32 = 296.0;
 
@@ -462,6 +475,19 @@ pub fn section_label(theme: &Theme, label: &str) -> Div {
     text_style(div(), TypeScale::META)
         .text_color(theme.colors.text_muted())
         .child(label.to_uppercase())
+}
+
+/// The heading of a section in a reading page: the uppercase label and, at
+/// the right, whatever the caller adds (a count, one quiet action). Every
+/// section of every reading page uses this one shape; there is no second,
+/// bolder heading with an icon.
+pub fn section_header(theme: &Theme, label: &str) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(SpacingScale::S2))
+        .min_h(px(20.0))
+        .child(section_label(theme, label).flex_1())
 }
 
 /// The single selection treatment for list rows: the `selection` fill plus a

@@ -44,7 +44,7 @@ use crate::ui::controls::{action_button, button_foreground, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
     count_chip, empty_panel, error_banner, index_rail, index_row, panel_title, reading_page,
-    section_label, skeleton_list, status_pill, toast, TOAST_DURATION,
+    section_header, section_label, skeleton_list, status_pill, toast, TOAST_DURATION,
 };
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme};
@@ -138,12 +138,12 @@ impl Section {
 
     fn glyph(self) -> IconName {
         match self {
-            Self::Overview => IconName::Activity,
+            Self::Overview => IconName::Gauge,
             Self::Deliveries => IconName::Clock,
-            Self::Test => IconName::Target,
-            Self::Decisions => IconName::File,
+            Self::Test => IconName::Flask,
+            Self::Decisions => IconName::Decision,
             Self::Rules => IconName::Shield,
-            Self::Documents => IconName::List,
+            Self::Documents => IconName::Book,
             Self::Mode => IconName::Settings,
         }
     }
@@ -764,7 +764,7 @@ impl<S: ContextStores> ContextScreen<S> {
                             .on_click(
                                 cx.listener(move |_, _, _, cx| cx.emit(OpenDecision(id.clone()))),
                             )
-                            .child(icon(IconName::File, 14.0, colors.text_muted()))
+                            .child(icon(IconName::Decision, 14.0, colors.text_muted()))
                             .child(
                                 div()
                                     .flex_1()
@@ -834,7 +834,20 @@ impl<S: ContextStores> ContextScreen<S> {
             .flex()
             .items_center()
             .gap(px(SpacingScale::S2))
-            .child(div().flex_1())
+            .child(
+                text_style(div(), TypeScale::META)
+                    .flex_1()
+                    .text_color(colors.text_muted())
+                    .child(if documents.is_empty() {
+                        "Nenhum documento lido ainda.".to_owned()
+                    } else {
+                        plural(
+                            documents.len(),
+                            "documento lido da pasta do projeto",
+                            "documentos lidos da pasta do projeto",
+                        )
+                    }),
+            )
             .child(reread);
         if documents.is_empty() {
             return div()
@@ -869,16 +882,7 @@ impl<S: ContextStores> ContextScreen<S> {
                     .flex_col()
                     .gap(px(SpacingScale::S1))
                     .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(SpacingScale::S2))
-                            .child(icon(IconName::File, 14.0, colors.text_secondary()))
-                            .child(
-                                text_style(div(), TypeScale::LABEL)
-                                    .text_color(colors.text_secondary())
-                                    .child(document_kind_plural(kind)),
-                            )
+                        section_header(theme, document_kind_plural(kind))
                             .child(count_chip(theme, items.len().to_string())),
                     )
                     .children(items.into_iter().take(DOCUMENTS_SHOWN).map(|document| {
@@ -887,7 +891,7 @@ impl<S: ContextStores> ContextScreen<S> {
                             .flex_col()
                             .gap(px(2.0))
                             .py(px(SpacingScale::S2))
-                            .pl(px(SpacingScale::S6 - 2.0))
+                            .px(px(SpacingScale::S3))
                             .child(
                                 text_style(div(), TypeScale::ROW_TITLE)
                                     .text_color(colors.text_primary())
@@ -960,16 +964,7 @@ impl<S: ContextStores> ContextScreen<S> {
                         .flex_col()
                         .gap(px(SpacingScale::S1))
                         .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(SpacingScale::S2))
-                                .child(icon(kind_icon(kind), 14.0, colors.text_secondary()))
-                                .child(
-                                    text_style(div(), TypeScale::LABEL)
-                                        .text_color(colors.text_secondary())
-                                        .child(kind_plural(kind)),
-                                )
+                            section_header(theme, kind_plural(kind))
                                 .child(count_chip(theme, items.len().to_string())),
                         )
                         .children(
@@ -1234,7 +1229,7 @@ impl<S: ContextStores> ContextScreen<S> {
                         .flex()
                         .gap(px(SpacingScale::S3))
                         .child(div().mt(px(3.0)).child(icon(
-                            IconName::File,
+                            IconName::Decision,
                             14.0,
                             colors.accent_hover(),
                         )))
@@ -1266,7 +1261,7 @@ impl<S: ContextStores> ContextScreen<S> {
                         .flex()
                         .gap(px(SpacingScale::S3))
                         .child(div().mt(px(3.0)).child(icon(
-                            kind.map(kind_icon).unwrap_or(IconName::Target),
+                            kind.map(kind_icon).unwrap_or(IconName::Shield),
                             14.0,
                             colors.text_secondary(),
                         )))
@@ -2078,7 +2073,7 @@ fn delivery_items(theme: &Theme, delivery: &Delivery) -> Div {
                 .gap(px(SpacingScale::S2))
                 .child(div().mt(px(3.0)).child(icon(
                     match item.kind {
-                        ItemKind::Decision => IconName::File,
+                        ItemKind::Decision => IconName::Decision,
                         ItemKind::Claim => IconName::Shield,
                     },
                     13.0,
@@ -2377,7 +2372,7 @@ fn kind_icon(kind: ClaimKind) -> IconName {
     match kind {
         ClaimKind::Assumption => IconName::CheckCircle,
         ClaimKind::Constraint => IconName::Shield,
-        ClaimKind::Goal => IconName::Target,
+        ClaimKind::Goal => IconName::Flag,
         ClaimKind::Convention => IconName::List,
     }
 }

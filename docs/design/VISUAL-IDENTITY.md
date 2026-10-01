@@ -49,6 +49,23 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   depende do blur.
 - Cada informação tem um lugar: contagem na lista lateral, título da seção na
   própria seção; não repetir a mesma informação no título e no rodapé.
+- **Um glifo por conceito** (`ui/icons.rs`): Revisão = `Inbox`; decisão =
+  `Decision` (placa); componente = `Component` (caixa); tecnologia = `Cpu`;
+  regra = `Shield`; documento do projeto = `Book`; arquivo de código e
+  evidência = `File`; Contexto = `Layers`; Mapa = `Graph`; Visão = `Compass`;
+  sugestão = `Lightbulb`; ligação do mapa = `Link`; visão geral de um destino =
+  `Gauge`; testar uma tarefa = `Flask`; objetivo = `Flag`; escopo = `Target`.
+  Um ícone novo entra nessa lista; nunca reaproveitar um glifo para outro
+  conceito.
+- **Títulos de seção têm uma forma só**: `section_header` (rótulo em
+  versalete META esmaecido) com, à direita, uma contagem (`count_chip`) ou uma
+  ação discreta. Não há título em negrito com ícone dentro de uma página de
+  leitura; grupos de uma lista (tipos de regra, tipos de documento) usam o
+  mesmo cabeçalho.
+- **Pílula com bolinha é estado** (`status_pill`: Pendente, Confirmada,
+  Enviado…). Tipo e verbo ("Regra", "Restrição", "depende de") são `tag`, a
+  mesma forma sem bolinha; "conflita com" leva o texto em âmbar. Âmbar é
+  aviso real (conflito, defasagem, revisar); Pendente é neutro.
 
 ## Marca
 
@@ -118,7 +135,7 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   direita e diff com linhas `+`/`-`/`@@` tingidas. Caminho e linhas
   usam metadados registrados; o código tem rolagem horizontal e vertical,
   altura limitada e linhas virtualizadas. Abas extensas rolam horizontalmente.
-  Estados têm badge com texto e bolinha: Pendente, Adiado, Confirmado e Rejeitado.
+  Estados têm badge com texto e bolinha: Pendente (neutro), Adiado, Confirmado e Rejeitado.
 - Sem candidatos, orientar sobre captura e extração. Falhas mostram recuperação
   em linguagem de produto; conteúdo técnico do erro não aparece na interface.
 - Confirmar, Rejeitar, Adiar/Retomar e Ajustar usam os casos de uso da Inbox.
@@ -137,8 +154,8 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
 
 - **Relevância (ADR-0006):** a fila mostra só candidatos com relevância a
   partir de 0,5; quando há escondidos, "Mostrar N de baixa relevância" (botão
-  fantasma sob a busca) os inclui. Candidato a regra leva o selo "Regra" (cor
-  de informação) ao lado do estado; "Por que importa" lista os critérios
+  fantasma sob a busca) os inclui. Candidato a regra leva a `tag` "Regra" ao
+  lado do estado; "Por que importa" lista os critérios
   marcados em texto meta abaixo do cabeçalho.
 
 ## Contexto — o que o agente recebe
@@ -253,10 +270,10 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
     Decisões). Camadas em chips no topo, legenda embaixo à esquerda, zoom e
     "enquadrar" embaixo à direita; Esc limpa, + − 0 aproximam e enquadram.
 - **Sugestões** abrem com **Relações entre decisões**: pergunta da decisão,
-  `status_pill` com o verbo ("depende de", "substitui" em azul, "conflita
-  com" em âmbar), a outra pergunta, a citação entre aspas com filete à
+  `tag` com o verbo ("depende de", "substitui"; "conflita com" com texto
+  âmbar), a outra pergunta, a citação entre aspas com filete à
   esquerda e o motivo em META; Rejeitar (ghost) e Confirmar (secundário).
-  Em seguida, **Contexto sugerido**: `status_pill` com o tipo (Restrição,
+  Em seguida, **Contexto sugerido**: `tag` com o tipo (Restrição,
   Premissa…), a regra, "Da decisão: … · Vale em …" em META e a citação com
   filete; Rejeitar e Confirmar. Em Contexto › Regras, uma regra cuja decisão
   de origem foi substituída leva a pílula âmbar "Revisar" e a frase do porquê.

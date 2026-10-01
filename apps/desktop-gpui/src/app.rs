@@ -175,8 +175,8 @@ impl Destination {
 
     fn glyph(self) -> IconName {
         match self {
-            Self::Review => IconName::List,
-            Self::Decisions => IconName::File,
+            Self::Review => IconName::Inbox,
+            Self::Decisions => IconName::Decision,
             Self::Context => IconName::Layers,
             Self::Map => IconName::Graph,
             Self::Overview => IconName::Compass,
@@ -713,7 +713,7 @@ impl<
                     group: "Candidatos",
                     label: question,
                     detail: None,
-                    glyph: IconName::List,
+                    glyph: IconName::Inbox,
                     shortcut: None,
                     command: Command::Candidate(id),
                 });
@@ -725,7 +725,7 @@ impl<
                     group: "Decisões",
                     label: question,
                     detail: None,
-                    glyph: IconName::File,
+                    glyph: IconName::Decision,
                     shortcut: None,
                     command: Command::Decision(id),
                 });

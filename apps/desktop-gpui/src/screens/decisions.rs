@@ -10,8 +10,8 @@ use crate::ui::{
     icons::{icon, IconName},
     patterns::{
         count_chip, empty_panel, error_banner, fade_in, hover_tint, mark_selected, panel_title,
-        reading_title, section_label, skeleton_list, status_pill, toast, track_hover, word_wrapped,
-        READING_WIDTH, TOAST_DURATION,
+        reading_title, section_header, section_label, skeleton_list, status_pill, toast,
+        track_hover, word_wrapped, READING_WIDTH, TOAST_DURATION,
     },
     search_field::{SearchChanged, SearchField},
     theme::{text_style, Theme},
@@ -643,7 +643,7 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
             button_foreground(&t, kind, !self.busy)
         };
         let glyph = match &action {
-            Action::Document => Some(IconName::File),
+            Action::Document => Some(IconName::Decision),
             Action::History => Some(IconName::Clock),
             Action::Context(0) => Some(IconName::Target),
             Action::Context(1) => Some(IconName::CheckCircle),
@@ -928,7 +928,7 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
             return if self.query.trim().is_empty() {
                 empty_panel(
                     &t,
-                    IconName::File,
+                    IconName::Decision,
                     "Decisões",
                     "Decisões que permanecem",
                     "Confirme uma escolha na Revisão para preservar o documento, suas evidências e seu histórico aqui.",
@@ -1157,17 +1157,7 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
                     .flex()
                     .flex_col()
                     .gap(px(SpacingScale::S3))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(SpacingScale::S2))
-                            .child(icon(IconName::Layers, 14.0, t.colors.text_muted()))
-                            .child(
-                                text_style(div(), TypeScale::HEADING_3)
-                                    .child("Contexto da decisão"),
-                            ),
-                    )
+                    .child(section_header(&t, "Contexto da decisão"))
                     .child(context.border_t_0().pt(px(0.0))),
             )
             .child(self.evidence(cx))
@@ -1221,16 +1211,7 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
                 cx,
             )
         });
-        let header = div()
-            .flex()
-            .items_center()
-            .gap(px(SpacingScale::S2))
-            .child(icon(IconName::Link, 14.0, colors.text_muted()))
-            .child(
-                text_style(div(), TypeScale::HEADING_3)
-                    .flex_1()
-                    .child("Relações"),
-            )
+        let header = section_header(&t, "Relações")
             .when(!links.is_empty(), |row| {
                 row.child(count_chip(&t, links.len().to_string()))
             })
@@ -1403,7 +1384,7 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.act(Action::Link(id.clone()), window, cx)
                                 }))
-                                .child(icon(IconName::File, 14.0, colors.text_muted()))
+                                .child(icon(IconName::Decision, 14.0, colors.text_muted()))
                                 .child(
                                     text_style(div(), TypeScale::BODY_SMALL)
                                         .flex_1()
@@ -1450,23 +1431,13 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
     }
     fn evidence(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let t = Theme::current(cx);
-        let header = div()
-            .flex()
-            .items_center()
-            .gap(px(SpacingScale::S2))
-            .child(icon(IconName::Link, 14.0, t.colors.text_muted()))
-            .child(
-                text_style(div(), TypeScale::HEADING_3)
-                    .flex_1()
-                    .child("Evidências"),
-            )
-            .child(count_chip(
-                &t,
-                match self.sources.len() {
-                    1 => "1 fonte".to_string(),
-                    n => format!("{n} fontes"),
-                },
-            ));
+        let header = section_header(&t, "Evidências").child(count_chip(
+            &t,
+            match self.sources.len() {
+                1 => "1 fonte".to_string(),
+                n => format!("{n} fontes"),
+            },
+        ));
         let panel = div()
             .flex()
             .flex_col()
