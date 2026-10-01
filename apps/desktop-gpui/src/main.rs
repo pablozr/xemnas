@@ -18,8 +18,8 @@ use storage_sqlite::SqliteStore;
 use std::sync::Arc;
 use xemnas_desktop::app::{
     ActivitySource, AdjustItem, CaptureStatus, ConfirmItem, FocusSearch, GoContext, GoDecisions,
-    GoMap, GoReview, NextItem, PaletteClose, PaletteDown, PaletteRun, PaletteUp, PrevItem,
-    RejectItem, SaveEditor, Shell, SnoozeItem, TabNext, TabPrev, TogglePalette,
+    GoMap, GoOverview, GoReview, NextItem, PaletteClose, PaletteDown, PaletteRun, PaletteUp,
+    PrevItem, RejectItem, SaveEditor, Shell, SnoozeItem, TabNext, TabPrev, TogglePalette,
 };
 use xemnas_desktop::screens::settings::SettingsServices;
 use xemnas_desktop::ui::search_field::{
@@ -70,6 +70,7 @@ fn main() {
             catalog: Some(std::sync::Arc::new(demo::SampleCatalog)),
             account: None,
         };
+        let overview = overview_api(ai.clone(), Arc::new(ai_provider::ChatGptSession::default()));
         let services = settings_services(
             Box::new(ai.clone()),
             providers,
@@ -77,7 +78,7 @@ fn main() {
             environment,
             ai,
         );
-        run_shell_mode(store, services, true, CaptureStatus::Demo);
+        run_shell_mode(store, services, overview, true, CaptureStatus::Demo);
         return;
     }
 
@@ -99,6 +100,7 @@ fn main() {
             run_shell_mode(
                 Err(error.to_string()),
                 services,
+                overview_api(ai_settings(&paths.ai_profile), Arc::default()),
                 false,
                 CaptureStatus::Unavailable,
             );
@@ -230,7 +232,8 @@ fn main() {
         environment,
         settings,
     );
-    run_shell_mode(Ok(store), services, false, capture);
+    let overview = overview_api(ai_settings(&paths.ai_profile), chatgpt.clone());
+    run_shell_mode(Ok(store), services, overview, false, capture);
 
     // Graceful shutdown mirrors startup: stop the API first so the discovery
     // and per-session token files are removed, then stop the jobs worker.
@@ -332,9 +335,31 @@ fn backdrop_from_env() -> WindowBackgroundAppearance {
     }
 }
 
+/// Builds the project overview over the opened store.
+type OverviewFactory = Box<dyn FnOnce(SqliteStore) -> Arc<dyn application::overview::OverviewApi>>;
+
+/// The overview reloads the AI profile on every generation, like analysis.
+fn overview_api<P, K>(
+    settings: application::profile::AiSettings<P, K>,
+    chatgpt: Arc<ai_provider::ChatGptSession>,
+) -> OverviewFactory
+where
+    P: application::profile::ProfileStore + Send + Sync + 'static,
+    K: application::profile::SecretStore + Send + Sync + 'static,
+{
+    Box::new(move |store| {
+        Arc::new(application::overview::ProjectOverviews::new(
+            store,
+            settings,
+            ai_provider::ProviderFactory::new(chatgpt),
+        ))
+    })
+}
+
 fn run_shell_mode(
     store: Result<SqliteStore, String>,
     settings: SettingsServices,
+    overview: OverviewFactory,
     demo: bool,
     capture: CaptureStatus,
 ) {
@@ -369,6 +394,7 @@ fn run_shell_mode(
             KeyBinding::new("ctrl-2", GoDecisions, Some("xemnas")),
             KeyBinding::new("ctrl-3", GoContext, Some("xemnas")),
             KeyBinding::new("ctrl-4", GoMap, Some("xemnas")),
+            KeyBinding::new("ctrl-0", GoOverview, Some("xemnas")),
             KeyBinding::new("backspace", Backspace, Some("SearchField")),
             KeyBinding::new("delete", Delete, Some("SearchField")),
             KeyBinding::new("left", Left, Some("SearchField")),
@@ -397,7 +423,7 @@ fn run_shell_mode(
             size(px(1440.0), px(1024.0))
         };
         let bounds = Bounds::centered(None, dimensions, cx);
-        let (projects, inbox, decisions, context, map) = match store {
+        let (projects, inbox, decisions, context, map, overview) = match store {
             Ok(store) => (
                 Ok(application::projects::Projects::new(store.clone())),
                 Some(application::inbox::Inbox::new(store.clone())),
@@ -415,10 +441,11 @@ fn run_shell_mode(
                 Some(xemnas_desktop::screens::map::MapServices {
                     graph: application::graph::KnowledgeGraph::new(store.clone()),
                     decisions: application::decisions::Decisions::new(store.clone()),
-                    claims: application::claims::Claims::new(store),
+                    claims: application::claims::Claims::new(store.clone()),
                 }),
+                Some(overview(store)),
             ),
-            Err(error) => (Err(error), None, None, None, None),
+            Err(error) => (Err(error), None, None, None, None, None),
         };
         let view = cx.new(|cx| {
             let mut shell = Shell::<SqliteStore>::new(
@@ -430,6 +457,9 @@ fn run_shell_mode(
                 map,
                 Some(settings),
             );
+            if let Some(overview) = overview {
+                shell.set_overview(overview, cx);
+            }
             shell.set_demo(demo);
             shell.set_backdrop(backdrop != WindowBackgroundAppearance::Opaque);
             shell.set_activity(capture, activity, cx);

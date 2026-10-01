@@ -341,6 +341,11 @@ impl<S: MapStores> MapScreen<S> {
             .find(|row| row.entity.entity_id == id)
     }
 
+    /// Opens one entity's detail (also used by other destinations).
+    pub fn show_entity(&mut self, id: String, cx: &mut Context<Self>) {
+        self.open_entity(id, cx);
+    }
+
     fn open_entity(&mut self, id: String, cx: &mut Context<Self>) {
         let Some(project) = self.project.clone() else {
             return;

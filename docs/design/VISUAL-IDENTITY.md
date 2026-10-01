@@ -145,6 +145,21 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
 - Encerrar uma regra não apaga: ela deixa de valer e fica no histórico. A
   prévia não é salva; exportar é ação explícita com destino escolhido.
 
+## Visão — o projeto resumido
+
+- Primeira aba do projeto (Ctrl 0, paleta), ADR-0007, numa `reading_page`:
+  título "Visão do projeto", linha de meta (data, quantas decisões e regras,
+  e em âmbar "N decisões novas desde então") e "Atualizar visão" secundário;
+  seção Resumo com parágrafos e, abaixo de cada um, chips mono das fontes
+  (decisão abre em Decisões; regra é só rótulo); seção Principais fluxos com
+  cartões de vidro dois por linha (título, descrição, passos e componentes).
+- O cartão abre o fluxo na mesma coluna: "Todos os fluxos" (ghost) volta;
+  passos numerados em círculos de 24 px ligados por filete vertical, com
+  título, texto, chip do componente (ícone de grafo, abre no Mapa) e fontes.
+- Vazio: `empty_panel` com o que será enviado ao provedor e "Gerar visão"
+  primário; gerando: "Gerando…" desabilitado; erro em `error_banner`; nota de
+  procedência no rodapé. Nunca texto sem fonte.
+
 ## Mapa — o grafo do projeto
 
 - Quarto destino do projeto (Ctrl 4, paleta), ADR-0005. Índice à esquerda
