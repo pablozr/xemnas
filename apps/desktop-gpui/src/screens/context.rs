@@ -10,6 +10,7 @@
 
 use std::path::PathBuf;
 
+use application::claim_suggestions::{ClaimSuggestionStore, ClaimSuggestions};
 use application::claims::{ClaimRecord, ClaimStore, Claims, NewClaim};
 use application::context::{
     ContextPack, ContextPacks, ContextProvider, ContextRequest, ContextStore,
@@ -60,6 +61,7 @@ pub trait ContextStores:
     + GraphStore
     + DocumentStore
     + InjectionHistory
+    + ClaimSuggestionStore
     + Clone
     + Send
     + 'static
@@ -76,6 +78,7 @@ impl<T> ContextStores for T where
         + GraphStore
         + DocumentStore
         + InjectionHistory
+        + ClaimSuggestionStore
         + Clone
         + Send
         + 'static
@@ -96,6 +99,8 @@ pub struct ContextServices<S> {
     pub documents: Documents<S>,
     /// What the agent actually received.
     pub deliveries: Deliveries<S>,
+    /// Rules whose source decision was replaced.
+    pub derived: ClaimSuggestions<S>,
 }
 
 /// Asks the shell to open a decision in Decisões.
@@ -168,6 +173,8 @@ struct Snapshot {
     claims: Vec<ClaimRecord>,
     documents: Vec<ProjectDocument>,
     deliveries: Vec<Delivery>,
+    /// Claims whose source decision was superseded.
+    review: Vec<String>,
 }
 
 enum Outcome {
@@ -1061,6 +1068,10 @@ impl<S: ContextStores> ContextScreen<S> {
     fn claim_row(&self, theme: &Theme, claim: &ClaimRecord, cx: &mut Context<Self>) -> AnyElement {
         let colors = theme.colors;
         let confirming = self.confirm_retire.as_deref() == Some(claim.claim_id.as_str());
+        let review = self
+            .snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.review.contains(&claim.claim_id));
         let id = claim.claim_id.clone();
         let row = div()
             .flex()
@@ -1079,13 +1090,30 @@ impl<S: ContextStores> ContextScreen<S> {
                     .gap(px(2.0))
                     .child(text_style(div(), TypeScale::BODY).child(claim.statement.clone()))
                     .child(
-                        text_style(div(), TypeScale::META)
-                            .text_color(colors.text_muted())
-                            .child(if confirming {
-                                "Encerrar hoje? Ela deixa de valer e fica no histórico.".to_owned()
-                            } else {
-                                format!("Vale desde {}", calendar_date(&claim.valid_from))
-                            }),
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(SpacingScale::S2))
+                            .when(review, |line| {
+                                line.child(status_pill(
+                                    theme,
+                                    colors.status_warning(),
+                                    "Revisar",
+                                ))
+                            })
+                            .child(
+                                text_style(div(), TypeScale::META)
+                                    .text_color(colors.text_muted())
+                                    .child(if confirming {
+                                        "Encerrar hoje? Ela deixa de valer e fica no histórico."
+                                            .to_owned()
+                                    } else if review {
+                                        "A decisão de origem foi substituída; confira se ainda vale."
+                                            .to_owned()
+                                    } else {
+                                        format!("Vale desde {}", calendar_date(&claim.valid_from))
+                                    }),
+                            ),
                     ),
             );
         if confirming {
@@ -2264,12 +2292,17 @@ fn load_snapshot<S: ContextStores>(
             tracing::error!(error = %error, operation = "deliveries", "list failed");
             "Não foi possível ler as entregas ao agente.".to_owned()
         })?;
+    let review = backend.derived.to_review(project).map_err(|error| {
+        tracing::error!(error = %error, operation = "claims_to_review", "read failed");
+        "Não foi possível ler as regras do projeto.".to_owned()
+    })?;
     Ok(Snapshot {
         settings,
         decisions,
         claims,
         documents,
         deliveries,
+        review,
     })
 }
 

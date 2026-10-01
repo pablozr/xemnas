@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 
+use application::claim_suggestions::{ClaimSuggestionStore, ClaimSuggestionView, ClaimSuggestions};
 use application::claims::{ClaimStore, Claims};
 use application::decisions::{DecisionFilter, DecisionStatus, DecisionStore, Decisions};
 use application::graph::{
@@ -48,6 +49,7 @@ pub trait MapStores:
     GraphStore
     + RelationStore
     + RelationSuggestionStore
+    + ClaimSuggestionStore
     + ClaimStore
     + ProjectRepository
     + DecisionStore
@@ -61,6 +63,7 @@ impl<T> MapStores for T where
     T: GraphStore
         + RelationStore
         + RelationSuggestionStore
+        + ClaimSuggestionStore
         + ClaimStore
         + ProjectRepository
         + DecisionStore
@@ -80,6 +83,8 @@ pub struct MapServices<S> {
     pub claims: Claims<S>,
     /// Relations between decisions waiting for confirmation.
     pub relations: RelationSuggestions<S>,
+    /// Context derived from decisions, waiting for confirmation.
+    pub context: ClaimSuggestions<S>,
 }
 
 /// Decisions offered when linking.
@@ -133,6 +138,8 @@ struct MapData {
     graph: ProjectGraph,
     /// Relations between decisions waiting for confirmation.
     relations: Vec<RelationSuggestionView>,
+    /// Context derived from decisions, waiting for confirmation.
+    derived: Vec<ClaimSuggestionView>,
     /// Components created from the declared workspace on this load.
     assembled: usize,
     suggestions: Vec<Suggestion>,
@@ -655,6 +662,46 @@ impl<S: MapStores> MapScreen<S> {
         );
     }
 
+    /// Like [`Self::mutate`] for derived context.
+    fn mutate_context(
+        &mut self,
+        cx: &mut Context<Self>,
+        notice: &'static str,
+        change: impl FnOnce(
+                &MapServices<S>,
+            ) -> Result<(), application::claim_suggestions::ClaimSuggestionError>
+            + Send
+            + 'static,
+    ) {
+        let Some(project) = self.project.clone() else {
+            return;
+        };
+        self.run(
+            cx,
+            Box::new(move |backend| {
+                let result = change(backend)
+                    .map(|_| None)
+                    .map_err(|error| match error.code() {
+                        "not_found" => "A sugestão mudou. O mapa foi atualizado.".to_owned(),
+                        "claim" => "A regra não pôde ser criada; ela pode já existir.".to_owned(),
+                        code => {
+                            tracing::error!(code, operation = "claim_suggestion", "change failed");
+                            "Não foi possível salvar a regra.".to_owned()
+                        }
+                    });
+                let data = result
+                    .is_ok()
+                    .then(|| load(backend, &project).ok().map(Box::new))
+                    .flatten();
+                Outcome::Changed {
+                    result,
+                    data,
+                    notice,
+                }
+            }),
+        );
+    }
+
     /// Like [`Self::mutate`] for changes made through decisions (relations).
     fn mutate_decisions(
         &mut self,
@@ -978,6 +1025,7 @@ impl<S: MapStores> MapScreen<S> {
         };
         let pending = data.suggestions.len()
             + data.relations.len()
+            + data.derived.len()
             + data.proposals.components.len()
             + data.proposals.technologies.len();
         let entities: Vec<MapEntity> = data.map.entities.clone();
@@ -1169,10 +1217,12 @@ impl<S: MapStores> MapScreen<S> {
         };
         let suggestions = data.suggestions.clone();
         let relations = data.relations.clone();
+        let derived = data.derived.clone();
         let components = data.proposals.components.clone();
         let technologies = data.proposals.technologies.clone();
         if suggestions.is_empty()
             && relations.is_empty()
+            && derived.is_empty()
             && components.is_empty()
             && technologies.is_empty()
         {
@@ -1297,6 +1347,110 @@ impl<S: MapStores> MapScreen<S> {
                 );
             }
             column = column.child(section(theme, "Relações entre decisões", list));
+        }
+        if !derived.is_empty() {
+            let mut list = div().flex().flex_col();
+            for (index, suggestion) in derived.iter().enumerate() {
+                let record = &suggestion.record;
+                let confirm_id = record.suggestion_id.clone();
+                let reject_id = record.suggestion_id.clone();
+                let confirm = self.button(
+                    format!("map-context-confirm-{index}"),
+                    ButtonKind::Secondary,
+                    !self.busy,
+                    "Confirmar",
+                    move |this, cx| {
+                        let id = confirm_id.clone();
+                        this.mutate_context(
+                            cx,
+                            "Regra criada a partir da decisão.",
+                            move |backend| backend.context.confirm(&id).map(|_| ()),
+                        );
+                    },
+                    cx,
+                );
+                let reject = self.button(
+                    format!("map-context-reject-{index}"),
+                    ButtonKind::Ghost,
+                    !self.busy,
+                    "Rejeitar",
+                    move |this, cx| {
+                        let id = reject_id.clone();
+                        this.mutate_context(
+                            cx,
+                            "Sugestão rejeitada; ela não volta.",
+                            move |backend| backend.context.reject(&id),
+                        );
+                    },
+                    cx,
+                );
+                let scope = if suggestion.scope.is_empty() {
+                    "Vale para o projeto todo".to_owned()
+                } else {
+                    format!(
+                        "Vale em {}",
+                        suggestion
+                            .scope
+                            .iter()
+                            .map(|(_, name)| name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
+                list = list.child(
+                    div()
+                        .flex()
+                        .items_start()
+                        .gap(px(SpacingScale::S3))
+                        .py(px(SpacingScale::S3))
+                        .when(index > 0, |row| {
+                            row.border_t_1().border_color(colors.hairline_divider())
+                        })
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .flex()
+                                .flex_col()
+                                .gap(px(SpacingScale::S1))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(SpacingScale::S2))
+                                        .child(status_pill(
+                                            theme,
+                                            colors.status_info(),
+                                            claim_label(record.kind.as_str()),
+                                        ))
+                                        .child(
+                                            text_style(div(), TypeScale::ROW_TITLE)
+                                                .child(record.statement.clone()),
+                                        ),
+                                )
+                                .child(
+                                    text_style(div(), TypeScale::META)
+                                        .text_color(colors.text_muted())
+                                        .child(format!(
+                                            "Da decisão: {} · {scope}",
+                                            suggestion.decision_question
+                                        )),
+                                )
+                                .child(
+                                    text_style(div(), TypeScale::BODY_SMALL)
+                                        .mt(px(SpacingScale::S1))
+                                        .pl(px(SpacingScale::S3))
+                                        .border_l_2()
+                                        .border_color(colors.hairline_divider())
+                                        .text_color(colors.text_secondary())
+                                        .child(format!("“{}”", record.quote)),
+                                ),
+                        )
+                        .child(reject)
+                        .child(confirm),
+                );
+            }
+            column = column.child(section(theme, "Contexto sugerido", list));
         }
         if !suggestions.is_empty() {
             let mut list = div().flex().flex_col();
@@ -2900,10 +3054,18 @@ fn load<S: MapStores>(backend: &MapServices<S>, project: &str) -> Result<MapData
             "Não foi possível ler as relações sugeridas.",
         )
     })?;
+    let derived = backend.context.pending(project).map_err(|error| {
+        failure(
+            "claim_suggestions",
+            error.code(),
+            "Não foi possível ler o contexto sugerido.",
+        )
+    })?;
     Ok(MapData {
         map,
         graph,
         relations,
+        derived,
         assembled,
         suggestions,
         proposals,

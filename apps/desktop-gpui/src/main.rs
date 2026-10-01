@@ -166,6 +166,27 @@ fn main() {
             }
         }),
     );
+    // The context an adopted decision states becomes suggested rules.
+    jobs.register(
+        application::claim_suggestions::CLAIM_JOB_KIND,
+        std::sync::Arc::new({
+            let finder = application::claim_suggestions::ClaimFinder::new(
+                store.clone(),
+                settings.clone(),
+                ai_provider::ProviderFactory::new(chatgpt.clone()),
+            );
+            move |record: &application::jobs::JobRecord| match finder.run(&record.payload) {
+                Ok(stored) => {
+                    tracing::info!(stored, operation = "derive_claims", "context derived");
+                    Ok(())
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, operation = "derive_claims", "failed");
+                    Ok(())
+                }
+            }
+        }),
+    );
     jobs.observe_with(|event| match event {
         application::jobs::JobEvent::Finished(outcome) => {
             tracing::info!(
@@ -488,6 +509,7 @@ fn run_shell_mode(
                     packs: application::context::ContextPacks::new(store.clone()),
                     documents: application::documents::Documents::new(store.clone()),
                     deliveries: application::injection::Deliveries::new(store.clone()),
+                    derived: application::claim_suggestions::ClaimSuggestions::new(store.clone()),
                 }),
                 Some(xemnas_desktop::screens::map::MapServices {
                     graph: application::graph::KnowledgeGraph::new(store.clone()),
@@ -496,6 +518,7 @@ fn run_shell_mode(
                     relations: application::relation_suggestions::RelationSuggestions::new(
                         store.clone(),
                     ),
+                    context: application::claim_suggestions::ClaimSuggestions::new(store.clone()),
                 }),
                 Some(overview(store)),
             ),

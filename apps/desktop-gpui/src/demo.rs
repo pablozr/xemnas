@@ -464,6 +464,21 @@ fn seed_map(store: &SqliteStore) -> Result<(), Box<dyn std::error::Error>> {
         })?;
     }
 
+    // Context the judge derived from a decision, waiting in Sugestões.
+    {
+        use application::claim_suggestions::{ClaimSuggestionRecord, ClaimSuggestionStore};
+        store.insert_claim_suggestion(&ClaimSuggestionRecord {
+            suggestion_id: "demo-claim-1".into(),
+            project_id: PROJECT.into(),
+            decision_id: recover.clone(),
+            kind: domain::claims::ClaimKind::Constraint,
+            statement: "Só tarefas idempotentes voltam para a fila depois de uma interrupção."
+                .into(),
+            quote: "Reenfileirar apenas tarefas idempotentes após uma interrupção.".into(),
+            created_at: "2026-09-30T12:00:00Z".into(),
+        })?;
+    }
+
     // Sample documentation, as if read from the project folder.
     use application::documents::{document_ref, DocumentKind, DocumentStore, ProjectDocument};
     let documents = [

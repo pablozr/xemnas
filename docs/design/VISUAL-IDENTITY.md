@@ -256,6 +256,10 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   `status_pill` com o verbo ("depende de", "substitui" em azul, "conflita
   com" em âmbar), a outra pergunta, a citação entre aspas com filete à
   esquerda e o motivo em META; Rejeitar (ghost) e Confirmar (secundário).
+  Em seguida, **Contexto sugerido**: `status_pill` com o tipo (Restrição,
+  Premissa…), a regra, "Da decisão: … · Vale em …" em META e a citação com
+  filete; Rejeitar e Confirmar. Em Contexto › Regras, uma regra cuja decisão
+  de origem foi substituída leva a pílula âmbar "Revisar" e a frase do porquê.
   Itens sugeridos mostram a origem ("declarado no workspace Cargo") e a
   descrição do pacote, com "Criar os N do workspace" quando há mais de um.
 - A **Vizinhança** do detalhe continua determinística em camadas. Nada entra
