@@ -551,3 +551,56 @@ fn folders_with_the_same_name_are_named_by_path_and_a_part_has_one_parent() {
         Err("second_parent")
     );
 }
+
+#[test]
+fn an_adopted_rule_is_suggested_for_the_components_its_evidence_touched() {
+    use application::extract::{DecisionCandidateRecord, ExtractionStore};
+    use application::inbox::{CandidateEdits, Inbox};
+
+    let test = support::open("graph-rule", &["p1"]);
+    let graph = KnowledgeGraph::new(test.store.clone());
+    let storage = component(&graph, "storage-sqlite", "crates/storage-sqlite/**");
+    component(&graph, "desktop", "apps/desktop/**");
+    test.store
+        .insert_candidates(&[DecisionCandidateRecord {
+            id: "cand-rule".into(),
+            project_id: "p1".into(),
+            capture_id: "capture-p1".into(),
+            status: "pending".into(),
+            question: "Como gravar decisões?".into(),
+            choice: "Toda escrita de decisão acontece numa transação.".into(),
+            rationale: "Evita duplicatas.".into(),
+            signals: "[\"public_contract\"]".into(),
+            confidence: 0.8,
+            confidence_reason: "sintético".into(),
+            evidence_refs: "[\"art-p1\"]".into(),
+            diff_summary: "{\"files\":[\"crates/storage-sqlite/src/inbox.rs\"],\"artifacts\":1}"
+                .into(),
+            dedup_hash: "dedup-rule".into(),
+            created_at: "2026-01-02T00:00:00Z".into(),
+            updated_at: "2026-01-02T00:00:00Z".into(),
+            kind: "rule".into(),
+            significance: 0.8,
+            criteria: "[]".into(),
+        }])
+        .expect("candidate");
+    let edits: Option<CandidateEdits> = None;
+    let rule = Inbox::new(test.store.clone())
+        .confirm("cand-rule", edits)
+        .expect("adopt rule")
+        .decision_id;
+
+    graph.refresh_suggestions("p1").expect("refresh");
+    let applies: Vec<(String, String)> = graph
+        .suggestions("p1")
+        .expect("suggestions")
+        .into_iter()
+        .filter(|suggestion| suggestion.kind == EdgeKind::AppliesTo)
+        .map(|suggestion| (suggestion.source.node.id, suggestion.entity.node.id))
+        .collect();
+    assert_eq!(
+        applies,
+        vec![(rule, storage)],
+        "only the component it touched"
+    );
+}

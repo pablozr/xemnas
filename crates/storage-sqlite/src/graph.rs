@@ -1,7 +1,7 @@
 //! SQLite implementation of the knowledge graph port (ADR-0005).
 
 use application::graph::{
-    summary_files, DecisionNode, EdgeRecord, EntityRecord, GraphError, GraphStore,
+    summary_files, DecisionNode, EdgeRecord, EntityRecord, GraphError, GraphStore, RuleSource,
 };
 use domain::entities::{EdgeKind, EdgeOrigin, EntityKind, NodeKind};
 use rusqlite::{params, Connection, OptionalExtension, Row};
@@ -265,6 +265,38 @@ impl GraphStore for SqliteStore {
             });
         }
         Ok(decisions)
+    }
+
+    fn rule_sources(&self, project_id: &str) -> Result<Vec<RuleSource>, GraphError> {
+        self.rule_sources_of(project_id)
+    }
+}
+
+impl SqliteStore {
+    pub(crate) fn rule_sources_of(&self, project_id: &str) -> Result<Vec<RuleSource>, GraphError> {
+        let connection = self.lock();
+        let mut statement = connection
+            .prepare(
+                "SELECT c.claim_id, COALESCE(d.diff_summary, '{}') \
+                 FROM context_claims c \
+                 JOIN decision_candidates d ON d.id = c.source_candidate_id \
+                 WHERE c.project_id = ?1 ORDER BY c.claim_id",
+            )
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map([project_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(storage_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage_error)?;
+        Ok(rows
+            .into_iter()
+            .map(|(claim_id, summary)| RuleSource {
+                claim_id,
+                files: summary_files(&summary),
+            })
+            .collect())
     }
 }
 

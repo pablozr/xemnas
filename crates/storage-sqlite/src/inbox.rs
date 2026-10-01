@@ -334,9 +334,15 @@ impl InboxStore for SqliteStore {
                 .execute(
                     "INSERT INTO context_claims \
                      (claim_id, project_id, kind, statement, valid_from, valid_until, \
-                      source_decision_id, created_at, updated_at) \
-                     VALUES (?1, ?2, 'constraint', ?3, ?4, NULL, NULL, ?4, ?4)",
-                    params![seed.decision_id, seed.project_id, seed.choice, updated_at],
+                      source_decision_id, created_at, updated_at, source_candidate_id) \
+                     VALUES (?1, ?2, 'constraint', ?3, ?4, NULL, NULL, ?4, ?4, ?5)",
+                    params![
+                        seed.decision_id,
+                        seed.project_id,
+                        seed.choice,
+                        updated_at,
+                        id
+                    ],
                 )
                 .map_err(storage_error)?;
             transaction

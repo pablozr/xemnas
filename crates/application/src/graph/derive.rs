@@ -360,7 +360,7 @@ where
                         &mut edges,
                         project_id,
                         EdgeKind::Affects,
-                        &decision.decision_id,
+                        (NodeKind::Decision, &decision.decision_id),
                         &component.entity_id,
                         file,
                         &now,
@@ -382,7 +382,7 @@ where
                             &mut edges,
                             project_id,
                             EdgeKind::Uses,
-                            &decision.decision_id,
+                            (NodeKind::Decision, &decision.decision_id),
                             &technology.entity_id,
                             &dependency,
                             &now,
@@ -395,6 +395,41 @@ where
                             .1
                             .insert(decision.decision_id.clone());
                     }
+                }
+            }
+        }
+
+        // Rules adopted from Revisão apply to the components their evidence
+        // touched: suggested, like any derived edge.
+        let valid_claims: BTreeSet<String> = self
+            .store
+            .project_claims(project_id)
+            .map_err(|error| GraphError::Storage(error.to_string()))?
+            .into_iter()
+            .filter(|claim| claim.is_valid_at(&at))
+            .map(|claim| claim.claim_id)
+            .collect();
+        for rule in self.store.rule_sources(project_id)? {
+            if !valid_claims.contains(&rule.claim_id) {
+                continue;
+            }
+            for file in &rule.files {
+                for component in live.iter().filter(|entity| {
+                    entity.kind == EntityKind::Component
+                        && entity
+                            .patterns
+                            .iter()
+                            .any(|pattern| pattern_matches(pattern, file))
+                }) {
+                    report.new_edges += self.suggest(
+                        &mut edges,
+                        project_id,
+                        EdgeKind::AppliesTo,
+                        (NodeKind::Claim, &rule.claim_id),
+                        &component.entity_id,
+                        file,
+                        &now,
+                    )?;
                 }
             }
         }
@@ -466,15 +501,16 @@ where
         edges: &mut Vec<EdgeRecord>,
         project_id: &str,
         kind: EdgeKind,
-        decision_id: &str,
+        source: (NodeKind, &str),
         entity_id: &str,
         reason: &str,
         now: &str,
     ) -> Result<usize, GraphError> {
+        let (source_kind, source_id) = source;
         let exists = edges.iter().any(|edge| {
             edge.kind == kind
-                && edge.source_kind == NodeKind::Decision
-                && edge.source_id == decision_id
+                && edge.source_kind == source_kind
+                && edge.source_id == source_id
                 && edge.entity_id == entity_id
         });
         if exists {
@@ -484,8 +520,8 @@ where
             edge_id: uuid::Uuid::now_v7().to_string(),
             project_id: project_id.to_string(),
             kind,
-            source_kind: NodeKind::Decision,
-            source_id: decision_id.to_string(),
+            source_kind,
+            source_id: source_id.to_string(),
             entity_id: entity_id.to_string(),
             origin: EdgeOrigin::Derived,
             reason: reason.to_string(),

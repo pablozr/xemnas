@@ -228,6 +228,15 @@ pub struct DecisionNode {
     pub diffs: Vec<String>,
 }
 
+/// A rule adopted from a candidate, with the files its evidence touched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleSource {
+    /// The claim.
+    pub claim_id: String,
+    /// Files of the candidate's evidence (`diff_summary.files`).
+    pub files: Vec<String>,
+}
+
 /// Persistence port of the graph.
 pub trait GraphStore {
     /// Every entity of a project, with patterns and aliases.
@@ -264,6 +273,9 @@ pub trait GraphStore {
     /// Every decision of the project that was ever confirmed, with the files
     /// and diff hunks of its capture.
     fn project_decisions(&self, project_id: &str) -> Result<Vec<DecisionNode>, GraphError>;
+
+    /// Rules of the project adopted from a candidate, with its files.
+    fn rule_sources(&self, project_id: &str) -> Result<Vec<RuleSource>, GraphError>;
 }
 
 /// Input for [`KnowledgeGraph::create_entity`].
