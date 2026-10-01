@@ -43,8 +43,8 @@ use super::format::{calendar_date, clock, day_heading, plural, short_date, thous
 use crate::ui::controls::{action_button, button_foreground, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
-    count_chip, empty_panel, error_banner, index_rail, index_row, panel_title, reading_page,
-    section_header, section_label, skeleton_list, status_pill, toast, TOAST_DURATION,
+    count_chip, empty_panel, error_banner, index_rail, index_row, radio_list, radio_row,
+    reading_page, section_header, section_label, skeleton_list, status_pill, toast, TOAST_DURATION,
 };
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme};
@@ -596,77 +596,32 @@ impl<S: ContextStores> ContextScreen<S> {
             .flex_col()
             .gap(px(SpacingScale::S3))
             .child(
-                div()
-                    .id("context-mode")
-                    .flex()
-                    .gap(px(SpacingScale::S2))
-                    .role(Role::RadioGroup)
+                radio_list(theme, "context-mode")
                     .aria_label("Modo de contexto")
-                    .children(options.into_iter().map(|(mode, title, body, glyph)| {
-                        let selected = self.mode == mode;
-                        div()
-                            .id(("context-mode-option", mode as usize))
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .flex()
-                            .flex_col()
-                            .gap(px(SpacingScale::S2))
-                            .p(px(SpacingScale::S3))
-                            .rounded(RadiusScale.surface())
-                            .border_1()
-                            .border_color(if selected {
-                                colors.accent_default()
-                            } else {
-                                colors.glass_border_card()
-                            })
-                            .bg(if selected {
-                                colors.selection()
-                            } else {
-                                colors.glass_fill_card()
-                            })
-                            .when(!selected, |option| {
-                                option
-                                    .hover(move |style| {
-                                        style
-                                            .bg(colors.glass_fill_medium())
-                                            .border_color(colors.glass_border_card_hover())
-                                    })
+                    .children(options.into_iter().enumerate().map(
+                        |(index, (mode, title, body, glyph))| {
+                            let selected = self.mode == mode;
+                            radio_row(
+                                theme,
+                                ("context-mode-option", mode as usize),
+                                selected,
+                                index > 0,
+                                glyph,
+                                title,
+                                body,
+                            )
+                            .when(!selected, |row| {
+                                row.hover(move |style| style.bg(colors.glass_fill_medium()))
                                     .active(move |style| style.bg(colors.glass_fill_strong()))
                             })
-                            .cursor_pointer()
-                            .role(Role::RadioButton)
-                            .aria_label(title)
-                            .aria_toggled(if selected {
-                                Toggled::True
-                            } else {
-                                Toggled::False
-                            })
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.mode = mode;
-                                cx.notify();
-                            }))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(SpacingScale::S2))
-                                    .child(icon(
-                                        glyph,
-                                        14.0,
-                                        if selected {
-                                            colors.accent_hover()
-                                        } else {
-                                            colors.text_muted()
-                                        },
-                                    ))
-                                    .child(text_style(div(), TypeScale::ROW_TITLE).child(title)),
-                            )
-                            .child(
-                                text_style(div(), TypeScale::META)
-                                    .text_color(colors.text_muted())
-                                    .child(body),
-                            )
-                    })),
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    this.mode = mode;
+                                    cx.notify();
+                                },
+                            ))
+                        },
+                    )),
             )
             .child(
                 div()
@@ -1451,13 +1406,6 @@ impl<S: ContextStores> ContextScreen<S> {
         index_rail(theme)
             .child(
                 div()
-                    .flex_none()
-                    .px(px(SpacingScale::S4))
-                    .pt(px(SpacingScale::S4))
-                    .child(panel_title(theme, "Contexto")),
-            )
-            .child(
-                div()
                     .id("context-rail")
                     .flex_1()
                     .min_h(px(0.0))
@@ -1553,27 +1501,19 @@ impl<S: ContextStores> ContextScreen<S> {
         let budget = settings.budget_tokens.unwrap_or(DEFAULT_BUDGET_TOKENS);
         let tint = mode_color(theme, mode);
 
-        // Where things stand, in one sentence.
+        // Where things stand, in one sentence: a status line, not a card.
         let change = self.focus_for("context-change-mode", cx);
         let status = div()
             .flex()
-            .items_center()
-            .gap(px(SpacingScale::S4))
-            .p(px(SpacingScale::S5))
-            .rounded(RadiusScale.dialog())
-            .border_1()
-            .border_color(colors.glass_border_card())
-            .bg(colors.glass_fill_card())
+            .items_start()
+            .gap(px(SpacingScale::S3))
             .child(
                 div()
-                    .size(px(28.0))
+                    .mt(px(7.0))
+                    .size(px(8.0))
                     .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
                     .rounded_full()
-                    .bg(tint.alpha(0.16))
-                    .child(div().size(px(10.0)).rounded_full().bg(tint)),
+                    .bg(tint),
             )
             .child(
                 div()
@@ -1582,7 +1522,7 @@ impl<S: ContextStores> ContextScreen<S> {
                     .flex()
                     .flex_col()
                     .gap(px(2.0))
-                    .child(text_style(div(), TypeScale::HEADING_2).child(mode_word(mode)))
+                    .child(text_style(div(), TypeScale::HEADING_3).child(mode_word(mode)))
                     .child(
                         text_style(div(), TypeScale::BODY_SMALL)
                             .text_color(colors.text_secondary())
@@ -1601,37 +1541,31 @@ impl<S: ContextStores> ContextScreen<S> {
                     }),
             );
 
-        // How it gets there: sources, selection, delivery.
-        let stage = |number: &'static str, title: &'static str, lines: Vec<String>, note: &str| {
+        // How it gets there: three numbered columns divided by hairlines.
+        let stage = |number: &'static str, title: &'static str, lines: Vec<String>, first: bool| {
             div()
                 .flex_1()
                 .min_w(px(0.0))
                 .flex()
                 .flex_col()
-                .gap(px(SpacingScale::S2))
-                .p(px(SpacingScale::S4))
-                .rounded(RadiusScale.surface())
-                .border_1()
-                .border_color(colors.hairline_divider())
+                .gap(px(SpacingScale::S1))
+                .when(!first, |stage| {
+                    stage
+                        .pl(px(SpacingScale::S5))
+                        .border_l_1()
+                        .border_color(colors.hairline_divider())
+                })
                 .child(
                     div()
                         .flex()
-                        .items_center()
+                        .items_baseline()
                         .gap(px(SpacingScale::S2))
+                        .mb(px(SpacingScale::S1))
                         .child(
-                            div()
-                                .size(px(18.0))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded_full()
-                                .border_1()
-                                .border_color(colors.glass_border_card_hover())
-                                .child(
-                                    text_style(div(), TypeScale::META)
-                                        .text_color(colors.text_secondary())
-                                        .child(number),
-                                ),
+                            text_style(div(), TypeScale::META)
+                                .font_family(Theme::font_mono())
+                                .text_color(colors.text_muted())
+                                .child(number),
                         )
                         .child(
                             text_style(div(), TypeScale::LABEL)
@@ -1644,82 +1578,68 @@ impl<S: ContextStores> ContextScreen<S> {
                         .text_color(colors.text_secondary())
                         .child(line)
                 }))
-                .when(!note.is_empty(), |stage| {
-                    stage.child(
-                        text_style(div(), TypeScale::META)
-                            .text_color(colors.text_muted())
-                            .child(note.to_owned()),
-                    )
-                })
-        };
-        let arrow = || {
-            div().flex_none().self_center().child(icon(
-                IconName::ChevronRight,
-                14.0,
-                colors.text_disabled(),
-            ))
         };
         let pipeline = div()
             .flex()
             .items_stretch()
-            .gap(px(SpacingScale::S2))
+            .gap(px(SpacingScale::S5))
             .child(stage(
-                "1",
+                "01",
                 "Fontes",
                 vec![
                     plural(decisions.len(), "decisão em vigor", "decisões em vigor"),
                     plural(claims.len(), "regra do projeto", "regras do projeto"),
                 ],
-                "A documentação fica na Visão.",
+                true,
             ))
-            .child(arrow())
             .child(stage(
-                "2",
+                "02",
                 "Seleção",
                 vec![
                     "No pedido: o texto e os arquivos citados.".to_owned(),
                     "Na edição: o que o mapa liga ao arquivo.".to_owned(),
                 ],
-                "",
+                false,
             ))
-            .child(arrow())
             .child(stage(
-                "3",
+                "03",
                 "Entrega",
                 vec![
                     format!("Até {budget} tokens por bloco."),
                     "Sem repetir o que a sessão já recebeu.".to_owned(),
                 ],
-                "",
+                false,
             ));
 
-        // The last seven days, from the audit.
+        // The last seven days, from the audit: flat figures in one band.
         let since = (chrono::Utc::now() - chrono::Duration::days(7))
             .format("%Y-%m-%dT%H:%M:%SZ")
             .to_string();
         let summary = DeliverySummary::since(deliveries, &since);
         let measured = summary.deliveries - summary.sent;
-        let tile = |value: String, label: &'static str, detail: String| {
+        let figure = |value: String, label: &'static str, detail: String, first: bool| {
             div()
                 .flex_1()
                 .min_w(px(0.0))
                 .flex()
                 .flex_col()
                 .gap(px(2.0))
-                .p(px(SpacingScale::S4))
-                .rounded(RadiusScale.surface())
-                .bg(colors.glass_fill_card())
-                .border_1()
-                .border_color(colors.glass_border_card())
+                .py(px(SpacingScale::S4))
+                .when(!first, |figure| {
+                    figure
+                        .pl(px(SpacingScale::S5))
+                        .border_l_1()
+                        .border_color(colors.hairline_divider())
+                })
                 .child(
-                    text_style(div(), TypeScale::META)
-                        .text_color(colors.text_muted())
-                        .child(label),
-                )
-                .child(
-                    text_style(div(), TypeScale::DISPLAY)
+                    text_style(div(), TypeScale::HEADING_1)
                         .text_color(colors.text_primary())
                         .child(value),
+                )
+                .child(
+                    text_style(div(), TypeScale::LABEL)
+                        .text_color(colors.text_secondary())
+                        .child(label),
                 )
                 .child(
                     text_style(div(), TypeScale::META)
@@ -1729,26 +1649,33 @@ impl<S: ContextStores> ContextScreen<S> {
         };
         let metrics = div()
             .flex()
-            .gap(px(SpacingScale::S3))
-            .child(tile(
+            .gap(px(SpacingScale::S5))
+            .border_t_1()
+            .border_b_1()
+            .border_color(colors.hairline_divider())
+            .child(figure(
                 summary.deliveries.to_string(),
                 "Entregas",
                 format!("{} enviadas · {measured} medidas", summary.sent),
+                true,
             ))
-            .child(tile(
+            .child(figure(
                 summary.sessions.to_string(),
                 "Sessões do agente",
                 "conversas que receberam".to_owned(),
+                false,
             ))
-            .child(tile(
+            .child(figure(
                 summary.average_tokens().to_string(),
                 "Tokens por bloco",
                 format!("média · limite {budget}"),
+                false,
             ))
-            .child(tile(
+            .child(figure(
                 summary.omitted.to_string(),
                 "Fora do orçamento",
-                "itens relevantes que não couberam".to_owned(),
+                "itens que não couberam".to_owned(),
+                false,
             ));
 
         // The latest deliveries.

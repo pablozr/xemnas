@@ -37,7 +37,7 @@ use crate::ui::controls::{action_button, icon_action, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
     count_chip, empty_panel, error_banner, mark_selected, panel_title, reading_page, section_label,
-    segment, segmented, skeleton_list, tag, toast, TOAST_DURATION,
+    segment, segmented, skeleton_list, tag, toast, READING_WIDTH, TOAST_DURATION,
 };
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme};
@@ -91,8 +91,6 @@ pub struct MapServices<S> {
 const PICK_LIMIT: usize = 100;
 /// Days an entity counts as recently active on the overview.
 const RECENT_DAYS: i64 = 14;
-/// Squares drawn per kind on an overview block before "+N".
-const MAX_SQUARES: usize = 12;
 /// Nodes per side of the neighborhood diagram.
 const MAX_SIDE: usize = 6;
 /// Height of a neighborhood node.
@@ -1572,17 +1570,29 @@ impl<S: MapStores> MapScreen<S> {
                         .when(index > 0, |row| {
                             row.border_t_1().border_color(colors.hairline_divider())
                         })
-                        .child(icon(kind_icon(kind), 16.0, colors.text_muted()))
                         .child(
                             div()
                                 .flex_1()
                                 .min_w(px(0.0))
                                 .flex()
                                 .flex_col()
-                                .gap(px(2.0))
-                                .child(text_style(div(), TypeScale::ROW_TITLE).child(name))
+                                .gap(px(SpacingScale::S1))
                                 .child(
-                                    text_style(div(), TypeScale::BODY_SMALL)
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(SpacingScale::S2))
+                                        .child(tag(
+                                            theme,
+                                            match kind {
+                                                EntityKind::Component => "Componente",
+                                                EntityKind::Technology => "Tecnologia",
+                                            },
+                                        ))
+                                        .child(text_style(div(), TypeScale::ROW_TITLE).child(name)),
+                                )
+                                .child(
+                                    text_style(div(), TypeScale::META)
                                         .text_color(colors.text_muted())
                                         .child(match (pattern, declared) {
                                             (Some(pattern), Some(source)) => format!(
@@ -2386,10 +2396,17 @@ impl<S: MapStores> MapScreen<S> {
             .size_full()
             .flex()
             .flex_col()
-            .gap(px(SpacingScale::S4))
-            .p(px(SpacingScale::S6))
+            .gap(px(SpacingScale::S5))
+            .px(px(SpacingScale::S8))
+            .pt(px(SpacingScale::S8))
+            .pb(px(SpacingScale::S6))
             .child(
+                // The header sits where the Blocks page puts it, so switching
+                // drawings moves nothing but the drawing.
                 div()
+                    .w_full()
+                    .max_w(px(READING_WIDTH))
+                    .mx_auto()
                     .flex()
                     .items_start()
                     .gap(px(SpacingScale::S4))
@@ -2463,7 +2480,8 @@ impl<S: MapStores> MapScreen<S> {
 
         let mut grid = div().flex().flex_col().gap(px(SpacingScale::S3));
         for pair in tops.chunks(2) {
-            let mut line = div().flex().gap(px(SpacingScale::S3)).items_start();
+            // Blocks on one line share a height; weight is in the text.
+            let mut line = div().flex().gap(px(SpacingScale::S3)).items_stretch();
             for row in pair {
                 let parts: Vec<MapEntity> = entities
                     .iter()
@@ -2473,7 +2491,7 @@ impl<S: MapStores> MapScreen<S> {
                     .cloned()
                     .collect();
                 let block = self.component_block(theme, row, &parts, &recent_since, cx);
-                line = line.child(div().flex_1().min_w(px(0.0)).child(block));
+                line = line.child(div().flex_1().min_w(px(0.0)).flex().child(block.flex_1()));
             }
             if pair.len() == 1 {
                 line = line.child(div().flex_1());
@@ -2505,27 +2523,7 @@ impl<S: MapStores> MapScreen<S> {
             chips = chips.child(chip);
         }
 
-        let legend = div()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .gap(px(SpacingScale::S4))
-            .child(legend_item(
-                theme,
-                weight_square(theme, true),
-                "decisão em vigor",
-            ))
-            .child(legend_item(theme, weight_square(theme, false), "regra"))
-            .child(legend_item(
-                theme,
-                status_dot(colors.status_success()),
-                "atividade nos últimos 14 dias",
-            ))
-            .child(legend_item(
-                theme,
-                status_dot(colors.status_warning()),
-                "decisões em conflito",
-            ));
+        let conflicted = tops.iter().any(|row| row.conflicts > 0);
 
         let switch = self.layout_switch(theme, cx);
         let mut column = div()
@@ -2548,7 +2546,13 @@ impl<S: MapStores> MapScreen<S> {
         if !technologies.is_empty() {
             column = column.child(section(theme, "Tecnologias", chips));
         }
-        column = column.child(legend);
+        if conflicted {
+            column = column.child(legend_item(
+                theme,
+                status_dot(colors.status_warning()),
+                "decisões em conflito",
+            ));
+        }
         reading_page("map-overview", column).into_any_element()
     }
 
@@ -2569,14 +2573,11 @@ impl<S: MapStores> MapScreen<S> {
         let focus = self.focus_for(&format!("map-block-{id}"), cx);
         let open_id = id.clone();
         let key_id = id.clone();
-        let mut squares = div().flex().flex_wrap().gap(px(3.0));
-        for _ in 0..row.decisions.min(MAX_SQUARES) {
-            squares = squares.child(weight_square(theme, true));
-        }
-        for _ in 0..row.claims.min(MAX_SQUARES) {
-            squares = squares.child(weight_square(theme, false));
-        }
-        let extra = (row.decisions + row.claims).saturating_sub(2 * MAX_SQUARES);
+        let activity = row
+            .last_activity
+            .as_deref()
+            .filter(|_| recent)
+            .map(|at| format!("mudou em {}", short_date(at)));
         let mut parts_row = div().flex().flex_wrap().gap(px(SpacingScale::S2));
         for part in parts {
             let part_id = part.entity.entity_id.clone();
@@ -2604,7 +2605,6 @@ impl<S: MapStores> MapScreen<S> {
             .flex_col()
             .gap(px(SpacingScale::S2))
             .p(px(SpacingScale::S4))
-            .min_h(px(96.0 + 8.0 * row.decisions.min(MAX_SQUARES) as f32))
             .rounded(RadiusScale.surface())
             .border_1()
             .border_color(colors.glass_border_card())
@@ -2638,9 +2638,6 @@ impl<S: MapStores> MapScreen<S> {
                             .truncate()
                             .child(row.entity.name.clone()),
                     )
-                    .when(recent, |line| {
-                        line.child(status_dot(colors.status_success()))
-                    })
                     .when(row.conflicts > 0, |line| {
                         line.child(status_dot(colors.status_warning()))
                     }),
@@ -2654,19 +2651,32 @@ impl<S: MapStores> MapScreen<S> {
                         .child(row.entity.patterns.join("  ")),
                 )
             })
-            .child(squares.when(extra > 0, |squares| {
-                squares.child(
-                    text_style(div(), TypeScale::META)
-                        .text_color(colors.text_muted())
-                        .child(format!("+{extra}")),
-                )
-            }))
+            .when(!parts.is_empty(), |block| {
+                block.child(parts_row.mt(px(SpacingScale::S1)))
+            })
+            .child(div().flex_1())
             .child(
-                text_style(div(), TypeScale::META)
-                    .text_color(colors.text_secondary())
-                    .child(weight(row)),
+                div()
+                    .flex()
+                    .items_baseline()
+                    .gap(px(SpacingScale::S2))
+                    .pt(px(SpacingScale::S2))
+                    .child(
+                        text_style(div(), TypeScale::META)
+                            .flex_1()
+                            .text_color(if row.decisions + row.claims == 0 {
+                                colors.text_muted()
+                            } else {
+                                colors.text_secondary()
+                            })
+                            .child(weight(row)),
+                    )
+                    .children(activity.map(|line| {
+                        text_style(div(), TypeScale::META)
+                            .text_color(colors.text_muted())
+                            .child(line)
+                    })),
             )
-            .when(!parts.is_empty(), |block| block.child(parts_row))
     }
 
     /// One entity in the middle, the decisions tied to it on the left and the
@@ -2905,16 +2915,6 @@ fn curve(
     );
     if let Ok(path) = builder.build() {
         window.paint_path(path, color);
-    }
-}
-
-fn weight_square(theme: &Theme, filled: bool) -> Div {
-    let colors = theme.colors;
-    let square = div().size(px(8.0)).rounded(px(2.0));
-    if filled {
-        square.bg(colors.text_secondary())
-    } else {
-        square.border_1().border_color(colors.text_muted())
     }
 }
 

@@ -864,7 +864,7 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
             .flex()
             .flex_col()
             .bg(t.colors.pane())
-            .border_l_1()
+            .border_r_1()
             .border_color(t.colors.hairline_divider())
             .child(
                 div()
@@ -1102,10 +1102,11 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
                 .child(text_style(div(),TypeScale::HEADING_2).child(detail.summary.choice.clone())))
             .child(div().flex().flex_col().gap(px(SpacingScale::S2)).child(section_label(&t,"Justificativa"))
                 .child(text_style(div(),TypeScale::BODY).text_color(t.colors.text_secondary()).child(detail.rationale.clone())));
+        // One disclosure per row: opening one never reflows the others.
         let mut context = div()
             .flex()
-            .flex_wrap()
-            .gap(px(SpacingScale::S4))
+            .flex_col()
+            .gap(px(2.0))
             .border_t_1()
             .border_color(t.colors.hairline_divider())
             .pt(px(SpacingScale::S5));
@@ -1119,11 +1120,10 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
         .enumerate()
         {
             let mut section = div()
-                .w(gpui::relative(0.46))
-                .min_w(px(180.0))
+                .w_full()
                 .flex()
                 .flex_col()
-                .gap(px(SpacingScale::S2))
+                .gap(px(SpacingScale::S1))
                 .child(self.button(
                     format!("context-{index}"),
                     format!("{label} · {}", items.len()),
@@ -1135,15 +1135,19 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
                 if items.is_empty() {
                     section = section.child(
                         text_style(div(), TypeScale::BODY_SMALL)
+                            .pl(px(SpacingScale::S8))
+                            .pb(px(SpacingScale::S2))
                             .text_color(t.colors.text_muted())
                             .child("Nenhum item registrado."),
                     );
                 } else {
                     section = section.children(items.iter().map(|item| {
                         text_style(div(), TypeScale::BODY_SMALL)
+                            .pl(px(SpacingScale::S8))
                             .text_color(t.colors.text_secondary())
                             .child(format!("• {item}"))
                     }));
+                    section = section.child(div().h(px(SpacingScale::S2)));
                 }
             }
             context = context.child(section);
@@ -1754,8 +1758,8 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> Render for 
             .track_focus(&self.reader_focus)
             .size_full()
             .flex()
-            .child(reader)
             .child(self.index(compact, cx))
+            .child(reader)
     }
 }
 fn load_document<S: DecisionStore + InboxStore>(

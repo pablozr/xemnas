@@ -8,12 +8,12 @@
 use gpui::prelude::*;
 use gpui::{
     deferred, div, px, Animation, AnimationElement, AnimationExt, AnyElement, Div, ElementId, Rgba,
-    SharedString, SpringAnimation, Stateful,
+    Role, SharedString, SpringAnimation, Stateful, Toggled,
 };
 
 use crate::ui::icons::{icon, IconName};
 use crate::ui::theme::{text_style, Theme};
-use crate::ui::tokens::{MotionTokens, SpacingScale, TypeScale, TypeToken};
+use crate::ui::tokens::{MotionTokens, RadiusScale, SpacingScale, TypeScale, TypeToken};
 
 /// The quiet title of a side panel: 12 px, muted. The content, not the
 /// panel name, carries the weight.
@@ -347,6 +347,99 @@ pub fn tag(theme: &Theme, label: impl Into<SharedString>) -> Div {
         .bg(theme.colors.surface())
         .text_color(theme.colors.text_secondary())
         .child(label.into())
+}
+
+/// A list of exclusive options: rows divided by hairlines inside one
+/// bordered list. Options are never cards side by side.
+pub fn radio_list(theme: &Theme, id: impl Into<ElementId>) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .flex_col()
+        .rounded(RadiusScale.surface())
+        .border_1()
+        .border_color(theme.colors.glass_border_card())
+        .overflow_hidden()
+        .role(Role::RadioGroup)
+}
+
+/// One option of a [`radio_list`]: glyph, title, one line of description and
+/// the radio mark at the right; the selected row takes `mark_selected`. The
+/// caller adds the id, focus and click handler.
+pub fn radio_row(
+    theme: &Theme,
+    id: impl Into<ElementId>,
+    selected: bool,
+    divided: bool,
+    glyph: IconName,
+    title: &'static str,
+    body: &'static str,
+) -> Stateful<Div> {
+    let colors = theme.colors;
+    mark_selected(
+        div()
+            .id(id)
+            .relative()
+            .flex()
+            .items_center()
+            .gap(px(SpacingScale::S3))
+            .px(px(SpacingScale::S4))
+            .py(px(SpacingScale::S3))
+            .when(divided, |row| {
+                row.border_t_1().border_color(colors.hairline_divider())
+            })
+            .cursor_pointer()
+            .role(Role::RadioButton)
+            .aria_label(title)
+            .aria_toggled(if selected {
+                Toggled::True
+            } else {
+                Toggled::False
+            }),
+        theme,
+        selected,
+    )
+    .child(icon(
+        glyph,
+        16.0,
+        if selected {
+            colors.text_primary()
+        } else {
+            colors.text_muted()
+        },
+    ))
+    .child(
+        div()
+            .flex_1()
+            .min_w(px(0.0))
+            .flex()
+            .flex_col()
+            .gap(px(2.0))
+            .child(text_style(div(), TypeScale::ROW_TITLE).child(title))
+            .child(
+                text_style(div(), TypeScale::BODY_SMALL)
+                    .text_color(colors.text_muted())
+                    .child(body),
+            ),
+    )
+    .child(
+        div()
+            .size(px(16.0))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .border_1()
+            .border_color(if selected {
+                colors.accent_hover()
+            } else {
+                colors.glass_border_control()
+            })
+            .when(selected, |mark| {
+                mark.child(div().size(px(8.0)).rounded_full().bg(colors.accent_hover()))
+            }),
+    )
 }
 
 /// Width of the index rail beside a reading column (Mapa, Contexto).

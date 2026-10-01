@@ -115,7 +115,7 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   Decisões; o caminho fica na lista lateral e no painel. Não há barra de status:
   o rodapé da lateral mostra só estados reais (captura ativa, indisponível ou
   demonstração; jobs extraindo; falhas).
-- Em Decisões não há segunda fileira de abas: estado, versão, o acesso ao
+- Em Decisões o índice fica à esquerda, como em todo destino. Não há segunda fileira de abas: estado, versão, o acesso ao
   histórico ("Versões") e as ações Exportar/Revisar ficam na linha de metadados
   do documento. Linhas de lista e abas têm hover com mola criticamente amortecida.
 - Trocar de projeto limpa lista, evidência e filtro; respostas antigas não podem
@@ -166,12 +166,13 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   tarefa), **Fontes** (Decisões em vigor, Regras, Documentação, com contagem)
   e **Ajustes** (Modo de entrega); o pé mostra o modo salvo ("Ativo · até
   300 tokens") com ponto de estado.
-- **Visão geral**: cartão de estado (ponto com halo na cor do modo: verde
-  Ativo, azul Medindo, cinza Desligado; frase do que acontece; "Mudar modo"
-  ou "Ativar" secundário); "Como chega ao agente" em três etapas numeradas
-  ligadas por chevrons (Fontes com contagens, Seleção pelo pedido e pela
-  edição, Entrega com orçamento e sem repetição na sessão); "Últimos 7 dias"
-  em quatro blocos com número em `DISPLAY` (entregas enviadas e medidas,
+- **Visão geral** sem cartões: linha de estado (ponto de 8 px na cor do
+  modo: verde Ativo, azul Medindo, cinza Desligado; frase do que acontece;
+  "Mudar modo" ou "Ativar" secundário); "Como chega ao agente" em três
+  colunas numeradas em mono (01–03) divididas por filetes (Fontes com
+  contagens, Seleção pelo pedido e pela edição, Entrega com orçamento e sem
+  repetição na sessão); "Últimos 7 dias" numa faixa plana entre filetes,
+  quatro números em `HEADING_1` (entregas enviadas e medidas,
   sessões, tokens médios contra o limite, itens fora do orçamento), tirados
   da auditoria real; três entregas recentes e "Ver todas".
 - **Entregas**: auditoria de cada bloco, do mais recente ao mais antigo, por
@@ -186,8 +187,8 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   grupos por tipo, caminho em mono, "Ler de novo"; alimenta a Visão e não é
   enviada ao agente). Na Visão, fonte de documento usa o ícone de lista e o
   caminho no tooltip.
-- **Modo de entrega**: Desligado, Medir e Ativo lado a lado e tokens por
-  bloco; salvar só aparece quando algo muda.
+- **Modo de entrega**: Desligado, Medir e Ativo em `radio_list` +
+  `radio_row` (nunca cartões lado a lado) e tokens por bloco; salvar só aparece quando algo muda.
 - Rota de captura: `context:<deliveries|test|decisions|rules|documents|mode>`.
 
 ## Visão — o projeto resumido
@@ -235,10 +236,10 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   com ponto vazado, contagem e até 4 nomes + "e mais N". Validade de regra é
   data de calendário: nunca muda com o fuso.
 - **Visão geral** (primeira visão do Mapa): blocos no estilo C4, dois por
-  linha, um por componente de topo, com as partes dentro como chips; cada
-  decisão em vigor é um quadrado cheio de 8 px e cada regra um vazado, e o
-  bloco cresce com as decisões; ponto verde = atividade nos últimos 14 dias,
-  âmbar = decisões em conflito, com legenda. Tecnologias em chips abaixo.
+  linha e de mesma altura na linha, um por componente de topo, com as partes
+  dentro como chips; o rodapé do bloco diz o peso ("2 decisões · 1 regra") e
+  "mudou em 29 set" quando houve atividade nos últimos 14 dias; ponto âmbar =
+  decisões em conflito, com legenda só quando existe. Tecnologias em chips abaixo.
 - **Vizinhança** (topo do detalhe): diagrama em camadas, decisões à esquerda
   (abrem em Decisões), o item no centro (única superfície com `selection`) e
   regras à direita, ligados por curvas de 1,25 px desenhadas com `canvas` +
