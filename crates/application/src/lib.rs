@@ -1,6 +1,7 @@
 //! Application layer: use-case orchestration and the ports infrastructure implements.
 #![warn(missing_docs)]
 
+pub mod adoption;
 pub mod agent_access;
 pub mod analysis;
 pub mod captures;
