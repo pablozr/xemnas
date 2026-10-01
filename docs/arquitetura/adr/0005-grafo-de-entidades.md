@@ -37,6 +37,10 @@ Uma aresta `human` nasce confirmada. Uma `derived` nasce como **sugestão** (sem
 
 A derivação é determinística e roda ao abrir o Mapa, depois de cada mudança nele e **ao adotar um candidato**. Do disco do repositório ela só lê os manifestos de workspace citados acima; o resto vem do que o app já capturou.
 
+### Contexto derivado das decisões (revisão de 2026-10-01)
+
+Depois de adotar uma decisão, outro job (`derive_claims`) pede ao provedor no máximo 3 itens de contexto que ela afirma (premissa, restrição, convenção ou objetivo), cada um com citação literal do texto da decisão; o app confere a citação, o tipo, o tamanho e se o projeto já tem a mesma regra (migration 20, `claim_suggestions`). Em Sugestões do Mapa, confirmar cria a regra com a decisão como origem (`source_decision_id`) e `applies_to` nos itens que a decisão afeta; rejeitar não volta. Quando a decisão de origem é substituída, a regra derivada aparece em Contexto › Regras com "Revisar": nada é encerrado sozinho.
+
 ### Relações entre decisões sugeridas (revisão de 2026-10-01)
 
 Depois de adotar uma decisão, um job em segundo plano (`suggest_relations`) busca até 6 decisões anteriores em vigor que dividem um item do mapa com ela ou palavras (FTS), e pede ao provedor configurado que julgue cada par: `depends_on`, `conflicts_with`, `supersedes` ou nada. Toda relação precisa de uma **citação literal** do texto das decisões; o app confere a citação, os IDs, a direção (substituir é sempre da nova para a antiga), ciclos e estado antes de guardar a sugestão (migration 19, `relation_suggestions`). Ela aparece em Sugestões do Mapa com a citação e o motivo; só vira relação ao ser confirmada, e uma rejeitada não volta. Sem provedor ativo, nada é julgado. Similaridade escolhe candidatas; nunca decide a relação.

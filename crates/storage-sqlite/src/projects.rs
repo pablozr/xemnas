@@ -118,6 +118,7 @@ const PURGE_STATEMENTS: &[&str] = &[
     "DELETE FROM project_overviews WHERE project_id = ?1",
     "DELETE FROM project_documents WHERE project_id = ?1",
     "DELETE FROM relation_suggestions WHERE project_id = ?1",
+    "DELETE FROM claim_suggestions WHERE project_id = ?1",
     "DELETE FROM entity_edges WHERE project_id = ?1",
     "DELETE FROM entity_patterns WHERE entity_id IN \
      (SELECT entity_id FROM entities WHERE project_id = ?1)",

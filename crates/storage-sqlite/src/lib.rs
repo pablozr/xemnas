@@ -4,6 +4,7 @@
 mod agent;
 mod assessments;
 mod captures;
+mod claim_suggestions;
 mod claims;
 mod context;
 mod context_settings;

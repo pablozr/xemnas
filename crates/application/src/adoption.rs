@@ -12,6 +12,7 @@ use std::collections::BTreeSet;
 
 use domain::entities::{pattern_matches, EdgeKind, EntityKind, NodeKind};
 
+use crate::claim_suggestions::CLAIM_JOB_KIND;
 use crate::claims::ClaimStore;
 use crate::extract::CandidateKind;
 use crate::graph::{added_dependencies, GraphError, GraphStore, KnowledgeGraph, LinkRequest};
@@ -281,22 +282,26 @@ where
         // a background job looks for that without holding the adoption.
         if !confirmed.rule {
             let now = crate::clock::now_rfc3339();
-            let queued = JobRepository::insert(
-                &self.store,
-                &JobRecord {
-                    id: uuid::Uuid::now_v7().to_string(),
-                    kind: RELATION_JOB_KIND.to_string(),
-                    payload: confirmed.decision_id.clone(),
-                    state: JobState::Queued,
-                    idempotent: true,
-                    attempts: 0,
-                    last_error: None,
-                    created_at: now.clone(),
-                    updated_at: now,
-                },
-            );
-            // The relations are a suggestion; the adoption stands either way.
-            let _ = queued;
+            // Relations with earlier decisions and the context this one
+            // states are looked for in the background.
+            for kind in [RELATION_JOB_KIND, CLAIM_JOB_KIND] {
+                let queued = JobRepository::insert(
+                    &self.store,
+                    &JobRecord {
+                        id: uuid::Uuid::now_v7().to_string(),
+                        kind: kind.to_string(),
+                        payload: confirmed.decision_id.clone(),
+                        state: JobState::Queued,
+                        idempotent: true,
+                        attempts: 0,
+                        last_error: None,
+                        created_at: now.clone(),
+                        updated_at: now.clone(),
+                    },
+                );
+                // They are suggestions; the adoption stands either way.
+                let _ = queued;
+            }
         }
         Ok(AdoptOutcome {
             id: confirmed.decision_id,

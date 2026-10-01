@@ -201,7 +201,7 @@ fn checkpoints_from_before_0009_report_an_unknown_version() {
             row.get(0)
         })
         .expect("version");
-    assert_eq!(version, 19);
+    assert_eq!(version, 20);
 
     capture(
         &store,
