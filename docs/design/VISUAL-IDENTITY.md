@@ -179,6 +179,10 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
 - Fontes são chips com ícone (documento = decisão, escudo = regra) e o
   título encurtado em palavra inteira; o texto completo fica no tooltip.
   Defasagem é uma linha própria com ponto âmbar, nunca a meta inteira em cor.
+- Gerar a Visão também manda documentos novos ou alterados para análise; o
+  toast diz quantos ("3 documentos foram para análise; os candidatos aparecem
+  na Revisão"). Na Revisão, a evidência aparece como "Documento do projeto"
+  com o caminho.
 - Vazio: `empty_panel` com o que será enviado ao provedor e "Gerar visão"
   primário; gerando: "Gerando…" desabilitado; erro em `error_banner`; nota de
   procedência no rodapé. Nunca texto sem fonte.

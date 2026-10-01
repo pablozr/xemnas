@@ -58,6 +58,7 @@ fn kind_label(kind: &str) -> &str {
         "assistant_text" => "Resposta do assistente",
         "tool_summary" => "Resultado de ferramenta",
         "export_document" => "Documento de exportação",
+        "document" => "Documento do projeto",
         _ => "Fonte da captura",
     }
 }

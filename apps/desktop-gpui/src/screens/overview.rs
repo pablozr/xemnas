@@ -163,9 +163,22 @@ impl OverviewScreen {
                     }
                     Outcome::Generated(Ok(view)) => {
                         this.loaded = true;
+                        let queued = view.queued_documents;
                         this.view = Some(view);
                         this.flow = None;
-                        this.show_notice("Visão atualizada.".into(), cx);
+                        this.show_notice(
+                            match queued {
+                                0 => "Visão atualizada.".into(),
+                                1 => "Visão atualizada. 1 documento foi para análise; os \
+                                      candidatos aparecem na Revisão."
+                                    .into(),
+                                n => format!(
+                                    "Visão atualizada. {n} documentos foram para análise; os \
+                                     candidatos aparecem na Revisão."
+                                ),
+                            },
+                            cx,
+                        );
                     }
                     Outcome::Loaded(Err(error)) => {
                         this.loaded = true;
