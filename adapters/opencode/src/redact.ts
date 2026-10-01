@@ -319,7 +319,11 @@ export function reducePatches(
     if (start < 0) {
       continue;
     }
-    const file = relativePath(patch.file, directory) || "unknown";
+    const file = relativePath(patch.file, directory);
+    if (file.length === 0) {
+      // Without a file name the hunk cannot be tied to a component.
+      continue;
+    }
     const header = `diff --git a/${file} b/${file}\n`;
     const block = boundContent(`${header}${patch.diff.slice(start)}`, remaining);
     if (block.length === 0) {

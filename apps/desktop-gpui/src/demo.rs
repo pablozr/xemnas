@@ -143,6 +143,9 @@ pub(crate) fn store() -> Result<SqliteStore, Box<dyn std::error::Error>> {
                 dedup_hash: format!("demo-{project}-{index}"),
                 created_at: timestamp.clone(),
                 updated_at: timestamp,
+                kind: "decision".to_string(),
+                significance: 1.0,
+                criteria: "[]".to_string(),
             };
             store.insert_candidates(&[candidate.clone()])?;
             candidate.id = format!("confirmed-{}", candidate.id);

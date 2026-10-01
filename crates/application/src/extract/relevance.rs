@@ -327,6 +327,11 @@ pub(super) fn diff_summary(evidence: &DecisionEvidence) -> String {
     json!({ "files": files, "artifacts": evidence.artifacts.len() }).to_string()
 }
 
+/// Files changed in the capture, sorted.
+pub(super) fn diff_file_list(evidence: &DecisionEvidence) -> Vec<String> {
+    diff_files(evidence).into_iter().collect()
+}
+
 /// Sorted unique file paths found in `diff --git` headers.
 fn diff_files(evidence: &DecisionEvidence) -> BTreeSet<String> {
     let mut files = BTreeSet::new();

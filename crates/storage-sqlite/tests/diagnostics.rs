@@ -125,6 +125,9 @@ fn candidate(id: &str) -> DecisionCandidateRecord {
         dedup_hash: "dedup-cand-1".to_string(),
         created_at: "2026-01-03T00:00:00Z".to_string(),
         updated_at: "2026-01-03T00:00:00Z".to_string(),
+        kind: "decision".to_string(),
+        significance: 1.0,
+        criteria: "[]".to_string(),
     }
 }
 
@@ -250,7 +253,7 @@ fn exported_diagnostics_never_carry_content_markers() {
         );
     }
 
-    assert_eq!(document.schema.migrations_version, 14);
+    assert_eq!(document.schema.migrations_version, 15);
     assert!(
         json.contains("\"metrics\""),
         "the metrics section is part of the sanitized sweep"

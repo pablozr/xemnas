@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use application::extract::{
     connection_test_evidence, fail_provider_setup, filter_relevant, input_hash,
     record_skipped_assessment, run_connection_test, run_extraction, AssessmentOutcome,
-    AssessmentRecord, AssessmentStore, CandidateExtractor, CandidateProposal,
+    AssessmentRecord, AssessmentStore, CandidateExtractor, CandidateKind, CandidateProposal,
     DecisionCandidateRecord, DecisionEvidence, EvidenceArtifact, ExtractError, ExtractionStore,
     FakeCandidateExtractor, ProviderSetupError, RelevanceSignal, RunContext,
 };
@@ -422,6 +422,9 @@ fn valid_proposal(input: &DecisionEvidence, signals: &[RelevanceSignal]) -> Cand
             .collect(),
         diff_summary: serde_json::json!({"files": [], "artifacts": input.artifacts.len()})
             .to_string(),
+        kind: CandidateKind::Decision,
+        significance: 0.8,
+        criteria: Vec::new(),
     }
 }
 
@@ -980,4 +983,41 @@ fn connection_test_evidence_is_synthetic() {
             "only fixed fictitious content is sent"
         );
     }
+}
+
+/// Returns an implementation detail and a decision.
+struct DetailAndDecision;
+
+impl CandidateExtractor for DetailAndDecision {
+    fn extract(
+        &self,
+        input: &DecisionEvidence,
+        signals: &[RelevanceSignal],
+    ) -> Result<Vec<CandidateProposal>, ExtractError> {
+        let mut detail = valid_proposal(input, signals);
+        detail.kind = CandidateKind::Detail;
+        detail.question = "Como validar o campo?".into();
+        let mut decision = valid_proposal(input, signals);
+        decision.significance = 0.9;
+        decision.criteria = vec!["data_or_contract".into()];
+        Ok(vec![detail, decision])
+    }
+}
+
+#[test]
+fn implementation_details_are_never_persisted() {
+    let evidence = evidence(DURABLE[0]);
+    let store = FakeStore::with(evidence.clone());
+    let report = run_extraction(
+        &store,
+        &DetailAndDecision,
+        &evidence.capture_id,
+        &RunContext::for_tests(),
+    )
+    .expect("extraction");
+    assert_eq!(report.inserted, 1);
+    let record = &store.records()[0];
+    assert_eq!(record.kind, "decision");
+    assert!((record.significance - 0.9).abs() < f64::EPSILON);
+    assert_eq!(record.criteria, "[\"data_or_contract\"]");
 }

@@ -208,8 +208,23 @@ function toolPatch(state: Record<string, unknown>): { file: string; diff: string
       ? filediff.file
       : typeof input.filePath === "string"
         ? input.filePath
-        : "";
+        : patchFile(meta.diff);
   return { file, diff: meta.diff };
+}
+
+/** The file a unified or apply_patch diff names in its header, or "". */
+function patchFile(diff: string): string {
+  for (const line of diff.split(/\r?\n/)) {
+    const match =
+      /^Index:\s+(.+)$/.exec(line) ??
+      /^\*\*\* (?:Add|Update) File:\s*(.+)$/.exec(line) ??
+      /^\+\+\+ (?:b\/)?(.+)$/.exec(line);
+    const file = match?.[1]?.trim();
+    if (file !== undefined && file.length > 0 && file !== "/dev/null") {
+      return file;
+    }
+  }
+  return "";
 }
 
 /**

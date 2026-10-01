@@ -106,6 +106,9 @@ fn candidate(id: &str, capture_id: &str, dedup: &str) -> DecisionCandidateRecord
         dedup_hash: dedup.to_string(),
         created_at: "2026-01-01T00:00:00Z".to_string(),
         updated_at: "2026-01-01T00:00:00Z".to_string(),
+        kind: "decision".to_string(),
+        significance: 1.0,
+        criteria: "[]".to_string(),
     }
 }
 
@@ -308,8 +311,8 @@ fn migration_0005_applies_on_fresh_and_upgraded_databases() {
             |row| row.get(0),
         )
         .expect("count distinct");
-    assert_eq!(versions, 13);
-    assert_eq!(distinct, 13);
+    assert_eq!(versions, 14);
+    assert_eq!(distinct, 14);
 
     let _ = std::fs::remove_dir_all(&root);
 }

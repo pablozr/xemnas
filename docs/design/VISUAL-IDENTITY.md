@@ -127,6 +127,12 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   substituir tem borda de aviso e explica que a escolhida sai do contexto do
   agente e fica no histórico.
 
+- **Relevância (ADR-0006):** a fila mostra só candidatos com relevância a
+  partir de 0,5; quando há escondidos, "Mostrar N de baixa relevância" (botão
+  fantasma sob a busca) os inclui. Candidato a regra leva o selo "Regra" (cor
+  de informação) ao lado do estado; "Por que importa" lista os critérios
+  marcados em texto meta abaixo do cabeçalho.
+
 ## Contexto — o que vale no projeto
 
 - Terceiro destino do projeto (Ctrl 3), numa `reading_page`: modo de contexto

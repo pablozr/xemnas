@@ -15,7 +15,7 @@ use crate::store::SqliteStore;
 const CANDIDATE_COLUMNS: &str = "dc.id, dc.project_id, p.location, dc.capture_id, dc.status, \
      dc.question, dc.choice, dc.rationale, dc.signals, dc.confidence, dc.confidence_reason, \
      dc.evidence_refs, dc.diff_summary, ck.adapter, ck.session_id, ck.observed_at, r.received_at, \
-     dc.created_at, dc.updated_at";
+     dc.created_at, dc.updated_at, dc.kind, dc.significance, dc.criteria";
 
 /// Join that attaches the project, the receipt and the latest checkpoint.
 const CANDIDATE_FROM: &str = "FROM decision_candidates dc \
@@ -67,6 +67,9 @@ fn map_row(row: &Row<'_>) -> rusqlite::Result<StoredCandidate> {
         received_at,
         created_at: row.get(17)?,
         updated_at: row.get(18)?,
+        kind: row.get(19)?,
+        significance: row.get(20)?,
+        criteria: row.get(21)?,
     })
 }
 
@@ -143,6 +146,7 @@ impl InboxStore for SqliteStore {
         &self,
         project_id: Option<&str>,
         statuses: &[CandidateStatus],
+        min_significance: Option<f64>,
     ) -> Result<usize, InboxError> {
         if statuses.is_empty() {
             return Ok(0);
@@ -157,6 +161,10 @@ impl InboxStore for SqliteStore {
         if let Some(project_id) = project_id {
             sql.push_str(" AND dc.project_id = ?");
             binds.push(Value::Text(project_id.into()));
+        }
+        if let Some(min) = min_significance {
+            sql.push_str(" AND dc.significance >= ?");
+            binds.push(Value::Real(min));
         }
         let count: i64 = self
             .lock()
@@ -180,6 +188,10 @@ impl InboxStore for SqliteStore {
         if let Some(project_id) = &query.project_id {
             sql.push_str(" AND dc.project_id = ?");
             binds.push(Value::Text(project_id.clone()));
+        }
+        if let Some(min) = query.min_significance {
+            sql.push_str(" AND dc.significance >= ?");
+            binds.push(Value::Real(min));
         }
         if let Some(before) = &query.before {
             sql.push_str(" AND (dc.created_at < ? OR (dc.created_at = ? AND dc.id < ?))");
@@ -314,6 +326,27 @@ impl InboxStore for SqliteStore {
             .map_err(storage_error)?;
         if changed == 0 {
             return Ok(false);
+        }
+
+        if seed.as_rule {
+            // A rule becomes a project claim, valid from now, citing no decision.
+            transaction
+                .execute(
+                    "INSERT INTO context_claims \
+                     (claim_id, project_id, kind, statement, valid_from, valid_until, \
+                      source_decision_id, created_at, updated_at) \
+                     VALUES (?1, ?2, 'constraint', ?3, ?4, NULL, NULL, ?4, ?4)",
+                    params![seed.decision_id, seed.project_id, seed.choice, updated_at],
+                )
+                .map_err(storage_error)?;
+            transaction
+                .execute(
+                    "INSERT INTO claims_fts (claim_id, statement) VALUES (?1, ?2)",
+                    params![seed.decision_id, seed.choice],
+                )
+                .map_err(storage_error)?;
+            transaction.commit().map_err(storage_error)?;
+            return Ok(true);
         }
 
         transaction

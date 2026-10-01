@@ -14,7 +14,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use application::extract::{
-    CandidateExtractor, CandidateProposal, DecisionEvidence, ExtractError, RelevanceSignal,
+    CandidateExtractor, CandidateProposal, DecisionEvidence, ExtractError, ExtractionBackground,
+    RelevanceSignal,
 };
 use application::profile::{
     consent_status, AiProfile, ChatGptAccount, ProfileKind, SecretStore, SignedIn, CHATGPT_API_BASE,
@@ -776,6 +777,15 @@ impl CandidateExtractor for ChatGptExtractor {
         input: &DecisionEvidence,
         signals: &[RelevanceSignal],
     ) -> Result<Vec<CandidateProposal>, ExtractError> {
+        self.extract_with(input, signals, &ExtractionBackground::default())
+    }
+
+    fn extract_with(
+        &self,
+        input: &DecisionEvidence,
+        signals: &[RelevanceSignal],
+        background: &ExtractionBackground,
+    ) -> Result<Vec<CandidateProposal>, ExtractError> {
         if let Err(reason) = consent_status(&self.profile) {
             return Err(ExtractError::Extractor(format!(
                 "chamadas externas bloqueadas: {reason}"
@@ -790,7 +800,7 @@ impl CandidateExtractor for ChatGptExtractor {
                 "role": "user",
                 "content": [{
                     "type": "input_text",
-                    "text": build_user_content(&self.profile, input, signals),
+                    "text": build_user_content(&self.profile, input, signals, background),
                 }],
             }],
             "store": false,

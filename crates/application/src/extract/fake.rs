@@ -2,7 +2,8 @@
 
 use super::relevance::diff_summary;
 use super::{
-    CandidateExtractor, CandidateProposal, DecisionEvidence, ExtractError, RelevanceSignal,
+    CandidateExtractor, CandidateKind, CandidateProposal, DecisionEvidence, ExtractError,
+    RelevanceSignal,
 };
 
 /// Deterministic fake extractor (§12): templates fixed by the signals.
@@ -42,6 +43,9 @@ impl CandidateExtractor for FakeCandidateExtractor {
                 .map(|artifact| artifact.artifact_id.clone())
                 .collect(),
             diff_summary: diff_summary(input),
+            kind: CandidateKind::Decision,
+            significance: 0.8,
+            criteria: Vec::new(),
         }])
     }
 }

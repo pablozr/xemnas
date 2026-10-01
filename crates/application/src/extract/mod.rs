@@ -82,6 +82,74 @@ pub struct CandidateProposal {
     pub evidence_refs: Vec<String>,
     /// JSON `{files:[...], artifacts:n}`; never raw diff content.
     pub diff_summary: String,
+    /// Decision, project rule or implementation detail (details are dropped).
+    pub kind: CandidateKind,
+    /// How much it matters for the project, in `[0.0, 1.0]`.
+    pub significance: f64,
+    /// Significance criteria the extractor ticked ([`SIGNIFICANCE_CRITERIA`]).
+    pub criteria: Vec<String>,
+}
+
+/// What a proposal is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CandidateKind {
+    /// A durable engineering decision.
+    #[default]
+    Decision,
+    /// A rule the project (or one component) must follow; becomes a claim.
+    Rule,
+    /// How something was implemented; never persisted.
+    Detail,
+}
+
+impl CandidateKind {
+    /// Persisted literal.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Decision => "decision",
+            Self::Rule => "rule",
+            Self::Detail => "detail",
+        }
+    }
+
+    /// Parses a literal; unknown values read as a decision.
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "rule" => Self::Rule,
+            "detail" => Self::Detail,
+            _ => Self::Decision,
+        }
+    }
+}
+
+/// The significance test, adapted from Olaf Zimmermann's architectural
+/// significance criteria: what makes a choice worth remembering.
+pub const SIGNIFICANCE_CRITERIA: &[&str] = &[
+    "cross_cutting",
+    "data_or_contract",
+    "security_or_privacy",
+    "external_dependency",
+    "hard_to_reverse",
+    "first_of_a_kind",
+    "past_problem",
+    "constrains_future_work",
+];
+
+/// Candidates below this significance stay out of the review queue by
+/// default (they are kept, in a collapsed "low relevance" group).
+pub const MIN_SIGNIFICANCE: f64 = 0.5;
+
+/// What the project already knows and what the user accepted or rejected
+/// before, sent with the capture so the extractor skips repeats and learns
+/// the user's taste (bounded, never raw captures).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ExtractionBackground {
+    /// Decisions in force and rules already recorded, as `question → choice`.
+    pub known: Vec<String>,
+    /// Candidates the user confirmed recently, as `question → choice`.
+    pub confirmed: Vec<String>,
+    /// Candidates the user rejected recently, as `question → choice`.
+    pub rejected: Vec<String>,
 }
 
 /// A row to persist in `decision_candidates`.
@@ -111,6 +179,12 @@ pub struct DecisionCandidateRecord {
     pub evidence_refs: String,
     /// JSON `{files:[...], artifacts:n}`.
     pub diff_summary: String,
+    /// `decision` or `rule`.
+    pub kind: String,
+    /// Significance in `[0.0, 1.0]`.
+    pub significance: f64,
+    /// Serialized significance criteria array.
+    pub criteria: String,
     /// Unique hash used for deduplication.
     pub dedup_hash: String,
     /// RFC 3339 creation timestamp.
@@ -173,12 +247,33 @@ pub trait CandidateExtractor {
         input: &DecisionEvidence,
         signals: &[RelevanceSignal],
     ) -> Result<Vec<CandidateProposal>, ExtractError>;
+    /// Extracts with what the project already knows; extractors that can use
+    /// it override this, the others ignore it.
+    fn extract_with(
+        &self,
+        input: &DecisionEvidence,
+        signals: &[RelevanceSignal],
+        background: &ExtractionBackground,
+    ) -> Result<Vec<CandidateProposal>, ExtractError> {
+        let _ = background;
+        self.extract(input, signals)
+    }
 }
 
 /// The persistence port extraction needs.
 pub trait ExtractionStore {
     /// Loads the evidence for a capture, or `None` when it no longer exists.
     fn load_evidence(&self, capture_id: &str) -> Result<Option<DecisionEvidence>, ExtractError>;
+
+    /// What the project already records about `files` and the user's recent
+    /// confirmations and rejections. Empty by default.
+    fn background(
+        &self,
+        _project_id: &str,
+        _files: &[String],
+    ) -> Result<ExtractionBackground, ExtractError> {
+        Ok(ExtractionBackground::default())
+    }
 
     /// Inserts candidates, ignoring rows whose `dedup_hash` already exists.
     fn insert_candidates(&self, records: &[DecisionCandidateRecord])
@@ -218,7 +313,11 @@ where
         return Ok(ExtractionReport::default());
     }
 
-    let proposals = match extractor.extract(&evidence, &signals) {
+    // Background is a hint: a failure to read it never blocks extraction.
+    let background = store
+        .background(&evidence.project_id, &relevance::diff_file_list(&evidence))
+        .unwrap_or_default();
+    let proposals = match extractor.extract_with(&evidence, &signals, &background) {
         Ok(proposals) => proposals,
         Err(error) => {
             record_assessment(
@@ -243,6 +342,10 @@ where
     let mut validated: Vec<(CandidateProposal, Vec<RelevanceSignal>)> = Vec::new();
     let mut rejected: Option<ExtractError> = None;
     for proposal in proposals {
+        // Implementation details are not decisions nor rules.
+        if proposal.kind == CandidateKind::Detail {
+            continue;
+        }
         let proposal = reconcile_with_evidence(proposal, &evidence);
         match validate_proposal(&proposal, &evidence, &signals) {
             Ok(canonical) => validated.push((proposal, canonical)),
@@ -290,6 +393,10 @@ where
                 confidence_reason: proposal.confidence_reason.clone(),
                 evidence_refs,
                 diff_summary: proposal.diff_summary.clone(),
+                kind: proposal.kind.as_str().to_string(),
+                significance: proposal.significance.clamp(0.0, 1.0),
+                criteria: serde_json::to_string(&proposal.criteria)
+                    .unwrap_or_else(|_| "[]".to_string()),
                 dedup_hash: dedup_hash(capture_id, &proposal, &canonical),
                 created_at: now.clone(),
                 updated_at: now.clone(),

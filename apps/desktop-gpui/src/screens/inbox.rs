@@ -1,6 +1,7 @@
 //! Native review surface backed by the Inbox application port.
 //! Storage runs in the background; technical failures never reach the view.
 
+use application::extract::{CandidateKind, MIN_SIGNIFICANCE};
 use application::inbox::{
     CandidateDetail, CandidateEdits, CandidateStatus, CandidateSummary, Inbox, InboxError,
     InboxFilter, InboxPage, InboxStore,
@@ -27,7 +28,7 @@ use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{SpacingScale, TypeScale};
 
 enum Outcome {
-    Page(Result<(InboxPage, usize), InboxError>, bool),
+    Page(Result<(InboxPage, usize, usize), InboxError>, bool),
     Detail(Result<Box<CandidateDetail>, InboxError>),
     Action(Result<(), InboxError>, &'static str),
 }
@@ -70,6 +71,11 @@ pub struct InboxScreen<S: InboxStore + Send + 'static> {
     /// Notice whose dismissal timer is already running.
     notice_scheduled: Option<&'static str>,
     list_scroll: ScrollHandle,
+    /// Whether low-significance candidates are listed too.
+    show_low: bool,
+    /// Pending candidates kept out of the queue for low significance.
+    hidden_low: usize,
+    low_focus: FocusHandle,
 }
 
 impl<S: InboxStore + Send + 'static> InboxScreen<S> {
@@ -102,7 +108,18 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             notice: None,
             notice_scheduled: None,
             list_scroll: ScrollHandle::new(),
+            show_low: false,
+            hidden_low: 0,
+            low_focus: cx.focus_handle().tab_stop(true),
         }
+    }
+
+    fn toggle_low(&mut self, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        self.show_low = !self.show_low;
+        self.page(false, cx);
     }
 
     /// Mounts the workspace search inside the candidate list.
@@ -162,13 +179,28 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
         let filter = InboxFilter {
             project_id: self.project_id.clone(),
             cursor: if append { self.cursor.clone() } else { None },
+            min_significance: (!self.show_low).then_some(MIN_SIGNIFICANCE),
             ..InboxFilter::default()
+        };
+        let everything = InboxFilter {
+            min_significance: None,
+            cursor: None,
+            ..filter.clone()
+        };
+        let relevant = InboxFilter {
+            min_significance: Some(MIN_SIGNIFICANCE),
+            cursor: None,
+            ..filter.clone()
         };
         self.run(cx, move |inbox| {
             Outcome::Page(
-                inbox
-                    .list(&filter)
-                    .and_then(|page| inbox.count(&filter).map(|count| (page, count))),
+                inbox.list(&filter).and_then(|page| {
+                    let count = inbox.count(&filter)?;
+                    let hidden = inbox
+                        .count(&everything)?
+                        .saturating_sub(inbox.count(&relevant)?);
+                    Ok((page, count, hidden))
+                }),
                 append,
             )
         });
@@ -224,8 +256,9 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                     return;
                 }
                 match outcome {
-                    Outcome::Page(Ok((page, total)), append) => {
+                    Outcome::Page(Ok((page, total, hidden)), append) => {
                         this.total = Some(total);
+                        this.hidden_low = hidden;
                         this.loaded = true;
                         if !append {
                             this.rows.clear();
@@ -605,6 +638,33 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             .child(label)
     }
 
+    /// Shows or hides the low-significance candidates kept out of the queue.
+    fn low_toggle(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        let theme = Theme::current(cx);
+        let label = if self.show_low {
+            "Esconder os de baixa relevância".to_owned()
+        } else {
+            format!("Mostrar {} de baixa relevância", self.hidden_low)
+        };
+        div()
+            .px(px(SpacingScale::S4))
+            .pb(px(SpacingScale::S2))
+            .id("inbox-low-row")
+            .child(
+                action_button(&theme, "inbox-low", ButtonKind::Ghost, !self.busy)
+                    .aria_label(label.clone())
+                    .track_focus(&self.low_focus)
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_low(cx)))
+                    .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                            this.toggle_low(cx);
+                            cx.stop_propagation();
+                        }
+                    }))
+                    .child(label),
+            )
+    }
+
     fn reading_pane(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
         let visible_detail = self
@@ -709,12 +769,30 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                     .items_center()
                     .gap(px(SpacingScale::S3))
                     .child(status_badge(detail.summary.status, theme))
+                    .when(detail.summary.kind == CandidateKind::Rule, |line| {
+                        line.child(status_pill(&theme, theme.colors.status_info(), "Regra"))
+                    })
                     .child(
                         text_style(div(), TypeScale::META)
                             .text_color(theme.colors.text_muted())
                             .child(short_date(&detail.summary.received_at)),
                     ),
             )
+            .when(!detail.criteria.is_empty(), |page| {
+                page.child(
+                    text_style(div(), TypeScale::META)
+                        .text_color(theme.colors.text_muted())
+                        .child(format!(
+                            "Por que importa: {}",
+                            detail
+                                .criteria
+                                .iter()
+                                .map(|criterion| criterion_label(criterion))
+                                .collect::<Vec<_>>()
+                                .join(" · ")
+                        )),
+                )
+            })
             .child(reading_title(&detail.summary.question).text_color(theme.colors.text_primary()))
             .child(
                 div()
@@ -857,6 +935,7 @@ impl<S: InboxStore + Send + 'static> Render for InboxScreen<S> {
                         .child(div().flex_1())
                         .child(self.button("inbox-refresh", "Atualizar", false, cx)))
                     .child(div().px(px(SpacingScale::S4)).pb(px(SpacingScale::S3)).children(self.search.clone()))
+                    .when(self.hidden_low > 0 || self.show_low, |rail| rail.child(self.low_toggle(cx)))
                     .child(div().id("inbox-list").flex_1().min_h(px(0.0)).overflow_y_scroll().track_scroll(&self.list_scroll)
                         .children(visible.iter().map(|row| self.row(row, cx)))
                         .when(visible.is_empty() && self.busy, |list| list.child(skeleton_list(&theme, "inbox-skeleton", 5)))
@@ -873,6 +952,21 @@ impl<S: InboxStore + Send + 'static> Render for InboxScreen<S> {
                 .child(div().flex_1().min_w(px(0.0)).h_full().flex().flex_col()
                     .child(div().flex_1().min_h(px(0.0)).child(if let Some(editor) = self.editor.as_ref().filter(|_| self.detail.as_ref().is_some_and(|detail| matches_query(&detail.summary, &self.query))) { editor.clone().into_any_element() } else { self.reading_pane(cx) }))
                     .when(self.editor.is_none(), |pane| pane.child(self.review_actions(cx)))))
+    }
+}
+
+/// Product copy for a significance criterion.
+fn criterion_label(criterion: &str) -> &'static str {
+    match criterion {
+        "cross_cutting" => "afeta várias partes",
+        "data_or_contract" => "dados ou contrato",
+        "security_or_privacy" => "segurança ou privacidade",
+        "external_dependency" => "dependência externa",
+        "hard_to_reverse" => "difícil de reverter",
+        "first_of_a_kind" => "primeira vez no projeto",
+        "past_problem" => "resolve problema recorrente",
+        "constrains_future_work" => "condiciona trabalho futuro",
+        _ => "outro motivo",
     }
 }
 

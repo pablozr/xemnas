@@ -107,6 +107,9 @@ fn candidate(id: &str, refs: &str) -> DecisionCandidateRecord {
         dedup_hash: format!("dedup-{id}"),
         created_at: "2026-01-03T00:00:00Z".to_string(),
         updated_at: "2026-01-03T00:00:00Z".to_string(),
+        kind: "decision".to_string(),
+        significance: 1.0,
+        criteria: "[]".to_string(),
     }
 }
 
@@ -151,7 +154,7 @@ fn migration_0008_applies_on_fresh_and_upgraded_databases() {
             row.get(0)
         })
         .expect("count");
-    assert_eq!(versions, 13);
+    assert_eq!(versions, 14);
 
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -314,6 +317,7 @@ fn promote_rolls_back_completely_on_failure() {
         choice: "c".to_string(),
         rationale: "r".to_string(),
         evidence_refs: vec!["art-1".to_string()],
+        as_rule: false,
     };
     let result = InboxStore::confirm_one(
         &store,

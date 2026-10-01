@@ -42,6 +42,7 @@ pub(super) fn label(artifact: &ArtifactView) -> String {
         .get("file")
         .or_else(|| metadata.get("path"))
         .and_then(|value| value.as_str())
+        .filter(|path| !path.is_empty() && *path != "unknown")
         .map(|path| path.rsplit(['/', '\\']).next().unwrap_or(path).to_owned())
         .unwrap_or_else(|| kind_label(&artifact.kind).to_owned())
 }

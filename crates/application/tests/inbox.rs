@@ -328,6 +328,9 @@ fn stored(id: &str, created_at: &str, status: CandidateStatus) -> StoredCandidat
         received_at: created_at.to_string(),
         created_at: created_at.to_string(),
         updated_at: created_at.to_string(),
+        kind: "decision".to_string(),
+        significance: 1.0,
+        criteria: "[]".to_string(),
     }
 }
 

@@ -18,8 +18,9 @@ use std::time::Duration;
 
 use application::analysis::ExtractorFactory;
 use application::extract::{
-    run_connection_test, truncate_content, CandidateExtractor, CandidateProposal,
-    ConnectionTestReport, DecisionEvidence, ExtractError, RelevanceSignal, MAX_DIFF_SUMMARY_FILES,
+    run_connection_test, truncate_content, CandidateExtractor, CandidateKind, CandidateProposal,
+    ConnectionTestReport, DecisionEvidence, ExtractError, ExtractionBackground, RelevanceSignal,
+    MAX_DIFF_SUMMARY_FILES, SIGNIFICANCE_CRITERIA,
 };
 use application::profile::{consent_status, AiProfile, ProfileError, ProfileKind, SecretStore};
 use serde::{Deserialize, Serialize};
@@ -45,24 +46,37 @@ pub const KEYRING_SERVICE: &str = "xemnas.ai-profile";
 
 /// System prompt describing the strict JSON contract expected back.
 pub(crate) const SYSTEM_PROMPT: &str = "You read one turn of a coding session (the user's \
-message, the assistant's answer, tool summaries and code diffs) and extract the durable \
-engineering decisions it contains, for a human to confirm later.\n\
-A decision is a choice that will still matter in months: architecture, data model or \
-persistence, public contracts and APIs, dependencies, security and privacy, conventions the \
-team must follow, or an explicit trade-off between alternatives. Not decisions: routine \
-fixes, renames, formatting, tests alone, cosmetic UI tweaks, or restating what code does.\n\
-Rules: propose at most 3 decisions, only the clearest; return an empty list when there is \
-none, which is common and correct. Write every text field in the language of the \
-conversation. question: the problem, as a short question (\"Onde guardar os segredos?\"). \
-choice: what was chosen, in one sentence. rationale: why, including the rejected \
-alternative or trade-off when stated. confidence: 0 to 1, how sure you are that this is a \
-durable decision actually taken (not merely discussed); confidence_reason: one sentence. \
-evidence_refs: copy the ids exactly as written after \"### artifact\" for the artifacts \
-that support the decision. diff_summary: files the decision touched and the number of \
-artifacts (the app recomputes both).\n\
+message, the assistant's answer, tool summaries and code diffs) and propose what is worth \
+remembering about the project, for a human to confirm later. Most turns contain nothing: an \
+empty list is the common, correct answer.\n\
+Classify each item with kind: \"decision\" = an architectural choice between real \
+alternatives (structure, data model, persistence, public contracts, dependencies, security, \
+who is responsible for what); \"rule\" = an invariant or constraint the code of one part must \
+keep (\"only a human may resolve X\", \"every write goes through a transaction\"); \"detail\" = \
+how something was implemented or fixed (a bug fix, a validation, a rename, a test, UI \
+polish). Use detail for anything local to one function or file, anything a code review would \
+consider routine, and restatements of what the diff does.\n\
+Score significance from 0 to 1 with this test; tick every criterion that applies in \
+criteria: cross_cutting (affects several parts of the system), data_or_contract (data \
+model, persistence format, API or schema), security_or_privacy, external_dependency (new \
+library or service), hard_to_reverse, first_of_a_kind (the project never did this before), \
+past_problem (it fixes a class of problems that already hurt), constrains_future_work. No \
+criterion means significance below 0.3; one criterion around 0.5; two or more 0.7 and up. \
+A bug fix is detail unless it establishes a rule for the whole component.\n\
+Do not propose anything already recorded (listed under \"Already recorded\"), and follow \
+the user's taste shown under \"confirmed\" and \"rejected\". At most 3 items, the clearest \
+first; merge items that are the same choice.\n\
+Write every text field in the language of the conversation. question: the problem, as a \
+short question. choice: what was chosen (for a rule, the rule itself), in one sentence. \
+rationale: why, including the rejected alternative or trade-off when stated. confidence: 0 \
+to 1, how sure you are that it was actually decided (not merely discussed); \
+confidence_reason: one sentence. evidence_refs: copy the ids exactly as written after \
+\"### artifact\". diff_summary: files touched and number of artifacts (the app recomputes \
+both).\n\
 Reply with a single JSON object only, no prose, matching exactly: \
-{\"proposals\":[{\"question\":string,\"choice\":string,\"rationale\":string,\
-\"confidence\":number,\"confidence_reason\":string,\"evidence_refs\":[string],\
+{\"proposals\":[{\"kind\":\"decision|rule|detail\",\"question\":string,\"choice\":string,\
+\"rationale\":string,\"confidence\":number,\"confidence_reason\":string,\
+\"significance\":number,\"criteria\":[string],\"evidence_refs\":[string],\
 \"diff_summary\":{\"files\":[string],\"artifacts\":number}}]}. No extra fields.";
 
 /// Bounded retry policy for transient provider failures.
@@ -145,10 +159,19 @@ impl CandidateExtractor for ProviderExtractor {
         input: &DecisionEvidence,
         signals: &[RelevanceSignal],
     ) -> Result<Vec<CandidateProposal>, ExtractError> {
+        self.extract_with(input, signals, &ExtractionBackground::default())
+    }
+
+    fn extract_with(
+        &self,
+        input: &DecisionEvidence,
+        signals: &[RelevanceSignal],
+        background: &ExtractionBackground,
+    ) -> Result<Vec<CandidateProposal>, ExtractError> {
         match self {
-            Self::OpenAiCompatible(extractor) => extractor.extract(input, signals),
-            Self::ChatGpt(extractor) => extractor.extract(input, signals),
-            Self::OpenCode(extractor) => extractor.extract(input, signals),
+            Self::OpenAiCompatible(extractor) => extractor.extract_with(input, signals, background),
+            Self::ChatGpt(extractor) => extractor.extract_with(input, signals, background),
+            Self::OpenCode(extractor) => extractor.extract_with(input, signals, background),
         }
     }
 }
@@ -249,6 +272,15 @@ impl CandidateExtractor for OpenAiCompatibleExtractor {
         input: &DecisionEvidence,
         signals: &[RelevanceSignal],
     ) -> Result<Vec<CandidateProposal>, ExtractError> {
+        self.extract_with(input, signals, &ExtractionBackground::default())
+    }
+
+    fn extract_with(
+        &self,
+        input: &DecisionEvidence,
+        signals: &[RelevanceSignal],
+        background: &ExtractionBackground,
+    ) -> Result<Vec<CandidateProposal>, ExtractError> {
         if let Err(reason) = consent_status(&self.profile) {
             return Err(ExtractError::Extractor(format!(
                 "chamadas externas bloqueadas: {reason}"
@@ -268,7 +300,7 @@ impl CandidateExtractor for OpenAiCompatibleExtractor {
             "response_format": { "type": "json_object" },
             "messages": [
                 { "role": "system", "content": SYSTEM_PROMPT },
-                { "role": "user", "content": build_user_content(&self.profile, input, signals) }
+                { "role": "user", "content": build_user_content(&self.profile, input, signals, background) }
             ]
         });
 
@@ -387,15 +419,22 @@ pub(crate) fn output_schema() -> serde_json::Value {
                     "type": "object",
                     "additionalProperties": false,
                     "required": [
-                        "question", "choice", "rationale", "confidence",
-                        "confidence_reason", "evidence_refs", "diff_summary"
+                        "kind", "question", "choice", "rationale", "confidence",
+                        "confidence_reason", "significance", "criteria",
+                        "evidence_refs", "diff_summary"
                     ],
                     "properties": {
+                        "kind": { "type": "string", "enum": ["decision", "rule", "detail"] },
                         "question": { "type": "string" },
                         "choice": { "type": "string" },
                         "rationale": { "type": "string" },
                         "confidence": { "type": "number" },
                         "confidence_reason": { "type": "string" },
+                        "significance": { "type": "number" },
+                        "criteria": {
+                            "type": "array",
+                            "items": { "type": "string", "enum": SIGNIFICANCE_CRITERIA }
+                        },
                         "evidence_refs": { "type": "array", "items": { "type": "string" } },
                         "diff_summary": {
                             "type": "object",
@@ -425,14 +464,44 @@ pub(crate) fn sanitized_transport_error(error: reqwest::Error) -> ExtractError {
     ExtractError::Extractor(category.to_string())
 }
 
-/// Builds the user content from signals and bounded artifact content.
+/// Most lines of background per section sent with a capture.
+const MAX_BACKGROUND_LINES: usize = 12;
+
+/// Builds the user content: what the project already records and what the
+/// user accepted or rejected before, then the signals and the bounded
+/// artifacts.
 pub(crate) fn build_user_content(
     profile: &AiProfile,
     input: &DecisionEvidence,
     signals: &[RelevanceSignal],
+    background: &ExtractionBackground,
 ) -> String {
+    let mut text = String::new();
+    for (title, lines) in [
+        (
+            "Already recorded in this project (do not propose these again or anything they already cover)",
+            &background.known,
+        ),
+        (
+            "The user confirmed items like these before (this is the level worth proposing)",
+            &background.confirmed,
+        ),
+        (
+            "The user rejected items like these before (do not propose similar ones)",
+            &background.rejected,
+        ),
+    ] {
+        if lines.is_empty() {
+            continue;
+        }
+        text.push_str(&format!("## {title}\n"));
+        for line in lines.iter().take(MAX_BACKGROUND_LINES) {
+            text.push_str(&format!("- {}\n", truncate_content(line, 300)));
+        }
+        text.push('\n');
+    }
     let labels: Vec<&str> = signals.iter().map(RelevanceSignal::as_str).collect();
-    let mut text = format!("Relevance signals: {}\n", labels.join(", "));
+    text.push_str(&format!("Relevance signals: {}\n", labels.join(", ")));
     for artifact in &input.artifacts {
         let content = truncate_content(&artifact.content, profile.max_input_chars);
         text.push_str(&format!(
@@ -482,6 +551,15 @@ struct ModelProposal {
     confidence_reason: String,
     evidence_refs: Vec<String>,
     diff_summary: ModelDiffSummary,
+    /// `decision`, `rule` or `detail`; absent reads as a decision.
+    #[serde(default)]
+    kind: Option<String>,
+    /// Significance in `[0, 1]`; absent reads as the review threshold.
+    #[serde(default)]
+    significance: Option<f64>,
+    /// Significance criteria ticked; unknown ones are dropped.
+    #[serde(default)]
+    criteria: Vec<String>,
 }
 
 /// Strict diff summary shape expected by `validate_diff_summary`.
@@ -543,6 +621,17 @@ impl ModelEnvelope {
                 signals: signals.to_vec(),
                 evidence_refs: proposal.evidence_refs,
                 diff_summary,
+                kind: CandidateKind::parse(proposal.kind.as_deref().unwrap_or("decision")),
+                significance: proposal
+                    .significance
+                    .filter(|value| value.is_finite())
+                    .unwrap_or(application::extract::MIN_SIGNIFICANCE)
+                    .clamp(0.0, 1.0),
+                criteria: proposal
+                    .criteria
+                    .into_iter()
+                    .filter(|criterion| SIGNIFICANCE_CRITERIA.contains(&criterion.as_str()))
+                    .collect(),
             });
         }
         Ok(proposals)
@@ -597,5 +686,29 @@ impl SecretStore for KeyringSecretStore {
             Err(keyring::Error::NoEntry) => Ok(()),
             Err(_) => Err(keyring_error()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_kind_significance_and_known_criteria() {
+        let content = r#"{"proposals":[{"kind":"rule","question":"q","choice":"c","rationale":"r","confidence":0.7,"confidence_reason":"x","significance":1.7,"criteria":["security_or_privacy","made_up"],"evidence_refs":["a"],"diff_summary":{"files":[],"artifacts":1}}]}"#;
+        let proposals =
+            parse_model_output(content, &[RelevanceSignal::SecurityPrivacy]).expect("parse");
+        assert_eq!(proposals[0].kind, CandidateKind::Rule);
+        assert_eq!(proposals[0].significance, 1.0, "clamped");
+        assert_eq!(proposals[0].criteria, vec!["security_or_privacy"]);
+
+        let legacy = r#"{"proposals":[{"question":"q","choice":"c","rationale":"r","confidence":0.7,"confidence_reason":"x","evidence_refs":["a"],"diff_summary":{"files":[],"artifacts":1}}]}"#;
+        let proposals =
+            parse_model_output(legacy, &[RelevanceSignal::SecurityPrivacy]).expect("legacy");
+        assert_eq!(proposals[0].kind, CandidateKind::Decision);
+        assert_eq!(
+            proposals[0].significance,
+            application::extract::MIN_SIGNIFICANCE
+        );
     }
 }

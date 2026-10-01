@@ -161,6 +161,9 @@ fn candidate(
         dedup_hash: format!("dedup-{id}"),
         created_at: created_at.to_string(),
         updated_at: created_at.to_string(),
+        kind: "decision".to_string(),
+        significance: 1.0,
+        criteria: "[]".to_string(),
     }
 }
 
@@ -458,6 +461,7 @@ fn seed(decision_id: &str) -> DecisionSeed {
         choice: "c".to_string(),
         rationale: "r".to_string(),
         evidence_refs: vec!["art-2".to_string(), "art-1".to_string()],
+        as_rule: false,
     }
 }
 
@@ -515,5 +519,87 @@ fn validated_edits_are_persisted_by_confirm_and_adjust() {
     assert_eq!(stored.question, "ajusta q");
     assert_eq!(stored.choice, "ajusta c");
 
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn low_significance_stays_out_of_the_default_queue_and_rules_become_claims() {
+    use application::claims::Claims;
+    use application::extract::{CandidateKind, MIN_SIGNIFICANCE};
+
+    let root = temporary_directory("significance");
+    let store = SqliteStore::open(root.join("app.db")).expect("open store");
+    seed_project(&store);
+    seed_capture(&store, "capture-1", "message-1");
+    let mut low = candidate("low", "capture-1", "2026-01-01T00:00:01Z", "pending");
+    low.significance = 0.2;
+    low.dedup_hash = "dedup-low".into();
+    let mut rule = candidate("rule", "capture-1", "2026-01-01T00:00:02Z", "pending");
+    rule.kind = "rule".into();
+    rule.significance = 0.8;
+    rule.choice = "Só um humano resolve pendências legadas.".into();
+    rule.dedup_hash = "dedup-rule".into();
+    store.insert_candidates(&[low, rule]).expect("insert");
+
+    let inbox = Inbox::new(store.clone());
+    let relevant = InboxFilter {
+        min_significance: Some(MIN_SIGNIFICANCE),
+        ..InboxFilter::default()
+    };
+    let page = inbox.list(&relevant).expect("list");
+    assert_eq!(page.candidates.len(), 1, "the low one is hidden");
+    assert_eq!(page.candidates[0].kind, CandidateKind::Rule);
+    assert_eq!(inbox.count(&relevant).expect("count"), 1);
+    assert_eq!(
+        inbox.count(&InboxFilter::default()).expect("all"),
+        2,
+        "kept, not deleted"
+    );
+
+    let outcome = inbox.confirm("rule", None).expect("confirm rule");
+    assert!(outcome.rule);
+    let claims = Claims::new(store.clone())
+        .list("project-1", None)
+        .expect("claims");
+    assert_eq!(claims.len(), 1);
+    assert_eq!(
+        claims[0].statement,
+        "Só um humano resolve pendências legadas."
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn background_lists_what_is_recorded_and_the_users_taste() {
+    let root = temporary_directory("background");
+    let store = SqliteStore::open(root.join("app.db")).expect("open store");
+    seed_project(&store);
+    seed_capture(&store, "capture-1", "message-1");
+    let mut kept = candidate("kept", "capture-1", "2026-01-01T00:00:01Z", "pending");
+    kept.question = "Qual banco?".into();
+    kept.choice = "SQLite".into();
+    kept.dedup_hash = "dedup-kept".into();
+    let mut dropped = candidate("dropped", "capture-1", "2026-01-01T00:00:02Z", "pending");
+    dropped.question = "Como validar o campo?".into();
+    dropped.choice = "Regex".into();
+    dropped.dedup_hash = "dedup-dropped".into();
+    store.insert_candidates(&[kept, dropped]).expect("insert");
+    let inbox = Inbox::new(store.clone());
+    inbox.confirm("kept", None).expect("confirm");
+    inbox.reject("dropped").expect("reject");
+
+    let background = store.background("project-1", &[]).expect("background");
+    assert!(background
+        .known
+        .iter()
+        .any(|line| line == "Qual banco? → SQLite"));
+    assert!(background
+        .confirmed
+        .iter()
+        .any(|line| line.starts_with("Qual banco?")));
+    assert!(background
+        .rejected
+        .iter()
+        .any(|line| line == "Como validar o campo? → Regex"));
     let _ = std::fs::remove_dir_all(&root);
 }

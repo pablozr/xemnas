@@ -1596,6 +1596,9 @@ fn confirmed_decision(store: &SqliteStore, server: &RunningApi, location: &str) 
             dedup_hash: "dedup-agent".to_string(),
             created_at: "2026-01-02T00:00:00Z".to_string(),
             updated_at: "2026-01-02T00:00:00Z".to_string(),
+            kind: "decision".to_string(),
+            significance: 1.0,
+            criteria: "[]".to_string(),
         }])
         .expect("candidate");
     let confirm_edits: Option<application::inbox::CandidateEdits> = None;
