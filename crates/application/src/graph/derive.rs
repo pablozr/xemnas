@@ -82,11 +82,31 @@ const CARGO_KEYS: &[&str] = &[
 
 /// Dependency names added by manifest hunks (`Cargo.toml`, `package.json`),
 /// in order of appearance, without duplicates.
+///
+/// The section of each line is read from the hunk (`[dependencies]`,
+/// `"devDependencies": {`): lines in other sections (`[package.metadata]`,
+/// `"engines"`, scripts) are never dependencies. When the hunk does not show
+/// its section, only a line whose value looks like a version or a dependency
+/// table counts. A name also removed in the same file is a version change,
+/// not an addition.
 pub fn added_dependencies(diff: &str) -> Vec<String> {
-    let mut names = Vec::new();
+    let mut names: Vec<String> = Vec::new();
+    let mut removed: BTreeSet<String> = BTreeSet::new();
+    let mut file_added: Vec<String> = Vec::new();
     let mut manifest = None;
+    let mut section = Section::Unknown;
+    let flush =
+        |names: &mut Vec<String>, added: &mut Vec<String>, removed: &mut BTreeSet<String>| {
+            for name in added.drain(..) {
+                if !removed.contains(&name) && !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+            removed.clear();
+        };
     for line in diff.lines() {
         if let Some(rest) = line.strip_prefix("diff --git ") {
+            flush(&mut names, &mut file_added, &mut removed);
             let file = rest
                 .split_whitespace()
                 .next()
@@ -99,56 +119,166 @@ pub fn added_dependencies(diff: &str) -> Vec<String> {
             } else {
                 None
             };
+            section = Section::Unknown;
             continue;
         }
         let Some(kind) = manifest else {
             continue;
         };
-        let Some(added) = line.strip_prefix('+') else {
+        if line.starts_with("@@") {
+            // A new hunk may start anywhere in the file.
+            section = Section::Unknown;
             continue;
+        }
+        if line.starts_with("+++") || line.starts_with("---") {
+            continue;
+        }
+        let (marker, body) = match line.chars().next() {
+            Some('+') => ('+', &line[1..]),
+            Some('-') => ('-', &line[1..]),
+            Some(' ') => (' ', &line[1..]),
+            _ => (' ', line),
         };
-        if added.starts_with("++") {
+        let body = body.trim();
+        // Section headers, in context or added, move the section.
+        if let Some(next) = match kind {
+            Manifest::Cargo => cargo_section(body),
+            Manifest::Npm => npm_section(body),
+        } {
+            if marker != '-' {
+                section = next;
+            }
+            // `[dependencies.tokio]` names a dependency by itself.
+            if marker == '+' {
+                if let Some(name) = cargo_table_dependency(body) {
+                    file_added.push(name);
+                }
+            }
+            continue;
+        }
+        if kind == Manifest::Npm && body.starts_with('}') && marker != '-' {
+            section = Section::Unknown;
             continue;
         }
         let name = match kind {
-            Manifest::Cargo => cargo_dependency(added.trim()),
-            Manifest::Npm => npm_dependency(added.trim()),
+            Manifest::Cargo => cargo_dependency(body, section),
+            Manifest::Npm => npm_dependency(body, section),
         };
-        if let Some(name) = name {
-            if !names.contains(&name) {
-                names.push(name);
+        let Some(name) = name else {
+            continue;
+        };
+        match marker {
+            '+' => file_added.push(name),
+            '-' => {
+                removed.insert(name);
             }
+            _ => {}
         }
     }
+    flush(&mut names, &mut file_added, &mut removed);
     names
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Manifest {
     Cargo,
     Npm,
 }
 
-fn cargo_dependency(line: &str) -> Option<String> {
-    if let Some(table) = line
-        .strip_prefix("[dependencies.")
-        .or_else(|| line.strip_prefix("[dev-dependencies."))
-    {
-        return table.strip_suffix(']').map(str::to_string);
+/// Where a manifest line sits.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Section {
+    /// A dependency table or object.
+    Dependencies,
+    /// Any other table or object.
+    Other,
+    /// The hunk does not show it.
+    Unknown,
+}
+
+/// The section a Cargo table header opens.
+fn cargo_section(line: &str) -> Option<Section> {
+    let header = line.strip_prefix('[')?.trim_start_matches('[');
+    let header = header.trim_end_matches(']').trim();
+    if header.is_empty() || line.contains('=') {
+        return None;
+    }
+    let dependency_table = header.ends_with("dependencies")
+        || header
+            .rsplit_once('.')
+            .is_some_and(|(table, _)| table.ends_with("dependencies"));
+    Some(if dependency_table {
+        Section::Dependencies
+    } else {
+        Section::Other
+    })
+}
+
+/// `[dependencies.tokio]` → `tokio`.
+fn cargo_table_dependency(line: &str) -> Option<String> {
+    let header = line.strip_prefix('[')?.strip_suffix(']')?;
+    let (table, name) = header.rsplit_once('.')?;
+    (table.ends_with("dependencies") && !name.is_empty()).then(|| name.trim().to_string())
+}
+
+/// The section an npm key opening an object starts (`"dependencies": {`).
+fn npm_section(line: &str) -> Option<Section> {
+    let rest = line.strip_prefix('"')?;
+    let (key, value) = rest.split_once("\":")?;
+    if !value.trim().starts_with('{') {
+        return None;
+    }
+    Some(
+        if matches!(
+            key,
+            "dependencies" | "devDependencies" | "peerDependencies" | "optionalDependencies"
+        ) {
+            Section::Dependencies
+        } else {
+            Section::Other
+        },
+    )
+}
+
+fn cargo_dependency(line: &str, section: Section) -> Option<String> {
+    if section == Section::Other {
+        return None;
     }
     let (name, value) = line.split_once('=')?;
     let name = name.trim();
     let value = value.trim();
-    let valid = !name.is_empty()
+    let valid_name = !name.is_empty()
         && name.chars().all(|character| {
             character.is_ascii_alphanumeric() || character == '-' || character == '_'
         })
-        && !CARGO_KEYS.contains(&name)
-        && (value.starts_with('"') || value.starts_with('{'));
-    valid.then(|| name.to_string())
+        && !CARGO_KEYS.contains(&name);
+    let valid_value = match section {
+        Section::Dependencies => value.starts_with('"') || value.starts_with('{'),
+        // Without the section, only a version or a dependency table.
+        _ => looks_like_cargo_requirement(value),
+    };
+    (valid_name && valid_value).then(|| name.to_string())
 }
 
-fn npm_dependency(line: &str) -> Option<String> {
+/// `"1.2"`, `"^0.4"`, `{ version = …}`, `{ path = …}`, `{ git = …}`,
+/// `{ workspace = true }`.
+fn looks_like_cargo_requirement(value: &str) -> bool {
+    if let Some(text) = value.strip_prefix('"') {
+        return text
+            .chars()
+            .next()
+            .is_some_and(|first| first.is_ascii_digit() || "^~=<>*".contains(first));
+    }
+    value.starts_with('{')
+        && ["version", "path", "git", "workspace"]
+            .iter()
+            .any(|key| value.contains(&format!("{key} =")) || value.contains(&format!("{key}=")))
+}
+
+fn npm_dependency(line: &str, section: Section) -> Option<String> {
+    if section == Section::Other {
+        return None;
+    }
     let rest = line.strip_prefix('"')?;
     let (name, value) = rest.split_once("\":")?;
     let value = value.trim().trim_start_matches('"');
@@ -158,7 +288,12 @@ fn npm_dependency(line: &str) -> Option<String> {
         .is_some_and(|first| "^~><=*".contains(first) || first.is_ascii_digit())
         || ["workspace:", "npm:", "file:", "link:", "git"]
             .iter()
-            .any(|prefix| value.starts_with(prefix));
+            .any(|prefix| value.starts_with(prefix))
+        || (section == Section::Dependencies
+            && value
+                .chars()
+                .next()
+                .is_some_and(|first| first.is_ascii_alphabetic()));
     let valid = !name.is_empty()
         && name
             .chars()
@@ -355,16 +490,16 @@ mod tests {
     #[test]
     fn reads_added_dependencies_from_manifest_hunks() {
         let diff = "diff --git a/crates/app/Cargo.toml b/crates/app/Cargo.toml\n\
-                    @@ -1,3 +1,6 @@\n\
+                    @@ -1,3 +1,6 @@\n \
                     [dependencies]\n\
                     +rusqlite = { version = \"0.31\", features = [\"bundled\"] }\n\
                     +serde = \"1\"\n\
                     +version = \"0.2.0\"\n\
                     +[dependencies.tokio]\n\
                     diff --git a/web/package.json b/web/package.json\n\
-                    @@ -1,2 +1,4 @@\n\
+                    @@ -1,2 +1,4 @@\n \
+                    \"dependencies\": {\n\
                     +    \"@tanstack/query\": \"^5.0.0\",\n\
-                    +    \"build\": \"tsc -p .\",\n\
                     +    \"zod\": \"workspace:*\"\n\
                     diff --git a/src/main.rs b/src/main.rs\n\
                     +let x = \"1\";\n";
@@ -372,5 +507,47 @@ mod tests {
             added_dependencies(diff),
             vec!["rusqlite", "serde", "tokio", "@tanstack/query", "zod"]
         );
+    }
+
+    #[test]
+    fn other_sections_are_not_dependencies() {
+        // The two false positives found in the audit.
+        let cargo = "diff --git a/Cargo.toml b/Cargo.toml\n\
+                     @@ -1 +1,3 @@\n \
+                     [package.metadata]\n\
+                     +channel = \"stable\"\n";
+        assert!(added_dependencies(cargo).is_empty());
+        let npm = "diff --git a/package.json b/package.json\n\
+                   @@ -1 +1,3 @@\n \
+                   \"engines\": {\n\
+                   +  \"node\": \">=22\"\n";
+        assert!(added_dependencies(npm).is_empty());
+        let scripts = "diff --git a/package.json b/package.json\n\
+                       @@ -1 +1,3 @@\n \
+                       \"scripts\": {\n\
+                       +  \"build\": \"tsc -p .\"\n";
+        assert!(added_dependencies(scripts).is_empty());
+    }
+
+    #[test]
+    fn a_version_change_is_not_an_addition() {
+        let diff = "diff --git a/Cargo.toml b/Cargo.toml\n\
+                    @@ -3,3 +3,3 @@\n \
+                    [dependencies]\n\
+                    -serde = \"1.0.100\"\n\
+                    +serde = \"1.0.200\"\n\
+                    +anyhow = \"1\"\n";
+        assert_eq!(added_dependencies(diff), vec!["anyhow"]);
+    }
+
+    #[test]
+    fn without_a_visible_section_only_requirements_count() {
+        let diff = "diff --git a/Cargo.toml b/Cargo.toml\n\
+                    @@ -40,3 +40,5 @@\n \
+                    tokio = \"1\"\n\
+                    +regex = \"1.10\"\n\
+                    +channel = \"stable\"\n\
+                    +sqlx = { version = \"0.8\", features = [\"sqlite\"] }\n";
+        assert_eq!(added_dependencies(diff), vec!["regex", "sqlx"]);
     }
 }
