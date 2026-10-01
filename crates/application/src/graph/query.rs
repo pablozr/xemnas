@@ -788,6 +788,28 @@ where
         })
     }
 
+    /// Files the latest decisions changed, newest decision first and without
+    /// repeats: real paths to offer in the file lens.
+    ///
+    /// # Errors
+    ///
+    /// `storage`.
+    pub fn recent_files(&self, project_id: &str, limit: usize) -> Result<Vec<String>, GraphError> {
+        let mut decisions = self.store.project_decisions(project_id)?;
+        decisions.sort_by(|left, right| right.confirmed_at.cmp(&left.confirmed_at));
+        let mut files: Vec<String> = Vec::new();
+        for file in decisions.iter().flat_map(|decision| &decision.files) {
+            if files.len() == limit {
+                break;
+            }
+            let file = normalize_path(file);
+            if !file.is_empty() && !files.contains(&file) {
+                files.push(file);
+            }
+        }
+        Ok(files)
+    }
+
     /// Decision and claim ids that hold for any of `files`, for the Context
     /// Pack: decisions newest first.
     ///

@@ -662,3 +662,34 @@ fn an_empty_map_assembles_itself_from_the_declared_workspace() {
     assert_eq!(report.components[0].declared, Some(WorkspaceKind::Cargo));
     assert_eq!(graph.assemble("ws").expect("still"), 0);
 }
+
+#[test]
+fn recent_files_come_from_decisions_without_repeats() {
+    let test = support::open("graph-recent-files", &["p1"]);
+    support::decision_with_diff(
+        &test.store,
+        "p1",
+        "store",
+        "Onde guardar as decisões?",
+        &[
+            "crates/storage-sqlite/src/store.rs",
+            "crates/storage-sqlite/Cargo.toml",
+        ],
+        STORE_DIFF,
+    );
+    support::decision_with_diff(
+        &test.store,
+        "p1",
+        "again",
+        "Como migrar o banco?",
+        &["crates/storage-sqlite/src/store.rs", ""],
+        STORE_DIFF,
+    );
+    let graph = KnowledgeGraph::new(test.store.clone());
+
+    let files = graph.recent_files("p1", 6).expect("files");
+    assert_eq!(files.len(), 2, "deduplicated, blanks dropped");
+    assert!(files.contains(&"crates/storage-sqlite/src/store.rs".to_string()));
+    assert_eq!(graph.recent_files("p1", 1).expect("one").len(), 1);
+    assert!(graph.recent_files("p2", 6).expect("none").is_empty());
+}
