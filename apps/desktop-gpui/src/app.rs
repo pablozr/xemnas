@@ -6,6 +6,7 @@ use application::inbox::{Inbox, InboxStore};
 use application::jobs::JobSummary;
 use application::overview::OverviewApi;
 use application::projects::{ProjectRepository, Projects};
+use application::relation_suggestions::RelationSuggestionStore;
 use application::relations::DecisionRelations;
 use gpui::prelude::*;
 use gpui::{
@@ -194,7 +195,9 @@ impl Destination {
 }
 
 /// Persistent product screens with contextual search and native window controls.
-pub struct Shell<R: ProjectRepository + InboxStore + DecisionStore + ContextStores> {
+pub struct Shell<
+    R: ProjectRepository + InboxStore + DecisionStore + ContextStores + RelationSuggestionStore,
+> {
     theme: Theme,
     focus: FocusHandle,
     search: Entity<SearchField>,
@@ -233,7 +236,10 @@ pub struct Shell<R: ProjectRepository + InboxStore + DecisionStore + ContextStor
     route: Option<String>,
 }
 
-impl<R: ProjectRepository + InboxStore + DecisionStore + ContextStores> Shell<R> {
+impl<
+        R: ProjectRepository + InboxStore + DecisionStore + ContextStores + RelationSuggestionStore,
+    > Shell<R>
+{
     /// Mounts both use cases once, retaining their state across navigation.
     pub fn new(
         cx: &mut Context<Self>,
@@ -1343,7 +1349,10 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + ContextStores> Shell<R>
     }
 }
 
-impl<R: ProjectRepository + InboxStore + DecisionStore + ContextStores> Render for Shell<R> {
+impl<
+        R: ProjectRepository + InboxStore + DecisionStore + ContextStores + RelationSuggestionStore,
+    > Render for Shell<R>
+{
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.route.is_some() {
             self.follow_route(window, cx);

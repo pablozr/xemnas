@@ -17,8 +17,12 @@ use application::graph::{
     TimelineEvent, TimelineKind,
 };
 use application::projects::ProjectRepository;
+use application::relation_suggestions::{
+    RelationSuggestionStore, RelationSuggestionView, RelationSuggestions,
+};
 use application::relations::RelationStore;
 use domain::entities::{EdgeKind, EntityKind, NodeKind};
+use domain::relations::RelationKind;
 use gpui::prelude::*;
 use gpui::{
     canvas, div, point, px, AnyElement, Context, Div, Entity, EventEmitter, FocusHandle, Hsla,
@@ -32,7 +36,7 @@ use crate::ui::controls::{action_button, icon_action, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
     count_chip, empty_panel, error_banner, mark_selected, panel_title, reading_page, section_label,
-    segment, segmented, skeleton_list, toast, TOAST_DURATION,
+    segment, segmented, skeleton_list, status_pill, toast, TOAST_DURATION,
 };
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme};
@@ -41,13 +45,22 @@ use crate::ui::tooltip::tooltip;
 
 /// Every port the Mapa screen reads through.
 pub trait MapStores:
-    GraphStore + RelationStore + ClaimStore + ProjectRepository + DecisionStore + Clone + Send + 'static
+    GraphStore
+    + RelationStore
+    + RelationSuggestionStore
+    + ClaimStore
+    + ProjectRepository
+    + DecisionStore
+    + Clone
+    + Send
+    + 'static
 {
 }
 
 impl<T> MapStores for T where
     T: GraphStore
         + RelationStore
+        + RelationSuggestionStore
         + ClaimStore
         + ProjectRepository
         + DecisionStore
@@ -65,9 +78,10 @@ pub struct MapServices<S> {
     pub decisions: Decisions<S>,
     /// Rules of the project, for linking.
     pub claims: Claims<S>,
+    /// Relations between decisions waiting for confirmation.
+    pub relations: RelationSuggestions<S>,
 }
 
-/// Width of the index pane.
 /// Decisions offered when linking.
 const PICK_LIMIT: usize = 100;
 /// Days an entity counts as recently active on the overview.
@@ -117,6 +131,8 @@ enum Layout {
 struct MapData {
     map: ProjectMap,
     graph: ProjectGraph,
+    /// Relations between decisions waiting for confirmation.
+    relations: Vec<RelationSuggestionView>,
     /// Components created from the declared workspace on this load.
     assembled: usize,
     suggestions: Vec<Suggestion>,
@@ -639,6 +655,48 @@ impl<S: MapStores> MapScreen<S> {
         );
     }
 
+    /// Like [`Self::mutate`] for changes made through decisions (relations).
+    fn mutate_decisions(
+        &mut self,
+        cx: &mut Context<Self>,
+        notice: &'static str,
+        change: impl FnOnce(&MapServices<S>) -> Result<(), application::decisions::DecisionsError>
+            + Send
+            + 'static,
+    ) {
+        let Some(project) = self.project.clone() else {
+            return;
+        };
+        self.run(
+            cx,
+            Box::new(move |backend| {
+                let result = change(backend)
+                    .map(|_| None)
+                    .map_err(|error| match error.code() {
+                        "invalid_relation" => {
+                            "Essa relação não cabe mais (ciclo ou já registrada).".to_owned()
+                        }
+                        "conflict" | "not_found" => {
+                            "Uma das decisões mudou. O mapa foi atualizado.".to_owned()
+                        }
+                        code => {
+                            tracing::error!(code, operation = "relation", "relation change failed");
+                            "Não foi possível registrar a relação.".to_owned()
+                        }
+                    });
+                let data = result
+                    .is_ok()
+                    .then(|| load(backend, &project).ok().map(Box::new))
+                    .flatten();
+                Outcome::Changed {
+                    result,
+                    data,
+                    notice,
+                }
+            }),
+        );
+    }
+
     fn open_picker(&mut self, kind: PickKind, cx: &mut Context<Self>) {
         let (Some(project), View::Entity(entity_id)) = (self.project.clone(), self.view.clone())
         else {
@@ -919,6 +977,7 @@ impl<S: MapStores> MapScreen<S> {
             )));
         };
         let pending = data.suggestions.len()
+            + data.relations.len()
             + data.proposals.components.len()
             + data.proposals.technologies.len();
         let entities: Vec<MapEntity> = data.map.entities.clone();
@@ -1109,9 +1168,14 @@ impl<S: MapStores> MapScreen<S> {
             return div().into_any_element();
         };
         let suggestions = data.suggestions.clone();
+        let relations = data.relations.clone();
         let components = data.proposals.components.clone();
         let technologies = data.proposals.technologies.clone();
-        if suggestions.is_empty() && components.is_empty() && technologies.is_empty() {
+        if suggestions.is_empty()
+            && relations.is_empty()
+            && components.is_empty()
+            && technologies.is_empty()
+        {
             return empty_panel(
                 theme,
                 IconName::Rotate,
@@ -1132,6 +1196,108 @@ impl<S: MapStores> MapScreen<S> {
                 "Sugestões",
                 "O que o trabalho capturado indica. Nada entra no mapa sem a sua confirmação.",
             ));
+        if !relations.is_empty() {
+            let mut list = div().flex().flex_col();
+            for (index, suggestion) in relations.iter().enumerate() {
+                let record = &suggestion.record;
+                let confirm_id = record.suggestion_id.clone();
+                let reject_id = record.suggestion_id.clone();
+                let confirm = self.button(
+                    format!("map-relation-confirm-{index}"),
+                    ButtonKind::Secondary,
+                    !self.busy,
+                    "Confirmar",
+                    move |this, cx| {
+                        let id = confirm_id.clone();
+                        this.mutate_decisions(cx, "Relação registrada.", move |backend| {
+                            backend.relations.confirm(&id)
+                        });
+                    },
+                    cx,
+                );
+                let reject = self.button(
+                    format!("map-relation-reject-{index}"),
+                    ButtonKind::Ghost,
+                    !self.busy,
+                    "Rejeitar",
+                    move |this, cx| {
+                        let id = reject_id.clone();
+                        this.mutate_decisions(
+                            cx,
+                            "Relação rejeitada; ela não volta.",
+                            move |backend| backend.relations.reject(&id),
+                        );
+                    },
+                    cx,
+                );
+                let verb = match record.kind {
+                    RelationKind::DependsOn => "depende de",
+                    RelationKind::ConflictsWith => "conflita com",
+                    RelationKind::Supersedes => "substitui",
+                };
+                list = list.child(
+                    div()
+                        .flex()
+                        .items_start()
+                        .gap(px(SpacingScale::S3))
+                        .py(px(SpacingScale::S3))
+                        .when(index > 0, |row| {
+                            row.border_t_1().border_color(colors.hairline_divider())
+                        })
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .flex()
+                                .flex_col()
+                                .gap(px(SpacingScale::S1))
+                                .child(
+                                    text_style(div(), TypeScale::ROW_TITLE)
+                                        .child(suggestion.from_question.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(SpacingScale::S2))
+                                        .child(status_pill(
+                                            theme,
+                                            if record.kind == RelationKind::ConflictsWith {
+                                                colors.status_warning()
+                                            } else {
+                                                colors.status_info()
+                                            },
+                                            verb,
+                                        ))
+                                        .child(
+                                            text_style(div(), TypeScale::BODY_SMALL)
+                                                .text_color(colors.text_secondary())
+                                                .child(suggestion.to_question.clone()),
+                                        ),
+                                )
+                                .child(
+                                    text_style(div(), TypeScale::BODY_SMALL)
+                                        .mt(px(SpacingScale::S1))
+                                        .pl(px(SpacingScale::S3))
+                                        .border_l_2()
+                                        .border_color(colors.hairline_divider())
+                                        .text_color(colors.text_secondary())
+                                        .child(format!("“{}”", record.quote)),
+                                )
+                                .when(!record.reason.is_empty(), |column| {
+                                    column.child(
+                                        text_style(div(), TypeScale::META)
+                                            .text_color(colors.text_muted())
+                                            .child(record.reason.clone()),
+                                    )
+                                }),
+                        )
+                        .child(reject)
+                        .child(confirm),
+                );
+            }
+            column = column.child(section(theme, "Relações entre decisões", list));
+        }
         if !suggestions.is_empty() {
             let mut list = div().flex().flex_col();
             for (index, suggestion) in suggestions.iter().enumerate() {
@@ -2727,9 +2893,17 @@ fn load<S: MapStores>(backend: &MapServices<S>, project: &str) -> Result<MapData
                 "Não foi possível ler o grafo.",
             )
         })?;
+    let relations = backend.relations.pending(project).map_err(|error| {
+        failure(
+            "relation_suggestions",
+            error.code(),
+            "Não foi possível ler as relações sugeridas.",
+        )
+    })?;
     Ok(MapData {
         map,
         graph,
+        relations,
         assembled,
         suggestions,
         proposals,

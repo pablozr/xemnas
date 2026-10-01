@@ -144,6 +144,28 @@ fn main() {
             move |record: &application::jobs::JobRecord| analyze_capture(&analysis, record)
         }),
     );
+    // After an adoption, earlier decisions related to the new one are judged
+    // by the configured provider and stored as suggestions.
+    jobs.register(
+        application::relation_suggestions::RELATION_JOB_KIND,
+        std::sync::Arc::new({
+            let finder = application::relation_suggestions::RelationFinder::new(
+                store.clone(),
+                settings.clone(),
+                ai_provider::ProviderFactory::new(chatgpt.clone()),
+            );
+            move |record: &application::jobs::JobRecord| match finder.run(&record.payload) {
+                Ok(stored) => {
+                    tracing::info!(stored, operation = "suggest_relations", "relations judged");
+                    Ok(())
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, operation = "suggest_relations", "failed");
+                    Ok(())
+                }
+            }
+        }),
+    );
     jobs.observe_with(|event| match event {
         application::jobs::JobEvent::Finished(outcome) => {
             tracing::info!(
@@ -471,6 +493,9 @@ fn run_shell_mode(
                     graph: application::graph::KnowledgeGraph::new(store.clone()),
                     decisions: application::decisions::Decisions::new(store.clone()),
                     claims: application::claims::Claims::new(store.clone()),
+                    relations: application::relation_suggestions::RelationSuggestions::new(
+                        store.clone(),
+                    ),
                 }),
                 Some(overview(store)),
             ),

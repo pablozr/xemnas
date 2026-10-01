@@ -252,6 +252,12 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
     sugestões (Confirmar/Rejeitar) e a ação primária (abrir no Mapa ou em
     Decisões). Camadas em chips no topo, legenda embaixo à esquerda, zoom e
     "enquadrar" embaixo à direita; Esc limpa, + − 0 aproximam e enquadram.
+- **Sugestões** abrem com **Relações entre decisões**: pergunta da decisão,
+  `status_pill` com o verbo ("depende de", "substitui" em azul, "conflita
+  com" em âmbar), a outra pergunta, a citação entre aspas com filete à
+  esquerda e o motivo em META; Rejeitar (ghost) e Confirmar (secundário).
+  Itens sugeridos mostram a origem ("declarado no workspace Cargo") e a
+  descrição do pacote, com "Criar os N do workspace" quando há mais de um.
 - A **Vizinhança** do detalhe continua determinística em camadas. Nada entra
   no mapa sem confirmação; aposentar e rejeitar não apagam.
 

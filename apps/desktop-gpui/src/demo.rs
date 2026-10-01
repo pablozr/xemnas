@@ -444,6 +444,26 @@ fn seed_map(store: &SqliteStore) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // A relation the judge proposed, waiting in Sugestões.
+    {
+        use application::relation_suggestions::{
+            RelationSuggestionRecord, RelationSuggestionStore,
+        };
+        store.insert_relation_suggestion(&RelationSuggestionRecord {
+            suggestion_id: "demo-relation-1".into(),
+            project_id: PROJECT.into(),
+            from_id: resend.clone(),
+            to_id: recover.clone(),
+            kind: domain::relations::RelationKind::DependsOn,
+            quote: "Repetir apenas falhas transitórias, preservando a chave de idempotência."
+                .into(),
+            reason:
+                "O reenvio só é seguro porque a recuperação repete apenas tarefas idempotentes."
+                    .into(),
+            created_at: "2026-09-30T12:00:00Z".into(),
+        })?;
+    }
+
     // Sample documentation, as if read from the project folder.
     use application::documents::{document_ref, DocumentKind, DocumentStore, ProjectDocument};
     let documents = [
