@@ -26,6 +26,7 @@ pub mod profile;
 pub mod projects;
 pub mod providers;
 pub mod redact;
+pub mod relation_suggestions;
 pub mod relations;
 
 pub use agent_access::{AgentAccess, AgentAccessError, AgentApi, AgentStore};

@@ -5,8 +5,8 @@
 **Pergunta:** como automatizar relações e contexto ao adotar decisões, preservando
 evidência, autoridade humana e histórico? O modelo do ADR-0005 acompanha as pesquisas?
 
-**Status:** Em implementação. Passos 1, 2 e 3 (componentes declarados) da ordem
-proposta entregues em 2026-10-01 (ver "Andamento"); 4 a 6 abertos.
+**Status:** Em implementação. Passos 1 a 4 da ordem proposta entregues em
+2026-10-01 (ver "Andamento"); 5 (claims derivados) e 6 (medição e embeddings) abertos.
 
 Esta pesquisa combina auditoria do código do workspace em 2026-09-30 com fontes
 primárias e o contrato do [ADR-0005](../arquitetura/adr/0005-grafo-de-entidades.md).
@@ -47,6 +47,7 @@ Isso cumpre o ADR-0005, mas não a expectativa de automatizar os vínculos na ad
 | P2 hierarquia | Pai único validado na escrita (`a057e5b`) |
 | P2 identidade por nome | Chave mantém `+`/`#`; propostas pelo caminho (`a057e5b`); sem constraint única no banco |
 | Passo 2: vínculos na adoção | Entregue: prévia na Revisão, confirmar liga os marcados, derivação na hora (`d3d4b34` e seguinte) |
+| Passo 4: relações entre decisões | Entregue: candidatas por item do mapa e FTS, julgamento tipado com citação literal validada, fila em Sugestões; job após a adoção |
 | Passo 3: entidades automáticas | Entregue para componentes declarados (workspaces Cargo/npm/pnpm): mapa vazio se monta sozinho; membros novos viram propostas. Tecnologias continuam vindo das decisões |
 
 ## Achados de implementação, por prioridade

@@ -18,6 +18,7 @@ mod integration;
 mod jobs;
 mod overview;
 mod projects;
+mod relation_suggestions;
 mod relations;
 mod store;
 

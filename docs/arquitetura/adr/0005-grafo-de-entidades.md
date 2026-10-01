@@ -37,6 +37,10 @@ Uma aresta `human` nasce confirmada. Uma `derived` nasce como **sugestão** (sem
 
 A derivação é determinística e roda ao abrir o Mapa, depois de cada mudança nele e **ao adotar um candidato**. Do disco do repositório ela só lê os manifestos de workspace citados acima; o resto vem do que o app já capturou.
 
+### Relações entre decisões sugeridas (revisão de 2026-10-01)
+
+Depois de adotar uma decisão, um job em segundo plano (`suggest_relations`) busca até 6 decisões anteriores em vigor que dividem um item do mapa com ela ou palavras (FTS), e pede ao provedor configurado que julgue cada par: `depends_on`, `conflicts_with`, `supersedes` ou nada. Toda relação precisa de uma **citação literal** do texto das decisões; o app confere a citação, os IDs, a direção (substituir é sempre da nova para a antiga), ciclos e estado antes de guardar a sugestão (migration 19, `relation_suggestions`). Ela aparece em Sugestões do Mapa com a citação e o motivo; só vira relação ao ser confirmada, e uma rejeitada não volta. Sem provedor ativo, nada é julgado. Similaridade escolhe candidatas; nunca decide a relação.
+
 ### Adoção com vínculos (revisão de 2026-10-01)
 
 Antes, adotar uma decisão não criava vínculos: até alguém abrir o Mapa e confirmar as sugestões, o contexto por arquivo não a encontrava. Agora a Revisão mostra, junto do candidato, os vínculos que a própria evidência aponta para itens que já existem (`affects`/`uses` para decisão, `applies_to` para regra), todos marcados. Confirmar o candidato confirma também os marcados; os desmarcados são rejeitados e não voltam como sugestão; o resto do projeto é derivado na hora (`application::adoption`). Arquivos sem componente aparecem como tais. A confirmação continua humana: nada é ligado sem estar visível no momento da adoção.

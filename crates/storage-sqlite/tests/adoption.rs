@@ -166,6 +166,18 @@ fn adopting_links_what_was_kept_and_rejects_what_was_declined() {
         .expect("adopt");
     assert_eq!(outcome.linked, 2);
     assert!(!outcome.rule);
+    let queued: i64 = rusqlite::Connection::open(test.root.join("app.db"))
+        .expect("raw")
+        .query_row(
+            "SELECT COUNT(*) FROM jobs WHERE kind = ?1 AND payload = ?2",
+            [
+                application::relation_suggestions::RELATION_JOB_KIND,
+                outcome.id.as_str(),
+            ],
+            |row| row.get(0),
+        )
+        .expect("jobs");
+    assert_eq!(queued, 1, "relations are looked for in the background");
 
     let graph = KnowledgeGraph::new(test.store.clone());
     let detail = graph.entity_detail(&storage, None).expect("storage");

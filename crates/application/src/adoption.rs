@@ -16,7 +16,9 @@ use crate::claims::ClaimStore;
 use crate::extract::CandidateKind;
 use crate::graph::{added_dependencies, GraphError, GraphStore, KnowledgeGraph, LinkRequest};
 use crate::inbox::{CandidateEdits, Inbox, InboxError, InboxStore};
+use crate::jobs::{JobRecord, JobRepository, JobState};
 use crate::projects::ProjectRepository;
+use crate::relation_suggestions::RELATION_JOB_KIND;
 use crate::relations::RelationStore;
 
 /// A tie the candidate's evidence points to, on an entity that exists.
@@ -100,7 +102,13 @@ pub struct Adoption<S> {
 
 impl<S> Adoption<S>
 where
-    S: InboxStore + GraphStore + RelationStore + ClaimStore + ProjectRepository + Clone,
+    S: InboxStore
+        + GraphStore
+        + RelationStore
+        + ClaimStore
+        + ProjectRepository
+        + JobRepository
+        + Clone,
 {
     /// Wraps the store.
     pub fn new(store: S) -> Self {
@@ -269,6 +277,27 @@ where
                 }
             }
         }
+        // A new decision may depend on, conflict with or replace earlier ones:
+        // a background job looks for that without holding the adoption.
+        if !confirmed.rule {
+            let now = crate::clock::now_rfc3339();
+            let queued = JobRepository::insert(
+                &self.store,
+                &JobRecord {
+                    id: uuid::Uuid::now_v7().to_string(),
+                    kind: RELATION_JOB_KIND.to_string(),
+                    payload: confirmed.decision_id.clone(),
+                    state: JobState::Queued,
+                    idempotent: true,
+                    attempts: 0,
+                    last_error: None,
+                    created_at: now.clone(),
+                    updated_at: now,
+                },
+            );
+            // The relations are a suggestion; the adoption stands either way.
+            let _ = queued;
+        }
         Ok(AdoptOutcome {
             id: confirmed.decision_id,
             rule: confirmed.rule,
@@ -285,6 +314,7 @@ where
         + RelationStore
         + ClaimStore
         + ProjectRepository
+        + JobRepository
         + Clone
         + Send
         + Sync,
