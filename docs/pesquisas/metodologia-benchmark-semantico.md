@@ -223,3 +223,69 @@ código, lockfile, resultados brutos compactos e relatório ficam versionados.
 As APIs acima foram conferidas em fontes primárias em 2026-09-30. Links `main`
 e `latest` explicam a pesquisa; o benchmark executável deve fixar suas próprias
 versões e registrar divergências entre a versão instalada e essa documentação.
+
+## Harness reproduzível desta execução
+
+O workspace independente `tools/semantic-bench` não altera dependências nem
+comportamento do app. A execução é Rust, com FastEmbed 7.1.0, sqlite-vec 0.1.9,
+rusqlite 0.40.2, LanceDB 0.39.0 e ONNX Runtime CPU 1.30.0 carregado dinamicamente.
+O lockfile fixa as dependências transitivas e `prepare-models.sh` fixa as duas
+revisões dos modelos, populando apenas o cache do experimento. O script confere o SHA-256 do
+runtime oficial antes de carregar a biblioteca; não há worker Python.
+
+LanceDB 0.39.0 referencia `Error::Http` em `job.rs` mesmo quando a variante está
+desabilitada sem `remote`. A primeira tentativa de habilitar essa feature
+ampliou o grafo de dependências e foi interrompida antes da medição. A execução
+usa uma cópia isolada do tarball publicado, com SHA-256 conferido, e um patch
+versionado que condiciona somente os dois ramos de erro HTTP à feature correta.
+Não altera busca, métricas, indexação ou persistência. A dependência efetiva é
+**LanceDB 0.39.0 com patch de compilação embedded**, não a release intacta.
+`prepare-lancedb.sh` gera essa cópia fora do Git, em `/bench/lancedb-patched`;
+o build passa `--config 'patch.crates-io.lancedb.path="/bench/lancedb-patched"'`.
+Testes e Clippy precisam do mesmo override. É uma limitação de integração da
+release, não uma exigência de hospedagem. Adoção no produto ainda deve selecionar
+uma release upstream corrigida ou avaliar explicitamente carregar esse patch.
+
+```powershell
+& tools/semantic-bench/run.ps1 -WorkDirectory D:\xemnas-semantic-bench
+& tools/semantic-bench/summarize.ps1 -RunDirectory D:\xemnas-semantic-bench\run-AAAAmmdd-HHMMSS
+```
+
+Docker precisa estar disponível. O build usa cache Cargo em volume nativo e
+artefatos no diretório de trabalho. Os modelos são preparados com rede; a etapa
+medida desliga a rede, limita CPU a quatro equivalentes e memória a 8 GiB,
+sem swap. Os bancos ficam em volume Linux nativo, para que o bind NTFS do
+Windows não domine artificialmente a comparação. Cache dos modelos e resultados
+ficam no diretório de trabalho. `-SkipBuild` reutiliza o binário existente e só
+deve ser usado depois de compilar exatamente a versão que se pretende medir.
+
+A fixture congelada contém 48 decisões fictícias, 24 consultas PT/EN e qrels
+binários (duas decisões relevantes por consulta), incluindo alternativas opostas.
+É julgamento editorial, não um teste de inferência de relações causais. A escala
+de 1 mil/10 mil/100 mil linhas repete esses textos e perturba deterministicamente
+os vetores normalizados; só mede armazenamento. Não corresponde a cem mil
+decisões semanticamente distintas. A qualidade pública usa as versões completas
+PT e EN do Belebele convertido para retrieval pelo MTEB: 488 passagens e 900
+consultas por idioma. O script fixa revisão e hashes dos arquivos originais,
+preserva atribuição e licença, e não implementa ingestão de documentos do app.
+
+O harness usa Recall@10, MRR@10 e nDCG@10 binários, além de acerto e alternativa
+oposta na primeira posição da fixture. Recall@5 e julgamentos graduados são
+possibilidades do protocolo acima, não métricas executadas nesta versão.
+Consultas percorrem uma rotação determinística, em vez de um sorteio. Há três
+processos por modelo em quatro threads e por caso de armazenamento; os casos
+de uma thread e os pipelines completos têm um processo cada. A inferência curta
+tem 120 amostras medidas por processo; cada operação de armazenamento, 240;
+cada perfil longo, 20. Batch 8 tem três tempos de corpus por processo e informa
+média, sem percentis. Percentis usam nearest rank, e o resumo publica mediana,
+mínimo e máximo dos valores obtidos pelos três processos, sem juntar amostras
+como se fossem independentes. O pipeline mede embedding e buscas sequenciais
+com fusão RRF; a linha LanceDB desse pipeline é exhaustive, não ANN.
+
+O build nativo Windows foi bloqueado pelo Smart App Control ao carregar uma
+DLL de proc-macro. A medição Linux/WSL2 é uma alternativa documentada, não
+validação de distribuição no Windows nem certificação do hardware mínimo.
+O relatório de resultados deve preservar essa limitação. Os testes automatizados
+verificam métricas/RRF, vetores sintéticos e integração real sqlite-vec/FTS5;
+o script de resumo valida casos, amostras e IDs e informa concordância entre
+os top-10 exatos das duas engines.
