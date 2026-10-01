@@ -119,6 +119,17 @@ pub struct MapEntity {
     pub conflicts: usize,
 }
 
+/// Everything on the project map at a date, for the graph view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectGraph {
+    /// Entities alive, decisions in force and claims valid (depth 0).
+    pub nodes: Vec<GraphNode>,
+    /// Confirmed edges and decision relations between returned nodes.
+    pub edges: Vec<GraphEdge>,
+    /// Suggestions waiting for confirmation, by edge id.
+    pub suggested: Vec<(String, GraphEdge)>,
+}
+
 /// Components and technologies of a project at a date.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectMap {
@@ -550,6 +561,92 @@ where
             entities,
             part_of,
             pending,
+        })
+    }
+
+    /// The whole map as nodes and edges: entities alive, decisions in force,
+    /// claims valid, the edges that hold between them, decision relations
+    /// and pending suggestions. The desktop lays it out; nothing is derived
+    /// here beyond what the map already says.
+    ///
+    /// # Errors
+    ///
+    /// `project_not_found`, `invalid_request` for a bad date, `storage`.
+    pub fn project_graph(
+        &self,
+        project_id: &str,
+        as_of: Option<&str>,
+    ) -> Result<ProjectGraph, GraphError> {
+        let snapshot = self.snapshot(project_id, as_of)?;
+        let mut refs: Vec<NodeRef> = Vec::new();
+        refs.extend(
+            snapshot
+                .entities
+                .values()
+                .filter(|entity| entity.alive_at(&snapshot.at))
+                .map(|entity| NodeRef::entity(entity.entity_id.clone())),
+        );
+        refs.extend(
+            snapshot
+                .decisions
+                .keys()
+                .filter(|id| snapshot.decision_active(id))
+                .map(|id| NodeRef::decision(id.clone())),
+        );
+        refs.extend(
+            snapshot
+                .claims
+                .keys()
+                .filter(|id| snapshot.claim_active(id))
+                .map(|id| NodeRef::claim(id.clone())),
+        );
+        let present: BTreeSet<NodeRef> = refs.iter().cloned().collect();
+        let nodes = refs
+            .iter()
+            .filter_map(|node| {
+                Some(GraphNode {
+                    summary: snapshot.summary(node)?,
+                    depth: 0,
+                    active: true,
+                })
+            })
+            .collect();
+        let edge = |record: &EdgeRecord| GraphEdge {
+            from: NodeRef {
+                kind: record.source_kind,
+                id: record.source_id.clone(),
+            },
+            to: NodeRef::entity(record.entity_id.clone()),
+            kind: record.kind.as_str().to_string(),
+        };
+        let mut edges: Vec<GraphEdge> = snapshot
+            .holding()
+            .map(edge)
+            .filter(|edge| present.contains(&edge.from) && present.contains(&edge.to))
+            .collect();
+        edges.extend(
+            snapshot
+                .relations
+                .iter()
+                .filter(|row| snapshot.relation_holds(row))
+                .map(|row| GraphEdge {
+                    from: NodeRef::decision(row.from.clone()),
+                    to: NodeRef::decision(row.to.clone()),
+                    kind: row.kind.clone(),
+                })
+                .filter(|edge| present.contains(&edge.from) && present.contains(&edge.to)),
+        );
+        let suggested = snapshot
+            .edges
+            .iter()
+            .filter(|record| record.is_pending())
+            .map(|record| (record.edge_id.clone(), edge(record)))
+            .filter(|(_, edge)| present.contains(&edge.from) && present.contains(&edge.to))
+            .collect();
+        Ok(ProjectGraph {
+            nodes,
+            edges,
+            suggested,
         })
     }
 

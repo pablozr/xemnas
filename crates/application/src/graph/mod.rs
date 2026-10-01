@@ -11,7 +11,7 @@ mod query;
 pub use derive::{added_dependencies, ComponentProposal, SuggestionReport, TechnologyProposal};
 pub use query::{
     EntityDetail, FileLens, GraphEdge, GraphNode, MapEntity, Neighborhood, NodeRef, NodeSummary,
-    ProjectMap, Suggestion, TimelineEvent, TimelineKind, DEFAULT_NEIGHBORHOOD_LIMIT,
+    ProjectGraph, ProjectMap, Suggestion, TimelineEvent, TimelineKind, DEFAULT_NEIGHBORHOOD_LIMIT,
     MAX_NEIGHBORHOOD_DEPTH,
 };
 

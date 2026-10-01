@@ -85,6 +85,12 @@ fn suggestions_come_from_captured_files_and_dependencies() {
         .iter()
         .all(|suggestion| suggestion.source.node.id == decision));
 
+    // The graph view sees the pending pair as suggestions, not edges.
+    let whole = graph.project_graph("p1", None).expect("graph");
+    assert_eq!(whole.nodes.len(), 3, "two entities and the decision");
+    assert!(whole.edges.is_empty());
+    assert_eq!(whole.suggested.len(), 2);
+
     // Suggestions do not count until confirmed.
     assert!(graph
         .file_lens("p1", "crates/storage-sqlite/src/x.rs", None)
@@ -119,6 +125,12 @@ fn suggestions_come_from_captured_files_and_dependencies() {
     assert_eq!(lens.components.len(), 1);
     assert_eq!(lens.decisions.len(), 1);
     assert_eq!(lens.decisions[0].node.id, decision);
+
+    let whole = graph.project_graph("p1", None).expect("graph");
+    assert!(whole.suggested.is_empty());
+    assert_eq!(whole.edges.len(), 1);
+    assert_eq!(whole.edges[0].from, NodeRef::decision(decision.clone()));
+    assert_eq!(whole.edges[0].to, NodeRef::entity(storage.clone()));
 
     let map = graph.project_map("p1", None).expect("map");
     let row = map
