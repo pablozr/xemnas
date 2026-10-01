@@ -3,8 +3,8 @@
 **Data:** 2026-09-30.
 **Pergunta:** como comparar E5-small e EmbeddingGemma Q4 em FastEmbed Rust,
 com SQLite/FTS5/sqlite-vec e LanceDB embedded, para Windows de 8 GB sem GPU?
-**Status:** Aberta. Protocolo de pesquisa; execução e resultados são registrados
-separadamente. Não constitui aprovação da stack do produto.
+**Status:** Aberta. Protocolo executado; [resultados e artefatos](benchmark-semantico-local.md)
+registrados separadamente. Não constitui aprovação da stack do produto.
 
 ## Escopo e hipóteses
 

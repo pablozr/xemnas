@@ -1,0 +1,366 @@
+{
+  "documents": [
+    {
+      "id": 0,
+      "text": "Adotamos fila durável SQLite para indexar decisões aprovadas em segundo plano. Jobs persistem após reiniciar, com tentativas e chave idempotente. A aprovação não aguarda embeddings."
+    },
+    {
+      "id": 1,
+      "text": "Approved decisions enqueue durable SQLite background jobs. Embedding generation retries after restart and uses an idempotency key without blocking approval."
+    },
+    {
+      "id": 2,
+      "text": "Decidimos gerar embeddings sincronamente durante aprovação. Falhas abortam a aprovação e não há fila persistente."
+    },
+    {
+      "id": 3,
+      "text": "A fila de notificações fica somente em memória e desaparece ao encerrar. Ela não é usada na indexação das decisões."
+    },
+    {
+      "id": 4,
+      "text": "A busca combina BM25 lexical e similaridade vetorial por Reciprocal Rank Fusion. Isso recupera identificadores exatos e paráfrases sem depender da escala dos scores."
+    },
+    {
+      "id": 5,
+      "text": "Hybrid retrieval merges lexical BM25 and dense vector rankings using reciprocal rank fusion to handle exact symbols and paraphrases."
+    },
+    {
+      "id": 6,
+      "text": "Adotamos apenas comparação textual literal para busca. Não usamos vetores nem fusão de rankings."
+    },
+    {
+      "id": 7,
+      "text": "Somamos diretamente scores BM25 e cosine sem normalização; removemos Reciprocal Rank Fusion para simplificar a busca."
+    },
+    {
+      "id": 8,
+      "text": "Vínculos observados entre decisão e componente vêm dos caminhos editados por apply_patch, write e edit, atribuídos à evidência específica. Ler um arquivo não prova alteração."
+    },
+    {
+      "id": 9,
+      "text": "A decision targets components identified by attributable edit and patch events in its own evidence. Read-only file access is not evidence of modification."
+    },
+    {
+      "id": 10,
+      "text": "Ligamos decisões a todos os arquivos lidos na sessão, inclusive consultas sem edição e mudanças pertencentes a outra decisão."
+    },
+    {
+      "id": 11,
+      "text": "Exigimos que o usuário escreva manualmente cada caminho de componente no prompt, sem aproveitar eventos de ferramentas."
+    },
+    {
+      "id": 12,
+      "text": "Relações semânticas sugeridas no grafo guardam origem, evidência, confiança e versão do extrator. Similaridade recupera candidatos, mas não prova dependência causal."
+    },
+    {
+      "id": 13,
+      "text": "Semantic graph links retain provenance, supporting evidence, confidence and extractor version. Embedding similarity is candidate retrieval, not proof of causality."
+    },
+    {
+      "id": 14,
+      "text": "Toda similaridade acima de 0.8 vira automaticamente uma dependência causal definitiva no grafo, sem evidência nem origem."
+    },
+    {
+      "id": 15,
+      "text": "O grafo não armazena confiança ou histórico; links inferidos e observados têm a mesma autoridade e são indistinguíveis."
+    },
+    {
+      "id": 16,
+      "text": "Separação por projeto é obrigatória antes de selecionar vizinhos. O filtro de project_id precede top-k para não vazar contexto e não perder resultados válidos."
+    },
+    {
+      "id": 17,
+      "text": "Project isolation applies project_id before nearest-neighbor top-k. Prefiltering prevents cross-project context leakage and missing valid local matches."
+    },
+    {
+      "id": 18,
+      "text": "Buscamos top-k global e só depois filtramos por projeto, mesmo quando isso deixa menos de k resultados."
+    },
+    {
+      "id": 19,
+      "text": "A memória universal mistura projetos por padrão e envia resultados de qualquer repositório sem escopo ou autorização."
+    },
+    {
+      "id": 20,
+      "text": "Ao trocar o modelo de embeddings, criamos nova geração do índice com model_id, revisão e dimensão. Reconstruímos e trocamos atomicamente; não misturamos espaços vetoriais."
+    },
+    {
+      "id": 21,
+      "text": "Changing embedding models creates a fresh index generation recording model revision and dimensions. Rebuild first, then switch atomically without mixing vector spaces."
+    },
+    {
+      "id": 22,
+      "text": "Na troca de modelo reutilizamos vetores antigos quando têm a mesma dimensão, assumindo compatibilidade sem reconstrução."
+    },
+    {
+      "id": 23,
+      "text": "Removemos model_id e revisão do banco. O índice passa a aceitar quaisquer vetores e troca o modelo sem migração."
+    },
+    {
+      "id": 24,
+      "text": "Exclusão e substituição de decisões invalidam seus vetores e arestas derivadas. Mantemos tombstones e regeneração idempotente para impedir contexto obsoleto."
+    },
+    {
+      "id": 25,
+      "text": "Deleting or superseding a decision invalidates its embeddings and derived links. Tombstones and idempotent rebuilds stop stale context from returning."
+    },
+    {
+      "id": 26,
+      "text": "Decisões excluídas continuam no índice vetorial permanentemente e aparecem nas consultas para preservar desempenho."
+    },
+    {
+      "id": 27,
+      "text": "A substituição cria nova decisão mas conserva arestas e embeddings antigos como se ainda estivessem vigentes."
+    },
+    {
+      "id": 28,
+      "text": "A configuração local usa CPU, no máximo quatro threads de inferência e lotes pequenos. O modelo é carregado sob demanda e descarregado após inatividade em PCs de 8 GB."
+    },
+    {
+      "id": 29,
+      "text": "On 8 GB CPU-only machines, inference uses at most four threads and small batches. Load the embedding model on demand and unload it after idle time."
+    },
+    {
+      "id": 30,
+      "text": "Exigimos GPU dedicada com 16 GB de VRAM para gerar embeddings, usando lotes de 256 itens e todos os núcleos."
+    },
+    {
+      "id": 31,
+      "text": "Mantemos dois modelos grandes residentes o tempo inteiro e não limitamos memória nem threads no aplicativo local."
+    },
+    {
+      "id": 32,
+      "text": "FTS5 com tokenizer unicode61 e remoção de diacríticos serve à busca lexical em português. Desativamos stemming e stopwords inglesas na comparação com LanceDB."
+    },
+    {
+      "id": 33,
+      "text": "Portuguese keyword search uses Unicode tokenization and accent folding. The benchmark disables English stemming and stop words in LanceDB for fair lexical comparison."
+    },
+    {
+      "id": 34,
+      "text": "Aplicamos stemming e stopwords exclusivamente ingleses aos textos portugueses sem medir o efeito na recuperação."
+    },
+    {
+      "id": 35,
+      "text": "FTS5 é usado para gerar vetores neurais; o tokenizer também substitui o modelo multilíngue na busca semântica."
+    },
+    {
+      "id": 36,
+      "text": "A aprovação grava decisão e evento de indexação na mesma transação SQLite, seguindo o transactional outbox. O consumidor processa depois e pode repetir sem duplicar vínculos."
+    },
+    {
+      "id": 37,
+      "text": "Transactional outbox commits the approved decision and indexing event together in SQLite. An idempotent consumer processes the event later."
+    },
+    {
+      "id": 38,
+      "text": "Publicamos o evento antes de persistir a decisão, em operações separadas sem outbox, aceitando perder indexações em caso de falha."
+    },
+    {
+      "id": 39,
+      "text": "O produtor grava só a decisão e espera que um serviço remoto detecte a mudança, sem evento transacional local."
+    },
+    {
+      "id": 40,
+      "text": "O aplicativo funciona offline após baixar uma vez os pesos de embeddings. Inferência e índices ficam no computador, sem servidor obrigatório nem cobrança por consulta."
+    },
+    {
+      "id": 41,
+      "text": "After the initial model download, embeddings and embedded indexes run offline on the user's computer without a mandatory hosted service or per-query fees."
+    },
+    {
+      "id": 42,
+      "text": "Cada embedding exige chamada à API remota paga e conexão ativa; não oferecemos inferência no computador."
+    },
+    {
+      "id": 43,
+      "text": "O banco vetorial embedded depende obrigatoriamente de cluster hospedado e a busca local para quando a internet cai."
+    },
+    {
+      "id": 44,
+      "text": "Medimos carregamento e primeira inferência separados da latência aquecida. Reportamos p50 e p95 da geração de consulta e da busca, sem incluir download nos tempos de inferência."
+    },
+    {
+      "id": 45,
+      "text": "Benchmarks separate model loading and first inference from warm query encoding and index search. Report p50 and p95, and keep network download time separate."
+    },
+    {
+      "id": 46,
+      "text": "Usamos uma única consulta e reportamos só sua média, incluindo download dos pesos como se fosse tempo habitual de busca."
+    },
+    {
+      "id": 47,
+      "text": "Só medimos o índice com vetores prontos e chamamos esse número de latência total do assistente, ignorando o encoder."
+    }
+  ],
+  "queries": [
+    {
+      "relevant": [
+        0,
+        1
+      ],
+      "text": "Como garantir que o trabalho de indexação sobreviva ao fechamento do aplicativo?"
+    },
+    {
+      "relevant": [
+        0,
+        1
+      ],
+      "text": "Find the decision that keeps approval responsive while recovering indexing after a crash."
+    },
+    {
+      "relevant": [
+        4,
+        5
+      ],
+      "text": "Qual estratégia encontra nomes de funções e perguntas que usam palavras diferentes?"
+    },
+    {
+      "relevant": [
+        4,
+        5
+      ],
+      "text": "How do we merge keyword results with semantic matches without comparing incompatible score scales?"
+    },
+    {
+      "relevant": [
+        8,
+        9
+      ],
+      "text": "De onde extrair os módulos realmente modificados sem pedir caminhos ao usuário?"
+    },
+    {
+      "relevant": [
+        8,
+        9
+      ],
+      "text": "Which recorded operations justify linking a decision to the code it changed?"
+    },
+    {
+      "relevant": [
+        12,
+        13
+      ],
+      "text": "Como rastrear por que a IA criou uma aresta e evitar confundir proximidade com causa?"
+    },
+    {
+      "relevant": [
+        12,
+        13
+      ],
+      "text": "Find our policy for provenance and uncertainty on inferred decision relationships."
+    },
+    {
+      "relevant": [
+        16,
+        17
+      ],
+      "text": "Como impedir que a busca traga decisões de outro repositório?"
+    },
+    {
+      "relevant": [
+        16,
+        17
+      ],
+      "text": "Why must tenant filtering happen before choosing nearest neighbors?"
+    },
+    {
+      "relevant": [
+        20,
+        21
+      ],
+      "text": "O que fazer com a base vetorial quando substituímos o encoder?"
+    },
+    {
+      "relevant": [
+        20,
+        21
+      ],
+      "text": "How should we migrate retrieval when the embedding model changes?"
+    },
+    {
+      "relevant": [
+        24,
+        25
+      ],
+      "text": "Como evitar que uma escolha abandonada volte nas recomendações?"
+    },
+    {
+      "relevant": [
+        24,
+        25
+      ],
+      "text": "What removes stale retrieval context after a decision is superseded?"
+    },
+    {
+      "relevant": [
+        28,
+        29
+      ],
+      "text": "Qual política reduz a pressão de memória em computadores modestos?"
+    },
+    {
+      "relevant": [
+        28,
+        29
+      ],
+      "text": "How do we run embeddings on a low-memory computer without a discrete graphics card?"
+    },
+    {
+      "relevant": [
+        32,
+        33
+      ],
+      "text": "Como configurar a busca de palavras para textos em português com acentos?"
+    },
+    {
+      "relevant": [
+        32,
+        33
+      ],
+      "text": "Which lexical tokenizer settings avoid treating Portuguese text as English?"
+    },
+    {
+      "relevant": [
+        36,
+        37
+      ],
+      "text": "Como eliminar a janela de falha entre salvar a decisão e agendar sua indexação?"
+    },
+    {
+      "relevant": [
+        36,
+        37
+      ],
+      "text": "Which pattern atomically persists approval and its background indexing event?"
+    },
+    {
+      "relevant": [
+        40,
+        41
+      ],
+      "text": "O usuário consegue pesquisar quando estiver sem internet?"
+    },
+    {
+      "relevant": [
+        40,
+        41
+      ],
+      "text": "Which deployment choice avoids recurring hosting costs for retrieval?"
+    },
+    {
+      "relevant": [
+        44,
+        45
+      ],
+      "text": "Que medições mostram o tempo percebido de consulta sem esconder o custo do modelo?"
+    },
+    {
+      "relevant": [
+        44,
+        45
+      ],
+      "text": "How should cold start and steady-state retrieval latency be reported?"
+    }
+  ]
+}

@@ -279,8 +279,15 @@ O custo de geração/classificação e o peso de OCR merecem tanta atenção qua
 embeddings. Não há motivo técnico para reinventar os algoritmos de inferência
 ou para alugar servidor só por decidir usar Python.
 
-Pesquisa de documentação e código público; não houve instalação, download de
-modelos, benchmark, teste de OCR ou execução do pipeline na máquina mínima.
-Preços e branches consultados podem mudar. Compatibilidade, qualidade e latência
-da integração ficam explicitamente **não validadas**. Próxima decisão técnica
-deve usar o experimento e atualizar os documentos normativos pertinentes.
+A pesquisa original foi documental. O [benchmark Rust CPU](benchmark-semantico-local.md)
+executou E5-small/Gemma Q4 e SQLite/FTS5/sqlite-vec versus LanceDB embedded,
+em Linux/WSL2 limitado a 8 GiB. Ele favoreceu SQLite para o índice inicial;
+E5 para velocidade e Gemma para RAM e recuperação. Na fixture, a fusão RRF
+uniforme piorou a qualidade e embeddings colocaram escolhas opostas em primeiro
+lugar: combinação de rankings e validação de relações continuam hipóteses a
+avaliar, não políticas aprovadas pelo experimento.
+
+Windows físico de 8 GB, integração no app, OCR, reranking e geração por LLM
+continuam **não validados**. Documentos foram adiados. Preços e branches
+consultados podem mudar; a próxima decisão técnica deve usar os resultados
+e atualizar os documentos normativos pertinentes.

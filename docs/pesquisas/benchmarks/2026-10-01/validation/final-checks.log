@@ -1,0 +1,181 @@
+warning: associated items `remote` and `value` are never used
+  --> /bench/lancedb-patched/src/job.rs:89:19
+   |
+81 | impl TerminalResult {
+   | ------------------- associated items in this implementation
+...
+89 |     pub(crate) fn remote(value: Option<Value>, request_id: String) -> Self {
+   |                   ^^^^^^
+...
+96 |     pub(crate) fn value(&self) -> Option<&Value> {
+   |                   ^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: associated functions `new` and `opened` are never used
+   --> /bench/lancedb-patched/src/job.rs:208:19
+    |
+195 | impl Job<()> {
+    | ------------ associated functions in this implementation
+...
+208 |     pub(crate) fn new(handle: Box<dyn JobHandle>) -> Self {
+    |                   ^^^
+...
+220 |     pub(crate) fn opened(handle: Box<dyn JobHandle>, description: JobDescription) -> Self {
+    |                   ^^^^^^
+
+warning: method `as_query_param` is never used
+   --> /bench/lancedb-patched/src/query.rs:701:19
+    |
+700 | impl AnalyzePlanDistributedMetrics {
+    | ---------------------------------- method in this implementation
+701 |     pub(crate) fn as_query_param(self) -> &'static str {
+    |                   ^^^^^^^^^^^^^^
+
+warning: function `explain_take_offsets_plan` is never used
+    --> /bench/lancedb-patched/src/query.rs:2158:21
+     |
+2158 | pub(crate) async fn explain_take_offsets_plan(
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `prepare_take_offsets_request` is never used
+    --> /bench/lancedb-patched/src/query.rs:2178:21
+     |
+2178 | pub(crate) async fn prepare_take_offsets_request(
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `FunctionOutputTarget` is never constructed
+   --> /bench/lancedb-patched/src/table/computed_columns.rs:517:19
+    |
+517 | pub(crate) struct FunctionOutputTarget {
+    |                   ^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `FunctionInputTarget` is never constructed
+   --> /bench/lancedb-patched/src/table/computed_columns.rs:524:19
+    |
+524 | pub(crate) struct FunctionInputTarget {
+    |                   ^^^^^^^^^^^^^^^^^^^
+
+warning: struct `FunctionDeclarationPlan` is never constructed
+   --> /bench/lancedb-patched/src/table/computed_columns.rs:532:19
+    |
+532 | pub(crate) struct FunctionDeclarationPlan {
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `plan_function_application` is never used
+    --> /bench/lancedb-patched/src/table/computed_columns.rs:1085:15
+     |
+1085 | pub(crate) fn plan_function_application(
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `GetLsmStatsResponse` is never constructed
+  --> /bench/lancedb-patched/src/table/lsm_stats.rs:91:19
+   |
+91 | pub(crate) struct GetLsmStatsResponse {
+   |                   ^^^^^^^^^^^^^^^^^^^
+
+warning: function `resolve_arrow_fts_field_path` is never used
+   --> /bench/lancedb-patched/src/utils/mod.rs:381:15
+    |
+381 | pub(crate) fn resolve_arrow_fts_field_path(
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `lancedb` (lib) generated 11 warnings
+   Compiling semantic-bench v0.1.0 (/source)
+    Finished `release` profile [optimized] target(s) in 2m 14s
+warning: associated items `remote` and `value` are never used
+  --> /bench/lancedb-patched/src/job.rs:89:19
+   |
+81 | impl TerminalResult {
+   | ------------------- associated items in this implementation
+...
+89 |     pub(crate) fn remote(value: Option<Value>, request_id: String) -> Self {
+   |                   ^^^^^^
+...
+96 |     pub(crate) fn value(&self) -> Option<&Value> {
+   |                   ^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: associated functions `new` and `opened` are never used
+   --> /bench/lancedb-patched/src/job.rs:208:19
+    |
+195 | impl Job<()> {
+    | ------------ associated functions in this implementation
+...
+208 |     pub(crate) fn new(handle: Box<dyn JobHandle>) -> Self {
+    |                   ^^^
+...
+220 |     pub(crate) fn opened(handle: Box<dyn JobHandle>, description: JobDescription) -> Self {
+    |                   ^^^^^^
+
+warning: method `as_query_param` is never used
+   --> /bench/lancedb-patched/src/query.rs:701:19
+    |
+700 | impl AnalyzePlanDistributedMetrics {
+    | ---------------------------------- method in this implementation
+701 |     pub(crate) fn as_query_param(self) -> &'static str {
+    |                   ^^^^^^^^^^^^^^
+
+warning: function `explain_take_offsets_plan` is never used
+    --> /bench/lancedb-patched/src/query.rs:2158:21
+     |
+2158 | pub(crate) async fn explain_take_offsets_plan(
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `prepare_take_offsets_request` is never used
+    --> /bench/lancedb-patched/src/query.rs:2178:21
+     |
+2178 | pub(crate) async fn prepare_take_offsets_request(
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `FunctionOutputTarget` is never constructed
+   --> /bench/lancedb-patched/src/table/computed_columns.rs:517:19
+    |
+517 | pub(crate) struct FunctionOutputTarget {
+    |                   ^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `FunctionInputTarget` is never constructed
+   --> /bench/lancedb-patched/src/table/computed_columns.rs:524:19
+    |
+524 | pub(crate) struct FunctionInputTarget {
+    |                   ^^^^^^^^^^^^^^^^^^^
+
+warning: struct `FunctionDeclarationPlan` is never constructed
+   --> /bench/lancedb-patched/src/table/computed_columns.rs:532:19
+    |
+532 | pub(crate) struct FunctionDeclarationPlan {
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `plan_function_application` is never used
+    --> /bench/lancedb-patched/src/table/computed_columns.rs:1085:15
+     |
+1085 | pub(crate) fn plan_function_application(
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `GetLsmStatsResponse` is never constructed
+  --> /bench/lancedb-patched/src/table/lsm_stats.rs:91:19
+   |
+91 | pub(crate) struct GetLsmStatsResponse {
+   |                   ^^^^^^^^^^^^^^^^^^^
+
+warning: function `resolve_arrow_fts_field_path` is never used
+   --> /bench/lancedb-patched/src/utils/mod.rs:381:15
+    |
+381 | pub(crate) fn resolve_arrow_fts_field_path(
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `lancedb` (lib) generated 11 warnings
+   Compiling semantic-bench v0.1.0 (/source)
+    Finished `release` profile [optimized] target(s) in 37.18s
+     Running unittests src/main.rs (/build/release/deps/semantic_bench-4802a9480df9dd7d)
+
+running 3 tests
+test tests::synthetic_vectors_are_reproducible_unique_and_normalized ... ok
+test tests::metrics_and_fusion_have_known_answers ... ok
+test sqlite::tests::extension_cosine_and_fts_punctuation ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+error: 'cargo-clippy' is not installed for the toolchain '1.98.1-x86_64-unknown-linux-gnu'.
+help: run `rustup component add clippy` to install it

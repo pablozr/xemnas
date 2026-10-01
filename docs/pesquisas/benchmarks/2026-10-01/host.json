@@ -1,0 +1,18 @@
+{
+  "captured_at": "2026-09-30T23:38:03.0002908-03:00",
+  "os": {
+    "Caption": "Microsoft Windows 11 Pro",
+    "Version": "10.0.26200",
+    "BuildNumber": "26200"
+  },
+  "cpu": {
+    "Name": "AMD Ryzen 5 5600G with Radeon Graphics         ",
+    "NumberOfCores": 6,
+    "NumberOfLogicalProcessors": 12
+  },
+  "physical_ram_bytes": 34221264896,
+  "power_plan": "GUID do Esquema de Energia: 381b4222-f694-41f0-9685-ff5bb260df2e  (Equilibrado)",
+  "background_container_count": 7,
+  "benchmark_image_id": "sha256:09791f588a009647dfa304ce6036391d035e8490eca6504bdad044022c8b1068",
+  "isolation": "Docker Linux/WSL2, 8 GiB memory and no swap, quota 4 CPUs; other host services remain active."
+}

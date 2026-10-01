@@ -1,7 +1,8 @@
 # Embeddings e reranking locais para o xemnas
 
 **Data:** 2026-09-30.
-**Status:** Aberta. Pesquisa; nenhum runtime ou modelo foi instalado ou validado no app.
+**Status:** Aberta. E5/Gemma Q4 executados em FastEmbed Rust CPU; integração no
+app e validação nativa Windows 8 GB pendentes.
 **Pergunta:** Como executar embeddings e reranking no desktop Rust/Windows,
 com custo e latência controlados, permitindo uma futura biblioteca de PDFs e livros?
 
@@ -20,7 +21,9 @@ Nesse perfil, a primeira comparação deve ser
 uma referência simples e multilíngue; EmbeddingGemma é uma alternativa recente
 orientada a dispositivos, com contexto maior. BGE-M3 e Qwen3-Embedding-0.6B entram
 como candidatos de qualidade, não como requisitos mínimos do desktop.
-Essa é uma recomendação de engenharia inferida das opções abaixo, ainda sem benchmark.
+A comparação foi [executada em Rust CPU](benchmark-semantico-local.md), limitada
+a 8 GiB em Linux/WSL2. Gemma recuperou melhor com menos RAM; E5 foi mais rápido.
+Os resultados não certificam a máquina Windows mínima nem aprovam um modelo no app.
 SO, UI, banco, cache e editor/compilação coexistem nos mesmos 8 GB: o tamanho do
 arquivo quantizado não é orçamento total de memória. Batch inicial deve ser pequeno,
 com apenas um job de inferência; a capacidade real depende de medição. Modelos
@@ -242,7 +245,7 @@ possível custo de LLM local/remoto.
 
 | Limitação | Próximo passo |
 | --- | --- |
-| Nenhum modelo/runtime executado | Benchmark autorizado em hardware alvo |
+| E5/Gemma executados no harness Linux CPU, não no app Windows mínimo | Integrar e validar em Windows físico de 8 GB |
 | Perfil de 8 GB definido; CPU e corpus ainda desconhecidos | Identificar máquina e datasets PT/EN reais |
 | Catálogo `main` muda | Fixar release/tag e matriz de features antes do spike |
 | Conversões de terceiros | Conferir hashes, proveniência e equivalência de ranking |

@@ -1,0 +1,11 @@
+{
+  "download_and_load_ms": 6468.040705,
+  "memory": {
+    "VmHWM": "1038020 kB",
+    "VmPeak": "1516836 kB",
+    "VmRSS": "1021352 kB",
+    "cgroup_current_bytes": "1055899648",
+    "cgroup_peak_bytes_so_far": "1072979968",
+    "cgroup_swap_current_bytes": "0"
+  }
+}

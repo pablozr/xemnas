@@ -8,10 +8,11 @@ planos de `docs/roadmap/`.
 
 | Documento | Assunto | Status |
 | --- | --- | --- |
-| [metodologia-benchmark-semantico.md](metodologia-benchmark-semantico.md) | Protocolo de qualidade, latência e memória para E5/Gemma e SQLite/LanceDB | Aberta. Experimento Rust CPU em execução; Windows bloqueou o build nativo |
-| [memoria-semantica-local-first.md](memoria-semantica-local-first.md) | Síntese da recuperação local, direção acordada, custos, latência e experimento mínimo | Aberta. Windows 8 GB/CPU; stack final depende de benchmark |
-| [embeddings-e-reranking-local.md](embeddings-e-reranking-local.md) | Runtimes Rust/Python, modelos locais, licenças e empacotamento | Aberta. Shortlist E5-small/EmbeddingGemma; sem execução de modelos |
-| [biblioteca-e-busca-local.md](biblioteca-e-busca-local.md) | Índices locais, PDFs/OCR, chunking, citações e memória | Aberta. SQLite/LanceDB em comparação; sem instalação |
+| [benchmark-semantico-local.md](benchmark-semantico-local.md) | Resultados reproduzíveis de E5-small/Gemma Q4 e SQLite/LanceDB: qualidade, RAM, tempos e ANN | Aberta. 72 casos concluídos; Windows físico 8 GB e integração no produto pendentes |
+| [metodologia-benchmark-semantico.md](metodologia-benchmark-semantico.md) | Protocolo de qualidade, latência e memória para E5/Gemma e SQLite/LanceDB | Aberta. Executado; resultados em relatório próprio, build nativo Windows bloqueado |
+| [memoria-semantica-local-first.md](memoria-semantica-local-first.md) | Síntese da recuperação local, direção acordada, custos, latência e experimento mínimo | Aberta. Benchmark disponível; stack final e Windows 8 GB/CPU pendentes |
+| [embeddings-e-reranking-local.md](embeddings-e-reranking-local.md) | Runtimes Rust/Python, modelos locais, licenças e empacotamento | Aberta. E5/Gemma testados em Rust CPU; reranking e integração pendentes |
+| [biblioteca-e-busca-local.md](biblioteca-e-busca-local.md) | Índices locais, PDFs/OCR, chunking, citações e memória | Aberta. SQLite/LanceDB comparados; documentos adiados |
 | [solucoes-prontas-rag-local.md](solucoes-prontas-rag-local.md) | Produtos RAG locais e frameworks disponíveis no mercado | Aberta. Comparação documental; integração não validada |
 | [automacao-do-grafo-fontes.md](automacao-do-grafo-fontes.md) | Auditoria do grafo, automação na adoção e comparação com GraphRAG/Graphiti | Aberta. Direção de automação acordada; implementação e seleção técnica pendentes |
 | [ideias-de-produto.md](ideias-de-produto.md) | Revisão, contexto do projeto e próximas ideias do produto | Aberta. A aba Contexto já foi entregue (`40ead8a`); o resto segue em discussão até o dogfood |

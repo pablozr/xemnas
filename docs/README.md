@@ -40,5 +40,7 @@ Quando dois documentos divergirem, vale nesta ordem:
   [índice da pasta](pesquisas/README.md).
   A avaliação de recuperação local segue a
   [metodologia do benchmark semântico](pesquisas/metodologia-benchmark-semantico.md).
+  Os [resultados e dados do experimento Rust CPU](pesquisas/benchmark-semantico-local.md)
+  registram qualidade, memória, latência e as limitações da execução Linux/WSL2.
 - **Como operar, configurar ou diagnosticar:** `operacao/`.
 - **Imagem para o README da raiz:** `assets/readme/`.

@@ -1,0 +1,2 @@
+354412568 /build/release/semantic-bench
+28985152 /bench/ort/onnxruntime-linux-x64-1.30.0/lib/libonnxruntime.so.1.30.0

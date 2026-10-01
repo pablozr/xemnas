@@ -1,0 +1,2 @@
+# Snapshots have byte-level hashes; preserve their original line endings.
+* -text

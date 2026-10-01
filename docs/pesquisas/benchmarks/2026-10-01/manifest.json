@@ -1,0 +1,1221 @@
+{
+  "status": "Complete, summary validation passed",
+  "execution_id": "run-20260930-233621",
+  "dates": "2026-09-30/2026-10-01 America/Sao_Paulo",
+  "source_commit": "7249e48",
+  "models": {
+    "e5": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+    "gemma_q4": "5090578d9565bb06545b4552f76e6bc2c93e4a66"
+  },
+  "lancedb": "0.39.0 with the isolated embedded HTTP-error cfg patch in tools/semantic-bench/lancedb-embedded.patch",
+  "validation": "8 embeddings, 48 storage cases, 12 complete exhaustive retrieval pipelines, 4 public quality cases",
+  "datasets": "Derived Belebele PT/EN: CC-BY-SA-4.0, attribution, revision and original hashes in each JSON. Fixture decisions are fictional.",
+  "notes": "Pipeline timings have one process per case; no ANN pipeline. Initial-download JSONs and Windows block were observed during preparation before the final harness. final-checks.log includes the missing-Clippy attempt; clippy.log records its successful subsequent run.",
+  "files": [
+    {
+      "path": "belebele-e5-eng_Latn.log",
+      "bytes": 61,
+      "sha256": "3d04c2d7327f1acd080afbf2c02ca9c2d4acafc6e0759260b7d1da03968e1870"
+    },
+    {
+      "path": "belebele-e5-eng_Latn.time",
+      "bytes": 879,
+      "sha256": "c03c9f987127aba957a1a6d9a10c5e5ff676441ad034ee72eeef0e27280089a9"
+    },
+    {
+      "path": "belebele-e5-por_Latn.log",
+      "bytes": 61,
+      "sha256": "cdce8f920d42a6931700a5377828087704af0d389a42cce8b8a2ef46fe9e2e6e"
+    },
+    {
+      "path": "belebele-e5-por_Latn.time",
+      "bytes": 880,
+      "sha256": "d97a4b4e4fc4e1d1974fdbc8aaf9224da679e1b3bc026395cf35518aebcbd8f5"
+    },
+    {
+      "path": "belebele-gemma-q4-eng_Latn.log",
+      "bytes": 67,
+      "sha256": "a779cf4826b0bc94030e68e9154fb065ec419ce90f6bc2d4d6e1974818d5c636"
+    },
+    {
+      "path": "belebele-gemma-q4-eng_Latn.time",
+      "bytes": 895,
+      "sha256": "b5d7dcd7c383d471c96d965298577d6384e2838c70d723e7db82eb2c3db773ba"
+    },
+    {
+      "path": "belebele-gemma-q4-por_Latn.log",
+      "bytes": 67,
+      "sha256": "054c4bb88b519b6e846bd98ceac9d156ce4b69f79171aad58a4f96072ec29b24"
+    },
+    {
+      "path": "belebele-gemma-q4-por_Latn.time",
+      "bytes": 896,
+      "sha256": "64223f9f12878e22882fc37ef44a1f62b701d0e551e8d24478642859ec093b92"
+    },
+    {
+      "path": "cpu-stat-after-storage.txt",
+      "bytes": 158,
+      "sha256": "401cdabf9afb2a3cbf8d0b6060f15d12b3105338d5089fafb4b636b361873a45"
+    },
+    {
+      "path": "cpu-stat-mid.txt",
+      "bytes": 150,
+      "sha256": "cef579d47c1c5ad4eb8b4eac93e7dc1a9b0b96d45130836e6542eccdb206f41d"
+    },
+    {
+      "path": "e5-t1.log",
+      "bytes": 48,
+      "sha256": "b0bdf336d87cdd5a9967a57494012596d06a81ec44a4b61b82eb7e7bf97b2a3d"
+    },
+    {
+      "path": "e5-t1.time",
+      "bytes": 819,
+      "sha256": "fac262db0bb94cf8830f147d1e6b31fc459a165a985d26a8dc05b04c78bd0c57"
+    },
+    {
+      "path": "e5-t4-r1.log",
+      "bytes": 51,
+      "sha256": "377c400a1d7511c2e2a51efa9f4d4e5a45fa87a407c1c62490c5941e552147dd"
+    },
+    {
+      "path": "e5-t4-r1.time",
+      "bytes": 824,
+      "sha256": "4b9caf65f7d05762f91de97be9df42037584b3d33102f935c9f8e34d035b8323"
+    },
+    {
+      "path": "e5-t4-r2.log",
+      "bytes": 51,
+      "sha256": "3beb80a9df57bc91ed60a098b584a0b21b564a1445efdc42ed5dfe06a53a4d42"
+    },
+    {
+      "path": "e5-t4-r2.time",
+      "bytes": 824,
+      "sha256": "be696f7354551cef1a4cf20888b7dda0f674247060d18bf5d7decd92620c9535"
+    },
+    {
+      "path": "e5-t4-r3.log",
+      "bytes": 51,
+      "sha256": "4f0ae86a21a492d3d6e7048f635414819f367e830793e62c26b74bb3a3ecf6f9"
+    },
+    {
+      "path": "e5-t4-r3.time",
+      "bytes": 824,
+      "sha256": "18157b74a5131431decca7e0e4a9fd1644d36b8f974eac5eb0daf44a87581d1d"
+    },
+    {
+      "path": "environment.txt",
+      "bytes": 3253,
+      "sha256": "c1e28e96156c8b1fc532fa0f764680eeb0ae32d205832170564186d40b1c8f7b"
+    },
+    {
+      "path": "experiment.sha256",
+      "bytes": 1748,
+      "sha256": "8b9abddc0f1c57879635e8200f04ada171ad3383c43ef135397c25d95fd56509"
+    },
+    {
+      "path": "fixture.json",
+      "bytes": 12758,
+      "sha256": "9ff58594bbf1df1b333f1911e3f15a88331d59d962b4e17a7c7b3cc1abf32636"
+    },
+    {
+      "path": "gemma-q4-t1.log",
+      "bytes": 54,
+      "sha256": "270b270f17012b84077a7c25541696165f6cb5dfbabfdcaa649719f9a48ac5e2"
+    },
+    {
+      "path": "gemma-q4-t1.time",
+      "bytes": 836,
+      "sha256": "ff0fc07c7bbd0c30d340a108f709b99d61f6ba4fab58023d697848b3b9d28f6c"
+    },
+    {
+      "path": "gemma-q4-t4-r1.log",
+      "bytes": 57,
+      "sha256": "b318befd81c2df526e5fdc2ead1441476e21dff768445d0b524c4908c32a0eb5"
+    },
+    {
+      "path": "gemma-q4-t4-r1.time",
+      "bytes": 841,
+      "sha256": "0aad53cd14eae51f258096d8f46d9e6934c09956dec2318d1cd07afa90539baf"
+    },
+    {
+      "path": "gemma-q4-t4-r2.log",
+      "bytes": 57,
+      "sha256": "8e3a7ff483287dcc423b939dbd82c7916caed2ba3c7930c7a14a0f059f1fadfb"
+    },
+    {
+      "path": "gemma-q4-t4-r2.time",
+      "bytes": 841,
+      "sha256": "34aa2f8f91240c38ff3b5245ffd0629f97e930a74871b43913bb5b98a62e9c7d"
+    },
+    {
+      "path": "gemma-q4-t4-r3.log",
+      "bytes": 57,
+      "sha256": "eea9dbc64427b741eb67d6a6341677456f722142825dcf50b4af02aae34f013f"
+    },
+    {
+      "path": "gemma-q4-t4-r3.time",
+      "bytes": 840,
+      "sha256": "806c33d1732adf55c67453989a76d00213dde5a92b1e25299cdb3b65124fa025"
+    },
+    {
+      "path": "host.json",
+      "bytes": 710,
+      "sha256": "0923ed967841c08d8def24f940b4d9568c904e327bfb58924f8ca07216d15858"
+    },
+    {
+      "path": "lance-e5-1000-r1-pipeline.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "lance-e5-1000-r1-pipeline.time",
+      "bytes": 877,
+      "sha256": "b89f8a9dac35e28d3d5794d57150cfa174deb35396327276ac312b5189840802"
+    },
+    {
+      "path": "lance-e5-1000-r1.log",
+      "bytes": 39,
+      "sha256": "37fb4e9816d86f1814409b14bbd91454a61ae12b9042b201251e35c31a3029b5"
+    },
+    {
+      "path": "lance-e5-1000-r1.time",
+      "bytes": 847,
+      "sha256": "3659998c36633a75656f518ea51b47fdba69e70599484fbc6bab812d6681a6e6"
+    },
+    {
+      "path": "lance-e5-1000-r2.log",
+      "bytes": 39,
+      "sha256": "a01087980dedca0af69cca0fb5f49381bcbae427457dc1fed9098dce55173389"
+    },
+    {
+      "path": "lance-e5-1000-r2.time",
+      "bytes": 849,
+      "sha256": "68a0180c214da4cb0cedfa8c024743a22d294eee2e78d46f4504df3d3016edb9"
+    },
+    {
+      "path": "lance-e5-1000-r3.log",
+      "bytes": 39,
+      "sha256": "e24a886fc0f691ea7e3c2b6af113743cede9c5aeb20390ccae268eea42f4b96e"
+    },
+    {
+      "path": "lance-e5-1000-r3.time",
+      "bytes": 848,
+      "sha256": "511fc4aef01276b02f1ba547e7c69ac5c929129d7d7406843636e32b4556fc66"
+    },
+    {
+      "path": "lance-e5-10000-r1-pipeline.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "lance-e5-10000-r1-pipeline.time",
+      "bytes": 880,
+      "sha256": "0cad849e0f517d88e3f9f5a30b8df7722fef2616c98a4ab2c11aef86c84d7563"
+    },
+    {
+      "path": "lance-e5-10000-r1.log",
+      "bytes": 40,
+      "sha256": "7947abcb8b9288f9d06daae850b4f9a86f37d67a0a198ad23bd6f1f842a0514d"
+    },
+    {
+      "path": "lance-e5-10000-r1.time",
+      "bytes": 852,
+      "sha256": "9859cc1436511c363c5a33d33111234e8e3e38d9b1b339ec928660733102fec1"
+    },
+    {
+      "path": "lance-e5-10000-r2.log",
+      "bytes": 40,
+      "sha256": "feee1c2604c30cb15fea587808729ae629f158f584b06a8b66c899aa7d6dbba0"
+    },
+    {
+      "path": "lance-e5-10000-r2.time",
+      "bytes": 852,
+      "sha256": "c6d7c0bf5b9f90f7c468a2bd926032b039ed195e62ca3ef992ac2070e1924096"
+    },
+    {
+      "path": "lance-e5-10000-r3.log",
+      "bytes": 40,
+      "sha256": "890e7c6df97c924a1ac85eedbf486a90a8aa5e539d2a3fc2b0f07368462fcd7f"
+    },
+    {
+      "path": "lance-e5-10000-r3.time",
+      "bytes": 852,
+      "sha256": "b65eaa21fad4e285a4b0d8d6315bb5e162e6fff73eddffcca14c25b899581a84"
+    },
+    {
+      "path": "lance-e5-100000-r1-pipeline.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "lance-e5-100000-r1-pipeline.time",
+      "bytes": 884,
+      "sha256": "d525e404547be2127a297800a72f21e5ca571a9f1c751df8fc6c6bf0a0d9ff32"
+    },
+    {
+      "path": "lance-e5-100000-r1.log",
+      "bytes": 41,
+      "sha256": "e550e69081f20cda935e618a56e4e8be9f80ad91524c7199e77fc3ddc7fbd646"
+    },
+    {
+      "path": "lance-e5-100000-r1.time",
+      "bytes": 863,
+      "sha256": "1c1d447f31033dd09e49e53606b9d3d1c18d6bad63b9123f456ef2613c0d7e1f"
+    },
+    {
+      "path": "lance-e5-100000-r2.log",
+      "bytes": 41,
+      "sha256": "fd8f805a2e6f84cb9b03a4972394a80750dc995c266fad9c7370e84a32af3c5d"
+    },
+    {
+      "path": "lance-e5-100000-r2.time",
+      "bytes": 863,
+      "sha256": "22c88767176686c7b63fbe989394aa544b53dab7ec0011bbb540a855fbd3e382"
+    },
+    {
+      "path": "lance-e5-100000-r3.log",
+      "bytes": 41,
+      "sha256": "c2fb27c7351b0560196aa3d789ff11efd5497af597fc3134bd28beb09c5b8228"
+    },
+    {
+      "path": "lance-e5-100000-r3.time",
+      "bytes": 862,
+      "sha256": "a606767dbec515b92ca50b30319f32828fc84192ab9442a3687d440e1f6c03e0"
+    },
+    {
+      "path": "lance-e5-48-r1.log",
+      "bytes": 37,
+      "sha256": "1b07596ba926928c3596fabb75f97507d6d15134f268e5ba02db8ceffe4bbc87"
+    },
+    {
+      "path": "lance-e5-48-r1.time",
+      "bytes": 840,
+      "sha256": "baa4ef3bdbce070bed0c5906b57d0c92ba3f4c5b4144c71d174434ec94dd69fb"
+    },
+    {
+      "path": "lance-e5-48-r2.log",
+      "bytes": 37,
+      "sha256": "8aaa6ed3da6c55c19a12507f62afd803490201b74a2f920402d2b32de8f9efe4"
+    },
+    {
+      "path": "lance-e5-48-r2.time",
+      "bytes": 840,
+      "sha256": "013c98f9f66020cc6c2aac3a5c0424160e158b2ed1efedc351cff25e80a753df"
+    },
+    {
+      "path": "lance-e5-48-r3.log",
+      "bytes": 37,
+      "sha256": "7cb629e67495c520cda102441f4e8a195f19c82b1e98496a4be4f32241d01789"
+    },
+    {
+      "path": "lance-e5-48-r3.time",
+      "bytes": 840,
+      "sha256": "6300abf1aff896dd6f7238feebf1851fc8513358550ebb5d92acda906cc52538"
+    },
+    {
+      "path": "lance-gemma-q4-1000-r1-pipeline.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "lance-gemma-q4-1000-r1-pipeline.time",
+      "bytes": 895,
+      "sha256": "341e3259d5782e3df8e3b5316fac5fcb95c5646275be1eb3bb2f10ea395734ad"
+    },
+    {
+      "path": "lance-gemma-q4-1000-r1.log",
+      "bytes": 45,
+      "sha256": "8522fdbaf3f2e592b63d4ae7f209a181a11cbb64a2e24e3a7266cddf135be169"
+    },
+    {
+      "path": "lance-gemma-q4-1000-r1.time",
+      "bytes": 862,
+      "sha256": "08f957c005c08b320912938e861b491a4dcf274c41babccafa4013f26bbfc4f3"
+    },
+    {
+      "path": "lance-gemma-q4-1000-r2.log",
+      "bytes": 45,
+      "sha256": "0eb76fe2a79fcdcb9e6bc9a819f1e1d0f912efbb0ff5edb85d7e81fc83c1d9cb"
+    },
+    {
+      "path": "lance-gemma-q4-1000-r2.time",
+      "bytes": 861,
+      "sha256": "b481f7f5e2126efbafa289cb4bff5c5ba5d12c10f5e96ffa2081f3fbaadaa888"
+    },
+    {
+      "path": "lance-gemma-q4-1000-r3.log",
+      "bytes": 45,
+      "sha256": "684a1197cd7c8ed508ffceb8529b6ed7e0ab5774c0245b8a57c7892c5e340773"
+    },
+    {
+      "path": "lance-gemma-q4-1000-r3.time",
+      "bytes": 861,
+      "sha256": "d9db1c1261bd24e865c6d25ebda8c55c8bbf77196a6929b064bbfd9465008bf7"
+    },
+    {
+      "path": "lance-gemma-q4-10000-r1-pipeline.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "lance-gemma-q4-10000-r1-pipeline.time",
+      "bytes": 898,
+      "sha256": "faf78b40153f72501e3b1e488d7b69a7c078e203167c2db39a34a4a1c0b85606"
+    },
+    {
+      "path": "lance-gemma-q4-10000-r1.log",
+      "bytes": 46,
+      "sha256": "a250022846e393a33ee9b747db4c15d8a611dc1a3e776ef4ad55376522ef153f"
+    },
+    {
+      "path": "lance-gemma-q4-10000-r1.time",
+      "bytes": 870,
+      "sha256": "aafb61c179caafb2655e3e7c3d1a0954652452673bbfe242771cb51e6920e9a2"
+    },
+    {
+      "path": "lance-gemma-q4-10000-r2.log",
+      "bytes": 46,
+      "sha256": "0d9a3cc0da7b3eaf6dcdc50f3181c1a82acff6a8067b661323119eb4167a2e9d"
+    },
+    {
+      "path": "lance-gemma-q4-10000-r2.time",
+      "bytes": 870,
+      "sha256": "26d0375f9c3139353f40af3fdc698a61ad4ac64f3014213f2f0a34b6aa652292"
+    },
+    {
+      "path": "lance-gemma-q4-10000-r3.log",
+      "bytes": 46,
+      "sha256": "4beb80e4439c8e43f5220ed5741a9dd6532feb9e319c72e31b8d3a80d66a6d9c"
+    },
+    {
+      "path": "lance-gemma-q4-10000-r3.time",
+      "bytes": 870,
+      "sha256": "1c7cb0aef58c9bfdf5924bca9f03c33b264cd0451f868cda2625bbad72dbe72e"
+    },
+    {
+      "path": "lance-gemma-q4-100000-r1-pipeline.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "lance-gemma-q4-100000-r1-pipeline.time",
+      "bytes": 903,
+      "sha256": "12c2e8b9efa99c8453e6ed4208ea940498ecf01aa3ceedf46f65932182833c9d"
+    },
+    {
+      "path": "lance-gemma-q4-100000-r1.log",
+      "bytes": 47,
+      "sha256": "d406071586528f7448928dda894bfcdf544feab83e233bcb2c12e7490015ca09"
+    },
+    {
+      "path": "lance-gemma-q4-100000-r1.time",
+      "bytes": 879,
+      "sha256": "548ae90c26404beb09fb833bc97b42d69772e2643e5297ebf73d1a0151909525"
+    },
+    {
+      "path": "lance-gemma-q4-100000-r2.log",
+      "bytes": 47,
+      "sha256": "8aafd894935aaa9a616a405c00adb435e2f883f84378e9c3aa5254bed6414502"
+    },
+    {
+      "path": "lance-gemma-q4-100000-r2.time",
+      "bytes": 878,
+      "sha256": "e2c6dda48bb24d70ac32e5b4b2c945c26033e20243496e41430fcbcbc590b751"
+    },
+    {
+      "path": "lance-gemma-q4-100000-r3.log",
+      "bytes": 47,
+      "sha256": "60250976c8bfbc4068a233ce6d27119dee129a13b62f602d4c8a95874db94a12"
+    },
+    {
+      "path": "lance-gemma-q4-100000-r3.time",
+      "bytes": 878,
+      "sha256": "365e470fa0fcca7dd60c0054888c47509c6b0b6b6ed3b1f9050799483ceeb4cc"
+    },
+    {
+      "path": "lance-gemma-q4-48-r1.log",
+      "bytes": 43,
+      "sha256": "918db5f92d8aa003db8b1540d4cbb3ff4f727d086651745d4898ea711ac9bd48"
+    },
+    {
+      "path": "lance-gemma-q4-48-r1.time",
+      "bytes": 852,
+      "sha256": "0a850289b064d56df3792972a88696cf8a42b8c44b347dee910149d61ceb7477"
+    },
+    {
+      "path": "lance-gemma-q4-48-r2.log",
+      "bytes": 43,
+      "sha256": "25b5b01d5b940171e1b42dc645b8264ca284451b594c963835af7a9ba2d94de5"
+    },
+    {
+      "path": "lance-gemma-q4-48-r2.time",
+      "bytes": 852,
+      "sha256": "24cea780afc5ab0b2401c2340c9febd37fc1f531ad3ff4820545d3f60f561b4b"
+    },
+    {
+      "path": "lance-gemma-q4-48-r3.log",
+      "bytes": 43,
+      "sha256": "0c1e091fdfc04c8a188a98b9a88178f9db3a5ecf4103e4847ffef0881cfa0415"
+    },
+    {
+      "path": "lance-gemma-q4-48-r3.time",
+      "bytes": 852,
+      "sha256": "413a1e0dc48e39d8d3b3c2f6e236ca5684337bca4f01ab0dcdb753311e93a034"
+    },
+    {
+      "path": "memory-events-after-storage.txt",
+      "bytes": 59,
+      "sha256": "de0bf46c06ec8c25c14803783151d907281a81520d8cb97cd3fa2c69c6fc23ec"
+    },
+    {
+      "path": "model-artifacts-sizes.txt",
+      "bytes": 5287,
+      "sha256": "71a0d7484ac38fc27310b80d358f30e2d4c9391b8181f3f36d5a8304cc12dc9c"
+    },
+    {
+      "path": "model-artifacts.sha256",
+      "bytes": 6486,
+      "sha256": "b841ad16e437aa09fdd03b0abf1541e411a8a05d9fc58a609f617c9b16001cb9"
+    },
+    {
+      "path": "model-file-bytes.txt",
+      "bytes": 1488,
+      "sha256": "669096c6efae5fbaf5f24b0d26796dad22029b684f02ec0e62d96141eefc2753"
+    },
+    {
+      "path": "prepare-e5.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "prepare-gemma-q4.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "runtime-file-bytes.txt",
+      "bytes": 118,
+      "sha256": "51ebd17bfb20bd39f7fba11acff33e03ce4ddd63fd09c9e40cb430e88b72011e"
+    },
+    {
+      "path": "sqlite-e5-1000-r1-pipeline.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "sqlite-e5-1000-r1-pipeline.time",
+      "bytes": 882,
+      "sha256": "cc4b0c1c045dad48749247ce1a0f7417a339f1cd0de65d9b7f96d03d238a517d"
+    },
+    {
+      "path": "sqlite-e5-1000-r1.log",
+      "bytes": 40,
+      "sha256": "9f2b01d573afa4a41435d738fd09f0086b9f9a01ed06ae3dbfc2b193cbef7342"
+    },
+    {
+      "path": "sqlite-e5-1000-r1.time",
+      "bytes": 843,
+      "sha256": "93bec389fc6b4e9903a69048f6a067efe8f2fca5426b62a6a64eaccc4ed77143"
+    },
+    {
+      "path": "sqlite-e5-1000-r2.log",
+      "bytes": 40,
+      "sha256": "a9493650cc1e19a17838c23404cd22351eb273c45d02e681ae1ae6575b7963ea"
+    },
+    {
+      "path": "sqlite-e5-1000-r2.time",
+      "bytes": 843,
+      "sha256": "d6209d289ff9279e8e5e92b8fb882b0e18c2fdfd00101c6205112b10aa813eb1"
+    },
+    {
+      "path": "sqlite-e5-1000-r3.log",
+      "bytes": 40,
+      "sha256": "30cfddcfa669a067f1d59fceef7172ec74770b0a61e162ea15f9c824638cc00a"
+    },
+    {
+      "path": "sqlite-e5-1000-r3.time",
+      "bytes": 843,
+      "sha256": "45f763a41920c357473db92fa700938665c8feeb38c5dd64c6089a44f2877a7c"
+    },
+    {
+      "path": "sqlite-e5-10000-r1-pipeline.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "sqlite-e5-10000-r1-pipeline.time",
+      "bytes": 884,
+      "sha256": "525ecb8cb85a6d691078eafccd71a527f57c0b1d2b6f96dc8c87d3114539383c"
+    },
+    {
+      "path": "sqlite-e5-10000-r1.log",
+      "bytes": 41,
+      "sha256": "37db88b6c761b7a6d1535af921c7c7ae0109b090f83382f30cc47636b4bc7ee6"
+    },
+    {
+      "path": "sqlite-e5-10000-r1.time",
+      "bytes": 847,
+      "sha256": "0c2ea03af144ebff5d2f778bb42153f7d3d6623c0324806871ac466c99f5e655"
+    },
+    {
+      "path": "sqlite-e5-10000-r2.log",
+      "bytes": 41,
+      "sha256": "dc0001ea5399583fbe84f009836aea66af6aaab44a9541a0ac00932f31480431"
+    },
+    {
+      "path": "sqlite-e5-10000-r2.time",
+      "bytes": 847,
+      "sha256": "50623fe609e6525e0e3dbbebf3c239cd664a83033d56b2583d6c874295714edc"
+    },
+    {
+      "path": "sqlite-e5-10000-r3.log",
+      "bytes": 41,
+      "sha256": "28256422ca2a0794f26e5d931f7ae579d6bf6c55c459c87ee19784542d702de3"
+    },
+    {
+      "path": "sqlite-e5-10000-r3.time",
+      "bytes": 847,
+      "sha256": "ec29ca7312b126c369e75031028fed289480b70e321a2d266e3aa40dce009d64"
+    },
+    {
+      "path": "sqlite-e5-100000-r1-pipeline.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "sqlite-e5-100000-r1-pipeline.time",
+      "bytes": 887,
+      "sha256": "f43c849967df40d2d4e6889460f2348ecfa82a9609fae68ca540083eb0d5bc58"
+    },
+    {
+      "path": "sqlite-e5-100000-r1.log",
+      "bytes": 42,
+      "sha256": "f048a43d265ced10839029310ddc97f40554f957c7efc42ae20ba4a2945566f0"
+    },
+    {
+      "path": "sqlite-e5-100000-r1.time",
+      "bytes": 855,
+      "sha256": "bdf58ef827520058332ed4a8f6c82a05ca83613ca3ffaf12b38822c6cfe456c7"
+    },
+    {
+      "path": "sqlite-e5-100000-r2.log",
+      "bytes": 42,
+      "sha256": "155d55fb53019cfb08b30249470b60f6ff455715e0e9064c61b11c7f3a5d1920"
+    },
+    {
+      "path": "sqlite-e5-100000-r2.time",
+      "bytes": 855,
+      "sha256": "58ae97cf3c7c2aa09ae7f3530e49b1c3ca147cba20e491245f9b6da4d2192fa2"
+    },
+    {
+      "path": "sqlite-e5-100000-r3.log",
+      "bytes": 42,
+      "sha256": "566d16a80c3ad20cd38721f045e9c700f48835da2ff1f145a8c99d7924a27aaa"
+    },
+    {
+      "path": "sqlite-e5-100000-r3.time",
+      "bytes": 855,
+      "sha256": "7befab5846bbd6a4687adc54700176a8df18321ff5b3c2930299886e0a1ba2d5"
+    },
+    {
+      "path": "sqlite-e5-48-r1.log",
+      "bytes": 38,
+      "sha256": "e82bf2e44e9791ca5f93b346d60c064ff473a2c672ac4fce6b06430e013f900d"
+    },
+    {
+      "path": "sqlite-e5-48-r1.time",
+      "bytes": 839,
+      "sha256": "333a88e6defd8658d0b14a26c94e8e917f27b6e4a7a9a923da82c858b455dd93"
+    },
+    {
+      "path": "sqlite-e5-48-r2.log",
+      "bytes": 38,
+      "sha256": "c4b6a1f9edb1cc41e816651d54c5ad618ad59ddaa9450f55662d5342ee0582e4"
+    },
+    {
+      "path": "sqlite-e5-48-r2.time",
+      "bytes": 839,
+      "sha256": "138bd93e200e1694f2d47bafac5a41e3041c3aad665b01b4fc10f6020b538de5"
+    },
+    {
+      "path": "sqlite-e5-48-r3.log",
+      "bytes": 38,
+      "sha256": "decfbe16bb033d028133f21e95b228586628f8665e005fe4d3d8499a39704a7d"
+    },
+    {
+      "path": "sqlite-e5-48-r3.time",
+      "bytes": 839,
+      "sha256": "bfb4b3ac0c03d1aa4e8aacd59f16f73c4e4f5b1b87d46b753e3c33fb069ee1e3"
+    },
+    {
+      "path": "sqlite-gemma-q4-1000-r1-pipeline.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "sqlite-gemma-q4-1000-r1-pipeline.time",
+      "bytes": 903,
+      "sha256": "7b627338ed6bd128557b622036ee5e1be815a53515979713aaf6a91671038599"
+    },
+    {
+      "path": "sqlite-gemma-q4-1000-r1.log",
+      "bytes": 46,
+      "sha256": "03bfb45813a32474c118291db2f9ae19e920d4619d88d86033361dd73eada390"
+    },
+    {
+      "path": "sqlite-gemma-q4-1000-r1.time",
+      "bytes": 856,
+      "sha256": "894bf5209fd7b6bd8b7657ed955db7adabba2d2a8e0ae04cea19cbc6c42e643c"
+    },
+    {
+      "path": "sqlite-gemma-q4-1000-r2.log",
+      "bytes": 46,
+      "sha256": "2977c033b8c1af89e1acde802a004281aa0fe89b07921a34f11b9bb7a658305d"
+    },
+    {
+      "path": "sqlite-gemma-q4-1000-r2.time",
+      "bytes": 856,
+      "sha256": "30d96d2007fef6938e02d3b993476292975c74652f6e1b2b876bfcf7f9b9c661"
+    },
+    {
+      "path": "sqlite-gemma-q4-1000-r3.log",
+      "bytes": 46,
+      "sha256": "91c1a7132ac96cf63d036d1623292d7cfa78669704a9e6f29f6c2a0e5a4bedb7"
+    },
+    {
+      "path": "sqlite-gemma-q4-1000-r3.time",
+      "bytes": 856,
+      "sha256": "063964eaec5d347f96c368ab5782b6108440158caeafe2752a2d8b3cff754358"
+    },
+    {
+      "path": "sqlite-gemma-q4-10000-r1-pipeline.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "sqlite-gemma-q4-10000-r1-pipeline.time",
+      "bytes": 906,
+      "sha256": "2733b6efca050da447bc1076f0cce4bfe555e34781718c1d729ef75b6ff8b3fa"
+    },
+    {
+      "path": "sqlite-gemma-q4-10000-r1.log",
+      "bytes": 47,
+      "sha256": "e05995f4676bd3e647e06bbb266d090589a94af12766a885708e66655492735d"
+    },
+    {
+      "path": "sqlite-gemma-q4-10000-r1.time",
+      "bytes": 861,
+      "sha256": "3e6eaaeb3502632dad7d69f4e44ad0157e3d4acd915cb713212c9b5671743bb1"
+    },
+    {
+      "path": "sqlite-gemma-q4-10000-r2.log",
+      "bytes": 47,
+      "sha256": "680f27bae46a4fa82232a73a5e5ebf12a85c5260a49c1bbfc7259f9ebe3b961e"
+    },
+    {
+      "path": "sqlite-gemma-q4-10000-r2.time",
+      "bytes": 861,
+      "sha256": "e5a0ba1c4915f238b0754d047a24e741b000c219902327d39256929415ec5a1e"
+    },
+    {
+      "path": "sqlite-gemma-q4-10000-r3.log",
+      "bytes": 47,
+      "sha256": "80ef120c1aac554ee07bf9b7e4c8ad78cd37357d2d1c18b64bf63b299920a95c"
+    },
+    {
+      "path": "sqlite-gemma-q4-10000-r3.time",
+      "bytes": 861,
+      "sha256": "65034e81ce22f537b7768bfde053743614914c9d26a882664abcdcbcbd410c46"
+    },
+    {
+      "path": "sqlite-gemma-q4-100000-r1-pipeline.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "sqlite-gemma-q4-100000-r1-pipeline.time",
+      "bytes": 909,
+      "sha256": "551b957e16753febd3f2a2f61c7e51ee2688b3d3e5ce1b8be9a7ffe13833e9e2"
+    },
+    {
+      "path": "sqlite-gemma-q4-100000-r1.log",
+      "bytes": 48,
+      "sha256": "a98d763fcb33c3fd7d9fa2898c165c3a2b8da53b8f61bf6e094ea9ffa6c0a4e1"
+    },
+    {
+      "path": "sqlite-gemma-q4-100000-r1.time",
+      "bytes": 868,
+      "sha256": "1a5e949208ed00de63969bc027dee8822fca560c780737370bdc9e85d188e8bd"
+    },
+    {
+      "path": "sqlite-gemma-q4-100000-r2.log",
+      "bytes": 48,
+      "sha256": "73a2c48760f74fd8cf43f0cf188c8af8d0676f0da43686ee64f3b8d11f45b5e7"
+    },
+    {
+      "path": "sqlite-gemma-q4-100000-r2.time",
+      "bytes": 868,
+      "sha256": "cb57643055ed9e101a6eced425c2914ede98f5031bbfe09fb044c3c3a54da978"
+    },
+    {
+      "path": "sqlite-gemma-q4-100000-r3.log",
+      "bytes": 48,
+      "sha256": "e47e3bbb68534acbaa029595059860887d27b85bf933c87550fef543db6efa08"
+    },
+    {
+      "path": "sqlite-gemma-q4-100000-r3.time",
+      "bytes": 868,
+      "sha256": "79407aeb77ea562d23a5069c25ffa727257530cc2a35e781e3e3d8b6d8a556ad"
+    },
+    {
+      "path": "sqlite-gemma-q4-48-r1.log",
+      "bytes": 44,
+      "sha256": "69dd681627e303085c15984e5a2ad7ca79a87e9a070a361d49e1515e3e384dc4"
+    },
+    {
+      "path": "sqlite-gemma-q4-48-r1.time",
+      "bytes": 852,
+      "sha256": "52d894330e42c4ec2a39e73d9bf6c4ae820f132bbd63996aeba6db83fbbf16dd"
+    },
+    {
+      "path": "sqlite-gemma-q4-48-r2.log",
+      "bytes": 44,
+      "sha256": "f5690728e77a4928dc06af7a1b45ebbb0f92228a774402ff58fa4802b5f6f402"
+    },
+    {
+      "path": "sqlite-gemma-q4-48-r2.time",
+      "bytes": 852,
+      "sha256": "4c0bcf589b3590060afe6a52e0b1e124074c669d37189d137715852fdaea529f"
+    },
+    {
+      "path": "sqlite-gemma-q4-48-r3.log",
+      "bytes": 44,
+      "sha256": "667a3a9295129d8ec2710d012abac5eeada291071c948be97175728a7f9e3668"
+    },
+    {
+      "path": "sqlite-gemma-q4-48-r3.time",
+      "bytes": 852,
+      "sha256": "9c58f6c3b3ecf2282ca90b16b987a1820a69c787eaf2fd945508016ad009d573"
+    },
+    {
+      "path": "summary.json",
+      "bytes": 1134628,
+      "sha256": "01de928105ecc7853d91541de59dc4ca35de1ee76f5f909092b84e8152d5314e"
+    },
+    {
+      "path": "belebele-e5-eng_Latn/quality.json",
+      "bytes": 142026,
+      "sha256": "81be04334353b9fbd287d648327eb321b49c7421d13bcf322e76037b11183ca3"
+    },
+    {
+      "path": "belebele-e5-por_Latn/quality.json",
+      "bytes": 141995,
+      "sha256": "b324eaf1bc84aab11dc948e544095713e6eac41da599783d1daef666bd5e84cb"
+    },
+    {
+      "path": "belebele-gemma-q4-eng_Latn/quality.json",
+      "bytes": 141899,
+      "sha256": "dba4a807556fbde95f6d04a4fc88cc8e996d8278e90bc7120803a96842f4ea7f"
+    },
+    {
+      "path": "belebele-gemma-q4-por_Latn/quality.json",
+      "bytes": 142038,
+      "sha256": "4833874d8e079d17919e966edfbd46f333df0152542791e864385ec7e3c58176"
+    },
+    {
+      "path": "data/belebele-eng_Latn.json",
+      "bytes": 443215,
+      "sha256": "bf27391b23b3e078ba22f7510c0f6c45e1f42cb0286fd36396031b67df4407a4"
+    },
+    {
+      "path": "data/belebele-por_Latn.json",
+      "bytes": 473190,
+      "sha256": "3ec8ae1f57677ab64eca049a06416c168040dae7c8365bfe92fbece0c6ab8251"
+    },
+    {
+      "path": "data/e5-vectors.json",
+      "bytes": 529989,
+      "sha256": "e806ca842522a458b47bb10bcbcd41c3ed053db1febc8edc12d8d9f39735515e"
+    },
+    {
+      "path": "data/gemma-q4-vectors.json",
+      "bytes": 1072586,
+      "sha256": "33f175a113eae389002fb814acb13ae5106dd662a9113b1eb4cf43ab8dc8bd6f"
+    },
+    {
+      "path": "e5-t1/embedding.json",
+      "bytes": 9970,
+      "sha256": "f99b6a8a2348add9c18ea14c066ca1f3c40d8944741a15ff4a33f1d89820ee02"
+    },
+    {
+      "path": "e5-t4-r1/embedding.json",
+      "bytes": 9961,
+      "sha256": "dd64a0667a75ac7973ec32db7e25c178ce63527df861e07ae6132ed488690206"
+    },
+    {
+      "path": "e5-t4-r2/embedding.json",
+      "bytes": 9989,
+      "sha256": "28d1bb0f7ccc4ab4f95ceb3f15eb647b45edb3d50531148ca6e655bb188258d4"
+    },
+    {
+      "path": "e5-t4-r3/embedding.json",
+      "bytes": 9944,
+      "sha256": "663fd2b3e17e9654a0a106d98230834231cff53c4207bb77ed2d0e4c96d2bb05"
+    },
+    {
+      "path": "gemma-q4-t1/embedding.json",
+      "bytes": 10031,
+      "sha256": "cf3ef9f939528a373bf17b704ea3c0c701099a1fec00245b1ad511776dbb1be6"
+    },
+    {
+      "path": "gemma-q4-t4-r1/embedding.json",
+      "bytes": 10157,
+      "sha256": "647b2ec878686ac5658cc6abf575c1ac41419395ff695064ea902de5c518254f"
+    },
+    {
+      "path": "gemma-q4-t4-r2/embedding.json",
+      "bytes": 10162,
+      "sha256": "b33ebe7b8013d2662ce6d2a07fcabc9ff6b29ffd8e4d8593cba1c4d5f29dbbd6"
+    },
+    {
+      "path": "gemma-q4-t4-r3/embedding.json",
+      "bytes": 10161,
+      "sha256": "2ee1ed0890442360240383cd418b208910babadca4610206428204777d333b6d"
+    },
+    {
+      "path": "lance-e5-1000-r1/pipeline.json",
+      "bytes": 2761,
+      "sha256": "dd6e95d67fcbd99fada1764a926d5176681123aca2d723ae22b8aaeaf3e9e922"
+    },
+    {
+      "path": "lance-e5-1000-r1/storage.json",
+      "bytes": 34599,
+      "sha256": "ca9b5ec6b4fb443792bf4b48d556a4dd83527caa4a53abaa74ac9f772e4f90dd"
+    },
+    {
+      "path": "lance-e5-1000-r2/storage.json",
+      "bytes": 34632,
+      "sha256": "edc511b8ad600d434962e54854bd2efe6c0686f2ab5c494e219dce11c5206619"
+    },
+    {
+      "path": "lance-e5-1000-r3/storage.json",
+      "bytes": 35065,
+      "sha256": "f2c3d15da4e40d1d5b34ca807827b1ba586e3c147af0bd519908d9ddbde66e19"
+    },
+    {
+      "path": "lance-e5-10000-r1/pipeline.json",
+      "bytes": 2770,
+      "sha256": "78eb4d9d834213fe832abf923af9d538d3ccb59b6801c8a160944d34f2a3d2d3"
+    },
+    {
+      "path": "lance-e5-10000-r1/storage.json",
+      "bytes": 34506,
+      "sha256": "2fabfafe10645f299574fef5d666bc1dad11ca3aaa9bb58e337f7f884d268b32"
+    },
+    {
+      "path": "lance-e5-10000-r2/storage.json",
+      "bytes": 34758,
+      "sha256": "aeb4c5698b274f24057accd6ec64bb1b00af3311a6855f931a6fd80c78e05368"
+    },
+    {
+      "path": "lance-e5-10000-r3/storage.json",
+      "bytes": 34671,
+      "sha256": "e86fe6fbdb00a773ae8fa4b0270c21de4530f9ce06a80508ff6c6ee395668a6a"
+    },
+    {
+      "path": "lance-e5-100000-r1/pipeline.json",
+      "bytes": 2825,
+      "sha256": "7f84e9217b76f4c8cea3af0c524ec5d25c5cdb73c3386f82eae627d9b8498e21"
+    },
+    {
+      "path": "lance-e5-100000-r1/storage.json",
+      "bytes": 35742,
+      "sha256": "86f3e78579c1ab4aa533c87102762c4069ea7bac7f2970f7a7cdf39de7da9154"
+    },
+    {
+      "path": "lance-e5-100000-r2/storage.json",
+      "bytes": 35922,
+      "sha256": "784a1027943f8e8ba78d172277f146d970ab47ceb35876ae3a78d4ce51086aa2"
+    },
+    {
+      "path": "lance-e5-100000-r3/storage.json",
+      "bytes": 34905,
+      "sha256": "90f43bac0de59482ecd44f7341ec24ab195d9f8dad31472bc80ad8c24e64f8d8"
+    },
+    {
+      "path": "lance-e5-48-r1/storage.json",
+      "bytes": 29320,
+      "sha256": "f3da57cd7ef0aff1ec5c42428b61164815571a397ce95339493b14503700b153"
+    },
+    {
+      "path": "lance-e5-48-r2/storage.json",
+      "bytes": 29083,
+      "sha256": "73f1118f3634944653166526ba97a0d12c01b6d451eedf915547e4f71cbb6f7e"
+    },
+    {
+      "path": "lance-e5-48-r3/storage.json",
+      "bytes": 28846,
+      "sha256": "8d2f3f79aea527973ca8beb705e13d9b318599d1566ec4a7ebeb218a8a7f8ac4"
+    },
+    {
+      "path": "lance-gemma-q4-1000-r1/pipeline.json",
+      "bytes": 2769,
+      "sha256": "47121824633cfbb8d5f8e165bfd6d21c8d623627206abbcd773ccd794bf27570"
+    },
+    {
+      "path": "lance-gemma-q4-1000-r1/storage.json",
+      "bytes": 34327,
+      "sha256": "0b6462ac1d62c347dc3863de9c9973c6ddd1ece76c1161c90e511c66e41f4d4d"
+    },
+    {
+      "path": "lance-gemma-q4-1000-r2/storage.json",
+      "bytes": 34688,
+      "sha256": "cac3edccef4aac5f367df26403cf053d61957e59e7c7b1e52628d603cc7b5da7"
+    },
+    {
+      "path": "lance-gemma-q4-1000-r3/storage.json",
+      "bytes": 34470,
+      "sha256": "3e62439b9b32b70975a6430acf4a5522408d0c5cd9ffbbe8890b5eaaf675a22a"
+    },
+    {
+      "path": "lance-gemma-q4-10000-r1/pipeline.json",
+      "bytes": 2756,
+      "sha256": "f6bbc842f5d8de4ec4703585b588d2ac7dbdec580dc50ed3ff5d4aaf0f9df08f"
+    },
+    {
+      "path": "lance-gemma-q4-10000-r1/storage.json",
+      "bytes": 35357,
+      "sha256": "5f7198c2f9a19eadb2186af6130a83e185c2aa18be6ca88e6ccc3877cd2f7253"
+    },
+    {
+      "path": "lance-gemma-q4-10000-r2/storage.json",
+      "bytes": 35097,
+      "sha256": "f878d034b5bbd976f9ec56947b5bf38ddbe4e74a1ad02588f05f0162fbf6dc59"
+    },
+    {
+      "path": "lance-gemma-q4-10000-r3/storage.json",
+      "bytes": 35265,
+      "sha256": "587210f3e137574c8e386598b7239629151215a57a763f2052486652a00dc55f"
+    },
+    {
+      "path": "lance-gemma-q4-100000-r1/pipeline.json",
+      "bytes": 2857,
+      "sha256": "3ec9173508f1489de844326c44d0614c6419f36407bee97b4d6b3a3b2727af19"
+    },
+    {
+      "path": "lance-gemma-q4-100000-r1/storage.json",
+      "bytes": 35996,
+      "sha256": "96c3b140aa499e7d1c7fffd7ac4c9adec682970aa42df53e0f9999f2782cae46"
+    },
+    {
+      "path": "lance-gemma-q4-100000-r2/storage.json",
+      "bytes": 35804,
+      "sha256": "207aabe917782cbcf01fc936e16e0458d914f6286650f10d920f9512a864c8bd"
+    },
+    {
+      "path": "lance-gemma-q4-100000-r3/storage.json",
+      "bytes": 35928,
+      "sha256": "15bbe574227a548d5b82027b52251e1b92b56661723f953504450be1dca43d24"
+    },
+    {
+      "path": "lance-gemma-q4-48-r1/storage.json",
+      "bytes": 29101,
+      "sha256": "ed749a9b28926eca8677da8c81402b7f962ca99337a987e25a345680258dac1d"
+    },
+    {
+      "path": "lance-gemma-q4-48-r2/storage.json",
+      "bytes": 29212,
+      "sha256": "675e6e5608f4c749dacca73f8e32d71b08e022ac868ed0a8657c2f9695683bc0"
+    },
+    {
+      "path": "lance-gemma-q4-48-r3/storage.json",
+      "bytes": 29106,
+      "sha256": "30db11df03a00f2bcde99a40543090d732ea4ef5e4251605e7d2dd75571b8efd"
+    },
+    {
+      "path": "prepare-e5/preparation.json",
+      "bytes": 267,
+      "sha256": "fd35d2704d75c12ab5b54bbd109c4ec06bc978d6b28d354aa3c26af54d931e66"
+    },
+    {
+      "path": "prepare-gemma-q4/preparation.json",
+      "bytes": 265,
+      "sha256": "c23391bd7dd3c06c068c2fc664025406a1c2afbc7676446b10d9767be2f112f4"
+    },
+    {
+      "path": "sqlite-e5-1000-r1/pipeline.json",
+      "bytes": 2706,
+      "sha256": "dee546c665baa41b88f5ccdacbce02f87dd8eae3bec7b64a421c3322a6de694e"
+    },
+    {
+      "path": "sqlite-e5-1000-r1/storage.json",
+      "bytes": 16880,
+      "sha256": "ca27446cda271a2d1b966b42921dd74e17e6a8dcac883a8da4c32d532b4dd96d"
+    },
+    {
+      "path": "sqlite-e5-1000-r2/storage.json",
+      "bytes": 17161,
+      "sha256": "e4753f5287f51f2ca11e95f6ada09182e2f8ad78576d4459807be82f56ec0ab0"
+    },
+    {
+      "path": "sqlite-e5-1000-r3/storage.json",
+      "bytes": 16829,
+      "sha256": "af985505f5a9621972311fa08bc9a706c031f4b0265d42aac9172067de594119"
+    },
+    {
+      "path": "sqlite-e5-10000-r1/pipeline.json",
+      "bytes": 2712,
+      "sha256": "bf27a6f81f95e5d72cf68986d0d10c08040f326f6dc95f354eae426d4fac233f"
+    },
+    {
+      "path": "sqlite-e5-10000-r1/storage.json",
+      "bytes": 17238,
+      "sha256": "18ab0637c9f8f8e4f0347d30049e5f948c891044bd561b1e42640138ba26dc60"
+    },
+    {
+      "path": "sqlite-e5-10000-r2/storage.json",
+      "bytes": 17276,
+      "sha256": "0e91446e907548a9261f6392a2985ee1719e5b82bdd4e978279b7625e134d071"
+    },
+    {
+      "path": "sqlite-e5-10000-r3/storage.json",
+      "bytes": 17131,
+      "sha256": "8b019050a8d9babdb33b64e8e7d5bc141d1680d88fee172056c0a2df1dfeda7b"
+    },
+    {
+      "path": "sqlite-e5-100000-r1/pipeline.json",
+      "bytes": 2865,
+      "sha256": "987cb4c09307eaf58e2b83875e1159691545cbc6b0835d84a7ac97cbff9cea5e"
+    },
+    {
+      "path": "sqlite-e5-100000-r1/storage.json",
+      "bytes": 18168,
+      "sha256": "363b99b022965deefe9ff37c68af2b80e337cf3c670e2b993c51be53f3afe2f4"
+    },
+    {
+      "path": "sqlite-e5-100000-r2/storage.json",
+      "bytes": 17976,
+      "sha256": "80a2bca46e73c63298c182bc94e7c66d8d5e3e0eb0086518da9651ee75f7dcba"
+    },
+    {
+      "path": "sqlite-e5-100000-r3/storage.json",
+      "bytes": 18058,
+      "sha256": "dd04383117048be94b2020d32eb4df7c7468ad0e77d912d4613f0a24d2cbe517"
+    },
+    {
+      "path": "sqlite-e5-48-r1/storage.json",
+      "bytes": 28908,
+      "sha256": "a51870e1eeb481d5ba6aa7bbb04e66dd3fb19078c03e89de72c7e70dcb76bb21"
+    },
+    {
+      "path": "sqlite-e5-48-r2/storage.json",
+      "bytes": 28698,
+      "sha256": "ca54efda009d40e541fbf012c6c1a6eb6ff9702312fb33548289619bed8aa1d5"
+    },
+    {
+      "path": "sqlite-e5-48-r3/storage.json",
+      "bytes": 28828,
+      "sha256": "7f5d268f3422860309068a0970505bffee9e761f74dff5acdfa8f538a50d52a8"
+    },
+    {
+      "path": "sqlite-gemma-q4-1000-r1/pipeline.json",
+      "bytes": 2752,
+      "sha256": "3bee2a0d82cce9bbac341470bf41b55ea90e59ab84eb650b1d1ad5d78886124e"
+    },
+    {
+      "path": "sqlite-gemma-q4-1000-r1/storage.json",
+      "bytes": 17044,
+      "sha256": "529e6496a657d4d040fabb35e3de022aff3e0ee142c5b9c64629e07d8fd2e727"
+    },
+    {
+      "path": "sqlite-gemma-q4-1000-r2/storage.json",
+      "bytes": 17081,
+      "sha256": "eec408e11952a679f2e76d97d0572d91cad02da575782c05f289054b08f7ab9e"
+    },
+    {
+      "path": "sqlite-gemma-q4-1000-r3/storage.json",
+      "bytes": 17191,
+      "sha256": "18deae1874d7c8886e6615948abdcec1bb53fc76e4bab899e16c1e0eef6cf1fc"
+    },
+    {
+      "path": "sqlite-gemma-q4-10000-r1/pipeline.json",
+      "bytes": 2774,
+      "sha256": "d464b7a68fd6b461bd589fa2543917379441f19393c3043efd566cbfb85bcbd7"
+    },
+    {
+      "path": "sqlite-gemma-q4-10000-r1/storage.json",
+      "bytes": 17827,
+      "sha256": "c3d1acf464fa57a39e95e6453237aa4e3dbd027196e3bf0346edd819f568ced1"
+    },
+    {
+      "path": "sqlite-gemma-q4-10000-r2/storage.json",
+      "bytes": 17768,
+      "sha256": "7b40097ae6ce6614d83bd0bb906795b1282f91cbd1d53440c10f6f9a18d22a7e"
+    },
+    {
+      "path": "sqlite-gemma-q4-10000-r3/storage.json",
+      "bytes": 17702,
+      "sha256": "3ac8845d8ae83e297a8702378d7495378a3e67053d2668a629d601ffa5c8a6bb"
+    },
+    {
+      "path": "sqlite-gemma-q4-100000-r1/pipeline.json",
+      "bytes": 2829,
+      "sha256": "0b4b46c8f022b85b1b03fec10219d1537636abfb4e9222ac62c115f80749a3d5"
+    },
+    {
+      "path": "sqlite-gemma-q4-100000-r1/storage.json",
+      "bytes": 18529,
+      "sha256": "bd7b7c4e2fc110557578baebe649294d347d5c1ad872fc3dde4054c6c04facc2"
+    },
+    {
+      "path": "sqlite-gemma-q4-100000-r2/storage.json",
+      "bytes": 18390,
+      "sha256": "57928c7d058e127d5b4889902a84294dac276fcd277c4dae5f03e00e391a48e2"
+    },
+    {
+      "path": "sqlite-gemma-q4-100000-r3/storage.json",
+      "bytes": 18223,
+      "sha256": "60fff8d0413a2868246bb8bc2c36ffdf4e9ba105549a121d3256029b8009b994"
+    },
+    {
+      "path": "sqlite-gemma-q4-48-r1/storage.json",
+      "bytes": 28845,
+      "sha256": "5dd960e759b11329623776cb10254a9abed436dcdabdbe79b9c2846dba7bf847"
+    },
+    {
+      "path": "sqlite-gemma-q4-48-r2/storage.json",
+      "bytes": 28985,
+      "sha256": "b4243aa7652c61c4f8e1990fcb47b12b6ca72b1f370a2a0538ac2d7398d9b45e"
+    },
+    {
+      "path": "sqlite-gemma-q4-48-r3/storage.json",
+      "bytes": 28713,
+      "sha256": "a3d883588ca842a0ab63313b3f19a79c9c7c2d8154d99f69024d297b5e23db48"
+    },
+    {
+      "path": "validation/clippy.log",
+      "bytes": 17291,
+      "sha256": "eaf0a4878f64cd27212f8d143cf0822fa5893fa72be0d6f7dfd571bd5eae32ab"
+    },
+    {
+      "path": "validation/final-checks.log",
+      "bytes": 7150,
+      "sha256": "30f321b0017a234b704ecf04aa76d1c4d5f3b6aedcf8bd0d1c623f7f9b2b1a89"
+    },
+    {
+      "path": "validation/initial-download-e5.json",
+      "bytes": 143,
+      "sha256": "7617f44d576af8d64031f3bdeb3add2505b754ebb0ddb2c758fbe94db14ac566"
+    },
+    {
+      "path": "validation/initial-download-gemma.json",
+      "bytes": 140,
+      "sha256": "6dc52fce6e4c8c62540f8e871d683ca065d44b16b2fd3d8f087d2305a2623309"
+    },
+    {
+      "path": "validation/windows-build-block.json",
+      "bytes": 1455,
+      "sha256": "ce6d6b86f8d72ecde1a53b3c1c7cfd45b161c2c83be6d897a3d68a7026c235f9"
+    }
+  ]
+}

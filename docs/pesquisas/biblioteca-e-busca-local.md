@@ -9,7 +9,10 @@ sem GPU dedicada, sem exigir infraestrutura hospedada?
 Esta pesquisa complementa a [auditoria do grafo](automacao-do-grafo-fontes.md).
 Integra a [síntese de arquitetura e custos](memoria-semantica-local-first.md).
 É uma comparação para orientar um experimento, não uma troca da stack vigente.
-Não foram instalados bancos, modelos ou parsers nem medidos tempos nesta pesquisa.
+O levantamento original foi documental. O [benchmark Rust CPU](benchmark-semantico-local.md)
+comparou SQLite/FTS5/sqlite-vec e LanceDB embedded com E5/Gemma Q4, sem integração
+no app. A fusão RRF uniforme piorou a fixture; sua política continua em avaliação.
+Parsers, PDFs/OCR e ingestão da biblioteca foram adiados e não foram testados.
 
 ## Encaixe no produto
 

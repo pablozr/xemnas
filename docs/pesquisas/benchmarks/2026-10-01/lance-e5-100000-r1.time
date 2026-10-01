@@ -1,0 +1,23 @@
+	Command being timed: "/build/release/semantic-bench lance /bench/run-20260930-233621/e5-t4-r1/vectors.json 100000 /scratch/lance-e5-100000-r1"
+	User time (seconds): 65.98
+	System time (seconds): 120.61
+	Percent of CPU this job got: 212%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 1:27.94
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 901512
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 1947
+	Minor (reclaiming a frame) page faults: 9023186
+	Voluntary context switches: 455974
+	Involuntary context switches: 2507
+	Swaps: 0
+	File system inputs: 182584
+	File system outputs: 907480
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
