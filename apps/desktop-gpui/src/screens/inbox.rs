@@ -1136,14 +1136,9 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                             theme,
                             "Origem",
                             &format!(
-                                "{}\nSessão: {}\nRecebido: {}",
+                                "Recebido em {}\n{}",
+                                short_date(&detail.summary.received_at),
                                 detail.summary.project_location,
-                                detail
-                                    .summary
-                                    .session_id
-                                    .as_deref()
-                                    .unwrap_or("não informada"),
-                                short_date(&detail.summary.received_at)
                             ),
                         )
                         .flex_1()

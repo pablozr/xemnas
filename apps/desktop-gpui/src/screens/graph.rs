@@ -28,7 +28,7 @@ use super::format::clipped;
 use crate::ui::controls::{action_button, focus_ring, icon_action, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::theme::{text_style, Theme};
-use crate::ui::tokens::{SpacingScale, TypeScale};
+use crate::ui::tokens::{RadiusScale, SpacingScale, TypeScale};
 use crate::ui::tooltip::tooltip;
 
 /// What the graph asks of the Mapa.
@@ -726,7 +726,7 @@ impl GraphCanvas {
             .flex()
             .flex_col()
             .p(px(2.0))
-            .rounded(px(10.0))
+            .rounded(RadiusScale.surface())
             .border_1()
             .border_color(colors.glass_border())
             .bg(colors.canvas_deep().alpha(0.88));
@@ -776,7 +776,7 @@ impl GraphCanvas {
             .gap_y(px(SpacingScale::S1))
             .px(px(SpacingScale::S3))
             .py(px(SpacingScale::S2))
-            .rounded(px(10.0))
+            .rounded(RadiusScale.surface())
             .border_1()
             .border_color(colors.glass_border())
             .bg(colors.canvas_deep().alpha(0.88))
@@ -1003,7 +1003,7 @@ impl GraphCanvas {
             .w(px(CARD_WIDTH))
             .flex()
             .flex_col()
-            .rounded(px(12.0))
+            .rounded(RadiusScale.dialog())
             .border_1()
             .border_color(colors.glass_border())
             .bg(colors.canvas_raised().alpha(0.96))
@@ -1195,7 +1195,7 @@ impl Render for GraphCanvas {
             .size_full()
             .relative()
             .overflow_hidden()
-            .rounded(px(12.0))
+            .rounded(RadiusScale.dialog())
             .border_1()
             .border_color(colors.hairline_divider())
             .bg(colors.canvas_deep())

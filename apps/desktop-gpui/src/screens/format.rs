@@ -81,6 +81,11 @@ pub(super) fn clipped(text: &str, max: usize) -> String {
     format!("{}…", cut.trim_end_matches([',', ';', ':', '.']))
 }
 
+/// `1 regra`, `3 regras`: the count with the right form of the noun.
+pub(super) fn plural(count: usize, one: &str, many: &str) -> String {
+    format!("{count} {}", if count == 1 { one } else { many })
+}
+
 /// `8192` → `8.192`.
 pub(super) fn thousands(value: usize) -> String {
     let digits = value.to_string();

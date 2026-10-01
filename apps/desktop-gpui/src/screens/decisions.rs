@@ -1185,25 +1185,21 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
                         .flex()
                         .items_center()
                         .gap(px(SpacingScale::S2))
-                        .child(icon(IconName::Link, 12.0, t.colors.text_muted()))
-                        .child(section_label(&t, "Proveniência")),
+                        .child(section_label(&t, "Origem")),
                 )
                 .child(
                     text_style(div(), TypeScale::META)
                         .text_color(t.colors.text_secondary())
-                        .child(format!(
-                            "Captura: {}",
-                            detail
-                                .provenance
-                                .capture_id
-                                .as_deref()
-                                .unwrap_or("não registrada")
-                        )),
+                        .child(if detail.provenance.capture_id.is_some() {
+                            "Confirmada na Revisão a partir de uma conversa capturada."
+                        } else {
+                            "Confirmada na Revisão; a captura de origem não foi registrada."
+                        }),
                 )
                 .child(
                     text_style(div(), TypeScale::META)
                         .text_color(t.colors.text_muted())
-                        .child(format!("Candidato: {}", detail.provenance.candidate_id)),
+                        .child(detail.provenance.project_location.clone()),
                 ),
         );
         document.into_any_element()

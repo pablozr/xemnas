@@ -16,7 +16,7 @@ use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Context, Div, Render, Role, Window};
 
 use super::parts::{card, card_body, card_footer, kv_row, stat_tile, status_hero};
-use crate::screens::format::date_time;
+use crate::screens::format::{date_time, plural};
 use crate::ui::controls::{action_button, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{error_banner, skeleton_list, status_pill, toast, TOAST_DURATION};
@@ -339,8 +339,8 @@ impl OpenCodePanel {
                                     text_style(div(), TypeScale::BODY_SMALL)
                                         .text_color(colors.text_muted())
                                         .child(format!(
-                                            "{} sessão(ões) · última captura em {}",
-                                            adapter.sessions,
+                                            "{} · última captura em {}",
+                                            plural(adapter.sessions as usize, "sessão", "sessões"),
                                             date_time(&adapter.last_received_at)
                                         )),
                                 ),

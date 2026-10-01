@@ -941,15 +941,28 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                 .gap(px(2.0))
                 .children(
                     [
-                        (impact.decisions, "decisão(ões) com versões e relações"),
-                        (impact.candidates, "candidato(s)"),
-                        (impact.claims, "regra(s) do projeto"),
-                        (impact.captures, "captura(s) com evidências"),
-                        (impact.injections, "registro(s) de contexto enviado"),
+                        (
+                            impact.decisions,
+                            "decisão com versões e relações",
+                            "decisões com versões e relações",
+                        ),
+                        (impact.candidates, "candidato", "candidatos"),
+                        (impact.claims, "regra do projeto", "regras do projeto"),
+                        (
+                            impact.captures,
+                            "captura com evidências",
+                            "capturas com evidências",
+                        ),
+                        (
+                            impact.injections,
+                            "registro de contexto enviado",
+                            "registros de contexto enviado",
+                        ),
                     ]
                     .into_iter()
-                    .filter(|(count, _)| *count > 0)
-                    .map(|(count, label)| {
+                    .filter(|(count, _, _)| *count > 0)
+                    .map(|(count, one, many)| {
+                        let label = if count == 1 { one } else { many };
                         div()
                             .flex()
                             .gap(px(SpacingScale::S2))

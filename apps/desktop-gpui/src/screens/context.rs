@@ -39,7 +39,7 @@ use gpui::{
     Window,
 };
 
-use super::format::{calendar_date, clock, day_heading, short_date, thousands};
+use super::format::{calendar_date, clock, day_heading, plural, short_date, thousands};
 use crate::ui::controls::{action_button, button_foreground, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
@@ -48,7 +48,7 @@ use crate::ui::patterns::{
 };
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme};
-use crate::ui::tokens::{tint, SpacingScale, TypeScale};
+use crate::ui::tokens::{tint, RadiusScale, SpacingScale, TypeScale};
 
 /// Every port the Contexto screen reads through.
 pub trait ContextStores:
@@ -612,7 +612,7 @@ impl<S: ContextStores> ContextScreen<S> {
                             .flex_col()
                             .gap(px(SpacingScale::S2))
                             .p(px(SpacingScale::S3))
-                            .rounded(px(10.0))
+                            .rounded(RadiusScale.surface())
                             .border_1()
                             .border_color(if selected {
                                 colors.accent_default()
@@ -739,7 +739,7 @@ impl<S: ContextStores> ContextScreen<S> {
                     .id("context-in-force")
                     .flex()
                     .flex_col()
-                    .rounded(px(10.0))
+                    .rounded(RadiusScale.surface())
                     .border_1()
                     .border_color(colors.glass_border_card())
                     .overflow_hidden()
@@ -992,7 +992,7 @@ impl<S: ContextStores> ContextScreen<S> {
                     .flex()
                     .flex_col()
                     .gap(px(SpacingScale::S3))
-                    .rounded(px(10.0))
+                    .rounded(RadiusScale.surface())
                     .border_1()
                     .border_color(colors.glass_border_card())
                     .bg(colors.glass_fill_card())
@@ -1172,7 +1172,7 @@ impl<S: ContextStores> ContextScreen<S> {
                 .flex_col()
                 .gap(px(SpacingScale::S3))
                 .p(px(SpacingScale::S4))
-                .rounded(px(10.0))
+                .rounded(RadiusScale.surface())
                 .border_1()
                 .border_color(colors.glass_border_card())
                 .bg(colors.glass_fill_card())
@@ -1185,7 +1185,9 @@ impl<S: ContextStores> ContextScreen<S> {
                             text_style(div(), TypeScale::ROW_TITLE)
                                 .flex_1()
                                 .child(format!(
-                                    "{decisions} decisão(ões) · {claims} regra(s){}",
+                                    "{} · {}{}",
+                                    plural(decisions, "decisão", "decisões"),
+                                    plural(claims, "regra", "regras"),
                                     if pack.omitted > 0 {
                                         format!(" · {} fora do orçamento", pack.omitted)
                                     } else {
@@ -1563,7 +1565,7 @@ impl<S: ContextStores> ContextScreen<S> {
             .items_center()
             .gap(px(SpacingScale::S4))
             .p(px(SpacingScale::S5))
-            .rounded(px(12.0))
+            .rounded(RadiusScale.dialog())
             .border_1()
             .border_color(colors.glass_border_card())
             .bg(colors.glass_fill_card())
@@ -1613,7 +1615,7 @@ impl<S: ContextStores> ContextScreen<S> {
                 .flex_col()
                 .gap(px(SpacingScale::S2))
                 .p(px(SpacingScale::S4))
-                .rounded(px(10.0))
+                .rounded(RadiusScale.surface())
                 .border_1()
                 .border_color(colors.hairline_divider())
                 .child(
@@ -1710,7 +1712,7 @@ impl<S: ContextStores> ContextScreen<S> {
                 .flex_col()
                 .gap(px(2.0))
                 .p(px(SpacingScale::S4))
-                .rounded(px(10.0))
+                .rounded(RadiusScale.surface())
                 .bg(colors.glass_fill_card())
                 .border_1()
                 .border_color(colors.glass_border_card())
@@ -2031,14 +2033,6 @@ impl<S: ContextStores> ContextScreen<S> {
                             ),
                     ),
             )
-            .child(
-                text_style(div(), TypeScale::META)
-                    .w(px(64.0))
-                    .flex_none()
-                    .font_family(Theme::font_mono())
-                    .text_color(colors.text_muted())
-                    .child(short_ref(&delivery.session_id)),
-            )
             .when(expandable, |row| {
                 row.child(icon(
                     if open {
@@ -2058,7 +2052,7 @@ fn delivery_list(theme: &Theme) -> Div {
     div()
         .flex()
         .flex_col()
-        .rounded(px(10.0))
+        .rounded(RadiusScale.surface())
         .border_1()
         .border_color(theme.colors.glass_border_card())
         .overflow_hidden()
@@ -2120,6 +2114,14 @@ fn delivery_items(theme: &Theme, delivery: &Delivery) -> Div {
                     .child("Nada do projeto casou com o pedido; o bloco saiu vazio."),
             )
         })
+        .child(
+            text_style(div(), TypeScale::META)
+                .text_color(colors.text_muted())
+                .child(format!(
+                    "Sessão do agente {}",
+                    short_ref(&delivery.session_id)
+                )),
+        )
 }
 
 /// The first item, or what the block was.
@@ -2179,15 +2181,6 @@ fn empty_deliveries(mode: ContextMode) -> &'static str {
             "Nenhuma entrega ainda. Elas aparecem quando o agente fizer um pedido neste \
              projeto com o plugin conectado."
         }
-    }
-}
-
-/// `1 regra`, `3 regras`.
-fn plural(count: usize, one: &str, many: &str) -> String {
-    if count == 1 {
-        format!("1 {one}")
-    } else {
-        format!("{count} {many}")
     }
 }
 

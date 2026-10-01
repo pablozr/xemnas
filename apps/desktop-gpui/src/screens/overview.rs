@@ -17,7 +17,7 @@ use gpui::{
 };
 
 use super::context::OpenDecision;
-use super::format::{clipped, short_date};
+use super::format::{clipped, plural, short_date};
 use crate::ui::controls::{action_button, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
@@ -25,7 +25,7 @@ use crate::ui::patterns::{
     TOAST_DURATION,
 };
 use crate::ui::theme::{text_style, Theme};
-use crate::ui::tokens::{SpacingScale, TypeScale};
+use crate::ui::tokens::{RadiusScale, SpacingScale, TypeScale};
 use crate::ui::tooltip::tooltip;
 
 /// Asks the shell to open an entity in the Mapa.
@@ -362,7 +362,7 @@ impl OverviewScreen {
                     .flex_col()
                     .gap(px(SpacingScale::S2))
                     .p(px(SpacingScale::S4))
-                    .rounded(px(10.0))
+                    .rounded(RadiusScale.surface())
                     .border_1()
                     .border_color(colors.glass_border_card())
                     .bg(colors.glass_fill_card())
@@ -725,15 +725,6 @@ const FLOW_CARD_WIDTH: f32 = (READING_WIDTH - SpacingScale::S3) / 2.0;
 
 /// Longest source title shown on a chip; the tooltip has the rest.
 const CHIP_CHARS: usize = 48;
-
-/// `1 regra`, `3 regras`.
-fn plural(count: usize, one: &str, many: &str) -> String {
-    if count == 1 {
-        format!("1 {one}")
-    } else {
-        format!("{count} {many}")
-    }
-}
 
 /// Product copy for an overview failure; storage detail goes to the log.
 fn product(error: OverviewError) -> String {

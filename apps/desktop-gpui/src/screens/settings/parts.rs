@@ -6,7 +6,7 @@ use gpui::{div, px, AnyElement, Div, Rgba, Role, Stateful};
 
 use crate::ui::icons::{icon, IconName};
 use crate::ui::theme::{text_style, Theme};
-use crate::ui::tokens::{SpacingScale, TypeScale};
+use crate::ui::tokens::{RadiusScale, SpacingScale, TypeScale};
 
 /// A settings group: a hairline panel whose header is the title and one
 /// line of purpose, like a Linear or Zed settings section. No glyph: the
@@ -15,7 +15,7 @@ pub(super) fn card(theme: &Theme, title: &'static str, description: &'static str
     div()
         .flex()
         .flex_col()
-        .rounded(px(10.0))
+        .rounded(RadiusScale.surface())
         .border_1()
         .border_color(theme.colors.glass_border_card())
         .bg(theme.colors.glass_fill_card())

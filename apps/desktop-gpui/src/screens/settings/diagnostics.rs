@@ -18,12 +18,12 @@ use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Context, Div, Render, Role, Window};
 
 use super::parts::{card, card_body, card_footer, stat_tile};
-use crate::screens::format::date_time;
+use crate::screens::format::{date_time, plural};
 use crate::ui::controls::{action_button, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{error_banner, skeleton_list, status_pill, toast, TOAST_DURATION};
 use crate::ui::theme::{text_style, Theme};
-use crate::ui::tokens::{SpacingScale, TypeScale};
+use crate::ui::tokens::{RadiusScale, SpacingScale, TypeScale};
 
 /// What the Diagnóstico section needs from the application layer.
 pub trait DiagnosticsBackend: Send + 'static {
@@ -228,7 +228,7 @@ impl DiagnosticsPanel {
                     .gap(px(SpacingScale::S6))
                     .px(px(SpacingScale::S5))
                     .py(px(SpacingScale::S4))
-                    .rounded(px(10.0))
+                    .rounded(RadiusScale.surface())
                     .border_1()
                     .border_color(colors.glass_border_card())
                     .bg(colors.glass_fill_card())
@@ -457,10 +457,13 @@ impl DiagnosticsPanel {
             ),
             (
                 "Dados",
-                format!(
-                    "{} projeto(s) · {} captura(s) · {} decisão(ões) · {} revisão(ões)",
-                    counts.projects, counts.captures, counts.decisions, counts.revisions
-                ),
+                [
+                    plural(counts.projects as usize, "projeto", "projetos"),
+                    plural(counts.captures as usize, "captura", "capturas"),
+                    plural(counts.decisions as usize, "decisão", "decisões"),
+                    plural(counts.revisions as usize, "revisão", "revisões"),
+                ]
+                .join(" · "),
             ),
             (
                 "Extração",

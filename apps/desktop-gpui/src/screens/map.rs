@@ -31,7 +31,7 @@ use gpui::{
 };
 
 use super::context::OpenDecision;
-use super::format::{calendar_date, clipped, clock, day_heading, short_date};
+use super::format::{calendar_date, clipped, clock, day_heading, plural, short_date};
 use super::graph::{GraphCanvas, GraphEvent};
 use crate::ui::controls::{action_button, icon_action, ButtonKind};
 use crate::ui::icons::{icon, IconName};
@@ -41,7 +41,7 @@ use crate::ui::patterns::{
 };
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme};
-use crate::ui::tokens::{SpacingScale, TypeScale};
+use crate::ui::tokens::{RadiusScale, SpacingScale, TypeScale};
 use crate::ui::tooltip::tooltip;
 
 /// Every port the Mapa screen reads through.
@@ -1599,11 +1599,14 @@ impl<S: MapStores> MapScreen<S> {
                                                 source.label()
                                             ),
                                             (Some(pattern), None) => {
-                                                format!("{pattern} · {} decisão(ões)", decisions)
+                                                format!(
+                                                    "{pattern} · {}",
+                                                    plural(decisions, "decisão", "decisões")
+                                                )
                                             }
                                             (None, _) => format!(
-                                                "dependência adicionada em {} decisão(ões)",
-                                                decisions
+                                                "dependência adicionada em {}",
+                                                plural(decisions, "decisão", "decisões")
                                             ),
                                         }),
                                 )
@@ -1979,7 +1982,7 @@ impl<S: MapStores> MapScreen<S> {
                 .flex_col()
                 .gap(px(SpacingScale::S2))
                 .p(px(SpacingScale::S3))
-                .rounded(px(10.0))
+                .rounded(RadiusScale.surface())
                 .border_1()
                 .border_color(colors.glass_border_card())
                 .bg(colors.glass_fill_card())
@@ -2611,7 +2614,7 @@ impl<S: MapStores> MapScreen<S> {
             .gap(px(SpacingScale::S2))
             .p(px(SpacingScale::S4))
             .min_h(px(96.0 + 8.0 * row.decisions.min(MAX_SQUARES) as f32))
-            .rounded(px(10.0))
+            .rounded(RadiusScale.surface())
             .border_1()
             .border_color(colors.glass_border_card())
             .bg(colors.glass_fill_card())
@@ -2770,7 +2773,7 @@ impl<S: MapStores> MapScreen<S> {
                     .flex()
                     .flex_col()
                     .justify_center()
-                    .rounded(px(10.0))
+                    .rounded(RadiusScale.surface())
                     .border_1()
                     .border_color(colors.accent_default())
                     .bg(colors.selection())
@@ -2860,7 +2863,7 @@ impl<S: MapStores> MapScreen<S> {
             .flex()
             .flex_col()
             .justify_center()
-            .rounded(px(10.0))
+            .rounded(RadiusScale.surface())
             .border_1()
             .border_color(colors.glass_border_card())
             .bg(colors.glass_fill_card())
@@ -3179,7 +3182,12 @@ fn timeline_list(theme: &Theme, events: &[TimelineEvent]) -> Div {
     }
 
     for (day_index, (heading, runs)) in days.into_iter().enumerate() {
-        let count: usize = runs.iter().map(Vec::len).sum();
+        // Upkeep is condensed, so the heading counts what changed.
+        let changes = runs
+            .iter()
+            .flatten()
+            .filter(|event| !upkeep(event.kind))
+            .count();
         list = list.child(
             div()
                 .flex()
@@ -3195,7 +3203,11 @@ fn timeline_list(theme: &Theme, events: &[TimelineEvent]) -> Div {
                 .child(
                     text_style(div(), TypeScale::META)
                         .text_color(colors.text_muted())
-                        .child(plural(count, "evento", "eventos")),
+                        .child(if changes == 0 {
+                            "manutenção do mapa".to_owned()
+                        } else {
+                            plural(changes, "mudança", "mudanças")
+                        }),
                 ),
         );
         let last = runs.len().saturating_sub(1);
@@ -3311,7 +3323,7 @@ fn timeline_item(theme: &Theme, run: &[&TimelineEvent], last: bool) -> Div {
                             .child(if run.len() == 1 {
                                 label.to_owned()
                             } else {
-                                format!("{label} · {}", run.len())
+                                upkeep_headline(first.kind, run.len())
                             }),
                     )
                     .child(time),
@@ -3410,6 +3422,17 @@ fn timeline_copy(kind: TimelineKind, theme: &Theme) -> (&'static str, IconName, 
     }
 }
 
+/// "8 itens entraram no mapa": a condensed run says how many, then what.
+fn upkeep_headline(kind: TimelineKind, count: usize) -> String {
+    match kind {
+        TimelineKind::EntityCreated => format!("{count} itens entraram no mapa"),
+        TimelineKind::EntityRetired => format!("{count} itens aposentados"),
+        TimelineKind::EdgeConfirmed => format!("{count} ligações confirmadas"),
+        TimelineKind::EdgeInvalidated => format!("{count} ligações desfeitas"),
+        _ => plural(count, "evento", "eventos"),
+    }
+}
+
 fn weight(row: &MapEntity) -> String {
     let mut parts = vec![plural(row.decisions, "decisão", "decisões")];
     if row.claims > 0 {
@@ -3419,10 +3442,6 @@ fn weight(row: &MapEntity) -> String {
         parts.push(plural(row.conflicts, "conflito", "conflitos"));
     }
     parts.join(" · ")
-}
-
-fn plural(count: usize, one: &str, many: &str) -> String {
-    format!("{count} {}", if count == 1 { one } else { many })
 }
 
 fn edge_verb(kind: EdgeKind) -> &'static str {
