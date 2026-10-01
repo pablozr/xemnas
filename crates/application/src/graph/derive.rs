@@ -24,6 +24,10 @@ pub struct ComponentProposal {
     pub pattern: String,
     /// Decisions that touched it.
     pub decisions: usize,
+    /// Optional description (the package's, for a declared member).
+    pub description: String,
+    /// The manifest that declares it, when it is a workspace member.
+    pub declared: Option<super::WorkspaceKind>,
 }
 
 /// A technology the captured work added as a dependency, not yet created.
@@ -314,7 +318,8 @@ where
     ///
     /// `project_not_found`, or `storage` on failure.
     pub fn refresh_suggestions(&self, project_id: &str) -> Result<SuggestionReport, GraphError> {
-        ProjectRepository::get(&self.store, project_id)?.ok_or(GraphError::ProjectNotFound)?;
+        let project =
+            ProjectRepository::get(&self.store, project_id)?.ok_or(GraphError::ProjectNotFound)?;
         let now = now_rfc3339();
         let at = Timestamp::parse(&now).ok_or(GraphError::Storage("relógio inválido".into()))?;
         let entities = self.store.project_entities(project_id)?;
@@ -465,16 +470,45 @@ where
                         pattern: format!("{prefix}/**"),
                         name,
                         decisions: ids.len(),
+                        description: String::new(),
+                        declared: None,
                     }
                 })
             })
             .collect();
+        // Members the project declares come first: they are structure the
+        // team wrote down, not a guess from a diff.
+        let declared: Vec<ComponentProposal> =
+            super::declared_components(std::path::Path::new(&project.location))
+                .into_iter()
+                .filter(|member| !claimed.contains(&member.pattern))
+                .filter(|member| {
+                    !known.contains(&(EntityKind::Component, entity_key(&member.name)))
+                })
+                .map(|member| ComponentProposal {
+                    decisions: report
+                        .components
+                        .iter()
+                        .find(|inferred| inferred.pattern == member.pattern)
+                        .map_or(0, |inferred| inferred.decisions),
+                    name: member.name,
+                    pattern: member.pattern,
+                    description: member.description,
+                    declared: Some(member.source),
+                })
+                .collect();
+        report.components.retain(|inferred| {
+            !declared
+                .iter()
+                .any(|member| member.pattern == inferred.pattern)
+        });
         report.components.sort_by(|left, right| {
             right
                 .decisions
                 .cmp(&left.decisions)
                 .then(left.name.cmp(&right.name))
         });
+        report.components.splice(0..0, declared);
         report.technologies = technologies
             .into_iter()
             .filter(|(key, _)| !known.contains(&(EntityKind::Technology, key.clone())))

@@ -6,9 +6,11 @@
 //! Derived edges start as suggestions and only count once confirmed.
 
 mod derive;
+mod discover;
 mod query;
 
 pub use derive::{added_dependencies, ComponentProposal, SuggestionReport, TechnologyProposal};
+pub use discover::{declared_components, DeclaredComponent, WorkspaceKind};
 pub use query::{
     EntityDetail, FileLens, GraphEdge, GraphNode, MapEntity, Neighborhood, NodeRef, NodeSummary,
     ProjectGraph, ProjectMap, Suggestion, TimelineEvent, TimelineKind, DEFAULT_NEIGHBORHOOD_LIMIT,

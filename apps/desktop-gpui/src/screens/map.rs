@@ -117,6 +117,8 @@ enum Layout {
 struct MapData {
     map: ProjectMap,
     graph: ProjectGraph,
+    /// Components created from the declared workspace on this load.
+    assembled: usize,
     suggestions: Vec<Suggestion>,
     proposals: SuggestionReport,
 }
@@ -361,8 +363,18 @@ impl<S: MapStores> MapScreen<S> {
     fn apply(&mut self, outcome: Outcome, cx: &mut Context<Self>) {
         match outcome {
             Outcome::Loaded(Ok(data)) => {
+                let assembled = data.assembled;
                 self.data = Some(*data);
                 self.fill_graph(cx);
+                if assembled > 0 {
+                    self.show_notice(
+                        match assembled {
+                            1 => "Mapa montado a partir do workspace: 1 componente.".to_owned(),
+                            n => format!("Mapa montado a partir do workspace: {n} componentes."),
+                        },
+                        cx,
+                    );
+                }
                 if self.route.is_some() {
                     return self.follow_route(cx);
                 }
@@ -1198,6 +1210,8 @@ impl<S: MapStores> MapScreen<S> {
                         proposal.name.clone(),
                         Some(proposal.pattern.clone()),
                         proposal.decisions,
+                        proposal.description.clone(),
+                        proposal.declared,
                     )
                 })
                 .chain(technologies.iter().map(|proposal| {
@@ -1206,9 +1220,14 @@ impl<S: MapStores> MapScreen<S> {
                         proposal.name.clone(),
                         None,
                         proposal.decisions,
+                        String::new(),
+                        None,
                     )
                 }));
-            for (index, (kind, name, pattern, decisions)) in proposals.enumerate() {
+            for (index, (kind, name, pattern, decisions, description, declared)) in
+                proposals.enumerate()
+            {
+                let create_description = description.clone();
                 let project = self.project.clone().unwrap_or_default();
                 let (create_name, create_pattern) = (name.clone(), pattern.clone());
                 let create = self.button(
@@ -1221,6 +1240,7 @@ impl<S: MapStores> MapScreen<S> {
                             project_id: project.clone(),
                             kind: Some(kind),
                             name: create_name.clone(),
+                            description: create_description.clone(),
                             patterns: create_pattern.clone().into_iter().collect(),
                             ..NewEntity::default()
                         };
@@ -1253,21 +1273,84 @@ impl<S: MapStores> MapScreen<S> {
                                 .child(
                                     text_style(div(), TypeScale::BODY_SMALL)
                                         .text_color(colors.text_muted())
-                                        .child(match pattern {
-                                            Some(pattern) => {
+                                        .child(match (pattern, declared) {
+                                            (Some(pattern), Some(source)) => format!(
+                                                "{pattern} · declarado no {}",
+                                                source.label()
+                                            ),
+                                            (Some(pattern), None) => {
                                                 format!("{pattern} · {} decisão(ões)", decisions)
                                             }
-                                            None => format!(
+                                            (None, _) => format!(
                                                 "dependência adicionada em {} decisão(ões)",
                                                 decisions
                                             ),
                                         }),
-                                ),
+                                )
+                                .when(!description.is_empty(), |column| {
+                                    column.child(
+                                        text_style(div(), TypeScale::META)
+                                            .text_color(colors.text_muted())
+                                            .child(description.clone()),
+                                    )
+                                }),
                         )
                         .child(create),
                 );
             }
-            column = column.child(section(theme, "Itens sugeridos", list));
+            // Declared members can be taken together.
+            let declared: Vec<NewEntity> = components
+                .iter()
+                .filter(|proposal| proposal.declared.is_some())
+                .map(|proposal| NewEntity {
+                    project_id: self.project.clone().unwrap_or_default(),
+                    kind: Some(EntityKind::Component),
+                    name: proposal.name.clone(),
+                    description: proposal.description.clone(),
+                    patterns: vec![proposal.pattern.clone()],
+                    ..NewEntity::default()
+                })
+                .collect();
+            let all = (declared.len() > 1).then(|| {
+                let count = declared.len();
+                self.button(
+                    "map-create-declared",
+                    ButtonKind::Secondary,
+                    !self.busy,
+                    format!("Criar os {count} do workspace"),
+                    move |this, cx| {
+                        let inputs = declared.clone();
+                        this.mutate(cx, "Componentes do workspace criados.", move |backend| {
+                            for input in inputs {
+                                match backend.graph.create_entity(input) {
+                                    Ok(_) | Err(application::graph::GraphError::DuplicateName) => {}
+                                    Err(error) => return Err(error),
+                                }
+                            }
+                            Ok(None)
+                        });
+                    },
+                    cx,
+                )
+            });
+            column = column.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S3))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .child(section_label(theme, "Itens sugeridos")),
+                            )
+                            .children(all),
+                    )
+                    .child(list),
+            );
         }
         reading_page("map-suggestions", column).into_any_element()
     }
@@ -2605,6 +2688,14 @@ impl<S: MapStores> Render for MapScreen<S> {
 // ---- helpers --------------------------------------------------------------
 
 fn load<S: MapStores>(backend: &MapServices<S>, project: &str) -> Result<MapData, String> {
+    // An empty map assembles itself from what the project declares.
+    let assembled = backend.graph.assemble(project).map_err(|error| {
+        failure(
+            "assemble",
+            error.code(),
+            "Não foi possível montar o mapa a partir do projeto.",
+        )
+    })?;
     let proposals = backend
         .graph
         .refresh_suggestions(project)
@@ -2639,6 +2730,7 @@ fn load<S: MapStores>(backend: &MapServices<S>, project: &str) -> Result<MapData
     Ok(MapData {
         map,
         graph,
+        assembled,
         suggestions,
         proposals,
     })

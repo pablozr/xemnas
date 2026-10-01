@@ -33,7 +33,9 @@ Uma aresta `human` nasce confirmada. Uma `derived` nasce como **sugestão** (sem
 - **Identidade**: a chave mantém `+` e `#`, então C, C++ e C# são itens distintos.
 - **Ação do usuário**: qualquer entidade, padrão, alias ou aresta, confirmada na hora.
 
-A derivação é determinística e roda ao abrir o Mapa, depois de cada mudança nele e **ao adotar um candidato**. Ela não lê o disco do repositório, só o que o app já capturou.
+- **Componentes declarados (2026-10-01).** Membros do workspace Cargo (`[workspace] members`), `workspaces` do `package.json` e `packages` do `pnpm-workspace.yaml` são lidos dos manifestos do projeto (padrões `pasta` e `pasta/*`), com nome e descrição do pacote. Com o mapa sem componentes, eles são **criados automaticamente**, uma vez; depois, membros novos aparecem como propostas ("declarado no workspace Cargo", com "Criar os N do workspace"). Pastas inferidas dos diffs continuam só propostas.
+
+A derivação é determinística e roda ao abrir o Mapa, depois de cada mudança nele e **ao adotar um candidato**. Do disco do repositório ela só lê os manifestos de workspace citados acima; o resto vem do que o app já capturou.
 
 ### Adoção com vínculos (revisão de 2026-10-01)
 

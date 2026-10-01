@@ -604,3 +604,61 @@ fn an_adopted_rule_is_suggested_for_the_components_its_evidence_touched() {
         "only the component it touched"
     );
 }
+
+#[test]
+fn an_empty_map_assembles_itself_from_the_declared_workspace() {
+    use application::graph::WorkspaceKind;
+    use application::projects::{ProjectRecord, ProjectRepository};
+
+    let test = support::open("graph-assemble", &[]);
+    let repo = test.root.join("repo");
+    for dir in ["crates/core", "crates/api"] {
+        std::fs::create_dir_all(repo.join(dir)).expect("dirs");
+    }
+    std::fs::write(
+        repo.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"crates/*\"]\n",
+    )
+    .expect("root");
+    std::fs::write(
+        repo.join("crates/core/Cargo.toml"),
+        "[package]\nname = \"core\"\ndescription = \"Regras do domínio.\"\n",
+    )
+    .expect("core");
+    std::fs::write(
+        repo.join("crates/api/Cargo.toml"),
+        "[package]\nname = \"api\"\n",
+    )
+    .expect("api");
+    test.store
+        .insert(&ProjectRecord::new(
+            "ws".into(),
+            repo.to_string_lossy().replace('\\', "/"),
+            "2026-01-01T00:00:00Z".into(),
+        ))
+        .expect("project");
+
+    let graph = KnowledgeGraph::new(test.store.clone());
+    assert_eq!(graph.assemble("ws").expect("assemble"), 2);
+    assert_eq!(graph.assemble("ws").expect("again"), 0, "only an empty map");
+    let entities = graph.entities("ws").expect("entities");
+    let core = entities
+        .iter()
+        .find(|entity| entity.name == "core")
+        .expect("core");
+    assert_eq!(core.patterns, vec!["crates/core/**"]);
+    assert_eq!(core.description, "Regras do domínio.");
+
+    // A member added later is proposed, not created.
+    std::fs::create_dir_all(repo.join("crates/web")).expect("web");
+    std::fs::write(
+        repo.join("crates/web/Cargo.toml"),
+        "[package]\nname = \"web\"\n",
+    )
+    .expect("web manifest");
+    let report = graph.refresh_suggestions("ws").expect("refresh");
+    assert_eq!(report.components.len(), 1);
+    assert_eq!(report.components[0].name, "web");
+    assert_eq!(report.components[0].declared, Some(WorkspaceKind::Cargo));
+    assert_eq!(graph.assemble("ws").expect("still"), 0);
+}
