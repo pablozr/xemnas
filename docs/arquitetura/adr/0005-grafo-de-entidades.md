@@ -19,18 +19,25 @@ Tipos de aresta:
 - `affects`: decisão → componente;
 - `uses`: decisão → tecnologia;
 - `applies_to`: claim → componente ou tecnologia;
-- `part_of`: componente → componente, sem ciclo.
+- `part_of`: componente → componente, sem ciclo e com **um pai** por componente (o contexto é herdado por uma única cadeia).
 
 Uma aresta `human` nasce confirmada. Uma `derived` nasce como **sugestão** (sem `confirmed_at`) e só vale depois de confirmada. Rejeitar uma sugestão a invalida, e a derivação não a propõe de novo.
 
 ## Como o grafo nasce (sem IA)
 
-- **Componentes propostos** a partir dos arquivos que as decisões realmente tocaram (`diff_summary.files` do candidato de origem): o prefixo `crates/<nome>`, `apps/<nome>`, `packages/<nome>`, `adapters/<nome>`, `libs/<nome>`, `services/<nome>` ou `modules/<nome>`, senão a primeira pasta. A proposta vira entidade só com um clique do usuário.
+- **Componentes propostos** a partir dos arquivos que as decisões realmente tocaram (`diff_summary.files` do candidato de origem): o prefixo `crates/<nome>`, `apps/<nome>`, `packages/<nome>`, `adapters/<nome>`, `libs/<nome>`, `services/<nome>` ou `modules/<nome>`, senão a primeira pasta. A proposta é identificada pelo caminho: quando duas pastas têm o mesmo nome (`apps/api`, `services/api`) ou o nome já existe, ela se chama pelo caminho. Vira entidade só com um clique do usuário.
+- **Evidência da própria decisão (2026-10-01).** Arquivos e dependências de uma decisão vêm dos artefatos que ela cita, não da captura inteira: duas decisões do mesmo turno não herdam os arquivos uma da outra. Proposta única que só cita a conversa continua com os diffs da captura.
 - **Sugestões `affects`**: arquivos de uma decisão vigente que casam com o padrão de um componente.
-- **Tecnologias propostas e sugestões `uses`**: dependências adicionadas em `Cargo.toml` ou `package.json` nos diffs de evidência da decisão, resolvidas por chave ou alias.
+- **Sugestões `applies_to` (2026-10-01)**: uma regra adotada da Revisão guarda o candidato de origem (`source_candidate_id`, migration 18) e é sugerida para os componentes que a evidência dela tocou, enquanto vale.
+- **Tecnologias propostas e sugestões `uses`**: dependências adicionadas em `Cargo.toml` ou `package.json` nos hunks citados pela decisão, resolvidas por chave ou alias. O parser lê a seção do manifest (`[dependencies]`, `"devDependencies"`); `[package.metadata]`, `"engines"` e afins não são dependências, troca de versão não é adição, e sem seção visível só conta valor com cara de versão.
+- **Identidade**: a chave mantém `+` e `#`, então C, C++ e C# são itens distintos.
 - **Ação do usuário**: qualquer entidade, padrão, alias ou aresta, confirmada na hora.
 
-A derivação é determinística e roda ao abrir o Mapa e depois de cada mudança nele. Ela não lê o disco do repositório, só o que o app já capturou.
+A derivação é determinística e roda ao abrir o Mapa, depois de cada mudança nele e **ao adotar um candidato**. Ela não lê o disco do repositório, só o que o app já capturou.
+
+### Adoção com vínculos (revisão de 2026-10-01)
+
+Antes, adotar uma decisão não criava vínculos: até alguém abrir o Mapa e confirmar as sugestões, o contexto por arquivo não a encontrava. Agora a Revisão mostra, junto do candidato, os vínculos que a própria evidência aponta para itens que já existem (`affects`/`uses` para decisão, `applies_to` para regra), todos marcados. Confirmar o candidato confirma também os marcados; os desmarcados são rejeitados e não voltam como sugestão; o resto do projeto é derivado na hora (`application::adoption`). Arquivos sem componente aparecem como tais. A confirmação continua humana: nada é ligado sem estar visível no momento da adoção.
 
 ## Consultas
 

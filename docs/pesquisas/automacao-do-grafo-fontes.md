@@ -5,7 +5,8 @@
 **Pergunta:** como automatizar relações e contexto ao adotar decisões, preservando
 evidência, autoridade humana e histórico? O modelo do ADR-0005 acompanha as pesquisas?
 
-**Status:** Aberta
+**Status:** Em implementação. Passos 1 e 2 da ordem proposta entregues em
+2026-10-01 (ver "Andamento"); 3 a 6 abertos.
 
 Esta pesquisa combina auditoria do código do workspace em 2026-09-30 com fontes
 primárias e o contrato do [ADR-0005](../arquitetura/adr/0005-grafo-de-entidades.md).
@@ -34,6 +35,18 @@ Portanto, o contexto **é consultado automaticamente**, mas a cobertura do grafo
 **depende de preparação e confirmação manual**. Adotar uma decisão e imediatamente
 editar um arquivo pode não entregar essa decisão ao agente se o vínculo não existe.
 Isso cumpre o ADR-0005, mas não a expectativa de automatizar os vínculos na adoção.
+
+## Andamento (2026-10-01)
+
+| Achado | Situação |
+| --- | --- |
+| P1 escopo da captura | Corrigido: arquivos e dependências vêm dos artefatos citados (`04635b7`) |
+| P1 parser de manifest | Corrigido: seção, troca de versão e valor sem seção (`404ffaf`) |
+| P1 regras sem escopo | Corrigido: `source_candidate_id` e sugestões `applies_to` (`4a00a41`) |
+| P2 `as_of` com dados atuais | Aberto |
+| P2 hierarquia | Pai único validado na escrita (`a057e5b`) |
+| P2 identidade por nome | Chave mantém `+`/`#`; propostas pelo caminho (`a057e5b`); sem constraint única no banco |
+| Passo 2: vínculos na adoção | Entregue: prévia na Revisão, confirmar liga os marcados, derivação na hora (`d3d4b34` e seguinte) |
 
 ## Achados de implementação, por prioridade
 

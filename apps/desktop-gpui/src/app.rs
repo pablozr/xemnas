@@ -504,6 +504,17 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + ContextStores> Shell<R>
         self.backdrop = backdrop;
     }
 
+    /// Lets Revisão confirm candidates together with their ties on the map.
+    pub fn set_adoption(
+        &mut self,
+        adoption: Arc<dyn application::adoption::AdoptionApi>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(inbox) = &self.inbox {
+            inbox.update(cx, |screen, _| screen.set_adoption(adoption));
+        }
+    }
+
     /// Mounts Visão over its use case; without one the destination stays
     /// empty, like the others when the database fails.
     pub fn set_overview(&mut self, api: Arc<dyn OverviewApi>, cx: &mut Context<Self>) {

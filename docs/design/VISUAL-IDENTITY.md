@@ -84,6 +84,14 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
 
 ## Revisão — candidatos por projeto
 
+- **No mapa** (entre Motivo e Evidências): o que confirmar põe no mapa. Uma
+  linha por vínculo que a evidência aponta, com caixa marcada por padrão
+  (lavanda quando marcada), o verbo ("muda", "usa", "vale para"), ícone do
+  tipo, nome do item e, em mono, o arquivo ou a dependência que justifica;
+  contagem "2 de 3" no título. Desmarcar recusa o vínculo (não volta como
+  sugestão). Arquivos sem componente aparecem numa linha META. Sem nada a
+  ligar, a seção não aparece. O toast diz "Decisão criada e ligada ao mapa."
+
 - A barra da janela (40 px) contém marca, selo de demonstração quando houver,
   tema e controles nativos. Abaixo dela, uma única barra de projeto de 44 px leva
   o nome do projeto como trilha (abre o painel do projeto) e as abas Revisão e

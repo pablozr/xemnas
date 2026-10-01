@@ -444,6 +444,12 @@ fn run_shell_mode(
         if demo && argument_after("--theme").as_deref() == Some("charcoal") {
             cx.set_global(xemnas_desktop::ui::theme::ThemeMode::Charcoal);
         }
+        let adoption: Option<Arc<dyn application::adoption::AdoptionApi>> = store
+            .as_ref()
+            .ok()
+            .map(|store| -> Arc<dyn application::adoption::AdoptionApi> {
+                Arc::new(application::adoption::Adoption::new(store.clone()))
+            });
         let (projects, inbox, decisions, context, map, overview) = match store {
             Ok(store) => (
                 Ok(application::projects::Projects::new(store.clone())),
@@ -482,6 +488,9 @@ fn run_shell_mode(
             );
             if let Some(overview) = overview {
                 shell.set_overview(overview, cx);
+            }
+            if let Some(adoption) = adoption {
+                shell.set_adoption(adoption, cx);
             }
             shell.set_demo(demo);
             if let Some(route) = route {

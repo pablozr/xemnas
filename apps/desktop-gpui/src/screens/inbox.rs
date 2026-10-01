@@ -1,11 +1,15 @@
 //! Native review surface backed by the Inbox application port.
 //! Storage runs in the background; technical failures never reach the view.
 
+use std::sync::Arc;
+
+use application::adoption::{AdoptionApi, AdoptionError, AdoptionPreview, ProposedLink};
 use application::extract::{CandidateKind, MIN_SIGNIFICANCE};
 use application::inbox::{
     CandidateDetail, CandidateEdits, CandidateStatus, CandidateSummary, Inbox, InboxError,
     InboxFilter, InboxPage, InboxStore,
 };
+use domain::entities::{EdgeKind, EntityKind};
 use gpui::prelude::*;
 use gpui::{
     div, px, AnyElement, Context, Div, ElementId, Entity, FocusHandle, Render, Role, ScrollHandle,
@@ -76,9 +80,90 @@ pub struct InboxScreen<S: InboxStore + Send + 'static> {
     /// Pending candidates kept out of the queue for low significance.
     hidden_low: usize,
     low_focus: FocusHandle,
+    /// Adoption with the map; without it, confirming only creates the decision.
+    adoption: Option<Arc<dyn AdoptionApi>>,
+    /// The ties the selected candidate's evidence points to, each kept or not.
+    links: Option<MapLinks>,
+}
+
+/// The "No mapa" section of one candidate.
+struct MapLinks {
+    candidate_id: String,
+    links: Vec<(ProposedLink, bool)>,
+    uncovered: Vec<String>,
+    focus: Vec<FocusHandle>,
 }
 
 impl<S: InboxStore + Send + 'static> InboxScreen<S> {
+    /// Confirms through the adoption use case, so a decision lands on the
+    /// map with the ties the person kept.
+    pub fn set_adoption(&mut self, adoption: Arc<dyn AdoptionApi>) {
+        self.adoption = Some(adoption);
+    }
+
+    fn load_links(&mut self, candidate_id: String, cx: &mut Context<Self>) {
+        let Some(adoption) = self.adoption.clone() else {
+            return;
+        };
+        let generation = self.generation;
+        cx.spawn(async move |this, cx| {
+            let id = candidate_id.clone();
+            let preview = cx
+                .background_executor()
+                .spawn(async move { adoption.preview(&id) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if generation != this.generation || this.selected.as_deref() != Some(&candidate_id)
+                {
+                    return;
+                }
+                match preview {
+                    Ok(AdoptionPreview { links, uncovered }) => {
+                        this.links = Some(MapLinks {
+                            candidate_id,
+                            focus: links
+                                .iter()
+                                .map(|_| cx.focus_handle().tab_stop(true))
+                                .collect(),
+                            links: links.into_iter().map(|link| (link, true)).collect(),
+                            uncovered,
+                        });
+                    }
+                    Err(error) => {
+                        tracing::warn!(error = %error, "adoption preview failed");
+                        this.links = None;
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Kept and declined ties of `candidate_id`, when its preview is loaded.
+    fn chosen_links(&self, candidate_id: &str) -> Option<(Vec<ProposedLink>, Vec<ProposedLink>)> {
+        let links = self
+            .links
+            .as_ref()
+            .filter(|links| links.candidate_id == candidate_id)?;
+        let (kept, declined): (Vec<_>, Vec<_>) =
+            links.links.iter().cloned().partition(|(_, keep)| *keep);
+        Some((
+            kept.into_iter().map(|(link, _)| link).collect(),
+            declined.into_iter().map(|(link, _)| link).collect(),
+        ))
+    }
+
+    fn toggle_link(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some((_, keep)) = self
+            .links
+            .as_mut()
+            .and_then(|links| links.links.get_mut(index))
+        {
+            *keep = !*keep;
+            cx.notify();
+        }
+    }
     /// Composes the application use case without opening storage in the view.
     pub fn new(cx: &mut Context<Self>, inbox: Inbox<S>) -> Self {
         Self {
@@ -111,6 +196,8 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             show_low: false,
             hidden_low: 0,
             low_focus: cx.focus_handle().tab_stop(true),
+            adoption: None,
+            links: None,
         }
     }
 
@@ -212,6 +299,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
         }
         self.selected = Some(id.clone());
         self.detail = None;
+        self.links = None;
         self.source_index = 0;
         self.source_focus.clear();
         self.editor = None;
@@ -306,7 +394,9 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                             .iter()
                             .map(|_| cx.focus_handle().tab_stop(true))
                             .collect();
+                        let id = detail.summary.id.clone();
                         this.detail = Some(*detail);
+                        this.load_links(id, cx);
                     }
                     Outcome::Action(Ok(()), notice) => {
                         this.editor = None;
@@ -428,19 +518,26 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                             let id = id.clone();
                             let edits = edits.clone();
                             let confirm = *confirm;
+                            let adoption = this.adoption.clone();
+                            let chosen = this.chosen_links(&id);
                             this.run(cx, move |inbox| {
-                                Outcome::Action(
-                                    if confirm {
-                                        inbox.confirm(&id, Some(edits)).map(|_| ())
-                                    } else {
-                                        inbox.adjust(&id, edits)
-                                    },
-                                    if confirm {
-                                        "Ajustes confirmados. Decisão criada."
-                                    } else {
-                                        "Ajustes salvos. O candidato continua na revisão."
-                                    },
-                                )
+                                if !confirm {
+                                    return Outcome::Action(
+                                        inbox.adjust(&id, edits),
+                                        "Ajustes salvos. O candidato continua na revisão.",
+                                    );
+                                }
+                                match (adoption, chosen) {
+                                    (Some(adoption), Some((kept, declined))) => adopted(
+                                        adoption.adopt(&id, Some(edits), &kept, &declined),
+                                        "Ajustes confirmados. Decisão criada e ligada ao mapa.",
+                                        "Ajustes confirmados. Decisão criada.",
+                                    ),
+                                    _ => Outcome::Action(
+                                        inbox.confirm(&id, Some(edits)).map(|_| ()),
+                                        "Ajustes confirmados. Decisão criada.",
+                                    ),
+                                }
                             });
                         }
                         _ => {}
@@ -456,14 +553,25 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
         }
         let id = detail.summary.id.clone();
         let snoozed = detail.summary.status == CandidateStatus::Snoozed;
+        let adoption = self.adoption.clone();
+        let chosen = self.chosen_links(&id);
         self.notice = None;
         window.focus(&self.refresh_focus, cx);
         self.run(cx, move |inbox| {
             let (result, notice) = match action {
-                ReviewAction::Confirm => (
-                    inbox.confirm(&id, None).map(|_| ()),
-                    "Candidato confirmado. Decisão criada.",
-                ),
+                ReviewAction::Confirm => match (adoption, chosen) {
+                    (Some(adoption), Some((kept, declined))) => {
+                        return adopted(
+                            adoption.adopt(&id, None, &kept, &declined),
+                            "Candidato confirmado. Decisão criada e ligada ao mapa.",
+                            "Candidato confirmado. Decisão criada.",
+                        );
+                    }
+                    _ => (
+                        inbox.confirm(&id, None).map(|_| ()),
+                        "Candidato confirmado. Decisão criada.",
+                    ),
+                },
                 ReviewAction::Reject => (inbox.reject(&id), "Candidato rejeitado."),
                 ReviewAction::Snooze if snoozed => {
                     (inbox.unsnooze(&id), "Candidato retomado para revisão.")
@@ -665,6 +773,171 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             )
     }
 
+    /// What adopting the candidate puts on the map: each tie its evidence
+    /// points to, kept by default, and the files no component covers yet.
+    fn map_section(
+        &self,
+        theme: &Theme,
+        candidate_id: &str,
+        kind: CandidateKind,
+        cx: &mut Context<Self>,
+    ) -> Option<Div> {
+        let links = self
+            .links
+            .as_ref()
+            .filter(|links| links.candidate_id == candidate_id)?;
+        if links.links.is_empty() && links.uncovered.is_empty() {
+            return None;
+        }
+        let colors = theme.colors;
+        let kept = links.links.iter().filter(|(_, keep)| *keep).count();
+        let mut list = div().flex().flex_col();
+        for (index, (link, keep)) in links.links.iter().enumerate() {
+            let keep = *keep;
+            let verb = match link.kind {
+                EdgeKind::Uses => "usa",
+                EdgeKind::AppliesTo => "vale para",
+                _ => "muda",
+            };
+            let glyph = match link.entity_kind {
+                EntityKind::Component => IconName::Layers,
+                EntityKind::Technology => IconName::Cpu,
+            };
+            list = list.child(
+                div()
+                    .id(("map-link", index))
+                    .flex()
+                    .items_center()
+                    .gap(px(SpacingScale::S3))
+                    .px(px(SpacingScale::S3))
+                    .py(px(SpacingScale::S2))
+                    .rounded(theme.radius.control())
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(colors.glass_fill_medium()))
+                    .role(Role::CheckBox)
+                    .aria_label(format!("{verb} {}", link.entity_name))
+                    .aria_toggled(if keep {
+                        gpui::Toggled::True
+                    } else {
+                        gpui::Toggled::False
+                    })
+                    .track_focus(&links.focus[index])
+                    .focus_visible(focus_ring(theme))
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_link(index, cx)))
+                    .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                            this.toggle_link(index, cx);
+                            cx.stop_propagation();
+                        }
+                    }))
+                    .child(
+                        div()
+                            .size(px(16.0))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(4.0))
+                            .border_1()
+                            .border_color(if keep {
+                                colors.accent_hover()
+                            } else {
+                                colors.glass_border_card_hover()
+                            })
+                            .when(keep, |box_| {
+                                box_.bg(colors.accent_hover()).child(icon(
+                                    IconName::Check,
+                                    11.0,
+                                    colors.accent_on_emphasis(),
+                                ))
+                            }),
+                    )
+                    .child(
+                        text_style(div(), TypeScale::META)
+                            .w(px(64.0))
+                            .flex_none()
+                            .text_color(colors.text_muted())
+                            .child(verb),
+                    )
+                    .child(icon(glyph, 13.0, colors.text_secondary()))
+                    .child(
+                        text_style(div(), TypeScale::ROW_TITLE)
+                            .text_color(if keep {
+                                colors.text_primary()
+                            } else {
+                                colors.text_muted()
+                            })
+                            .child(link.entity_name.clone()),
+                    )
+                    .child(
+                        text_style(div(), TypeScale::META)
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .truncate()
+                            .font_family(Theme::font_mono())
+                            .text_color(colors.text_muted())
+                            .child(link.reason.clone()),
+                    ),
+            );
+        }
+        let uncovered = (!links.uncovered.is_empty()).then(|| {
+            let shown: Vec<&str> = links.uncovered.iter().take(3).map(String::as_str).collect();
+            let more = links.uncovered.len().saturating_sub(3);
+            text_style(div(), TypeScale::META)
+                .text_color(colors.text_muted())
+                .child(format!(
+                    "Sem componente no mapa: {}{}. Crie no Mapa para ligar da próxima vez.",
+                    shown.join(", "),
+                    if more > 0 {
+                        format!(" e mais {more}")
+                    } else {
+                        String::new()
+                    }
+                ))
+        });
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(SpacingScale::S2))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(SpacingScale::S2))
+                        .child(icon(IconName::Graph, 14.0, colors.text_muted()))
+                        .child(
+                            text_style(div(), TypeScale::HEADING_3)
+                                .flex_1()
+                                .child("No mapa"),
+                        )
+                        .when(!links.links.is_empty(), |row| {
+                            row.child(count_chip(
+                                theme,
+                                format!("{kept} de {}", links.links.len()),
+                            ))
+                        }),
+                )
+                .when(!links.links.is_empty(), |section| {
+                    section.child(
+                        text_style(div(), TypeScale::META)
+                            .text_color(colors.text_muted())
+                            .child(match kind {
+                                CandidateKind::Rule => {
+                                    "Ao confirmar, a regra passa a valer nos itens marcados."
+                                }
+                                _ => {
+                                    "Ao confirmar, a decisão fica ligada aos itens marcados; \
+                                      os desmarcados não voltam como sugestão."
+                                }
+                            }),
+                    )
+                })
+                .child(list)
+                .children(uncovered),
+        )
+    }
+
     fn reading_pane(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
         let visible_detail = self
@@ -813,6 +1086,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                     ),
             )
             .child(section(theme, "Motivo", &detail.rationale))
+            .children(self.map_section(&theme, &detail.summary.id, detail.summary.kind, cx))
             .child(
                 div()
                     .pt(px(SpacingScale::S2))
@@ -952,6 +1226,27 @@ impl<S: InboxStore + Send + 'static> Render for InboxScreen<S> {
                 .child(div().flex_1().min_w(px(0.0)).h_full().flex().flex_col()
                     .child(div().flex_1().min_h(px(0.0)).child(if let Some(editor) = self.editor.as_ref().filter(|_| self.detail.as_ref().is_some_and(|detail| matches_query(&detail.summary, &self.query))) { editor.clone().into_any_element() } else { self.reading_pane(cx) }))
                     .when(self.editor.is_none(), |pane| pane.child(self.review_actions(cx)))))
+    }
+}
+
+/// The outcome of an adoption: the map failing after the decision was
+/// created still counts as confirmed, with its own notice.
+fn adopted(
+    result: Result<application::adoption::AdoptOutcome, AdoptionError>,
+    linked: &'static str,
+    plain: &'static str,
+) -> Outcome {
+    match result {
+        Ok(outcome) if outcome.linked > 0 => Outcome::Action(Ok(()), linked),
+        Ok(_) => Outcome::Action(Ok(()), plain),
+        Err(AdoptionError::Inbox(error)) => Outcome::Action(Err(error), plain),
+        Err(AdoptionError::Graph(error)) => {
+            tracing::warn!(code = error.code(), "map update after adoption failed");
+            Outcome::Action(
+                Ok(()),
+                "Decisão criada. Não foi possível atualizar o mapa; abra o Mapa para revisar.",
+            )
+        }
     }
 }
 
