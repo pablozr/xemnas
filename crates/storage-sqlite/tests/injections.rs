@@ -5,7 +5,8 @@ mod support;
 use std::collections::BTreeSet;
 
 use application::injection::{
-    DeliveredItem, InjectionMode, InjectionRecord, InjectionStore, ItemKind,
+    DeliveredItem, Deliveries, DeliverySummary, InjectionMode, InjectionRecord, InjectionStore,
+    ItemKind,
 };
 use rusqlite::Connection;
 
@@ -170,4 +171,54 @@ fn diagnostics_aggregate_context_blocks_per_mode() {
     assert_eq!(context.inject.tokens_avg, Some(42));
     assert_eq!(context.shadow.blocks, 1);
     assert_eq!(context.shadow.items, 1);
+}
+
+#[test]
+fn the_history_lists_deliveries_newest_first_with_what_the_agent_read() {
+    let test = support::open("injections-history", &["p1"]);
+    let decision = support::decision(&test.store, "p1", "db", "Qual banco usar?", "SQLite");
+    let mut older = record(
+        "i-1",
+        "s-1",
+        InjectionMode::Shadow,
+        vec![item(ItemKind::Decision, &decision, 1)],
+    );
+    older.created_at = "2026-09-29T10:00:00Z".to_string();
+    let newer = record(
+        "i-2",
+        "s-2",
+        InjectionMode::Inject,
+        vec![
+            item(ItemKind::Decision, &decision, 1),
+            item(ItemKind::Claim, "gone", 1),
+        ],
+    );
+    test.store.record_injection(&older).expect("older");
+    test.store.record_injection(&newer).expect("newer");
+
+    let history = Deliveries::new(test.store.clone())
+        .recent("p1", 10)
+        .expect("history");
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[0].injection_id, "i-2", "newest first");
+    assert_eq!(history[0].items[0].label, "Qual banco usar?");
+    assert_eq!(history[0].items[1].label, "", "a missing claim reads empty");
+    assert_eq!(history[1].mode, InjectionMode::Shadow);
+
+    let summary = DeliverySummary::since(&history, "2026-09-30T00:00:00Z");
+    assert_eq!(summary.deliveries, 1);
+    assert_eq!(summary.sent, 1);
+    assert_eq!(summary.items, 2);
+    assert_eq!(summary.average_tokens(), 42);
+    assert_eq!(
+        DeliverySummary::since(&history, "2000-01-01T00:00:00Z").sessions,
+        2
+    );
+    assert!(
+        Deliveries::new(test.store.clone())
+            .recent("p1", 1)
+            .expect("limit")
+            .len()
+            == 1
+    );
 }

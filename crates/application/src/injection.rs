@@ -582,6 +582,163 @@ fn first_sentence(text: &str) -> String {
     cut
 }
 
+/// Read side of the injection audit: what was delivered (or measured) for a
+/// project, newest first.
+pub trait InjectionHistory {
+    /// The latest `limit` records of a project, newest first, with items.
+    fn recent_injections(
+        &self,
+        project_id: &str,
+        limit: usize,
+    ) -> Result<Vec<InjectionRecord>, ContextError>;
+}
+
+/// One item of a delivery, with the text the agent read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeliveryItem {
+    /// Decision or claim.
+    pub kind: ItemKind,
+    /// Full identifier.
+    pub id: String,
+    /// Version delivered.
+    pub version: i64,
+    /// Decision question or claim statement (empty when it no longer exists).
+    pub label: String,
+}
+
+/// One delivered (or measured) block, ready to show.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Delivery {
+    /// Audit record id.
+    pub injection_id: String,
+    /// Agent session.
+    pub session_id: String,
+    /// Sent (`inject`) or only measured (`shadow`).
+    pub mode: InjectionMode,
+    /// Estimated tokens of the block.
+    pub tokens: usize,
+    /// Relevant items left out by the budget.
+    pub omitted: usize,
+    /// RFC 3339 time.
+    pub created_at: String,
+    /// Items, in block order.
+    pub items: Vec<DeliveryItem>,
+}
+
+/// Totals over a set of deliveries.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DeliverySummary {
+    /// Blocks recorded.
+    pub deliveries: usize,
+    /// Blocks actually sent.
+    pub sent: usize,
+    /// Tokens across blocks.
+    pub tokens: usize,
+    /// Items across blocks.
+    pub items: usize,
+    /// Items left out by the budget.
+    pub omitted: usize,
+    /// Distinct agent sessions.
+    pub sessions: usize,
+}
+
+impl DeliverySummary {
+    /// Totals of `deliveries` created at or after `since` (RFC 3339).
+    pub fn since(deliveries: &[Delivery], since: &str) -> Self {
+        let recent: Vec<&Delivery> = deliveries
+            .iter()
+            .filter(|delivery| delivery.created_at.as_str() >= since)
+            .collect();
+        let sessions: BTreeSet<&str> = recent
+            .iter()
+            .map(|delivery| delivery.session_id.as_str())
+            .collect();
+        Self {
+            deliveries: recent.len(),
+            sent: recent
+                .iter()
+                .filter(|delivery| delivery.mode == InjectionMode::Inject)
+                .count(),
+            tokens: recent.iter().map(|delivery| delivery.tokens).sum(),
+            items: recent.iter().map(|delivery| delivery.items.len()).sum(),
+            omitted: recent.iter().map(|delivery| delivery.omitted).sum(),
+            sessions: sessions.len(),
+        }
+    }
+
+    /// Average tokens per block, rounded.
+    pub fn average_tokens(&self) -> usize {
+        (self.tokens + self.deliveries / 2)
+            .checked_div(self.deliveries)
+            .unwrap_or(0)
+    }
+}
+
+/// The delivery history use case.
+#[derive(Debug, Clone)]
+pub struct Deliveries<S> {
+    store: S,
+}
+
+impl<S> Deliveries<S>
+where
+    S: InjectionHistory + DecisionStore + ClaimStore,
+{
+    /// Wraps the store.
+    pub fn new(store: S) -> Self {
+        Self { store }
+    }
+
+    /// The latest deliveries of a project with the text of each item.
+    ///
+    /// # Errors
+    ///
+    /// `storage`.
+    pub fn recent(&self, project_id: &str, limit: usize) -> Result<Vec<Delivery>, ContextError> {
+        let records = self.store.recent_injections(project_id, limit)?;
+        let mut labels: std::collections::BTreeMap<(ItemKind, String), String> =
+            std::collections::BTreeMap::new();
+        let mut deliveries = Vec::with_capacity(records.len());
+        for record in records {
+            let mut items = Vec::with_capacity(record.items.len());
+            for item in record.items {
+                let key = (item.kind, item.id.clone());
+                if !labels.contains_key(&key) {
+                    let label = match item.kind {
+                        ItemKind::Decision => DecisionStore::get(&self.store, &item.id)
+                            .map_err(|error| ContextError::Storage(error.to_string()))?
+                            .map(|decision| decision.question)
+                            .unwrap_or_default(),
+                        ItemKind::Claim => self
+                            .store
+                            .get_claim(&item.id)
+                            .map_err(|error| ContextError::Storage(error.to_string()))?
+                            .map(|claim| claim.statement)
+                            .unwrap_or_default(),
+                    };
+                    labels.insert(key.clone(), label);
+                }
+                items.push(DeliveryItem {
+                    label: labels[&key].clone(),
+                    kind: item.kind,
+                    id: item.id,
+                    version: item.version,
+                });
+            }
+            deliveries.push(Delivery {
+                injection_id: record.injection_id,
+                session_id: record.session_id,
+                mode: record.mode,
+                tokens: record.tokens,
+                omitted: record.omitted,
+                created_at: record.created_at,
+                items,
+            });
+        }
+        Ok(deliveries)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
