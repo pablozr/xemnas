@@ -144,7 +144,13 @@ impl OpenCodeExtractor {
     }
 
     /// Request URL and body for the model's protocol.
-    fn request(&self, text: String) -> (String, serde_json::Value) {
+    fn request(
+        &self,
+        system: &str,
+        text: &str,
+        schema_name: &str,
+        schema: &serde_json::Value,
+    ) -> (String, serde_json::Value) {
         let model = &self.profile.model;
         match self.wire {
             Wire::ChatCompletions => (
@@ -153,7 +159,7 @@ impl OpenCodeExtractor {
                     "model": model,
                     "response_format": { "type": "json_object" },
                     "messages": [
-                        { "role": "system", "content": SYSTEM_PROMPT },
+                        { "role": "system", "content": system },
                         { "role": "user", "content": text }
                     ]
                 }),
@@ -163,7 +169,7 @@ impl OpenCodeExtractor {
                 json!({
                     "model": model,
                     "store": false,
-                    "instructions": SYSTEM_PROMPT,
+                    "instructions": system,
                     "input": [{
                         "role": "user",
                         "content": [{ "type": "input_text", "text": text }]
@@ -171,8 +177,8 @@ impl OpenCodeExtractor {
                     "text": {
                         "format": {
                             "type": "json_schema",
-                            "name": "decision_candidates",
-                            "schema": output_schema(),
+                            "name": schema_name,
+                            "schema": schema,
                             "strict": true
                         }
                     }
@@ -183,14 +189,14 @@ impl OpenCodeExtractor {
                 json!({
                     "model": model,
                     "max_tokens": MAX_OUTPUT_TOKENS,
-                    "system": SYSTEM_PROMPT,
+                    "system": system,
                     "messages": [{ "role": "user", "content": text }]
                 }),
             ),
         }
     }
 
-    fn attempt(&self, url: &str, body: &serde_json::Value, signals: &[RelevanceSignal]) -> Attempt {
+    fn attempt(&self, url: &str, body: &serde_json::Value) -> Attempt<String> {
         let mut request = self.client.post(url).json(body).bearer_auth(&self.key);
         if self.wire == Wire::Messages {
             request = request
@@ -233,9 +239,39 @@ impl OpenCodeExtractor {
                 "o OpenCode não devolveu texto".to_string(),
             ));
         };
-        match parse_model_output(json_object(&text), signals) {
-            Ok(proposals) => Attempt::Success(proposals),
-            Err(error) => Attempt::Fatal(error),
+        Attempt::Success(json_object(&text).to_string())
+    }
+
+    /// Asks the gateway for one JSON answer in the model's protocol, with
+    /// consent and retries.
+    pub fn complete(
+        &self,
+        system: &str,
+        user: &str,
+        schema_name: &str,
+        schema: &serde_json::Value,
+    ) -> Result<String, ExtractError> {
+        if let Err(reason) = consent_status(&self.profile) {
+            return Err(ExtractError::Extractor(format!(
+                "chamadas externas bloqueadas: {reason}"
+            )));
+        }
+        let (url, body) = self.request(system, user, schema_name, schema);
+        let mut attempt = 1u32;
+        loop {
+            match self.attempt(&url, &body) {
+                Attempt::Success(text) => return Ok(text),
+                Attempt::Fatal(error) => return Err(error),
+                Attempt::Transient => {
+                    if attempt >= self.retry.max_attempts {
+                        return Err(ExtractError::Extractor(format!(
+                            "o OpenCode falhou após {attempt} tentativa(s)"
+                        )));
+                    }
+                    (self.sleep)(self.retry.delay_for(attempt));
+                    attempt += 1;
+                }
+            }
         }
     }
 }
@@ -291,33 +327,14 @@ impl CandidateExtractor for OpenCodeExtractor {
         signals: &[RelevanceSignal],
         background: &ExtractionBackground,
     ) -> Result<Vec<CandidateProposal>, ExtractError> {
-        if let Err(reason) = consent_status(&self.profile) {
-            return Err(ExtractError::Extractor(format!(
-                "chamadas externas bloqueadas: {reason}"
-            )));
-        }
-        let (url, body) = self.request(build_user_content(
-            &self.profile,
-            input,
-            signals,
-            background,
-        ));
-        let mut attempt = 1u32;
-        loop {
-            match self.attempt(&url, &body, signals) {
-                Attempt::Success(proposals) => return Ok(proposals),
-                Attempt::Fatal(error) => return Err(error),
-                Attempt::Transient => {
-                    if attempt >= self.retry.max_attempts {
-                        return Err(ExtractError::Extractor(format!(
-                            "o OpenCode falhou após {attempt} tentativa(s)"
-                        )));
-                    }
-                    (self.sleep)(self.retry.delay_for(attempt));
-                    attempt += 1;
-                }
-            }
-        }
+        let user = build_user_content(&self.profile, input, signals, background);
+        let text = self.complete(
+            SYSTEM_PROMPT,
+            &user,
+            "decision_candidates",
+            &output_schema(),
+        )?;
+        parse_model_output(&text, signals)
     }
 }
 

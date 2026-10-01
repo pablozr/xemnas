@@ -138,7 +138,7 @@ fn migration_0010_upgrades_a_version_9_database() {
             row.get(0)
         })
         .expect("version");
-    assert_eq!(version, 15);
+    assert_eq!(version, 16);
     assert_eq!(
         Decisions::new(reopened)
             .detail(&decision)

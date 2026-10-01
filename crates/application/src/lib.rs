@@ -18,6 +18,7 @@ pub mod injection;
 pub mod integration;
 pub mod jobs;
 pub mod outbox;
+pub mod overview;
 pub mod paths;
 pub mod profile;
 pub mod projects;

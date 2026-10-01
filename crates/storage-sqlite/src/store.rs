@@ -64,6 +64,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 15,
         sql: include_str!("migrations/0015_candidate_kind_and_significance.sql"),
     },
+    Migration {
+        version: 16,
+        sql: include_str!("migrations/0016_create_project_overviews.sql"),
+    },
 ];
 
 /// A single embedded schema migration.

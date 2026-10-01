@@ -110,9 +110,9 @@ impl RetryPolicy {
 }
 
 /// Result of one provider attempt.
-pub(crate) enum Attempt {
-    /// A validated batch came back.
-    Success(Vec<CandidateProposal>),
+pub(crate) enum Attempt<T> {
+    /// The model's answer came back.
+    Success(T),
     /// A transient failure worth retrying.
     Transient,
     /// A failure that must not be retried.
@@ -172,6 +172,22 @@ impl CandidateExtractor for ProviderExtractor {
             Self::OpenAiCompatible(extractor) => extractor.extract_with(input, signals, background),
             Self::ChatGpt(extractor) => extractor.extract_with(input, signals, background),
             Self::OpenCode(extractor) => extractor.extract_with(input, signals, background),
+        }
+    }
+}
+
+impl application::overview::StructuredModel for ProviderExtractor {
+    fn complete(
+        &self,
+        system: &str,
+        user: &str,
+        schema_name: &str,
+        schema: &serde_json::Value,
+    ) -> Result<String, ExtractError> {
+        match self {
+            Self::OpenAiCompatible(model) => model.complete(system, user, schema_name, schema),
+            Self::ChatGpt(model) => model.complete(system, user, schema_name, schema),
+            Self::OpenCode(model) => model.complete(system, user, schema_name, schema),
         }
     }
 }
@@ -281,12 +297,32 @@ impl CandidateExtractor for OpenAiCompatibleExtractor {
         signals: &[RelevanceSignal],
         background: &ExtractionBackground,
     ) -> Result<Vec<CandidateProposal>, ExtractError> {
+        let user = build_user_content(&self.profile, input, signals, background);
+        let text = self.complete(
+            SYSTEM_PROMPT,
+            &user,
+            "decision_candidates",
+            &output_schema(),
+        )?;
+        parse_model_output(&text, signals)
+    }
+}
+
+impl OpenAiCompatibleExtractor {
+    /// Asks the model for one JSON answer (`json_object` mode), with consent,
+    /// retries and the response bounds of every call.
+    pub fn complete(
+        &self,
+        system: &str,
+        user: &str,
+        _schema_name: &str,
+        _schema: &serde_json::Value,
+    ) -> Result<String, ExtractError> {
         if let Err(reason) = consent_status(&self.profile) {
             return Err(ExtractError::Extractor(format!(
                 "chamadas externas bloqueadas: {reason}"
             )));
         }
-
         let endpoint = self
             .profile
             .endpoint
@@ -299,15 +335,14 @@ impl CandidateExtractor for OpenAiCompatibleExtractor {
             "temperature": 0,
             "response_format": { "type": "json_object" },
             "messages": [
-                { "role": "system", "content": SYSTEM_PROMPT },
-                { "role": "user", "content": build_user_content(&self.profile, input, signals, background) }
+                { "role": "system", "content": system },
+                { "role": "user", "content": user }
             ]
         });
-
         let mut attempt = 1u32;
         loop {
-            match self.attempt(&url, &body, signals) {
-                Attempt::Success(proposals) => return Ok(proposals),
+            match self.attempt(&url, &body) {
+                Attempt::Success(text) => return Ok(text),
                 Attempt::Fatal(error) => return Err(error),
                 Attempt::Transient => {
                     if attempt >= self.retry.max_attempts {
@@ -321,11 +356,9 @@ impl CandidateExtractor for OpenAiCompatibleExtractor {
             }
         }
     }
-}
 
-impl OpenAiCompatibleExtractor {
     /// Performs one request and classifies the outcome.
-    fn attempt(&self, url: &str, body: &serde_json::Value, signals: &[RelevanceSignal]) -> Attempt {
+    fn attempt(&self, url: &str, body: &serde_json::Value) -> Attempt<String> {
         let mut request = self.client.post(url).json(body);
         if !self.secret.is_empty() {
             request = request.bearer_auth(&self.secret);
@@ -385,10 +418,7 @@ impl OpenAiCompatibleExtractor {
                 "resposta do provedor sem conteúdo".to_string(),
             ));
         };
-        match parse_model_output(&content, signals) {
-            Ok(proposals) => Attempt::Success(proposals),
-            Err(error) => Attempt::Fatal(error),
-        }
+        Attempt::Success(content)
     }
 }
 

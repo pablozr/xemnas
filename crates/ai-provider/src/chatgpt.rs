@@ -28,8 +28,8 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::{
-    build_user_content, output_schema, parse_model_output, KeyringSecretStore, RetryPolicy,
-    MAX_RESPONSE_BYTES, SYSTEM_PROMPT,
+    build_user_content, output_schema, parse_model_output, Attempt, KeyringSecretStore,
+    RetryPolicy, MAX_RESPONSE_BYTES, SYSTEM_PROMPT,
 };
 
 /// OpenID issuer of Sign in with ChatGPT.
@@ -661,12 +661,6 @@ fn plan_error(code: &str) -> ExtractError {
     )
 }
 
-enum Attempt {
-    Success(Vec<CandidateProposal>),
-    Transient,
-    Fatal(ExtractError),
-}
-
 /// Extractor on the user's ChatGPT plan, through the Responses API.
 pub struct ChatGptExtractor {
     session: Arc<ChatGptSession>,
@@ -706,7 +700,7 @@ impl ChatGptExtractor {
         })
     }
 
-    fn attempt(&self, body: &serde_json::Value, signals: &[RelevanceSignal]) -> Attempt {
+    fn attempt(&self, body: &serde_json::Value) -> Attempt<String> {
         let token = match self.session.access_token(&self.profile) {
             Ok(token) => token,
             Err(ProviderError::Unreachable) => return Attempt::Transient,
@@ -752,10 +746,7 @@ impl ChatGptExtractor {
             });
         }
         match read_stream(response) {
-            Ok(StreamResult::Completed(text)) => match parse_model_output(&text, signals) {
-                Ok(proposals) => Attempt::Success(proposals),
-                Err(error) => Attempt::Fatal(error),
-            },
+            Ok(StreamResult::Completed(text)) => Attempt::Success(text),
             Ok(StreamResult::Failed(code))
                 if code == "subscription_sharing_usage_unavailable"
                     || code == "subscription_sharing_user_unavailable" =>
@@ -786,6 +777,27 @@ impl CandidateExtractor for ChatGptExtractor {
         signals: &[RelevanceSignal],
         background: &ExtractionBackground,
     ) -> Result<Vec<CandidateProposal>, ExtractError> {
+        let user = build_user_content(&self.profile, input, signals, background);
+        let text = self.complete(
+            SYSTEM_PROMPT,
+            &user,
+            "decision_candidates",
+            &output_schema(),
+        )?;
+        parse_model_output(&text, signals)
+    }
+}
+
+impl ChatGptExtractor {
+    /// Asks the plan for one answer under a strict JSON Schema, with consent
+    /// and retries.
+    pub fn complete(
+        &self,
+        system: &str,
+        user: &str,
+        schema_name: &str,
+        schema: &serde_json::Value,
+    ) -> Result<String, ExtractError> {
         if let Err(reason) = consent_status(&self.profile) {
             return Err(ExtractError::Extractor(format!(
                 "chamadas externas bloqueadas: {reason}"
@@ -795,29 +807,26 @@ impl CandidateExtractor for ChatGptExtractor {
         // plan requests; `store: false` and `stream: true` are mandatory.
         let body = json!({
             "model": self.profile.model,
-            "instructions": SYSTEM_PROMPT,
+            "instructions": system,
             "input": [{
                 "role": "user",
-                "content": [{
-                    "type": "input_text",
-                    "text": build_user_content(&self.profile, input, signals, background),
-                }],
+                "content": [{ "type": "input_text", "text": user }],
             }],
             "store": false,
             "stream": true,
             "text": {
                 "format": {
                     "type": "json_schema",
-                    "name": "decision_candidates",
+                    "name": schema_name,
                     "strict": true,
-                    "schema": output_schema(),
+                    "schema": schema,
                 }
             },
         });
         let mut attempt = 1u32;
         loop {
-            match self.attempt(&body, signals) {
-                Attempt::Success(proposals) => return Ok(proposals),
+            match self.attempt(&body) {
+                Attempt::Success(text) => return Ok(text),
                 Attempt::Fatal(error) => return Err(error),
                 Attempt::Transient => {
                     if attempt >= self.retry.max_attempts {
