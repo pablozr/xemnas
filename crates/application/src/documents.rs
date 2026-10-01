@@ -11,7 +11,13 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::captures::{
+    CaptureArtifactRecord, CaptureCheckpointRecord, CaptureError, CaptureReceiptRecord,
+    CaptureRepository, CaptureWrite,
+};
+use crate::jobs::{JobRecord, JobState, ANALYZE_CAPTURE_KIND};
 use crate::projects::ProjectRepository;
+use crate::redact::redact_secrets;
 
 /// Folders (at the project root) whose files are documentation.
 pub const DOC_DIRS: [&str; 10] = [
@@ -52,6 +58,15 @@ const MAX_DEPTH: usize = 6;
 const MAX_HEADINGS: usize = 12;
 /// Characters of the opening paragraph kept.
 const EXCERPT_CHARS: usize = 600;
+
+/// Artifact kind of a document sent to extraction.
+pub const DOCUMENT_ARTIFACT: &str = "document";
+/// Adapter recorded on document captures.
+pub const DOCUMENT_ADAPTER: &str = "xemnas-documents";
+/// Documents queued for review per run, ADRs and specs first.
+pub const PROPOSE_PER_RUN: usize = 12;
+/// Characters of a document sent to extraction.
+const DOCUMENT_CHARS: usize = 40_000;
 
 /// What a document is, from its place and name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -224,6 +239,128 @@ where
             truncated,
         })
     }
+}
+
+impl<S> Documents<S>
+where
+    S: DocumentStore + ProjectRepository + CaptureRepository,
+{
+    /// Queues new or changed documents for the same analysis as captured
+    /// conversations: each version of a document becomes one capture with a
+    /// `document` artifact and an analysis job, so its decisions and rules
+    /// reach Revisão and, once confirmed, the map's suggestions. A version
+    /// already queued is never queued again. Returns how many were queued.
+    ///
+    /// # Errors
+    ///
+    /// `project_not_found` or `storage`.
+    pub fn propose(&self, project_id: &str, limit: usize) -> Result<usize, DocumentError> {
+        let project = ProjectRepository::get(&self.store, project_id)
+            .map_err(|error| DocumentError::Storage(error.to_string()))?
+            .ok_or(DocumentError::ProjectNotFound)?;
+        let root = PathBuf::from(&project.location);
+        let mut queued = 0;
+        for document in self.list(project_id)? {
+            if queued >= limit {
+                break;
+            }
+            let key = document_capture_key(project_id, &document);
+            if self
+                .store
+                .find_receipt_by_idempotency_key(&key)
+                .map_err(capture_error)?
+                .is_some()
+            {
+                continue;
+            }
+            let Ok(raw) = std::fs::read(root.join(&document.path)) else {
+                continue;
+            };
+            let content: String = redact_secrets(&String::from_utf8_lossy(&raw))
+                .chars()
+                .take(DOCUMENT_CHARS)
+                .collect();
+            if content.trim().is_empty() {
+                continue;
+            }
+            match self.store.insert_capture(&document_capture(
+                &project.location,
+                &key,
+                &document,
+                content,
+            )) {
+                Ok(()) => queued += 1,
+                Err(CaptureError::DuplicateIdempotencyKey) => {}
+                Err(error) => return Err(capture_error(error)),
+            }
+        }
+        Ok(queued)
+    }
+}
+
+/// One version of a document: project, path and content fingerprint.
+fn document_capture_key(project_id: &str, document: &ProjectDocument) -> String {
+    format!(
+        "document:{project_id}:{}:{}",
+        document.path, document.fingerprint
+    )
+}
+
+fn document_capture(
+    location: &str,
+    key: &str,
+    document: &ProjectDocument,
+    content: String,
+) -> CaptureWrite {
+    let now = crate::clock::now_rfc3339();
+    let capture_id = uuid::Uuid::now_v7().to_string();
+    let metadata = serde_json::json!({
+        "file": document.path,
+        "doc_kind": document.kind.as_str(),
+        "title": document.title,
+    })
+    .to_string();
+    CaptureWrite {
+        receipt: CaptureReceiptRecord {
+            capture_id: capture_id.clone(),
+            idempotency_key: key.to_string(),
+            canonical_path: location.to_string(),
+            received_at: now.clone(),
+            artifact_count: 1,
+        },
+        artifacts: vec![CaptureArtifactRecord {
+            capture_id: capture_id.clone(),
+            artifact_id: uuid::Uuid::now_v7().to_string(),
+            kind: DOCUMENT_ARTIFACT.to_string(),
+            fingerprint: integration_contracts::capture::artifact_fingerprint(&content),
+            content,
+            metadata,
+        }],
+        job: JobRecord {
+            id: uuid::Uuid::now_v7().to_string(),
+            kind: ANALYZE_CAPTURE_KIND.to_string(),
+            payload: capture_id.clone(),
+            state: JobState::Queued,
+            idempotent: true,
+            attempts: 0,
+            last_error: None,
+            created_at: now.clone(),
+            updated_at: now.clone(),
+        },
+        checkpoint: CaptureCheckpointRecord {
+            adapter: DOCUMENT_ADAPTER.to_string(),
+            adapter_version: "1".to_string(),
+            session_id: format!("documents:{}", document.kind.as_str()),
+            message_id: format!("{}@{}", document.path, document.fingerprint),
+            capture_id,
+            observed_at: now.clone(),
+            updated_at: now,
+        },
+    }
+}
+
+fn capture_error(error: CaptureError) -> DocumentError {
+    DocumentError::Storage(error.to_string())
 }
 
 /// Documentation files under `root`: root files first, then documentation

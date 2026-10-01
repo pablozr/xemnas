@@ -16,7 +16,14 @@ impl CandidateExtractor for FakeCandidateExtractor {
         input: &DecisionEvidence,
         signals: &[RelevanceSignal],
     ) -> Result<Vec<CandidateProposal>, ExtractError> {
-        if signals.is_empty() {
+        // Reading a document needs a model; the offline fake would only
+        // restate the signals.
+        let documents_only = !input.artifacts.is_empty()
+            && input
+                .artifacts
+                .iter()
+                .all(|artifact| artifact.kind == crate::documents::DOCUMENT_ARTIFACT);
+        if signals.is_empty() || documents_only {
             return Ok(Vec::new());
         }
         let strong = signals.iter().filter(|signal| signal.is_strong()).count();

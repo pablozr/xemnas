@@ -63,8 +63,14 @@ library or service), hard_to_reverse, first_of_a_kind (the project never did thi
 past_problem (it fixes a class of problems that already hurt), constrains_future_work. No \
 criterion means significance below 0.3; one criterion around 0.5; two or more 0.7 and up. \
 A bug fix is detail unless it establishes a rule for the whole component.\n\
+An artifact of kind document is a file of the project's own documentation (ADR, \
+specification, README or guide; path and type in its header), not a conversation: propose \
+the decisions and rules it states as taken, and nothing for \
+plans, open questions, how-to steps, feature descriptions or instructions addressed to \
+agents. Rules written for every contributor (\"every migration is forward-only\") are \
+rules. Write in the document's language.\n\
 Do not propose anything already recorded (listed under \"Already recorded\"), and follow \
-the user's taste shown under \"confirmed\" and \"rejected\". At most 3 items, the clearest \
+the user's taste shown under \"confirmed\" and \"rejected\". At most 3 items (5 for a document), the clearest \
 first; merge items that are the same choice.\n\
 Write every text field in the language of the conversation. question: the problem, as a \
 short question. choice: what was chosen (for a rule, the rule itself), in one sentence. \
@@ -534,9 +540,28 @@ pub(crate) fn build_user_content(
     text.push_str(&format!("Relevance signals: {}\n", labels.join(", ")));
     for artifact in &input.artifacts {
         let content = truncate_content(&artifact.content, profile.max_input_chars);
+        let header = if artifact.kind == "document" {
+            let metadata: serde_json::Value =
+                serde_json::from_str(&artifact.metadata).unwrap_or_default();
+            let field = |name: &str| {
+                metadata
+                    .get(name)
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            format!(
+                "document: {}, {}, \"{}\"",
+                field("file"),
+                field("doc_kind"),
+                field("title")
+            )
+        } else {
+            artifact.kind.clone()
+        };
         text.push_str(&format!(
             "\n### artifact {} ({})\n{}\n",
-            artifact.artifact_id, artifact.kind, content
+            artifact.artifact_id, header, content
         ));
         if text.len() >= MAX_INPUT_BYTES {
             break;

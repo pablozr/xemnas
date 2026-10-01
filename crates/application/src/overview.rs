@@ -13,10 +13,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::analysis::ExtractorFactory;
+use crate::captures::CaptureRepository;
 use crate::claims::ClaimStore;
 use crate::clock::now_rfc3339;
 use crate::decisions::DecisionStore;
-use crate::documents::{document_ref, DocumentError, DocumentStore, Documents};
+use crate::documents::{document_ref, DocumentError, DocumentStore, Documents, PROPOSE_PER_RUN};
 use crate::extract::ExtractError;
 use crate::graph::{GraphStore, KnowledgeGraph};
 use crate::injection::short_ref;
@@ -204,6 +205,8 @@ pub struct OverviewView {
     pub overview: ProjectOverview,
     /// Decisions confirmed after it was generated.
     pub new_decisions: usize,
+    /// Documents sent for analysis by this generation (0 when only read).
+    pub queued_documents: usize,
 }
 
 /// Persistence port for overviews.
@@ -434,6 +437,7 @@ where
         + DecisionStore
         + OverviewStore
         + DocumentStore
+        + CaptureRepository
         + Clone,
     P: ProfileStore,
     K: SecretStore,
@@ -468,6 +472,7 @@ where
         Ok(Some(OverviewView {
             overview,
             new_decisions,
+            queued_documents: 0,
         }))
     }
 
@@ -525,9 +530,18 @@ where
             flows,
         };
         self.store.save_overview(&overview)?;
+        // With the provider on, new or changed documents go to the same
+        // analysis as conversations: their decisions reach Revisão.
+        let queued_documents = Documents::new(self.store.clone())
+            .propose(project_id, PROPOSE_PER_RUN)
+            .map_err(|error| match error {
+                DocumentError::Storage(detail) => OverviewError::Storage(detail),
+                other => OverviewError::Storage(other.to_string()),
+            })?;
         Ok(OverviewView {
             overview,
             new_decisions: 0,
+            queued_documents,
         })
     }
 
@@ -740,6 +754,7 @@ where
         + DecisionStore
         + OverviewStore
         + DocumentStore
+        + CaptureRepository
         + Clone
         + Send
         + Sync,

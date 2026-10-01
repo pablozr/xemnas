@@ -15,7 +15,7 @@
 
 - O consentimento da Visão passa a citar títulos, seções e o primeiro parágrafo da documentação; nada do código.
 - Remover o projeto apaga o índice.
-- Próximo passo possível: ADRs e especificações novas ou alteradas virarem capturas para a Revisão, passando pela mesma extração e confirmação.
+- **Documentos viram candidatos (2026-10-01).** Ao gerar a Visão (provedor ativo), até 12 documentos novos ou alterados por vez, ADRs e especificações primeiro, viram capturas com um artefato `document` e um job de análise, pelo mesmo caminho das conversas: consentimento, extração, reconciliação, Revisão e, confirmados, sugestões do Mapa. Cada versão (caminho + impressão digital) entra uma vez só. Os arquivos da captura são o próprio documento e os caminhos de código que ele cita, então o que ele decide se liga aos componentes. O extrator offline ignora documentos (só repetiria os sinais), e o prompt pede só o que o documento afirma como decidido, não planos, passos ou instruções a agentes.
 
 ## Alternativas rejeitadas
 

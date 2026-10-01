@@ -83,8 +83,34 @@ impl RelevanceSignal {
     }
 }
 
+/// The project's own documents in the capture: `(path, doc_kind)`.
+fn documents(evidence: &DecisionEvidence) -> Vec<(String, String)> {
+    evidence
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.kind == crate::documents::DOCUMENT_ARTIFACT)
+        .map(|artifact| {
+            let metadata: serde_json::Value =
+                serde_json::from_str(&artifact.metadata).unwrap_or_default();
+            let field = |name: &str| {
+                metadata
+                    .get(name)
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            (field("file"), field("doc_kind"))
+        })
+        .collect()
+}
+
 /// Returns `true` when the capture is one of the §6 exclusions.
 fn is_trivially_excluded(evidence: &DecisionEvidence, text: &str) -> bool {
+    // A written document is read whole; the extractor decides what in it
+    // was decided.
+    if !documents(evidence).is_empty() {
+        return false;
+    }
     if has_structural_strong(evidence) {
         return false;
     }
@@ -250,6 +276,15 @@ pub fn filter_relevant(evidence: &DecisionEvidence) -> Vec<RelevanceSignal> {
 
     let mut detected = BTreeSet::new();
 
+    // Documentation states intent meant to last; ADRs and specifications
+    // record choices that condition the work after them.
+    for (_, kind) in documents(evidence) {
+        detected.insert(RelevanceSignal::ValidityMonths);
+        if matches!(kind.as_str(), "adr" | "spec") {
+            detected.insert(RelevanceSignal::ConditionsFutureWork);
+        }
+    }
+
     if contains_any_token(&text, PUBLIC_CONTRACT_TOKENS) {
         detected.insert(RelevanceSignal::PublicContract);
     }
@@ -332,9 +367,21 @@ pub(super) fn diff_file_list(evidence: &DecisionEvidence) -> Vec<String> {
     diff_files(evidence).into_iter().collect()
 }
 
-/// Sorted unique file paths found in `diff --git` headers.
+/// Sorted unique file paths found in `diff --git` headers, plus, for a
+/// document, its own path and the code paths it cites (so what it decides
+/// ties to the components of the map).
 fn diff_files(evidence: &DecisionEvidence) -> BTreeSet<String> {
     let mut files = BTreeSet::new();
+    for (path, _) in documents(evidence) {
+        if !path.is_empty() {
+            files.insert(path);
+        }
+    }
+    for artifact in &evidence.artifacts {
+        if artifact.kind == crate::documents::DOCUMENT_ARTIFACT {
+            files.extend(crate::injection::mentioned_paths(&artifact.content, ""));
+        }
+    }
     for artifact in &evidence.artifacts {
         for line in artifact.content.lines() {
             let Some(rest) = line.strip_prefix("diff --git ") else {
