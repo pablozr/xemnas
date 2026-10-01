@@ -36,8 +36,9 @@ use super::graph::{GraphCanvas, GraphEvent};
 use crate::ui::controls::{action_button, icon_action, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
-    count_chip, empty_panel, error_banner, mark_selected, panel_title, reading_page, section_label,
-    segment, segmented, skeleton_list, tag, toast, READING_WIDTH, TOAST_DURATION,
+    count_chip, empty_panel, error_banner, mark_selected, panel_title, reading_page,
+    section_header, section_label, segment, segmented, skeleton_list, tag, toast, READING_WIDTH,
+    TOAST_DURATION,
 };
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme};
@@ -89,6 +90,8 @@ pub struct MapServices<S> {
 
 /// Decisions offered when linking.
 const PICK_LIMIT: usize = 100;
+/// Files offered as quick picks in the file lens.
+const RECENT_FILES: usize = 6;
 /// Days an entity counts as recently active on the overview.
 const RECENT_DAYS: i64 = 14;
 /// Nodes per side of the neighborhood diagram.
@@ -142,6 +145,8 @@ struct MapData {
     assembled: usize,
     suggestions: Vec<Suggestion>,
     proposals: SuggestionReport,
+    /// Files the latest decisions changed: quick picks for the file lens.
+    recent_files: Vec<String>,
 }
 
 enum Outcome {
@@ -1507,7 +1512,39 @@ impl<S: MapStores> MapScreen<S> {
                         .child(confirm),
                 );
             }
-            column = column.child(section(theme, "Vínculos sugeridos", list));
+            // Several ties from the same evidence are usually confirmed
+            // together; one action takes them all.
+            let ids: Vec<String> = suggestions
+                .iter()
+                .map(|suggestion| suggestion.edge_id.clone())
+                .collect();
+            let all = (ids.len() > 1).then(|| {
+                let count = ids.len();
+                self.button(
+                    "map-confirm-all",
+                    ButtonKind::Secondary,
+                    !self.busy,
+                    format!("Confirmar os {count}"),
+                    move |this, cx| {
+                        let ids = ids.clone();
+                        this.mutate(cx, "Vínculos confirmados.", move |backend| {
+                            for id in ids {
+                                backend.graph.confirm(&id)?;
+                            }
+                            Ok(None)
+                        });
+                    },
+                    cx,
+                )
+            });
+            column = column.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S3))
+                    .child(section_header(theme, "Vínculos sugeridos").children(all))
+                    .child(list),
+            );
         }
         if !components.is_empty() || !technologies.is_empty() {
             let mut list = div().flex().flex_col();
@@ -1662,17 +1699,7 @@ impl<S: MapStores> MapScreen<S> {
                     .flex()
                     .flex_col()
                     .gap(px(SpacingScale::S3))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .child(section_label(theme, "Itens sugeridos")),
-                            )
-                            .children(all),
-                    )
+                    .child(section_header(theme, "Itens sugeridos").children(all))
                     .child(list),
             );
         }
@@ -2142,6 +2169,42 @@ impl<S: MapStores> MapScreen<S> {
                     )
                     .child(show),
             );
+        let recent = self
+            .data
+            .as_ref()
+            .map(|data| data.recent_files.clone())
+            .unwrap_or_default();
+        if self.lens.is_none() && !recent.is_empty() {
+            let mut picks = div().flex().flex_col().gap(px(2.0));
+            for (index, file) in recent.into_iter().enumerate() {
+                let pick = file.clone();
+                picks = picks.child(
+                    self.row(
+                        format!("map-lens-recent-{index}"),
+                        false,
+                        &file,
+                        move |this, cx| {
+                            let value = pick.clone();
+                            this.path
+                                .update(cx, |field, cx| field.set_value(&value, cx));
+                            this.open_lens(cx);
+                        },
+                        cx,
+                    )
+                    .child(icon(IconName::File, 14.0, colors.text_muted()))
+                    .child(
+                        text_style(div(), TypeScale::BODY_SMALL)
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .truncate()
+                            .font_family(Theme::font_mono())
+                            .text_color(colors.text_secondary())
+                            .child(file),
+                    ),
+                );
+            }
+            column = column.child(section(theme, "Arquivos das últimas decisões", picks));
+        }
         if let Some(lens) = self.lens.clone() {
             if lens.components.is_empty() {
                 column = column.child(
@@ -3055,6 +3118,16 @@ fn load<S: MapStores>(backend: &MapServices<S>, project: &str) -> Result<MapData
             "Não foi possível ler o contexto sugerido.",
         )
     })?;
+    let recent_files = backend
+        .graph
+        .recent_files(project, RECENT_FILES)
+        .map_err(|error| {
+            failure(
+                "recent_files",
+                error.code(),
+                "Não foi possível ler os arquivos das decisões.",
+            )
+        })?;
     Ok(MapData {
         map,
         graph,
@@ -3063,6 +3136,7 @@ fn load<S: MapStores>(backend: &MapServices<S>, project: &str) -> Result<MapData
         assembled,
         suggestions,
         proposals,
+        recent_files,
     })
 }
 

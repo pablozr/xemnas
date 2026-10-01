@@ -21,8 +21,7 @@ use super::format::{clipped, plural, short_date};
 use crate::ui::controls::{action_button, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
-    empty_panel, error_banner, reading_page, section_label, skeleton_list, toast, READING_WIDTH,
-    TOAST_DURATION,
+    empty_panel, error_banner, reading_page, section_label, skeleton_list, toast, TOAST_DURATION,
 };
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{RadiusScale, SpacingScale, TypeScale};
@@ -339,70 +338,94 @@ impl OverviewScreen {
         cx: &mut Context<Self>,
     ) -> Div {
         let colors = theme.colors;
-        let mut grid = div().flex().flex_col().gap(px(SpacingScale::S3));
-        for (pair_index, pair) in flows.chunks(2).enumerate() {
-            let mut line = div().flex().items_stretch().gap(px(SpacingScale::S3));
-            for (offset, flow) in pair.iter().enumerate() {
-                let index = pair_index * 2 + offset;
-                let components: Vec<String> = flow
-                    .steps
-                    .iter()
-                    .filter_map(|step| step.entity_name.clone())
-                    .fold(Vec::new(), |mut names, name| {
-                        if !names.contains(&name) {
-                            names.push(name);
-                        }
-                        names
-                    });
-                let card = div()
-                    .id(SharedString::from(format!("overview-flow-{index}")))
-                    .w(px(FLOW_CARD_WIDTH))
-                    .flex_none()
-                    .flex()
-                    .flex_col()
-                    .gap(px(SpacingScale::S2))
-                    .p(px(SpacingScale::S4))
-                    .rounded(RadiusScale.surface())
-                    .border_1()
-                    .border_color(colors.glass_border_card())
-                    .bg(colors.glass_fill_card())
-                    .cursor_pointer()
-                    .hover(move |style| {
-                        style
-                            .border_color(colors.glass_border_card_hover())
-                            .bg(colors.glass_fill_medium())
-                    })
-                    .role(Role::Button)
-                    .aria_label(format!("Fluxo: {}", flow.title))
-                    .focus_visible(crate::ui::controls::focus_ring(theme))
-                    .child(text_style(div(), TypeScale::HEADING_3).child(flow.title.clone()))
-                    .child(
-                        text_style(div(), TypeScale::BODY_SMALL)
-                            .text_color(colors.text_secondary())
-                            .child(flow.description.clone()),
-                    )
-                    .child(
-                        text_style(div(), TypeScale::META)
-                            .text_color(colors.text_muted())
-                            .child(if components.is_empty() {
-                                format!("{} passos", flow.steps.len())
-                            } else {
-                                format!("{} passos · {}", flow.steps.len(), components.join(", "))
-                            }),
-                    );
-                line = line.child(self.pressable(
-                    card,
-                    &format!("overview-flow-{index}"),
-                    move |this, cx| {
-                        this.flow = Some(index);
-                        cx.notify();
-                    },
-                    cx,
-                ));
-            }
-            grid = grid.child(line);
+        // A numbered list read top to bottom: flows are not a grid of cards.
+        let mut list = div()
+            .flex()
+            .flex_col()
+            .rounded(RadiusScale.surface())
+            .border_1()
+            .border_color(colors.glass_border_card())
+            .overflow_hidden();
+        for (index, flow) in flows.iter().enumerate() {
+            let components: Vec<String> = flow
+                .steps
+                .iter()
+                .filter_map(|step| step.entity_name.clone())
+                .fold(Vec::new(), |mut names, name| {
+                    if !names.contains(&name) {
+                        names.push(name);
+                    }
+                    names
+                });
+            let row = div()
+                .id(SharedString::from(format!("overview-flow-{index}")))
+                .flex()
+                .items_start()
+                .gap(px(SpacingScale::S4))
+                .px(px(SpacingScale::S4))
+                .py(px(SpacingScale::S4))
+                .when(index > 0, |row| {
+                    row.border_t_1().border_color(colors.hairline_divider())
+                })
+                .cursor_pointer()
+                .hover(move |style| style.bg(colors.glass_fill_medium()))
+                .active(move |style| style.bg(colors.glass_fill_strong()))
+                .role(Role::Button)
+                .aria_label(format!("Fluxo: {}", flow.title))
+                .focus_visible(crate::ui::controls::focus_ring(theme))
+                .child(
+                    text_style(div(), TypeScale::META)
+                        .w(px(20.0))
+                        .flex_none()
+                        .pt(px(2.0))
+                        .font_family(Theme::font_mono())
+                        .text_color(colors.text_muted())
+                        .child(format!("{:02}", index + 1)),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.0))
+                        .child(text_style(div(), TypeScale::ROW_TITLE).child(flow.title.clone()))
+                        .child(
+                            text_style(div(), TypeScale::BODY_SMALL)
+                                .text_color(colors.text_secondary())
+                                .child(flow.description.clone()),
+                        )
+                        .child(
+                            text_style(div(), TypeScale::META)
+                                .mt(px(2.0))
+                                .text_color(colors.text_muted())
+                                .child(if components.is_empty() {
+                                    plural(flow.steps.len(), "passo", "passos")
+                                } else {
+                                    format!(
+                                        "{} · {}",
+                                        plural(flow.steps.len(), "passo", "passos"),
+                                        components.join(", ")
+                                    )
+                                }),
+                        ),
+                )
+                .child(div().pt(px(2.0)).child(icon(
+                    IconName::ChevronRight,
+                    14.0,
+                    colors.text_muted(),
+                )));
+            list = list.child(self.pressable(
+                row,
+                &format!("overview-flow-{index}"),
+                move |this, cx| {
+                    this.flow = Some(index);
+                    cx.notify();
+                },
+                cx,
+            ));
         }
-        grid
+        list
     }
 
     fn render_flow(&mut self, theme: &Theme, flow: &OverviewFlow, cx: &mut Context<Self>) -> Div {
@@ -719,9 +742,6 @@ impl Render for OverviewScreen {
             )
     }
 }
-
-/// Two flow cards and their gap fill the reading column.
-const FLOW_CARD_WIDTH: f32 = (READING_WIDTH - SpacingScale::S3) / 2.0;
 
 /// Longest source title shown on a chip; the tooltip has the rest.
 const CHIP_CHARS: usize = 48;

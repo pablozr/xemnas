@@ -197,8 +197,9 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   título "Visão do projeto", linha de meta (data, quantas decisões e regras,
   e em âmbar "N decisões novas desde então") e "Atualizar visão" secundário;
   seção Resumo com parágrafos e, abaixo de cada um, chips mono das fontes
-  (decisão abre em Decisões; regra é só rótulo); seção Principais fluxos com
-  cartões de vidro dois por linha (título, descrição, passos e componentes).
+  (decisão abre em Decisões; regra é só rótulo); seção Principais fluxos como
+  lista numerada numa borda só (número em mono, título, descrição, passos e
+  componentes, chevron), nunca grade de cartões.
 - O cartão abre o fluxo na mesma coluna: "Todos os fluxos" (ghost) volta;
   passos numerados em círculos de 24 px ligados por filete vertical, com
   título, texto, chip do componente (ícone de grafo, abre no Mapa) e fontes.
@@ -226,7 +227,9 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   nome, descrição, padrões em mono, ações Vincular decisão, Vincular regra,
   Faz parte de…, Editar e Aposentar com confirmação na própria página) e as
   seções Decisões em vigor (abrem em Decisões), Conflitos, Regras, Estrutura,
-  Impacto e Linha do tempo; lente de arquivo com campo e resultado.
+  Impacto e Linha do tempo; lente de arquivo com campo e resultado; antes da
+  primeira consulta, "Arquivos das últimas decisões" (até 6, do caso de uso
+  `recent_files`) preenche e consulta com um clique.
 - **Linha do tempo** (anatomia do Primer Timeline): do mais recente ao mais
   antigo, agrupada por dia ("Hoje", "Ontem", "29 set 2026" + contagem), num
   trilho vertical de 1 px. Decisões e regras são itens cheios: marcador de
@@ -261,6 +264,8 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
     ordem, do centro para fora; um sinal curto percorre cada linha
     devagar e, no item em foco, rápido e brilhante. Sem movimento com
     `reduce_motion`.
+  - Decisão ou regra sem nenhuma ligação não é desenhada (fica nas listas);
+    componente sem decisões fica esmaecido e com a linha de peso neutra.
   - Layout de forças assentado antes do primeiro quadro, com sementes por id:
     o mesmo mapa abre sempre igual e não "dança"; atualizar mantém os nós
     no lugar. Ilhas (componente de topo, partes, decisões e regras ligadas)
@@ -268,7 +273,7 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   - Foco: ponteiro ou clique apaga tudo menos a vizinhança; seleção ganha
     retícula de quatro colchetes e um cartão lateral (300 px) com ligações,
     sugestões (Confirmar/Rejeitar) e a ação primária (abrir no Mapa ou em
-    Decisões). Camadas em chips no topo, legenda embaixo à esquerda, zoom e
+    Decisões). Camadas em chips no topo, legenda sem caixa embaixo à esquerda, zoom e
     "enquadrar" embaixo à direita; Esc limpa, + − 0 aproximam e enquadram.
 - **Sugestões** abrem com **Relações entre decisões**: pergunta da decisão,
   `tag` com o verbo ("depende de", "substitui"; "conflita com" com texto
@@ -279,7 +284,8 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   filete; Rejeitar e Confirmar. Em Contexto › Regras, uma regra cuja decisão
   de origem foi substituída leva a pílula âmbar "Revisar" e a frase do porquê.
   Itens sugeridos mostram a origem ("declarado no workspace Cargo") e a
-  descrição do pacote, com "Criar os N do workspace" quando há mais de um.
+  descrição do pacote, com "Criar os N do workspace" quando há mais de um;
+  Vínculos sugeridos têm "Confirmar os N" no cabeçalho quando há mais de um.
 - A **Vizinhança** do detalhe continua determinística em camadas. Nada entra
   no mapa sem confirmação; aposentar e rejeitar não apagam.
 

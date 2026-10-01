@@ -774,12 +774,6 @@ impl GraphCanvas {
             .flex_wrap()
             .gap_x(px(SpacingScale::S3))
             .gap_y(px(SpacingScale::S1))
-            .px(px(SpacingScale::S3))
-            .py(px(SpacingScale::S2))
-            .rounded(RadiusScale.surface())
-            .border_1()
-            .border_color(colors.glass_border())
-            .bg(colors.canvas_deep().alpha(0.88))
             .child(item(
                 div()
                     .size(px(12.0))
@@ -1414,7 +1408,13 @@ impl Scene {
         let (x, y) = self.screen(bounds, node.pos);
         let zoom = self.camera.scale.clamp(0.6, 1.6);
         let radius = node.radius() * zoom * grow;
-        let shade = node.shade * appear;
+        // A component nothing was decided about yet stays dimmer.
+        let quiet = if node.kind == Kind::Component && node.weight == (0, 0) {
+            0.6
+        } else {
+            1.0
+        };
+        let shade = node.shade * appear * quiet;
         let ground = Hsla::from(colors.canvas_deep());
         let signal = Hsla::from(colors.graph_component());
         match node.kind {
@@ -1612,7 +1612,12 @@ impl Scene {
                 weight_line(node.weight),
                 9.5,
                 13.0,
-                Hsla::from(colors.graph_component()).opacity(0.7 * shade),
+                // An empty component is not news: its line stays quiet.
+                if node.weight == (0, 0) {
+                    Hsla::from(colors.text_muted()).opacity(shade)
+                } else {
+                    Hsla::from(colors.graph_component()).opacity(0.7 * shade)
+                },
             ));
         }
         for (text, size_px, line_height, color) in lines {
@@ -1759,9 +1764,18 @@ fn kind_order(kind: Kind) -> i32 {
 // ---- layout -----------------------------------------------------------------
 
 fn build(graph: &ProjectGraph) -> (Vec<Node>, Vec<Link>) {
+    // A decision or rule tied to nothing has no place on the drawing: a dot
+    // floating alone reads as a glitch. It stays in the lists and counts.
+    let tied: BTreeSet<&NodeRef> = graph
+        .edges
+        .iter()
+        .chain(graph.suggested.iter().map(|(_, edge)| edge))
+        .flat_map(|edge| [&edge.from, &edge.to])
+        .collect();
     let mut nodes: Vec<Node> = graph
         .nodes
         .iter()
+        .filter(|row| row.summary.node.kind == NodeKind::Entity || tied.contains(&row.summary.node))
         .map(|row| {
             let summary = &row.summary;
             let kind = match summary.node.kind {
@@ -2040,8 +2054,10 @@ fn tick(nodes: &mut [Node], links: &[Link], heat: f32) {
             node.vel.0 += (anchor.0 - node.pos.0) * 0.012 * heat;
             node.vel.1 += (anchor.1 - node.pos.1) * 0.012 * heat;
         }
-        node.vel.0 -= node.pos.0 * 0.004 * heat;
-        node.vel.1 -= node.pos.1 * 0.004 * heat;
+        // Gravity keeps islands and loose technologies near the middle, so
+        // the map reads as one picture instead of scattered parts.
+        node.vel.0 -= node.pos.0 * 0.011 * heat;
+        node.vel.1 -= node.pos.1 * 0.011 * heat;
         node.pos.0 += node.vel.0;
         node.pos.1 += node.vel.1;
         node.vel.0 *= 0.55;

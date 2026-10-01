@@ -18,13 +18,15 @@ use application::providers::{ModelCatalog, ModelInfo, PlanAccount};
 use gpui::prelude::*;
 use gpui::{
     div, px, AnyElement, App, Context, Div, Entity, EventEmitter, FocusHandle, Render, Role,
-    SharedString, Stateful, Subscription, Toggled, Window,
+    SharedString, Stateful, Subscription, Window,
 };
 
 use super::format::{date_time, thousands};
 use crate::ui::controls::{action_button, button_foreground, ButtonKind};
 use crate::ui::icons::{icon, IconName};
-use crate::ui::patterns::{error_banner, mark_selected, skeleton_list, toast, TOAST_DURATION};
+use crate::ui::patterns::{
+    error_banner, mark_selected, radio_row, skeleton_list, toast, TOAST_DURATION,
+};
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{tint, SpacingScale, TypeScale};
@@ -946,83 +948,28 @@ impl SettingsScreen {
             .or_insert_with(|| cx.focus_handle().tab_stop(true))
             .clone();
         let colors = theme.colors;
-        mark_selected(
-            div()
-                .id(id)
-                .relative()
-                .flex()
-                .items_center()
-                .gap(px(SpacingScale::S3))
-                .px(px(SpacingScale::S4))
-                .py(px(SpacingScale::S3))
-                .when(kind != ProfileKind::Fake, |row| {
-                    row.border_t_1().border_color(colors.hairline_divider())
-                })
-                .when(!selected, |row| {
-                    row.hover(move |style| style.bg(colors.glass_fill_medium()))
-                        .active(move |style| style.bg(colors.glass_fill_strong()))
-                })
-                .cursor_pointer()
-                .role(Role::RadioButton)
-                .aria_label(title)
-                .aria_toggled(if selected {
-                    Toggled::True
-                } else {
-                    Toggled::False
-                })
-                .track_focus(&focus)
-                .focus_visible(crate::ui::controls::focus_ring(&theme))
-                .on_click(cx.listener(move |this, _, _, cx| this.act(Action::Kind(kind), cx)))
-                .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
-                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                        this.act(Action::Kind(kind), cx);
-                        cx.stop_propagation();
-                    }
-                })),
+        radio_row(
             &theme,
+            id,
             selected,
-        )
-        .child(icon(
+            kind != ProfileKind::Fake,
             glyph,
-            16.0,
-            if selected {
-                colors.text_primary()
-            } else {
-                colors.text_muted()
-            },
-        ))
-        .child(
-            div()
-                .flex_1()
-                .min_w(px(0.0))
-                .flex()
-                .flex_col()
-                .gap(px(2.0))
-                .child(text_style(div(), TypeScale::ROW_TITLE).child(title))
-                .child(
-                    text_style(div(), TypeScale::BODY_SMALL)
-                        .text_color(colors.text_muted())
-                        .child(body),
-                ),
+            title,
+            body,
         )
-        .child(
-            div()
-                .size(px(16.0))
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded_full()
-                .border_1()
-                .border_color(if selected {
-                    colors.accent_hover()
-                } else {
-                    colors.glass_border_control()
-                })
-                .when(selected, |mark| {
-                    mark.child(div().size(px(8.0)).rounded_full().bg(colors.accent_hover()))
-                }),
-        )
+        .when(!selected, |row| {
+            row.hover(move |style| style.bg(colors.glass_fill_medium()))
+                .active(move |style| style.bg(colors.glass_fill_strong()))
+        })
+        .track_focus(&focus)
+        .focus_visible(crate::ui::controls::focus_ring(&theme))
+        .on_click(cx.listener(move |this, _, _, cx| this.act(Action::Kind(kind), cx)))
+        .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                this.act(Action::Kind(kind), cx);
+                cx.stop_propagation();
+            }
+        }))
     }
 
     fn render_extractor(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Div {
