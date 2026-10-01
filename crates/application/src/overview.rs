@@ -16,6 +16,7 @@ use crate::analysis::ExtractorFactory;
 use crate::claims::ClaimStore;
 use crate::clock::now_rfc3339;
 use crate::decisions::DecisionStore;
+use crate::documents::{document_ref, DocumentError, DocumentStore, Documents};
 use crate::extract::ExtractError;
 use crate::graph::{GraphStore, KnowledgeGraph};
 use crate::injection::short_ref;
@@ -37,6 +38,10 @@ pub const MAX_STEPS: usize = 8;
 pub const MAX_PARAGRAPHS: usize = 4;
 /// Longest text kept per field.
 const MAX_TEXT_CHARS: usize = 900;
+/// Documents sent at most.
+pub const MAX_DOCUMENTS: usize = 40;
+/// Characters of documentation sent at most.
+pub const MAX_DOCUMENT_CHARS: usize = 16_000;
 
 /// JSON value type of [`StructuredModel`] schemas, re-exported so adapters
 /// need no JSON crate of their own.
@@ -169,6 +174,9 @@ pub struct ProjectOverview {
     pub decisions: usize,
     /// Rules it was built from.
     pub rules: usize,
+    /// Documents it was built from.
+    #[serde(default)]
+    pub documents: usize,
     /// Summary paragraphs.
     pub summary: Vec<OverviewParagraph>,
     /// Main flows.
@@ -218,7 +226,7 @@ pub trait OverviewApi: Send + Sync {
 /// Instructions for the overview call.
 pub const OVERVIEW_PROMPT: &str = "You write the overview of one software project for its own \
 team, using only the recorded knowledge given: decisions in force (D:...), rules (R:...) and \
-the project map (components and technologies). You never see the code; do not invent \
+the project map (components and technologies) and the project's own documentation (F:..., title, sections and opening paragraph; documents describe intent and may be outdated: when they disagree with a decision, the decision wins). You never see the code; do not invent \
 components, libraries or behaviour that the records do not state.\n\
 Write in the language of the records. summary: 2 to 4 short paragraphs: what the project is \
 for, how it is organised, the central choices and the rules that weigh most. flows: the 3 to \
@@ -226,7 +234,7 @@ for, how it is organised, the central choices and the rules that weigh most. flo
 through it), each with 3 to 8 ordered steps; a step names the component where it happens \
 (use the component name exactly as listed, or null) and what happens there.\n\
 Every paragraph and every step must cite the records it rests on in refs, using the ids \
-exactly as given (D:xxxxxxxx or R:xxxxxxxx). Anything you cannot cite, leave out. Prefer \
+exactly as given (D:xxxxxxxx, R:xxxxxxxx or F:xxxxxxxx). Anything you cannot cite, leave out. Prefer \
 fewer, well-cited flows over many vague ones.\n\
 Reply with one JSON object only, matching exactly: {\"summary\":[{\"text\":string,\
 \"refs\":[string]}],\"flows\":[{\"title\":string,\"description\":string,\"steps\":[{\
@@ -292,6 +300,8 @@ pub struct OverviewInput {
     pub decisions: usize,
     /// Rules included.
     pub rules: usize,
+    /// Documents included.
+    pub documents: usize,
 }
 
 #[derive(Deserialize)]
@@ -423,6 +433,7 @@ where
         + ProjectRepository
         + DecisionStore
         + OverviewStore
+        + DocumentStore
         + Clone,
     P: ProfileStore,
     K: SecretStore,
@@ -470,8 +481,15 @@ where
         let project = ProjectRepository::get(&self.store, project_id)
             .map_err(storage)?
             .ok_or(OverviewError::ProjectNotFound)?;
+        // Documentation is read again so the overview sees the current files;
+        // an unreadable folder only leaves the previous index in place.
+        if let Err(DocumentError::Storage(detail)) =
+            Documents::new(self.store.clone()).index(project_id)
+        {
+            return Err(OverviewError::Storage(detail));
+        }
         let input = self.input(project_id, &project.location)?;
-        if input.decisions == 0 && input.rules == 0 {
+        if input.decisions == 0 && input.rules == 0 && input.documents == 0 {
             return Err(OverviewError::NothingRecorded);
         }
         let profile = self.settings.load_or_seed().map_err(storage)?;
@@ -502,6 +520,7 @@ where
             generated_at: now_rfc3339(),
             decisions: input.decisions,
             rules: input.rules,
+            documents: input.documents,
             summary,
             flows,
         };
@@ -647,6 +666,52 @@ where
                 );
             }
         }
+        // Documentation: title, sections and opening paragraph; ADRs and
+        // specs first, then READMEs and guides, within a budget.
+        let mut documents = self.store.project_documents(project_id).map_err(|error| {
+            OverviewError::Storage(match error {
+                DocumentError::Storage(detail) => detail,
+                other => other.to_string(),
+            })
+        })?;
+        documents.sort_by(|left, right| (left.kind, &left.path).cmp(&(right.kind, &right.path)));
+        let mut budget = MAX_DOCUMENT_CHARS;
+        let mut included = 0;
+        if !documents.is_empty() {
+            text.push_str("\n## Project documentation\n");
+        }
+        for document in documents.iter().take(MAX_DOCUMENTS) {
+            let label = format!("F:{}", document_ref(&document.path));
+            let mut entry = format!(
+                "- {label} ({}) {} — {}",
+                document.kind.as_str(),
+                document.path,
+                document.title
+            );
+            if !document.headings.is_empty() {
+                entry.push_str(&format!(" | sections: {}", document.headings.join("; ")));
+            }
+            if !document.excerpt.is_empty() {
+                entry.push_str(&format!(" | {}", document.excerpt));
+            }
+            entry.push('\n');
+            if entry.chars().count() > budget {
+                break;
+            }
+            budget -= entry.chars().count();
+            text.push_str(&entry);
+            input.references.insert(
+                label.to_lowercase(),
+                Citation {
+                    kind: "document".into(),
+                    id: document.path.clone(),
+                    label,
+                    title: document.title.clone(),
+                },
+            );
+            included += 1;
+        }
+        input.documents = included;
         input.text = text;
         Ok(input)
     }
@@ -674,6 +739,7 @@ where
         + ProjectRepository
         + DecisionStore
         + OverviewStore
+        + DocumentStore
         + Clone
         + Send
         + Sync,

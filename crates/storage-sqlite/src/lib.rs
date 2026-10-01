@@ -9,6 +9,7 @@ mod context;
 mod context_settings;
 mod decisions;
 mod diagnostics;
+mod documents;
 mod extraction;
 mod graph;
 mod inbox;

@@ -25,7 +25,10 @@ impl OverviewStore for SqliteStore {
         let content = overview.to_json()?;
         self.lock()
             .execute(
-                "INSERT INTO project_overviews (project_id, generated_at, content)                  VALUES (?1, ?2, ?3)                  ON CONFLICT(project_id) DO UPDATE SET                  generated_at = excluded.generated_at, content = excluded.content",
+                "INSERT INTO project_overviews (project_id, generated_at, content) \
+                 VALUES (?1, ?2, ?3) \
+                 ON CONFLICT(project_id) DO UPDATE SET \
+                 generated_at = excluded.generated_at, content = excluded.content",
                 params![overview.project_id, overview.generated_at, content],
             )
             .map_err(storage_error)?;

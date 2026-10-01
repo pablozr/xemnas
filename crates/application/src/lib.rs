@@ -10,6 +10,7 @@ pub mod context;
 pub mod context_settings;
 pub mod decisions;
 pub mod diagnostics;
+pub mod documents;
 pub mod export;
 pub mod extract;
 pub mod graph;
