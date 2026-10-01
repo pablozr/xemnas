@@ -9,6 +9,7 @@ mod decision_editor;
 pub mod decisions;
 mod evidence;
 mod format;
+pub mod graph;
 pub mod inbox;
 pub mod map;
 pub mod overview;

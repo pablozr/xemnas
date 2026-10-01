@@ -13,8 +13,8 @@ use application::claims::{ClaimStore, Claims};
 use application::decisions::{DecisionFilter, DecisionStatus, DecisionStore, Decisions};
 use application::graph::{
     EntityDetail, EntityEdit, EntityRecord, FileLens, GraphStore, KnowledgeGraph, LinkRequest,
-    MapEntity, NewEntity, NodeSummary, ProjectMap, Suggestion, SuggestionReport, TimelineEvent,
-    TimelineKind,
+    MapEntity, NewEntity, NodeSummary, ProjectGraph, ProjectMap, Suggestion, SuggestionReport,
+    TimelineEvent, TimelineKind,
 };
 use application::projects::ProjectRepository;
 use application::relations::RelationStore;
@@ -27,11 +27,12 @@ use gpui::{
 
 use super::context::OpenDecision;
 use super::format::{calendar_date, clipped, clock, day_heading, short_date};
+use super::graph::{GraphCanvas, GraphEvent};
 use crate::ui::controls::{action_button, icon_action, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
     count_chip, empty_panel, error_banner, mark_selected, panel_title, reading_page, section_label,
-    skeleton_list, toast, TOAST_DURATION,
+    segment, segmented, skeleton_list, toast, TOAST_DURATION,
 };
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme};
@@ -107,8 +108,16 @@ struct Picker {
     items: Vec<(String, String, String)>,
 }
 
+/// How the overview draws the map.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Layout {
+    Blocks,
+    Graph,
+}
+
 struct MapData {
     map: ProjectMap,
+    graph: ProjectGraph,
     suggestions: Vec<Suggestion>,
     proposals: SuggestionReport,
 }
@@ -153,6 +162,10 @@ pub struct MapScreen<S: MapStores> {
     focus: BTreeMap<String, FocusHandle>,
     /// Demo-only view to open once the map loads (`--open map:<view>`).
     route: Option<String>,
+    layout: Layout,
+    graph: Entity<GraphCanvas>,
+    /// Project the graph was last filled for, to play the entrance once.
+    graph_project: Option<String>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -175,10 +188,15 @@ impl<S: MapStores> MapScreen<S> {
         let description = field(cx, "Uma frase sobre o que é");
         let path = field(cx, "Ex.: crates/storage-sqlite/src/store.rs");
         let filter = field(cx, "Filtrar");
-        let subscriptions = [&name, &patterns, &aliases, &description, &path, &filter]
-            .into_iter()
-            .map(|field| cx.subscribe(field, |_, _, _: &SearchChanged, cx| cx.notify()))
-            .collect();
+        let mut subscriptions: Vec<Subscription> =
+            [&name, &patterns, &aliases, &description, &path, &filter]
+                .into_iter()
+                .map(|field| cx.subscribe(field, |_, _, _: &SearchChanged, cx| cx.notify()))
+                .collect();
+        let graph = cx.new(GraphCanvas::new);
+        subscriptions.push(cx.subscribe(&graph, |this, _, event: &GraphEvent, cx| {
+            this.on_graph(event, cx)
+        }));
         Self {
             backend: Some(services),
             project: None,
@@ -202,8 +220,47 @@ impl<S: MapStores> MapScreen<S> {
             notice: None,
             focus: BTreeMap::new(),
             route: None,
+            layout: Layout::Blocks,
+            graph,
+            graph_project: None,
             _subscriptions: subscriptions,
         }
+    }
+
+    fn on_graph(&mut self, event: &GraphEvent, cx: &mut Context<Self>) {
+        match event {
+            GraphEvent::OpenEntity(id) => self.open_entity(id.clone(), cx),
+            GraphEvent::OpenDecision(id) => cx.emit(OpenDecision(id.clone())),
+            GraphEvent::Confirm(edge) => {
+                let id = edge.clone();
+                self.mutate(cx, "Vínculo confirmado.", move |backend| {
+                    backend.graph.confirm(&id).map(|_| None)
+                });
+            }
+            GraphEvent::Reject(edge) => {
+                let id = edge.clone();
+                self.mutate(cx, "Sugestão rejeitada; ela não volta.", move |backend| {
+                    backend.graph.invalidate(&id).map(|_| None)
+                });
+            }
+        }
+    }
+
+    /// Hands fresh data to the graph; a new project plays the entrance.
+    fn fill_graph(&mut self, cx: &mut Context<Self>) {
+        let Some(data) = self.data.as_ref() else {
+            return;
+        };
+        let fresh = self.graph_project != self.project;
+        self.graph_project = self.project.clone();
+        let graph = data.graph.clone();
+        self.graph
+            .update(cx, |canvas, cx| canvas.set_graph(&graph, fresh, cx));
+    }
+
+    fn set_layout(&mut self, layout: Layout, cx: &mut Context<Self>) {
+        self.layout = layout;
+        cx.notify();
     }
 
     /// Opens `timeline`, `suggestions`, `file` or `entity:<name>` once the
@@ -218,6 +275,13 @@ impl<S: MapStores> MapScreen<S> {
         };
         match route.as_str() {
             "timeline" => self.open_view(View::Timeline, cx),
+            "graph" => self.set_layout(Layout::Graph, cx),
+            other if other.starts_with("graph:") => {
+                let name = other.trim_start_matches("graph:").to_owned();
+                self.set_layout(Layout::Graph, cx);
+                self.graph
+                    .update(cx, |canvas, cx| canvas.select_named(&name, cx));
+            }
             "suggestions" => self.open_view(View::Suggestions, cx),
             "file" => self.open_view(View::File, cx),
             other => {
@@ -299,6 +363,7 @@ impl<S: MapStores> MapScreen<S> {
         match outcome {
             Outcome::Loaded(Ok(data)) => {
                 self.data = Some(*data);
+                self.fill_graph(cx);
                 if self.route.is_some() {
                     return self.follow_route(cx);
                 }
@@ -326,6 +391,7 @@ impl<S: MapStores> MapScreen<S> {
             } => {
                 if let Some(data) = data {
                     self.data = Some(*data);
+                    self.fill_graph(cx);
                 }
                 self.picker = None;
                 self.confirm_retire = false;
@@ -1889,6 +1955,64 @@ impl<S: MapStores> MapScreen<S> {
     /// The project at a glance, like a C4 container view drawn by the real
     /// decisions: one block per top-level component, its parts inside, a
     /// square per decision in force, and technologies as chips.
+    /// "Blocos | Grafo": two drawings of the same map.
+    fn layout_switch(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Div {
+        let mut track = segmented(theme);
+        for (layout, id, glyph, label) in [
+            (
+                Layout::Blocks,
+                "map-layout-blocks",
+                IconName::Layers,
+                "Blocos",
+            ),
+            (Layout::Graph, "map-layout-graph", IconName::Graph, "Grafo"),
+        ] {
+            let focus = self.focus_for(id, cx);
+            track = track.child(
+                segment(theme, id, glyph, label, self.layout == layout)
+                    .track_focus(&focus)
+                    .on_click(cx.listener(move |this, _, _, cx| this.set_layout(layout, cx)))
+                    .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                            this.set_layout(layout, cx);
+                            cx.stop_propagation();
+                        }
+                    })),
+            );
+        }
+        track
+    }
+
+    /// The graph fills the whole content area under a short header.
+    fn render_graph(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let switch = self.layout_switch(theme, cx);
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .gap(px(SpacingScale::S4))
+            .p(px(SpacingScale::S6))
+            .child(
+                div()
+                    .flex()
+                    .items_start()
+                    .gap(px(SpacingScale::S4))
+                    .child(div().flex_1().min_w(px(0.0)).child(page_header(
+                        theme,
+                        "Mapa do projeto",
+                        "Cada ilha é um componente com o que vale nele. Passe o mouse para ver as ligações; clique para abrir.",
+                    )))
+                    .child(switch),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .child(self.graph.clone()),
+            )
+            .into_any_element()
+    }
+
     fn render_overview(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let colors = theme.colors;
         let Some(data) = self.data.as_ref() else {
@@ -1919,6 +2043,9 @@ impl<S: MapStores> MapScreen<S> {
                     .child(div().flex().child(open)),
             )
             .into_any_element();
+        }
+        if self.layout == Layout::Graph {
+            return self.render_graph(theme, cx);
         }
         let recent_since = (chrono::Utc::now() - chrono::Duration::days(RECENT_DAYS))
             .format("%Y-%m-%dT%H:%M:%SZ")
@@ -2004,15 +2131,23 @@ impl<S: MapStores> MapScreen<S> {
                 "decisões em conflito",
             ));
 
+        let switch = self.layout_switch(theme, cx);
         let mut column = div()
             .flex()
             .flex_col()
             .gap(px(SpacingScale::S8))
-            .child(page_header(
-                theme,
-                "Mapa do projeto",
-                "A arquitetura desenhada pelas decisões confirmadas. Abra um bloco para ver o que vale ali.",
-            ))
+            .child(
+                div()
+                    .flex()
+                    .items_start()
+                    .gap(px(SpacingScale::S4))
+                    .child(div().flex_1().min_w(px(0.0)).child(page_header(
+                        theme,
+                        "Mapa do projeto",
+                        "A arquitetura desenhada pelas decisões confirmadas. Abra um bloco para ver o que vale ali.",
+                    )))
+                    .child(switch),
+            )
             .child(section(theme, "Componentes", grid));
         if !technologies.is_empty() {
             column = column.child(section(theme, "Tecnologias", chips));
@@ -2492,8 +2627,19 @@ fn load<S: MapStores>(backend: &MapServices<S>, project: &str) -> Result<MapData
             "Não foi possível ler as sugestões.",
         )
     })?;
+    let graph = backend
+        .graph
+        .project_graph(project, None)
+        .map_err(|error| {
+            failure(
+                "project_graph",
+                error.code(),
+                "Não foi possível ler o grafo.",
+            )
+        })?;
     Ok(MapData {
         map,
+        graph,
         suggestions,
         proposals,
     })

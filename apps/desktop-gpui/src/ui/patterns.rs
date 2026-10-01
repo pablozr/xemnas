@@ -336,6 +336,56 @@ pub fn status_pill(theme: &Theme, color: Rgba, label: &'static str) -> Div {
         .child(label)
 }
 
+/// The track of a segmented switch between views of the same content
+/// ("Blocos | Grafo"): a recessed pill holding [`segment`]s.
+pub fn segmented(theme: &Theme) -> Div {
+    div()
+        .flex()
+        .flex_none()
+        .p(px(2.0))
+        .gap(px(2.0))
+        .rounded(px(8.0))
+        .bg(theme.colors.canvas_deep())
+        .border_1()
+        .border_color(theme.colors.hairline_divider())
+}
+
+/// One option of a [`segmented`] switch: glyph and label; the chosen one is
+/// raised on `glass_fill_medium`, the others stay quiet until hovered. The
+/// caller adds focus tracking and the press handlers.
+pub fn segment(
+    theme: &Theme,
+    id: impl Into<ElementId>,
+    glyph: IconName,
+    label: &'static str,
+    selected: bool,
+) -> Stateful<Div> {
+    let colors = theme.colors;
+    let hover = colors.glass_fill_low();
+    let text = if selected {
+        colors.text_primary()
+    } else {
+        colors.text_muted()
+    };
+    text_style(div(), TypeScale::LABEL)
+        .id(id)
+        .flex()
+        .items_center()
+        .gap(px(6.0))
+        .h(px(26.0))
+        .px(px(SpacingScale::S3))
+        .rounded(px(6.0))
+        .cursor_pointer()
+        .text_color(text)
+        .when(selected, |item| item.bg(colors.glass_fill_medium()))
+        .when(!selected, |item| item.hover(move |style| style.bg(hover)))
+        .role(gpui::Role::Tab)
+        .aria_label(label)
+        .focus_visible(crate::ui::controls::focus_ring(theme))
+        .child(icon(glyph, 13.0, text))
+        .child(label)
+}
+
 /// An editorial section label ("ESCOLHA SUGERIDA", "JUSTIFICATIVA").
 ///
 /// Uppercase meta text replaces the old heading-plus-rule pair: sections are

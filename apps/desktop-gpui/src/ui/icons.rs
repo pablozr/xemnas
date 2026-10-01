@@ -113,6 +113,12 @@ pub enum IconName {
     Graph,
     /// The project overview: where things are and how they flow.
     Compass,
+    /// Zoom out.
+    Minus,
+    /// Close a panel.
+    Close,
+    /// Fit the content to the view.
+    Fit,
 }
 
 impl IconName {
@@ -197,6 +203,11 @@ impl IconName {
                 r#"<circle cx="12" cy="8.5" r="3.75"/><path d="M4.75 20a7.25 7.25 0 0 1 14.5 0"/>"#
             ),
             Self::ArrowUpRight => glyph!(r#"<path d="M7 17 17 7M8.5 7H17v8.5"/>"#),
+            Self::Minus => glyph!(r#"<path d="M5 12h14"/>"#),
+            Self::Close => glyph!(r#"<path d="M6 6l12 12M18 6 6 18"/>"#),
+            Self::Fit => glyph!(
+                r#"<path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4"/>"#
+            ),
             Self::Compass => {
                 glyph!(r#"<circle cx="12" cy="12" r="8.5"/><path d="m15.5 8.5-2 5-5 2 2-5z"/>"#)
             }

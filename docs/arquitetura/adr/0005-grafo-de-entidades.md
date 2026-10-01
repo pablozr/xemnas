@@ -53,7 +53,7 @@ Todas aceitam `as_of`. Uma aresta vale em `t` quando foi confirmada até `t` e n
 
 ## Interface
 
-Uma aba **Mapa** no projeto (Ctrl 4 e paleta), no padrão de `docs/design/VISUAL-IDENTITY.md`: lista de componentes e tecnologias à esquerda, detalhe da entidade (decisões, claims, partes, conflitos, impacto) na coluna de leitura, caixa de sugestões para confirmar ou rejeitar, lente de arquivo e linha do tempo. Nunca o grafo inteiro de uma vez: sempre um nó e sua vizinhança.
+Uma aba **Mapa** no projeto (Ctrl 4 e paleta), no padrão de `docs/design/VISUAL-IDENTITY.md`: lista de componentes e tecnologias à esquerda, detalhe da entidade (decisões, claims, partes, conflitos, impacto) na coluna de leitura, caixa de sugestões para confirmar ou rejeitar, lente de arquivo e linha do tempo. Nunca o grafo inteiro de uma vez: sempre um nó e sua vizinhança. *Revisto em 2026-09-30:* além dos blocos, o Mapa ganhou a visão **Grafo** com o mapa inteiro (`KnowledgeGraph::project_graph`), em layout de forças assentado e estável; o detalhe de um item continua mostrando só a vizinhança. Regras visuais em `VISUAL-IDENTITY.md`.
 
 ## Consequências
 

@@ -195,8 +195,33 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   regras à direita, ligados por curvas de 1,25 px desenhadas com `canvas` +
   `PathBuilder` (tracejadas para regras); no máximo 6 por lado e "Mais N nas
   listas abaixo". Layout determinístico, nunca force-directed.
-- Nunca o grafo inteiro: sempre um item e o que está em volta. Nada entra no
-  mapa sem confirmação; aposentar e rejeitar não apagam.
+- **Grafo** (alternativa à visão em blocos, seletor `segmented` "Blocos |
+  Grafo" no cabeçalho; rota de captura `map:graph`): o mapa inteiro numa tela
+  de fósforo. Única superfície com cor própria (`graph.signal` menta,
+  `graph.decision` menta clara, `graph.technology` prata), restrita ao
+  grafo; âmbar para conflito e sugestão, azul `status.info` para regra.
+  - Formas: componente = lente (corpo escuro, aro de 1,25 px, órbita fina e
+    núcleo), tamanho pelo número de ligações; tecnologia = hexágono vazado;
+    decisão = ponto; regra = quadrado vazado. Rótulos em mono: componentes e
+    tecnologias sempre (componente com "2 decisões · 1 regra"), pontos só
+    sob o ponteiro ou com zoom alto; os vizinhos ficam no cartão lateral.
+  - Linhas: traço fino sobre um traço largo e quase transparente, curva
+    suave sempre para o mesmo lado; tracejado para sugestão e regra. Na
+    entrada, as linhas crescem do componente para fora e os nós acendem em
+    ordem, do centro para fora; um sinal curto percorre cada linha
+    devagar e, no item em foco, rápido e brilhante. Sem movimento com
+    `reduce_motion`.
+  - Layout de forças assentado antes do primeiro quadro, com sementes por id:
+    o mesmo mapa abre sempre igual e não "dança"; atualizar mantém os nós
+    no lugar. Ilhas (componente de topo, partes, decisões e regras ligadas)
+    se repelem para não se sobrepor.
+  - Foco: ponteiro ou clique apaga tudo menos a vizinhança; seleção ganha
+    retícula de quatro colchetes e um cartão lateral (300 px) com ligações,
+    sugestões (Confirmar/Rejeitar) e a ação primária (abrir no Mapa ou em
+    Decisões). Camadas em chips no topo, legenda embaixo à esquerda, zoom e
+    "enquadrar" embaixo à direita; Esc limpa, + − 0 aproximam e enquadram.
+- A **Vizinhança** do detalhe continua determinística em camadas. Nada entra
+  no mapa sem confirmação; aposentar e rejeitar não apagam.
 
 ## Configurações
 

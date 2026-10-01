@@ -387,6 +387,22 @@ impl ColorTokens {
         rgb(0xD4B56E)
     }
 
+    /// `graph.signal` — the phosphor of the project graph: components, links
+    /// and the signal running along them. Used only inside the graph.
+    pub fn graph_component(&self) -> Rgba {
+        rgb(0x6FD6AE)
+    }
+
+    /// `graph.technology` — technologies on the project graph (cool silver).
+    pub fn graph_technology(&self) -> Rgba {
+        rgb(0xC3CAD6)
+    }
+
+    /// `graph.decision` — decisions in force: the brightest phosphor.
+    pub fn graph_decision(&self) -> Rgba {
+        rgb(0xB6F2D8)
+    }
+
     /// `status.info` — neutral information.
     pub fn status_info(&self) -> Rgba {
         rgb(0x839BBE)
