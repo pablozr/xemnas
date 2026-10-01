@@ -142,6 +142,12 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   confirmado na própria linha e um compositor (tipo + frase + Adicionar);
   prévia do Context Pack para uma tarefa digitada, com barra de orçamento usado,
   itens que entrariam e exportação Markdown/JSON.
+- **Documentação** (ADR-0008), entre regras e prévia: rótulo com contagem e
+  "Ler de novo" (ghost), nota curta de procedência, grupos por tipo
+  (ADR, especificações, READMEs, guias) com ícone, contagem, título, caminho
+  em mono e número de seções; até 8 por grupo e "E mais N". Vazio diz quais
+  pastas são lidas. Na Visão, fonte de documento usa o ícone de lista e o
+  caminho no tooltip.
 - Encerrar uma regra não apaga: ela deixa de valer e fica no histórico. A
   prévia não é salva; exportar é ação explícita com destino escolhido.
 

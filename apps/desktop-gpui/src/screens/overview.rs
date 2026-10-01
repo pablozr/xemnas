@@ -32,10 +32,12 @@ use crate::ui::tooltip::tooltip;
 pub struct OpenEntity(pub String);
 
 const SENDS: &str = "Gera um resumo e os principais fluxos com o provedor de IA configurado. \
-                     Envia as decisões em vigor, as regras e os nomes do mapa; nada do código.";
+                     Envia as decisões em vigor, as regras, os nomes do mapa e títulos, seções \
+                     e o primeiro parágrafo da documentação; nada do código.";
 
-const PROVENANCE: &str = "Escrita pela IA a partir das decisões e regras confirmadas. Cada trecho \
-                          mostra as fontes; o que não tinha fonte ficou de fora.";
+const PROVENANCE: &str = "Escrita pela IA a partir das decisões e regras confirmadas e da \
+                          documentação do projeto. Cada trecho mostra as fontes; o que não \
+                          tinha fonte ficou de fora.";
 
 enum Outcome {
     Loaded(Result<Option<OverviewView>, String>),
@@ -277,10 +279,10 @@ impl OverviewScreen {
                 .rounded(theme.radius.control())
                 .bg(colors.glass_fill_low())
                 .child(icon(
-                    if decision {
-                        IconName::File
-                    } else {
-                        IconName::Shield
+                    match citation.kind.as_str() {
+                        "decision" => IconName::File,
+                        "document" => IconName::List,
+                        _ => IconName::Shield,
                     },
                     11.0,
                     colors.text_muted(),
@@ -306,10 +308,12 @@ impl OverviewScreen {
                     cx,
                 ));
             } else {
-                row = row.child(
-                    chip.aria_label(format!("Regra: {title}"))
-                        .tooltip(tooltip(format!("Regra: {title}"), None)),
-                );
+                let label = if citation.kind == "document" {
+                    format!("Documento: {} ({})", title, citation.id)
+                } else {
+                    format!("Regra: {title}")
+                };
+                row = row.child(chip.aria_label(label.clone()).tooltip(tooltip(label, None)));
             }
         }
         row
@@ -536,11 +540,19 @@ impl OverviewScreen {
         let colors = theme.colors;
         let overview = &view.overview;
         let update = self.generate_button(theme, ButtonKind::Secondary, cx);
+        let mut sources = vec![
+            plural(overview.decisions, "decisão", "decisões"),
+            plural(overview.rules, "regra", "regras"),
+        ];
+        if overview.documents > 0 {
+            sources.push(plural(overview.documents, "documento", "documentos"));
+        }
+        let last = sources.pop().unwrap_or_default();
         let meta = format!(
-            "Gerada em {} a partir de {} decisões e {} regras",
+            "Gerada em {} a partir de {} e {}",
             short_date(&overview.generated_at),
-            overview.decisions,
-            overview.rules
+            sources.join(", "),
+            last
         );
         let stale = (view.new_decisions > 0).then(|| {
             div()
@@ -700,6 +712,15 @@ const FLOW_CARD_WIDTH: f32 = (READING_WIDTH - SpacingScale::S3) / 2.0;
 
 /// Longest source title shown on a chip; the tooltip has the rest.
 const CHIP_CHARS: usize = 48;
+
+/// `1 regra`, `3 regras`.
+fn plural(count: usize, one: &str, many: &str) -> String {
+    if count == 1 {
+        format!("1 {one}")
+    } else {
+        format!("{count} {many}")
+    }
+}
 
 /// Product copy for an overview failure; storage detail goes to the log.
 fn product(error: OverviewError) -> String {

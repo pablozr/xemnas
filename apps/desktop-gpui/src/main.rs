@@ -458,6 +458,7 @@ fn run_shell_mode(
                     claims: application::claims::Claims::new(store.clone()),
                     settings: application::context_settings::ContextSettings::new(store.clone()),
                     packs: application::context::ContextPacks::new(store.clone()),
+                    documents: application::documents::Documents::new(store.clone()),
                 }),
                 Some(xemnas_desktop::screens::map::MapServices {
                     graph: application::graph::KnowledgeGraph::new(store.clone()),

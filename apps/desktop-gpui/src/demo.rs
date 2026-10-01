@@ -332,6 +332,70 @@ fn seed_map(store: &SqliteStore) -> Result<(), Box<dyn std::error::Error>> {
     graph.refresh_suggestions(PROJECT)?;
     let _ = resend;
 
+    // Sample documentation, as if read from the project folder.
+    use application::documents::{document_ref, DocumentKind, DocumentStore, ProjectDocument};
+    let documents = [
+        (
+            "README.md",
+            DocumentKind::Readme,
+            "xemnas",
+            vec!["Instalação", "Como funciona", "Privacidade"],
+            "Memória de decisões de engenharia para agentes de código, local e revisada.",
+        ),
+        (
+            "docs/arquitetura/adr/0005-grafo-de-entidades.md",
+            DocumentKind::Adr,
+            "ADR-0005: Grafo de entidades",
+            vec!["Decisão", "Consequências", "Alternativas rejeitadas"],
+            "Componentes e tecnologias ligam as decisões às partes do código.",
+        ),
+        (
+            "docs/arquitetura/adr/0006-tipo-e-relevancia-dos-candidatos.md",
+            DocumentKind::Adr,
+            "ADR-0006: Tipo e relevância dos candidatos",
+            vec!["Decisão", "Consequências"],
+            "Cada proposta traz tipo, relevância e os critérios que a justificam.",
+        ),
+        (
+            "docs/specs/captura.md",
+            DocumentKind::Spec,
+            "Especificação da captura",
+            vec!["Envelope", "Idempotência", "Limites"],
+            "Como uma resposta do agente chega à API local e vira captura.",
+        ),
+        (
+            "docs/design/VISUAL-IDENTITY.md",
+            DocumentKind::Guide,
+            "Quiet Glass",
+            vec!["Hierarquia e material", "Mapa", "Gate de entrega visual"],
+            "A regra visual do app desktop.",
+        ),
+    ]
+    .into_iter()
+    .map(|(path, kind, title, headings, excerpt)| ProjectDocument {
+        project_id: PROJECT.into(),
+        path: path.into(),
+        kind,
+        title: title.into(),
+        headings: headings.into_iter().map(str::to_owned).collect(),
+        excerpt: excerpt.into(),
+        bytes: 4096,
+        fingerprint: document_ref(path),
+        indexed_at: "2026-09-29T18:00:00Z".into(),
+    })
+    .collect::<Vec<_>>();
+    store.replace_documents(PROJECT, &documents)?;
+    let doc = |path: &str| Citation {
+        kind: "document".into(),
+        id: path.into(),
+        label: format!("F:{}", document_ref(path)),
+        title: documents
+            .iter()
+            .find(|document| document.path == path)
+            .map(|document| document.title.clone())
+            .unwrap_or_default(),
+    };
+
     let cite = |id: &String| Citation {
         kind: "decision".into(),
         id: id.clone(),
@@ -360,13 +424,14 @@ fn seed_map(store: &SqliteStore) -> Result<(), Box<dyn std::error::Error>> {
         generated_at: "2026-09-29T18:00:00Z".into(),
         decisions: decisions.len(),
         rules: rules.len(),
+        documents: documents.len(),
         summary: vec![
             OverviewParagraph {
                 text: "O xemnas guarda localmente as decisões de engenharia tiradas das \
                        conversas com o agente: cada captura vira candidatos, que só entram \
                        no projeto depois de revisados."
                     .into(),
-                citations: vec![cite(&unique), cite(&revise)],
+                citations: vec![cite(&unique), cite(&revise), doc("README.md")],
             },
             OverviewParagraph {
                 text: "A análise roda numa fila local que sobrevive a interrupções, e as \

@@ -20,6 +20,9 @@ use application::context_settings::{
 use application::decisions::{
     DecisionFilter, DecisionStatus, DecisionStore, DecisionSummary, Decisions,
 };
+use application::documents::{
+    DocumentIndex, DocumentKind, DocumentStore, Documents, ProjectDocument,
+};
 use application::export::{preview_pack, write_pack, ExportFormat};
 use application::graph::GraphStore;
 use application::injection::{DEFAULT_BUDGET_TOKENS, MAX_BUDGET_TOKENS, MIN_BUDGET_TOKENS};
@@ -52,6 +55,7 @@ pub trait ContextStores:
     + RelationStore
     + ContextSettingsStore
     + GraphStore
+    + DocumentStore
     + Clone
     + Send
     + 'static
@@ -66,6 +70,7 @@ impl<T> ContextStores for T where
         + RelationStore
         + ContextSettingsStore
         + GraphStore
+        + DocumentStore
         + Clone
         + Send
         + 'static
@@ -82,10 +87,15 @@ pub struct ContextServices<S> {
     pub settings: ContextSettings<S>,
     /// Context Pack builder.
     pub packs: ContextPacks<S>,
+    /// Project documentation read from the folder.
+    pub documents: Documents<S>,
 }
 
 /// Asks the shell to open a decision in Decisões.
 pub struct OpenDecision(pub String);
+
+/// Documents listed per kind before "e mais N".
+const DOCUMENTS_SHOWN: usize = 8;
 
 /// How many decisions in force the screen lists.
 const IN_FORCE_LIMIT: usize = 50;
@@ -94,6 +104,7 @@ struct Snapshot {
     settings: ProjectContextSettings,
     decisions: Vec<DecisionSummary>,
     claims: Vec<ClaimRecord>,
+    documents: Vec<ProjectDocument>,
 }
 
 enum Outcome {
@@ -102,6 +113,7 @@ enum Outcome {
     Claims(Result<Vec<ClaimRecord>, String>, &'static str),
     Pack(Result<Box<ContextPack>, String>),
     Exported(Result<Option<PathBuf>, String>),
+    Documents(Result<(DocumentIndex, Vec<ProjectDocument>), String>),
 }
 
 /// The Contexto destination of a selected project.
@@ -120,12 +132,20 @@ pub struct ContextScreen<S: ContextStores> {
     pack: Option<ContextPack>,
     error: Option<String>,
     notice: Option<String>,
+    scroll: gpui::ScrollHandle,
+    /// Demo-only: scroll to the end once loaded (`--open context:end`).
+    scroll_to_end: bool,
     _subscriptions: Vec<Subscription>,
 }
 
 impl<S: ContextStores> EventEmitter<OpenDecision> for ContextScreen<S> {}
 
 impl<S: ContextStores> ContextScreen<S> {
+    /// Scrolls to the end of the page once it is loaded (demo captures).
+    pub fn scroll_to_end(&mut self) {
+        self.scroll_to_end = true;
+    }
+
     /// Mounts the screen; nothing is read until a project is set.
     pub fn new(cx: &mut Context<Self>, services: ContextServices<S>) -> Self {
         let field = |cx: &mut Context<Self>, placeholder: &'static str| {
@@ -158,6 +178,8 @@ impl<S: ContextStores> ContextScreen<S> {
             pack: None,
             error: None,
             notice: None,
+            scroll: gpui::ScrollHandle::new(),
+            scroll_to_end: false,
             _subscriptions: subscriptions,
         }
     }
@@ -256,11 +278,28 @@ impl<S: ContextStores> ContextScreen<S> {
                 self.show_notice(format!("Prévia exportada para {}", path.display()), cx)
             }
             Outcome::Exported(Ok(None)) => {}
+            Outcome::Documents(Ok((index, documents))) => {
+                if let Some(snapshot) = &mut self.snapshot {
+                    snapshot.documents = documents;
+                }
+                let changed = index.changed + index.removed;
+                self.show_notice(
+                    match (index.total, changed) {
+                        (0, _) => "Nenhum documento encontrado na pasta do projeto.".into(),
+                        (total, 0) => format!("Documentação lida: {total}, sem mudanças."),
+                        (total, changed) => {
+                            format!("Documentação lida: {total}, {changed} com mudanças.")
+                        }
+                    },
+                    cx,
+                );
+            }
             Outcome::Loaded(Err(error))
             | Outcome::SettingsSaved(Err(error))
             | Outcome::Claims(Err(error), _)
             | Outcome::Pack(Err(error))
-            | Outcome::Exported(Err(error)) => self.error = Some(error),
+            | Outcome::Exported(Err(error))
+            | Outcome::Documents(Err(error)) => self.error = Some(error),
         }
     }
 
@@ -664,6 +703,150 @@ impl<S: ContextStores> ContextScreen<S> {
                     }))
                     .into_any_element()
             })
+    }
+
+    fn reindex(&mut self, cx: &mut Context<Self>) {
+        let Some(project) = self.project.clone() else {
+            return;
+        };
+        self.run(cx, move |backend| {
+            Outcome::Documents(
+                backend
+                    .documents
+                    .index(&project)
+                    .map_err(document_failure)
+                    .and_then(|index| {
+                        list_documents(backend, &project).map(|documents| (index, documents))
+                    }),
+            )
+        });
+    }
+
+    /// The project's own documentation, read from its folder.
+    fn render_documents(
+        &self,
+        theme: &Theme,
+        documents: &[ProjectDocument],
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let colors = theme.colors;
+        let reread = action_button(theme, "context-docs-reread", ButtonKind::Ghost, !self.busy)
+            .aria_label("Ler a documentação de novo")
+            .on_click(cx.listener(|this, _, _, cx| this.reindex(cx)))
+            .child(icon(IconName::Rotate, 13.0, colors.text_secondary()))
+            .child("Ler de novo");
+        let header = div()
+            .flex()
+            .items_center()
+            .gap(px(SpacingScale::S2))
+            .child(section_label(theme, "Documentação"))
+            .when(!documents.is_empty(), |row| {
+                row.child(count_chip(theme, documents.len().to_string()))
+            })
+            .child(div().flex_1())
+            .child(reread);
+        let note = text_style(div(), TypeScale::BODY_SMALL)
+            .text_color(colors.text_muted())
+            .child(
+                "Lida da pasta do projeto (docs/, specs/, ADRs e README). Entra na Visão como \
+                 fonte; nunca vira decisão sozinha.",
+            );
+        if documents.is_empty() {
+            return div()
+                .flex()
+                .flex_col()
+                .gap(px(SpacingScale::S3))
+                .child(header)
+                .child(
+                    text_style(div(), TypeScale::BODY_SMALL)
+                        .text_color(colors.text_secondary())
+                        .child(
+                            "Nenhum documento encontrado. Arquivos Markdown em docs/, specs/, \
+                             adr/ e o README da raiz aparecem aqui.",
+                        ),
+                );
+        }
+        let groups = DocumentKind::ALL.into_iter().filter_map(|kind| {
+            let items: Vec<&ProjectDocument> = documents
+                .iter()
+                .filter(|document| document.kind == kind)
+                .collect();
+            (!items.is_empty()).then_some((kind, items))
+        });
+        let list = div()
+            .flex()
+            .flex_col()
+            .gap(px(SpacingScale::S4))
+            .children(groups.map(|(kind, items)| {
+                let more = items.len().saturating_sub(DOCUMENTS_SHOWN);
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S1))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(SpacingScale::S2))
+                            .child(icon(IconName::File, 14.0, colors.text_secondary()))
+                            .child(
+                                text_style(div(), TypeScale::LABEL)
+                                    .text_color(colors.text_secondary())
+                                    .child(document_kind_plural(kind)),
+                            )
+                            .child(count_chip(theme, items.len().to_string())),
+                    )
+                    .children(items.into_iter().take(DOCUMENTS_SHOWN).map(|document| {
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .py(px(SpacingScale::S2))
+                            .pl(px(SpacingScale::S6 - 2.0))
+                            .child(
+                                text_style(div(), TypeScale::ROW_TITLE)
+                                    .text_color(colors.text_primary())
+                                    .child(document.title.clone()),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(SpacingScale::S2))
+                                    .child(
+                                        text_style(div(), TypeScale::META)
+                                            .font_family(Theme::font_mono())
+                                            .text_color(colors.text_muted())
+                                            .child(document.path.clone()),
+                                    )
+                                    .when(!document.headings.is_empty(), |row| {
+                                        row.child(
+                                            text_style(div(), TypeScale::META)
+                                                .text_color(colors.text_muted())
+                                                .child(match document.headings.len() {
+                                                    1 => "· 1 seção".to_owned(),
+                                                    n => format!("· {n} seções"),
+                                                }),
+                                        )
+                                    }),
+                            )
+                    }))
+                    .when(more > 0, |group| {
+                        group.child(
+                            text_style(div(), TypeScale::META)
+                                .pl(px(SpacingScale::S6 - 2.0))
+                                .text_color(colors.text_muted())
+                                .child(format!("E mais {more}")),
+                        )
+                    })
+            }));
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(SpacingScale::S3))
+            .child(header)
+            .child(note)
+            .child(list)
     }
 
     fn render_rules(&self, theme: &Theme, claims: &[ClaimRecord], cx: &mut Context<Self>) -> Div {
@@ -1073,7 +1256,7 @@ impl<S: ContextStores> ContextScreen<S> {
 }
 
 impl<S: ContextStores> Render for ContextScreen<S> {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::current(cx);
         let body: AnyElement = match self.snapshot.as_ref() {
             None if self.error.is_none() => div()
@@ -1091,10 +1274,20 @@ impl<S: ContextStores> Render for ContextScreen<S> {
             Some(snapshot) => {
                 let decisions = snapshot.decisions.clone();
                 let claims = snapshot.claims.clone();
+                let documents = snapshot.documents.clone();
                 let mode = self.render_mode(&theme, cx);
                 let in_force = self.render_in_force(&theme, &decisions, cx);
                 let rules = self.render_rules(&theme, &claims, cx);
+                let docs = self.render_documents(&theme, &documents, cx);
                 let pack = self.render_pack(&theme, cx);
+                if self.scroll_to_end {
+                    self.scroll_to_end = false;
+                    let scroll = self.scroll.clone();
+                    cx.on_next_frame(window, move |_, _, cx| {
+                        scroll.scroll_to_bottom();
+                        cx.notify();
+                    });
+                }
                 reading_page(
                     "context-page",
                     div()
@@ -1122,8 +1315,10 @@ impl<S: ContextStores> Render for ContextScreen<S> {
                         .child(mode)
                         .child(in_force)
                         .child(rules)
+                        .child(docs)
                         .child(pack),
                 )
+                .track_scroll(&self.scroll)
                 .into_any_element()
             }
         };
@@ -1175,11 +1370,52 @@ fn load_snapshot<S: ContextStores>(
         })?
         .decisions;
     let claims = list_claims(backend, project)?;
+    // The folder is read on each visit; an unreadable folder keeps the last
+    // index instead of failing the page.
+    if let Err(error) = backend.documents.index(project) {
+        tracing::warn!(error = %error, operation = "documents_index", "indexing skipped");
+    }
+    let documents = list_documents(backend, project)?;
     Ok(Snapshot {
         settings,
         decisions,
         claims,
+        documents,
     })
+}
+
+fn list_documents<S: ContextStores>(
+    backend: &ContextServices<S>,
+    project: &str,
+) -> Result<Vec<ProjectDocument>, String> {
+    backend.documents.list(project).map_err(|error| {
+        tracing::error!(error = ?error, operation = "documents", "list failed");
+        "Não foi possível ler a documentação do projeto.".to_owned()
+    })
+}
+
+/// Product copy for an indexing failure.
+fn document_failure(error: application::documents::DocumentError) -> String {
+    use application::documents::DocumentError;
+    match error {
+        DocumentError::FolderUnavailable => {
+            "A pasta do projeto não está acessível; a última leitura continua valendo.".into()
+        }
+        DocumentError::ProjectNotFound => "Projeto não encontrado.".into(),
+        DocumentError::Storage(detail) => {
+            tracing::error!(error = %detail, operation = "documents_index", "storage failed");
+            "Não foi possível ler a documentação. Tente de novo.".into()
+        }
+    }
+}
+
+fn document_kind_plural(kind: DocumentKind) -> &'static str {
+    match kind {
+        DocumentKind::Adr => "Registros de decisão (ADR)",
+        DocumentKind::Spec => "Especificações",
+        DocumentKind::Readme => "READMEs",
+        DocumentKind::Guide => "Guias e notas",
+    }
 }
 
 fn list_claims<S: ContextStores>(

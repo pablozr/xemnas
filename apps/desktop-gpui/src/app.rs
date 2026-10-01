@@ -564,6 +564,11 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + ContextStores> Shell<R>
                         map.update(cx, |screen, _| screen.open_route(view));
                     }
                 }
+                Destination::Context => {
+                    if let Some(screen) = &self.context {
+                        screen.update(cx, |screen, _| screen.scroll_to_end());
+                    }
+                }
                 Destination::Overview => {
                     if let (Some(screen), Some(flow)) = (
                         &self.overview,
