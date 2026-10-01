@@ -133,23 +133,37 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   de informação) ao lado do estado; "Por que importa" lista os critérios
   marcados em texto meta abaixo do cabeçalho.
 
-## Contexto — o que vale no projeto
+## Contexto — o que o agente recebe
 
-- Terceiro destino do projeto (Ctrl 3), numa `reading_page`: modo de contexto
-  do agente (Desligado, Medir, Ativo) como três opções lado a lado e tokens por
-  bloco com salvar só quando muda; decisões em vigor numa lista com borda que
-  abre em Decisões; regras do projeto agrupadas por tipo, com encerrar
-  confirmado na própria linha e um compositor (tipo + frase + Adicionar);
-  prévia do Context Pack para uma tarefa digitada, com barra de orçamento usado,
-  itens que entrariam e exportação Markdown/JSON.
-- **Documentação** (ADR-0008), entre regras e prévia: rótulo com contagem e
-  "Ler de novo" (ghost), nota curta de procedência, grupos por tipo
-  (ADR, especificações, READMEs, guias) com ícone, contagem, título, caminho
-  em mono e número de seções; até 8 por grupo e "E mais N". Vazio diz quais
-  pastas são lidas. Na Visão, fonte de documento usa o ícone de lista e o
+- Terceiro destino do projeto (Ctrl 3). Mesma gramática do Mapa: índice à
+  esquerda (`index_rail` + `index_row`, 296 px) e uma `reading_page` por
+  página. O índice agrupa **Agente** (Visão geral, Entregas, Testar uma
+  tarefa), **Fontes** (Decisões em vigor, Regras, Documentação, com contagem)
+  e **Ajustes** (Modo de entrega); o pé mostra o modo salvo ("Ativo · até
+  300 tokens") com ponto de estado.
+- **Visão geral**: cartão de estado (ponto com halo na cor do modo: verde
+  Ativo, azul Medindo, cinza Desligado; frase do que acontece; "Mudar modo"
+  ou "Ativar" secundário); "Como chega ao agente" em três etapas numeradas
+  ligadas por chevrons (Fontes com contagens, Seleção pelo pedido e pela
+  edição, Entrega com orçamento e sem repetição na sessão); "Últimos 7 dias"
+  em quatro blocos com número em `DISPLAY` (entregas enviadas e medidas,
+  sessões, tokens médios contra o limite, itens fora do orçamento), tirados
+  da auditoria real; três entregas recentes e "Ver todas".
+- **Entregas**: auditoria de cada bloco, do mais recente ao mais antigo, por
+  dia; linha com hora em mono, `status_pill` Enviado/Medido, primeiro item
+  e "e mais N", contagem e itens fora do orçamento, barra fina de tokens
+  contra o limite e sessão curta em mono; a linha abre os itens que o
+  agente leu (decisão com versão, regra). Vazio explica o modo e leva a ele.
+- **Testar uma tarefa**: o Context Pack para uma tarefa digitada, com barra de
+  orçamento, itens e exportação Markdown/JSON; a prévia não é salva.
+- **Decisões em vigor**, **Regras** (por tipo, compositor e encerrar
+  confirmado na linha; encerrar não apaga) e **Documentação** (ADR-0008:
+  grupos por tipo, caminho em mono, "Ler de novo"; alimenta a Visão e não é
+  enviada ao agente). Na Visão, fonte de documento usa o ícone de lista e o
   caminho no tooltip.
-- Encerrar uma regra não apaga: ela deixa de valer e fica no histórico. A
-  prévia não é salva; exportar é ação explícita com destino escolhido.
+- **Modo de entrega**: Desligado, Medir e Ativo lado a lado e tokens por
+  bloco; salvar só aparece quando algo muda.
+- Rota de captura: `context:<deliveries|test|decisions|rules|documents|mode>`.
 
 ## Visão — o projeto resumido
 

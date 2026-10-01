@@ -566,7 +566,14 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + ContextStores> Shell<R>
                 }
                 Destination::Context => {
                     if let Some(screen) = &self.context {
-                        screen.update(cx, |screen, _| screen.scroll_to_end());
+                        let view = view.clone();
+                        screen.update(cx, |screen, _| {
+                            if view == "end" {
+                                screen.scroll_to_end();
+                            } else {
+                                screen.open_section(&view);
+                            }
+                        });
                     }
                 }
                 Destination::Overview => {

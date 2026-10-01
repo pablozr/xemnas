@@ -330,7 +330,119 @@ fn seed_map(store: &SqliteStore) -> Result<(), Box<dyn std::error::Error>> {
     }
     // The remaining decision stays a suggestion for the Sugestões view.
     graph.refresh_suggestions(PROJECT)?;
-    let _ = resend;
+
+    // Sample deliveries to the agent, recent enough for the 7-day totals,
+    // and the project set to deliver them.
+    {
+        use application::context_settings::{ContextMode, ContextSettings};
+        use application::injection::{
+            DeliveredItem, InjectionMode, InjectionRecord, InjectionStore, ItemKind,
+        };
+        ContextSettings::new(store.clone()).set(PROJECT, ContextMode::Inject, Some(300))?;
+        let now = chrono::Utc::now();
+        // (minutes ago, session, mode, tokens, omitted, items)
+        type Sample<'a> = (
+            i64,
+            &'a str,
+            InjectionMode,
+            usize,
+            usize,
+            Vec<DeliveredItem>,
+        );
+        let samples: [Sample; 5] = [
+            (
+                12,
+                "ses-7f3a9c21",
+                InjectionMode::Inject,
+                214,
+                0,
+                vec![
+                    DeliveredItem {
+                        kind: ItemKind::Decision,
+                        id: unique.clone(),
+                        version: 3,
+                    },
+                    DeliveredItem {
+                        kind: ItemKind::Claim,
+                        id: rules[1].clone(),
+                        version: 1,
+                    },
+                ],
+            ),
+            (
+                47,
+                "ses-7f3a9c21",
+                InjectionMode::Inject,
+                128,
+                0,
+                vec![DeliveredItem {
+                    kind: ItemKind::Decision,
+                    id: recover.clone(),
+                    version: 2,
+                }],
+            ),
+            (
+                190,
+                "ses-1b08e44d",
+                InjectionMode::Inject,
+                296,
+                2,
+                vec![
+                    DeliveredItem {
+                        kind: ItemKind::Decision,
+                        id: secrets.clone(),
+                        version: 2,
+                    },
+                    DeliveredItem {
+                        kind: ItemKind::Claim,
+                        id: rules[0].clone(),
+                        version: 1,
+                    },
+                    DeliveredItem {
+                        kind: ItemKind::Decision,
+                        id: resend.clone(),
+                        version: 2,
+                    },
+                ],
+            ),
+            (
+                1500,
+                "ses-c92d0a17",
+                InjectionMode::Shadow,
+                172,
+                0,
+                vec![DeliveredItem {
+                    kind: ItemKind::Decision,
+                    id: revise.clone(),
+                    version: 2,
+                }],
+            ),
+            (
+                1530,
+                "ses-c92d0a17",
+                InjectionMode::Shadow,
+                0,
+                0,
+                Vec::new(),
+            ),
+        ];
+        for (index, (minutes, session, mode, tokens, omitted, items)) in
+            samples.into_iter().enumerate()
+        {
+            store.record_injection(&InjectionRecord {
+                injection_id: format!("demo-injection-{index}"),
+                session_id: session.into(),
+                project_id: PROJECT.into(),
+                mode,
+                tokens,
+                omitted,
+                created_at: (now - chrono::Duration::minutes(minutes))
+                    .format("%Y-%m-%dT%H:%M:%SZ")
+                    .to_string(),
+                items,
+            })?;
+        }
+    }
 
     // Sample documentation, as if read from the project folder.
     use application::documents::{document_ref, DocumentKind, DocumentStore, ProjectDocument};

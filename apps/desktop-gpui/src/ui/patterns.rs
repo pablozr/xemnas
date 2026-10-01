@@ -336,6 +336,74 @@ pub fn status_pill(theme: &Theme, color: Rgba, label: &'static str) -> Div {
         .child(label)
 }
 
+/// Width of the index rail beside a reading column (Mapa, Contexto).
+pub const INDEX_WIDTH: f32 = 296.0;
+
+/// The index rail: a fixed-width pane at the left of a destination, with a
+/// hairline on its right edge.
+pub fn index_rail(theme: &Theme) -> Div {
+    div()
+        .w(px(INDEX_WIDTH))
+        .flex_none()
+        .h_full()
+        .flex()
+        .flex_col()
+        .bg(theme.colors.pane())
+        .border_r_1()
+        .border_color(theme.colors.hairline_divider())
+}
+
+/// One entry of an [`index_rail`]: glyph, label and an optional count,
+/// selected with [`mark_selected`]. The caller adds focus and handlers.
+pub fn index_row(
+    theme: &Theme,
+    id: impl Into<ElementId>,
+    selected: bool,
+    glyph: IconName,
+    label: &'static str,
+    badge: Option<String>,
+) -> Stateful<Div> {
+    let colors = theme.colors;
+    let row = div()
+        .id(id)
+        .relative()
+        .flex()
+        .items_center()
+        .gap(px(SpacingScale::S3))
+        .px(px(SpacingScale::S3))
+        .py(px(SpacingScale::S2))
+        .rounded(theme.radius.control())
+        .cursor_pointer()
+        .role(gpui::Role::Button)
+        .aria_label(label)
+        .focus_visible(crate::ui::controls::focus_ring(theme))
+        .when(!selected, |row| {
+            row.hover(move |style| style.bg(colors.glass_fill_medium()))
+                .active(move |style| style.bg(colors.glass_fill_strong()))
+        })
+        .child(icon(
+            glyph,
+            16.0,
+            if selected {
+                colors.text_primary()
+            } else {
+                colors.text_muted()
+            },
+        ))
+        .child(
+            text_style(div(), TypeScale::ROW_TITLE)
+                .flex_1()
+                .text_color(if selected {
+                    colors.text_primary()
+                } else {
+                    colors.text_secondary()
+                })
+                .child(label),
+        )
+        .children(badge.map(|badge| count_chip(theme, badge)));
+    mark_selected(row, theme, selected)
+}
+
 /// The track of a segmented switch between views of the same content
 /// ("Blocos | Grafo"): a recessed pill holding [`segment`]s.
 pub fn segmented(theme: &Theme) -> Div {

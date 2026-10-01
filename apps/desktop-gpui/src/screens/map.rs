@@ -68,7 +68,6 @@ pub struct MapServices<S> {
 }
 
 /// Width of the index pane.
-const INDEX_WIDTH: f32 = 296.0;
 /// Decisions offered when linking.
 const PICK_LIMIT: usize = 100;
 /// Days an entity counts as recently active on the overview.
@@ -2679,15 +2678,7 @@ fn today() -> String {
 }
 
 fn index_frame(theme: &Theme) -> Div {
-    div()
-        .w(px(INDEX_WIDTH))
-        .flex_none()
-        .h_full()
-        .flex()
-        .flex_col()
-        .bg(theme.colors.pane())
-        .border_r_1()
-        .border_color(theme.colors.hairline_divider())
+    crate::ui::patterns::index_rail(theme)
 }
 
 fn page_header(theme: &Theme, title: &str, subtitle: &str) -> Div {
