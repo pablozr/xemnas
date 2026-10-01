@@ -38,5 +38,7 @@ Quando dois documentos divergirem, vale nesta ordem:
   do código.
 - **Pesquisa, investigação ou ideia futura:** `pesquisas/`, seguindo as regras do
   [índice da pasta](pesquisas/README.md).
+  A avaliação de recuperação local segue a
+  [metodologia do benchmark semântico](pesquisas/metodologia-benchmark-semantico.md).
 - **Como operar, configurar ou diagnosticar:** `operacao/`.
 - **Imagem para o README da raiz:** `assets/readme/`.

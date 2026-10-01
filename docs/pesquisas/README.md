@@ -8,6 +8,7 @@ planos de `docs/roadmap/`.
 
 | Documento | Assunto | Status |
 | --- | --- | --- |
+| [metodologia-benchmark-semantico.md](metodologia-benchmark-semantico.md) | Protocolo de qualidade, latência e memória para E5/Gemma e SQLite/LanceDB | Aberta. Experimento Rust CPU em execução; Windows bloqueou o build nativo |
 | [memoria-semantica-local-first.md](memoria-semantica-local-first.md) | Síntese da recuperação local, direção acordada, custos, latência e experimento mínimo | Aberta. Windows 8 GB/CPU; stack final depende de benchmark |
 | [embeddings-e-reranking-local.md](embeddings-e-reranking-local.md) | Runtimes Rust/Python, modelos locais, licenças e empacotamento | Aberta. Shortlist E5-small/EmbeddingGemma; sem execução de modelos |
 | [biblioteca-e-busca-local.md](biblioteca-e-busca-local.md) | Índices locais, PDFs/OCR, chunking, citações e memória | Aberta. SQLite/LanceDB em comparação; sem instalação |
