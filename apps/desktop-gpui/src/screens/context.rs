@@ -32,7 +32,7 @@ use gpui::{
     Window,
 };
 
-use super::format::{short_date, thousands};
+use super::format::{calendar_date, short_date, thousands};
 use crate::ui::controls::{action_button, button_foreground, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
@@ -825,7 +825,7 @@ impl<S: ContextStores> ContextScreen<S> {
                             .child(if confirming {
                                 "Encerrar hoje? Ela deixa de valer e fica no histórico.".to_owned()
                             } else {
-                                format!("Vale desde {}", short_date(&claim.valid_from))
+                                format!("Vale desde {}", calendar_date(&claim.valid_from))
                             }),
                     ),
             );

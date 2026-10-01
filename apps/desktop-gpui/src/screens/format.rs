@@ -38,6 +38,49 @@ pub(super) fn date_time(value: &str) -> String {
         .unwrap_or_else(|| value.to_owned())
 }
 
+/// A calendar date kept as recorded (`2026-09-01…` → `1 set 2026`): rule
+/// validity is a day, not an instant, so it never shifts with the zone.
+pub(super) fn calendar_date(value: &str) -> String {
+    chrono::NaiveDate::parse_from_str(value.get(..10).unwrap_or(value), "%Y-%m-%d")
+        .map(|date| {
+            format!(
+                "{} {} {}",
+                date.day(),
+                MONTHS[date.month0() as usize],
+                date.year()
+            )
+        })
+        .unwrap_or_else(|_| value.to_owned())
+}
+
+/// `10:00` in the local zone, or nothing for an unparsable value.
+pub(super) fn clock(value: &str) -> Option<String> {
+    local(value).map(|date| format!("{:02}:{:02}", date.hour(), date.minute()))
+}
+
+/// Day heading of a feed: `Hoje`, `Ontem` or `29 set 2026`.
+pub(super) fn day_heading(value: &str) -> String {
+    let Some(date) = local(value) else {
+        return value.to_owned();
+    };
+    let today = Local::now().date_naive();
+    match (today - date.date_naive()).num_days() {
+        0 => "Hoje".to_owned(),
+        1 => "Ontem".to_owned(),
+        _ => day(&date),
+    }
+}
+
+/// `text` cut at a word near `max` characters, with an ellipsis.
+pub(super) fn clipped(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_owned();
+    }
+    let cut: String = text.chars().take(max).collect();
+    let cut = cut.rsplit_once(' ').map_or(cut.as_str(), |(head, _)| head);
+    format!("{}…", cut.trim_end_matches([',', ';', ':', '.']))
+}
+
 /// `8192` → `8.192`.
 pub(super) fn thousands(value: usize) -> String {
     let digits = value.to_string();
@@ -73,6 +116,9 @@ mod tests {
         assert!(date_time(value).starts_with(&short_date(value)));
         assert_eq!(short_date("short"), "short");
         assert_eq!(date_time("short"), "short");
+        assert_eq!(calendar_date("2026-09-01T00:00:00Z"), "1 set 2026");
+        assert_eq!(calendar_date("2026-09-01"), "1 set 2026");
+        assert_eq!(clock("short"), None);
     }
 
     #[test]

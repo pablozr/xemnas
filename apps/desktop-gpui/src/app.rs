@@ -229,6 +229,8 @@ pub struct Shell<R: ProjectRepository + InboxStore + DecisionStore + ContextStor
     activity: Option<JobSummary>,
     /// Whether the window was opened over a system material (Mica/Acrylic).
     backdrop: bool,
+    /// Demo-only destination to open once projects load (`--open`).
+    route: Option<String>,
 }
 
 impl<R: ProjectRepository + InboxStore + DecisionStore + ContextStores> Shell<R> {
@@ -388,6 +390,7 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + ContextStores> Shell<R>
             capture: None,
             activity: None,
             backdrop: false,
+            route: None,
         }
     }
 
@@ -520,6 +523,60 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + ContextStores> Shell<R>
             .map(|project| project.id().as_str().to_owned());
         screen.update(cx, |screen, cx| screen.set_project(project, cx));
         self.overview = Some(screen);
+    }
+
+    /// Opens `<destination>[:<view>]` on the first demo project once the
+    /// list loads, so captures reach a screen without clicks or focus.
+    pub fn open_route(&mut self, route: String) {
+        self.route = Some(route);
+    }
+
+    fn follow_route(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(projects) = self.projects.clone() else {
+            return;
+        };
+        let Some(project) = projects
+            .read(cx)
+            .palette_projects()
+            .into_iter()
+            .map(|(id, _, _)| id)
+            .find(|id| id == "demo-xemnas")
+        else {
+            return;
+        };
+        let Some(route) = self.route.take() else {
+            return;
+        };
+        projects.update(cx, |screen, cx| screen.select_project(project, window, cx));
+        let (destination, view) = route.split_once(':').unwrap_or((route.as_str(), ""));
+        let destination = match destination {
+            "overview" => Destination::Overview,
+            "decisions" => Destination::Decisions,
+            "context" => Destination::Context,
+            "map" => Destination::Map,
+            _ => Destination::Review,
+        };
+        if !view.is_empty() {
+            let view = view.to_owned();
+            match destination {
+                Destination::Map => {
+                    if let Some(map) = &self.map {
+                        map.update(cx, |screen, _| screen.open_route(view));
+                    }
+                }
+                Destination::Overview => {
+                    if let (Some(screen), Some(flow)) = (
+                        &self.overview,
+                        view.strip_prefix("flow")
+                            .and_then(|index| index.parse().ok()),
+                    ) {
+                        screen.update(cx, |screen, _| screen.open_flow(flow));
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.switch_to(destination, window, cx);
     }
 
     /// Identifies opt-in sample data visibly, without changing navigation.
@@ -1265,6 +1322,9 @@ impl<R: ProjectRepository + InboxStore + DecisionStore + ContextStores> Shell<R>
 
 impl<R: ProjectRepository + InboxStore + DecisionStore + ContextStores> Render for Shell<R> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.route.is_some() {
+            self.follow_route(window, cx);
+        }
         // The material follows the system appearance; in a light theme it
         // turns pale under a dark palette, so the chrome stays opaque there.
         let glass = self.backdrop

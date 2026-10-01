@@ -156,6 +156,9 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
 - O cartão abre o fluxo na mesma coluna: "Todos os fluxos" (ghost) volta;
   passos numerados em círculos de 24 px ligados por filete vertical, com
   título, texto, chip do componente (ícone de grafo, abre no Mapa) e fontes.
+- Fontes são chips com ícone (documento = decisão, escudo = regra) e o
+  título encurtado em palavra inteira; o texto completo fica no tooltip.
+  Defasagem é uma linha própria com ponto âmbar, nunca a meta inteira em cor.
 - Vazio: `empty_panel` com o que será enviado ao provedor e "Gerar visão"
   primário; gerando: "Gerando…" desabilitado; erro em `error_banner`; nota de
   procedência no rodapé. Nunca texto sem fonte.
@@ -173,8 +176,15 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   nome, descrição, padrões em mono, ações Vincular decisão, Vincular regra,
   Faz parte de…, Editar e Aposentar com confirmação na própria página) e as
   seções Decisões em vigor (abrem em Decisões), Conflitos, Regras, Estrutura,
-  Impacto e Linha do tempo; lente de arquivo com campo e resultado; linha do
-  tempo com data, ponto de estado e frase.
+  Impacto e Linha do tempo; lente de arquivo com campo e resultado.
+- **Linha do tempo** (anatomia do Primer Timeline): do mais recente ao mais
+  antigo, agrupada por dia ("Hoje", "Ontem", "29 set 2026" + contagem), num
+  trilho vertical de 1 px. Decisões e regras são itens cheios: marcador de
+  22 px com ícone na cor do estado (verde confirmada, âmbar substituída, azul
+  regra), rótulo do tipo em META, título, detalhe e hora à direita. Manutenção
+  do mapa (itens criados, ligações) vira uma linha condensada por sequência,
+  com ponto vazado, contagem e até 4 nomes + "e mais N". Validade de regra é
+  data de calendário: nunca muda com o fuso.
 - **Visão geral** (primeira visão do Mapa): blocos no estilo C4, dois por
   linha, um por componente de topo, com as partes dentro como chips; cada
   decisão em vigor é um quadrado cheio de 8 px e cada regra um vazado, e o
@@ -245,6 +255,12 @@ truncamento de nome e caminho, seleção sob hover, foco, troca de projeto,
 confirmação/cancelamento e contraste. Se o executável estiver bloqueado pela
 política do Windows, registrar o limite em vez de validar com uma janela antiga
 ou enfraquecer as proteções do sistema.
+
+Sem tomar o foco da máquina: `tools/capture-background.ps1 -Route <rota>`
+abre o `--demo` fora da tela, sem foco, chega à tela por `--open` (ex.:
+`overview:flow0`, `map:timeline`, `map:entity:storage-sqlite`) e copia a
+janela com PrintWindow; `-Theme charcoal` troca a paleta. Nenhum clique ou
+tecla é enviado.
 
 Para a Inbox, conferir também lista vazia, filtro sem resultados, paginação,
 troca de fonte e leitura de evidências extensas. Capturas e decisões só ganham

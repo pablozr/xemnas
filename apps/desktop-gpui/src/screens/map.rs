@@ -26,7 +26,7 @@ use gpui::{
 };
 
 use super::context::OpenDecision;
-use super::format::short_date;
+use super::format::{calendar_date, clipped, clock, day_heading, short_date};
 use crate::ui::controls::{action_button, icon_action, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
@@ -151,6 +151,8 @@ pub struct MapScreen<S: MapStores> {
     error: Option<String>,
     notice: Option<String>,
     focus: BTreeMap<String, FocusHandle>,
+    /// Demo-only view to open once the map loads (`--open map:<view>`).
+    route: Option<String>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -199,7 +201,38 @@ impl<S: MapStores> MapScreen<S> {
             error: None,
             notice: None,
             focus: BTreeMap::new(),
+            route: None,
             _subscriptions: subscriptions,
+        }
+    }
+
+    /// Opens `timeline`, `suggestions`, `file` or `entity:<name>` once the
+    /// map is loaded; used by the demo to reach a view without input.
+    pub fn open_route(&mut self, route: String) {
+        self.route = Some(route);
+    }
+
+    fn follow_route(&mut self, cx: &mut Context<Self>) {
+        let Some(route) = self.route.take() else {
+            return;
+        };
+        match route.as_str() {
+            "timeline" => self.open_view(View::Timeline, cx),
+            "suggestions" => self.open_view(View::Suggestions, cx),
+            "file" => self.open_view(View::File, cx),
+            other => {
+                let name = other.strip_prefix("entity:").unwrap_or(other);
+                let id = self.data.as_ref().and_then(|data| {
+                    data.map
+                        .entities
+                        .iter()
+                        .find(|row| row.entity.name == name)
+                        .map(|row| row.entity.entity_id.clone())
+                });
+                if let Some(id) = id {
+                    self.open_entity(id, cx);
+                }
+            }
         }
     }
 
@@ -266,6 +299,9 @@ impl<S: MapStores> MapScreen<S> {
         match outcome {
             Outcome::Loaded(Ok(data)) => {
                 self.data = Some(*data);
+                if self.route.is_some() {
+                    return self.follow_route(cx);
+                }
                 // A view on an entity that no longer exists falls back.
                 if let View::Entity(id) = &self.view {
                     let id = id.clone();
@@ -1532,7 +1568,7 @@ impl<S: MapStores> MapScreen<S> {
                             format!(
                                 "{} · desde {}",
                                 claim_label(&row.detail),
-                                short_date(&row.at)
+                                calendar_date(&row.at)
                             )
                         }),
                 );
@@ -1693,7 +1729,7 @@ impl<S: MapStores> MapScreen<S> {
             .child(page_header(
                 theme,
                 "Linha do tempo",
-                "O que passou a valer e o que deixou de valer no projeto, do mais antigo ao mais recente.",
+                "O que passou a valer e o que deixou de valer no projeto, do mais recente ao mais antigo.",
             ))
             .child(timeline_list(theme, &events));
         reading_page("map-timeline", column).into_any_element()
@@ -2530,6 +2566,18 @@ fn section(theme: &Theme, label: &str, content: Div) -> Div {
         .child(content)
 }
 
+/// Upkeep names listed on a condensed line before "e mais N".
+const UPKEEP_SHOWN: usize = 4;
+/// Longest node name on a condensed line.
+const UPKEEP_CHARS: usize = 28;
+
+/// Diameter of a timeline marker; the rail runs through its center.
+const MARKER: f32 = 22.0;
+
+/// The project history as a feed: newest first, grouped by day, on a rail
+/// with one marker per kind (Primer Timeline anatomy). Decisions and rules
+/// are full items; map upkeep (items created, links confirmed) collapses
+/// into one condensed line per run so it never drowns what changed.
 fn timeline_list(theme: &Theme, events: &[TimelineEvent]) -> Div {
     let colors = theme.colors;
     let mut list = div().flex().flex_col();
@@ -2540,59 +2588,257 @@ fn timeline_list(theme: &Theme, events: &[TimelineEvent]) -> Div {
                 .child("Nada aconteceu aqui ainda."),
         );
     }
-    for (index, event) in events.iter().enumerate() {
-        let (verb, color) = timeline_copy(event.kind, theme);
-        let text = match &event.other {
-            Some(other) => format!("{} {verb} {}", event.node.label, other.label),
-            None => format!("{} {verb}", event.node.label),
-        };
+    let mut ordered: Vec<&TimelineEvent> = events.iter().collect();
+    ordered.sort_by(|left, right| right.at.cmp(&left.at));
+
+    // Day → runs of events (a run is one full event or consecutive upkeep
+    // of the same kind).
+    let mut days: Vec<(String, Vec<Vec<&TimelineEvent>>)> = Vec::new();
+    for event in ordered {
+        let heading = event_day(event);
+        if days.last().is_none_or(|(day, _)| *day != heading) {
+            days.push((heading, Vec::new()));
+        }
+        let runs = &mut days.last_mut().expect("day pushed").1;
+        let joins = runs.last().is_some_and(|run| {
+            upkeep(event.kind) && run.first().is_some_and(|first| first.kind == event.kind)
+        });
+        if joins {
+            runs.last_mut().expect("run").push(event);
+        } else {
+            runs.push(vec![event]);
+        }
+    }
+
+    for (day_index, (heading, runs)) in days.into_iter().enumerate() {
+        let count: usize = runs.iter().map(Vec::len).sum();
         list = list.child(
             div()
                 .flex()
-                .items_start()
-                .gap(px(SpacingScale::S3))
-                .py(px(SpacingScale::S2))
-                .when(index > 0, |row| {
-                    row.border_t_1().border_color(colors.hairline_divider())
-                })
+                .items_baseline()
+                .gap(px(SpacingScale::S2))
+                .when(day_index > 0, |row| row.mt(px(SpacingScale::S6)))
+                .mb(px(SpacingScale::S3))
+                .child(
+                    text_style(div(), TypeScale::ROW_TITLE)
+                        .text_color(colors.text_secondary())
+                        .child(heading),
+                )
                 .child(
                     text_style(div(), TypeScale::META)
-                        .w(px(88.0))
-                        .flex_none()
-                        .pt(px(2.0))
                         .text_color(colors.text_muted())
-                        .child(short_date(&event.at)),
-                )
-                .child(
-                    div()
-                        .mt(px(6.0))
-                        .size(px(6.0))
-                        .flex_none()
-                        .rounded_full()
-                        .bg(color),
-                )
-                .child(
-                    text_style(div(), TypeScale::BODY_SMALL)
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .child(text),
+                        .child(plural(count, "evento", "eventos")),
                 ),
         );
+        let last = runs.len().saturating_sub(1);
+        for (index, run) in runs.into_iter().enumerate() {
+            list = list.child(timeline_item(theme, &run, index == last));
+        }
     }
     list
 }
 
-fn timeline_copy(kind: TimelineKind, theme: &Theme) -> (&'static str, gpui::Rgba) {
+/// The day an event belongs to; rule validity is a calendar date.
+fn event_day(event: &TimelineEvent) -> String {
+    match event.kind {
+        TimelineKind::ClaimStarted | TimelineKind::ClaimEnded => calendar_date(&event.at),
+        _ => day_heading(&event.at),
+    }
+}
+
+/// Map upkeep, condensed in the feed.
+fn upkeep(kind: TimelineKind) -> bool {
+    matches!(
+        kind,
+        TimelineKind::EntityCreated
+            | TimelineKind::EntityRetired
+            | TimelineKind::EdgeConfirmed
+            | TimelineKind::EdgeInvalidated
+    )
+}
+
+fn timeline_item(theme: &Theme, run: &[&TimelineEvent], last: bool) -> Div {
+    let colors = theme.colors;
+    let first = run[0];
+    let condensed = upkeep(first.kind);
+    let (label, glyph, color) = timeline_copy(first.kind, theme);
+    let marker = if condensed {
+        div()
+            .size(px(MARKER))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                div()
+                    .size(px(7.0))
+                    .rounded_full()
+                    .border_1()
+                    .border_color(colors.text_muted())
+                    .bg(colors.content()),
+            )
+    } else {
+        div()
+            .size(px(MARKER))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .border_1()
+            .border_color(color.alpha(0.35))
+            .bg(colors.content())
+            .child(icon(glyph, 12.0, color))
+    };
+    let rail = div()
+        .w(px(MARKER))
+        .flex_none()
+        .flex()
+        .flex_col()
+        .items_center()
+        .child(marker)
+        .when(!last, |rail| {
+            rail.child(div().w(px(1.0)).flex_1().bg(colors.hairline_divider()))
+        });
+    let time = text_style(div(), TypeScale::META)
+        .flex_none()
+        .text_color(colors.text_muted())
+        .children(match first.kind {
+            TimelineKind::ClaimStarted | TimelineKind::ClaimEnded => None,
+            _ => clock(&first.at),
+        });
+    let body = if condensed {
+        let names: Vec<String> = run
+            .iter()
+            .map(|event| match &event.other {
+                Some(other) => format!(
+                    "{} → {}",
+                    clipped(&event.node.label, UPKEEP_CHARS),
+                    clipped(&other.label, UPKEEP_CHARS)
+                ),
+                None => clipped(&event.node.label, UPKEEP_CHARS),
+            })
+            .collect();
+        let shown = names
+            .iter()
+            .take(UPKEEP_SHOWN)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" · ");
+        let rest = names.len().saturating_sub(UPKEEP_SHOWN);
+        div()
+            .flex_1()
+            .min_w(px(0.0))
+            .flex()
+            .flex_col()
+            .gap(px(2.0))
+            .pt(px(3.0))
+            .child(
+                div()
+                    .flex()
+                    .items_baseline()
+                    .gap(px(SpacingScale::S3))
+                    .child(
+                        text_style(div(), TypeScale::BODY_SMALL)
+                            .flex_1()
+                            .text_color(colors.text_secondary())
+                            .child(if run.len() == 1 {
+                                label.to_owned()
+                            } else {
+                                format!("{label} · {}", run.len())
+                            }),
+                    )
+                    .child(time),
+            )
+            .child(
+                text_style(div(), TypeScale::META)
+                    .text_color(colors.text_muted())
+                    .child(if rest > 0 {
+                        format!("{shown} e mais {rest}")
+                    } else {
+                        shown
+                    }),
+            )
+    } else {
+        let detail = match (&first.other, first.kind) {
+            (Some(other), TimelineKind::DecisionSuperseded) => {
+                format!("Substituída por: {}", other.label)
+            }
+            _ => first.node.detail.clone(),
+        };
+        div()
+            .flex_1()
+            .min_w(px(0.0))
+            .flex()
+            .flex_col()
+            .gap(px(2.0))
+            .child(
+                div()
+                    .flex()
+                    .items_baseline()
+                    .gap(px(SpacingScale::S3))
+                    .pt(px(3.0))
+                    .child(
+                        text_style(div(), TypeScale::META)
+                            .flex_1()
+                            .text_color(color)
+                            .child(label),
+                    )
+                    .child(time),
+            )
+            .child(text_style(div(), TypeScale::BODY).child(first.node.label.clone()))
+            .when(!detail.is_empty(), |body| {
+                body.child(
+                    text_style(div(), TypeScale::BODY_SMALL)
+                        .text_color(colors.text_muted())
+                        .child(claim_or_text(first.kind, &detail)),
+                )
+            })
+    };
+    div()
+        .flex()
+        .gap(px(SpacingScale::S3))
+        .child(rail)
+        .child(body.pb(px(if last { 0.0 } else { SpacingScale::S4 })))
+}
+
+/// A rule's detail is its kind literal; a decision's is its choice.
+fn claim_or_text(kind: TimelineKind, detail: &str) -> String {
+    match kind {
+        TimelineKind::ClaimStarted | TimelineKind::ClaimEnded => claim_label(detail).to_owned(),
+        _ => detail.to_owned(),
+    }
+}
+
+fn timeline_copy(kind: TimelineKind, theme: &Theme) -> (&'static str, IconName, gpui::Rgba) {
     let colors = theme.colors;
     match kind {
-        TimelineKind::DecisionConfirmed => ("foi confirmada", colors.status_success()),
-        TimelineKind::DecisionSuperseded => ("foi substituída por", colors.status_warning()),
-        TimelineKind::ClaimStarted => ("passou a valer", colors.status_success()),
-        TimelineKind::ClaimEnded => ("deixou de valer", colors.status_warning()),
-        TimelineKind::EntityCreated => ("entrou no mapa", colors.text_muted()),
-        TimelineKind::EntityRetired => ("foi aposentado", colors.text_muted()),
-        TimelineKind::EdgeConfirmed => ("ficou ligada a", colors.text_muted()),
-        TimelineKind::EdgeInvalidated => ("deixou de estar ligada a", colors.text_muted()),
+        TimelineKind::DecisionConfirmed => (
+            "Decisão confirmada",
+            IconName::Check,
+            colors.status_success(),
+        ),
+        TimelineKind::DecisionSuperseded => (
+            "Decisão substituída",
+            IconName::Rotate,
+            colors.status_warning(),
+        ),
+        TimelineKind::ClaimStarted => (
+            "Regra passou a valer",
+            IconName::Shield,
+            colors.status_info(),
+        ),
+        TimelineKind::ClaimEnded => (
+            "Regra deixou de valer",
+            IconName::Shield,
+            colors.text_muted(),
+        ),
+        TimelineKind::EntityCreated => ("Entrou no mapa", IconName::Plus, colors.text_muted()),
+        TimelineKind::EntityRetired => ("Aposentado", IconName::Circle, colors.text_muted()),
+        TimelineKind::EdgeConfirmed => {
+            ("Ligações confirmadas", IconName::Link, colors.text_muted())
+        }
+        TimelineKind::EdgeInvalidated => {
+            ("Ligações desfeitas", IconName::Link, colors.text_muted())
+        }
     }
 }
 

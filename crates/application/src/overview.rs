@@ -118,6 +118,9 @@ pub struct Citation {
     pub id: String,
     /// Short label shown in the text (`D:xxxxxxxx` or `R:xxxxxxxx`).
     pub label: String,
+    /// The decision question or rule statement, for readers.
+    #[serde(default)]
+    pub title: String,
 }
 
 /// One paragraph of the summary.
@@ -545,6 +548,7 @@ where
                     kind: "decision".into(),
                     id: decision.decision_id.clone(),
                     label,
+                    title: decision.question.clone(),
                 },
             );
         }
@@ -574,6 +578,7 @@ where
                     kind: "claim".into(),
                     id: claim.claim_id.clone(),
                     label,
+                    title: claim.statement.clone(),
                 },
             );
         }
@@ -698,6 +703,7 @@ mod tests {
                 kind: "decision".into(),
                 id: "dec-1".into(),
                 label: "D:aaaa1111".into(),
+                title: "Qual banco usar?".into(),
             },
         );
         input.references.insert(
@@ -706,6 +712,7 @@ mod tests {
                 kind: "claim".into(),
                 id: "claim-1".into(),
                 label: "R:bbbb2222".into(),
+                title: "Erros em português".into(),
             },
         );
         input

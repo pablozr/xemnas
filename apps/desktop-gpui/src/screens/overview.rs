@@ -17,11 +17,12 @@ use gpui::{
 };
 
 use super::context::OpenDecision;
-use super::format::short_date;
+use super::format::{clipped, short_date};
 use crate::ui::controls::{action_button, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
-    empty_panel, error_banner, reading_page, section_label, skeleton_list, toast, TOAST_DURATION,
+    empty_panel, error_banner, reading_page, section_label, skeleton_list, toast, READING_WIDTH,
+    TOAST_DURATION,
 };
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{SpacingScale, TypeScale};
@@ -54,6 +55,8 @@ pub struct OverviewScreen {
     error: Option<String>,
     notice: Option<String>,
     focus: BTreeMap<String, FocusHandle>,
+    /// Demo-only flow to open once the overview is read.
+    route_flow: Option<usize>,
 }
 
 impl EventEmitter<OpenDecision> for OverviewScreen {}
@@ -74,6 +77,7 @@ impl OverviewScreen {
             error: None,
             notice: None,
             focus: BTreeMap::new(),
+            route_flow: None,
         }
     }
 
@@ -89,6 +93,11 @@ impl OverviewScreen {
         self.loaded = false;
         self.error = None;
         self.refresh(cx);
+    }
+
+    /// Opens a flow by position once the overview is read (demo captures).
+    pub fn open_flow(&mut self, index: usize) {
+        self.route_flow = Some(index);
     }
 
     /// Reads the stored overview again (cheap; never calls the provider).
@@ -146,6 +155,9 @@ impl OverviewScreen {
                     Outcome::Loaded(Ok(view)) => {
                         this.loaded = true;
                         this.view = view;
+                        if let Some(flow) = this.route_flow.take() {
+                            this.flow = Some(flow);
+                        }
                     }
                     Outcome::Generated(Ok(view)) => {
                         this.loaded = true;
@@ -249,26 +261,43 @@ impl OverviewScreen {
         let colors = theme.colors;
         let mut row = div().flex().flex_wrap().gap(px(SpacingScale::S1));
         for (index, citation) in citations.iter().enumerate() {
+            let decision = citation.kind == "decision";
+            let title = if citation.title.is_empty() {
+                citation.label.clone()
+            } else {
+                citation.title.clone()
+            };
             let chip = div()
                 .id(SharedString::from(format!("{prefix}-cite-{index}")))
-                .px(px(6.0))
+                .flex()
+                .items_center()
+                .gap(px(SpacingScale::S1))
+                .px(px(SpacingScale::S2))
+                .py(px(2.0))
                 .rounded(theme.radius.control())
-                .border_1()
-                .border_color(colors.hairline_divider())
+                .bg(colors.glass_fill_low())
+                .child(icon(
+                    if decision {
+                        IconName::File
+                    } else {
+                        IconName::Shield
+                    },
+                    11.0,
+                    colors.text_muted(),
+                ))
                 .child(
                     text_style(div(), TypeScale::META)
-                        .font_family(Theme::font_mono())
                         .text_color(colors.text_secondary())
-                        .child(citation.label.clone()),
+                        .child(clipped(&title, CHIP_CHARS)),
                 );
-            if citation.kind == "decision" {
+            if decision {
                 let id = citation.id.clone();
                 let chip = chip
                     .cursor_pointer()
                     .hover(move |style| style.bg(colors.glass_fill_medium()))
                     .role(Role::Link)
-                    .aria_label(format!("Abrir a decisão {}", citation.label))
-                    .tooltip(tooltip("Abrir em Decisões", None))
+                    .aria_label(format!("Abrir a decisão: {title}"))
+                    .tooltip(tooltip(format!("{title} · abrir em Decisões"), None))
                     .focus_visible(crate::ui::controls::focus_ring(theme));
                 row = row.child(self.pressable(
                     chip,
@@ -277,7 +306,10 @@ impl OverviewScreen {
                     cx,
                 ));
             } else {
-                row = row.child(chip.aria_label(format!("Regra {}", citation.label)));
+                row = row.child(
+                    chip.aria_label(format!("Regra: {title}"))
+                        .tooltip(tooltip(format!("Regra: {title}"), None)),
+                );
             }
         }
         row
@@ -292,7 +324,7 @@ impl OverviewScreen {
         let colors = theme.colors;
         let mut grid = div().flex().flex_col().gap(px(SpacingScale::S3));
         for (pair_index, pair) in flows.chunks(2).enumerate() {
-            let mut line = div().flex().gap(px(SpacingScale::S3)).items_start();
+            let mut line = div().flex().items_stretch().gap(px(SpacingScale::S3));
             for (offset, flow) in pair.iter().enumerate() {
                 let index = pair_index * 2 + offset;
                 let components: Vec<String> = flow
@@ -307,8 +339,8 @@ impl OverviewScreen {
                     });
                 let card = div()
                     .id(SharedString::from(format!("overview-flow-{index}")))
-                    .flex_1()
-                    .min_w(px(0.0))
+                    .w(px(FLOW_CARD_WIDTH))
+                    .flex_none()
                     .flex()
                     .flex_col()
                     .gap(px(SpacingScale::S2))
@@ -350,9 +382,6 @@ impl OverviewScreen {
                     },
                     cx,
                 ));
-            }
-            if pair.len() == 1 {
-                line = line.child(div().flex_1());
             }
             grid = grid.child(line);
         }
@@ -507,18 +536,36 @@ impl OverviewScreen {
         let colors = theme.colors;
         let overview = &view.overview;
         let update = self.generate_button(theme, ButtonKind::Secondary, cx);
-        let mut meta = format!(
+        let meta = format!(
             "Gerada em {} a partir de {} decisões e {} regras",
             short_date(&overview.generated_at),
             overview.decisions,
             overview.rules
         );
-        if view.new_decisions > 0 {
-            meta.push_str(&format!(
-                " · {} decisões novas desde então",
-                view.new_decisions
-            ));
-        }
+        let stale = (view.new_decisions > 0).then(|| {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(SpacingScale::S2))
+                .child(
+                    div()
+                        .size(px(6.0))
+                        .rounded_full()
+                        .bg(colors.status_warning()),
+                )
+                .child(
+                    text_style(div(), TypeScale::META)
+                        .text_color(colors.text_secondary())
+                        .child(format!(
+                            "{} desde então. Atualize para incluí-las.",
+                            if view.new_decisions == 1 {
+                                "1 decisão nova".to_owned()
+                            } else {
+                                format!("{} decisões novas", view.new_decisions)
+                            }
+                        )),
+                )
+        });
         let title = div()
             .flex_1()
             .min_w(px(0.0))
@@ -528,13 +575,10 @@ impl OverviewScreen {
             .child(text_style(div(), TypeScale::HEADING_1).child("Visão do projeto"))
             .child(
                 text_style(div(), TypeScale::META)
-                    .text_color(if view.new_decisions > 0 {
-                        colors.status_warning()
-                    } else {
-                        colors.text_muted()
-                    })
+                    .text_color(colors.text_muted())
                     .child(meta),
-            );
+            )
+            .children(stale);
         let mut summary = div().flex().flex_col().gap(px(SpacingScale::S4));
         for (index, paragraph) in overview.summary.iter().enumerate() {
             let prefix = format!("overview-p{index}");
@@ -650,6 +694,12 @@ impl Render for OverviewScreen {
             )
     }
 }
+
+/// Two flow cards and their gap fill the reading column.
+const FLOW_CARD_WIDTH: f32 = (READING_WIDTH - SpacingScale::S3) / 2.0;
+
+/// Longest source title shown on a chip; the tooltip has the rest.
+const CHIP_CHARS: usize = 48;
 
 /// Product copy for an overview failure; storage detail goes to the log.
 fn product(error: OverviewError) -> String {

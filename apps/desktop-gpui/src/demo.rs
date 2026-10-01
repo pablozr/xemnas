@@ -182,38 +182,272 @@ pub(crate) fn store() -> Result<SqliteStore, Box<dyn std::error::Error>> {
     Ok(store)
 }
 
-/// A small project map for the demo: two components, one confirmed link and
-/// the suggestions the sample files imply.
+/// A project map for the demo: components with parts, technologies, rules,
+/// confirmed links, open suggestions and one stored Visão, so every Mapa and
+/// Visão surface has something real to draw.
 fn seed_map(store: &SqliteStore) -> Result<(), Box<dyn std::error::Error>> {
-    use application::graph::{KnowledgeGraph, NewEntity};
-    use domain::entities::EntityKind;
+    use application::claims::{Claims, NewClaim};
+    use application::decisions::{DecisionFilter, Decisions};
+    use application::graph::{KnowledgeGraph, LinkRequest, NewEntity};
+    use application::injection::short_ref;
+    use application::overview::{
+        Citation, OverviewFlow, OverviewParagraph, OverviewStep, OverviewStore, ProjectOverview,
+    };
+    use domain::claims::ClaimKind;
+    use domain::entities::{EdgeKind, EntityKind, NodeKind};
 
+    const PROJECT: &str = "demo-xemnas";
     let graph = KnowledgeGraph::new(store.clone());
-    for (name, pattern, description) in [
+    let mut ids = HashMap::new();
+    for (kind, name, pattern, description) in [
         (
+            EntityKind::Component,
             "storage-sqlite",
             "crates/storage-sqlite/**",
             "Banco local: decisões, capturas e o mapa.",
         ),
         (
+            EntityKind::Component,
             "application",
             "crates/application/**",
             "Casos de uso e portas.",
         ),
+        (
+            EntityKind::Component,
+            "jobs",
+            "crates/application/src/jobs.rs",
+            "Fila local de análises, com recuperação.",
+        ),
+        (
+            EntityKind::Component,
+            "inbox",
+            "crates/storage-sqlite/src/inbox.rs",
+            "Candidatos aguardando revisão.",
+        ),
+        (
+            EntityKind::Component,
+            "ai-provider",
+            "crates/ai-provider/**",
+            "Chamadas ao provedor de IA com consentimento.",
+        ),
+        (EntityKind::Technology, "SQLite", "", "Banco embutido."),
+        (
+            EntityKind::Technology,
+            "Cofre do Windows",
+            "",
+            "Credenciais do sistema.",
+        ),
+        (EntityKind::Technology, "Rust", "", "Linguagem do app."),
     ] {
-        graph.create_entity(NewEntity {
-            project_id: "demo-xemnas".into(),
-            kind: Some(EntityKind::Component),
+        let entity = graph.create_entity(NewEntity {
+            project_id: PROJECT.into(),
+            kind: Some(kind),
             name: name.into(),
             description: description.into(),
-            patterns: vec![pattern.into()],
+            patterns: if pattern.is_empty() {
+                Vec::new()
+            } else {
+                vec![pattern.into()]
+            },
             ..NewEntity::default()
         })?;
+        ids.insert(name, entity.entity_id);
     }
-    graph.refresh_suggestions("demo-xemnas")?;
-    if let Some(first) = graph.suggestions("demo-xemnas")?.first() {
-        graph.confirm(&first.edge_id)?;
+    for (part, whole) in [("jobs", "application"), ("inbox", "storage-sqlite")] {
+        graph.link(LinkRequest {
+            kind: EdgeKind::PartOf,
+            source_kind: NodeKind::Entity,
+            source_id: ids[part].clone(),
+            entity_id: ids[whole].clone(),
+        })?;
     }
+
+    let decisions = Decisions::new(store.clone())
+        .list(&DecisionFilter {
+            project_id: Some(PROJECT.into()),
+            ..DecisionFilter::default()
+        })?
+        .decisions;
+    let decision = |start: &str| {
+        decisions
+            .iter()
+            .find(|row| row.question.starts_with(start))
+            .map(|row| row.decision_id.clone())
+            .ok_or_else(|| format!("demo decision {start}"))
+    };
+    let unique = decision("Como garantir")?;
+    let secrets = decision("Onde armazenar")?;
+    let recover = decision("Como recuperar")?;
+    let resend = decision("Quando reenviar")?;
+    let revise = decision("Como versionar")?;
+    for (kind, source, target) in [
+        (EdgeKind::Affects, &unique, "storage-sqlite"),
+        (EdgeKind::Uses, &unique, "SQLite"),
+        (EdgeKind::Affects, &secrets, "ai-provider"),
+        (EdgeKind::Uses, &secrets, "Cofre do Windows"),
+        (EdgeKind::Affects, &recover, "jobs"),
+        (EdgeKind::Affects, &revise, "storage-sqlite"),
+    ] {
+        graph.link(LinkRequest {
+            kind,
+            source_kind: NodeKind::Decision,
+            source_id: source.clone(),
+            entity_id: ids[target].clone(),
+        })?;
+    }
+
+    let claims = Claims::new(store.clone());
+    let mut rules = Vec::new();
+    let mut statements = HashMap::new();
+    for (kind, statement, target) in [
+        (
+            ClaimKind::Constraint,
+            "Nenhuma credencial sai do cofre do sistema.",
+            "ai-provider",
+        ),
+        (
+            ClaimKind::Convention,
+            "Toda escrita de decisão acontece numa transação.",
+            "storage-sqlite",
+        ),
+    ] {
+        let claim = claims.create(NewClaim {
+            project_id: PROJECT.into(),
+            kind,
+            statement: statement.into(),
+            valid_from: Some("2026-09-01".into()),
+            valid_until: None,
+            source_decision_id: None,
+        })?;
+        graph.link(LinkRequest {
+            kind: EdgeKind::AppliesTo,
+            source_kind: NodeKind::Claim,
+            source_id: claim.claim_id.clone(),
+            entity_id: ids[target].clone(),
+        })?;
+        statements.insert(claim.claim_id.clone(), statement.to_owned());
+        rules.push(claim.claim_id);
+    }
+    // The remaining decision stays a suggestion for the Sugestões view.
+    graph.refresh_suggestions(PROJECT)?;
+    let _ = resend;
+
+    let cite = |id: &String| Citation {
+        kind: "decision".into(),
+        id: id.clone(),
+        label: format!("D:{}", short_ref(id)),
+        title: decisions
+            .iter()
+            .find(|row| &row.decision_id == id)
+            .map(|row| row.question.clone())
+            .unwrap_or_default(),
+    };
+    let rule = |id: &String| Citation {
+        kind: "claim".into(),
+        id: id.clone(),
+        label: format!("R:{}", short_ref(id)),
+        title: statements.get(id).cloned().unwrap_or_default(),
+    };
+    let step = |title: &str, text: &str, entity: &str, citations: Vec<Citation>| OverviewStep {
+        title: title.into(),
+        text: text.into(),
+        entity_id: ids.get(entity).cloned(),
+        entity_name: ids.get(entity).map(|_| entity.to_owned()),
+        citations,
+    };
+    store.save_overview(&ProjectOverview {
+        project_id: PROJECT.into(),
+        generated_at: "2026-09-29T18:00:00Z".into(),
+        decisions: decisions.len(),
+        rules: rules.len(),
+        summary: vec![
+            OverviewParagraph {
+                text: "O xemnas guarda localmente as decisões de engenharia tiradas das \
+                       conversas com o agente: cada captura vira candidatos, que só entram \
+                       no projeto depois de revisados."
+                    .into(),
+                citations: vec![cite(&unique), cite(&revise)],
+            },
+            OverviewParagraph {
+                text: "A análise roda numa fila local que sobrevive a interrupções, e as \
+                       chamadas ao provedor de IA usam credenciais que nunca saem do cofre \
+                       do sistema."
+                    .into(),
+                citations: vec![cite(&recover), cite(&secrets), rule(&rules[0])],
+            },
+        ],
+        flows: vec![
+            OverviewFlow {
+                title: "Da conversa à decisão".into(),
+                description: "Como uma resposta do agente vira uma decisão confirmada.".into(),
+                steps: vec![
+                    step(
+                        "Captura enfileirada",
+                        "A captura chega pela API local e entra na fila com chave de \
+                         idempotência.",
+                        "jobs",
+                        vec![cite(&recover)],
+                    ),
+                    step(
+                        "Análise pelo provedor",
+                        "O provedor configurado propõe candidatos a partir da evidência.",
+                        "ai-provider",
+                        vec![cite(&secrets)],
+                    ),
+                    step(
+                        "Revisão",
+                        "Os candidatos esperam na Revisão até serem confirmados ou \
+                         rejeitados.",
+                        "inbox",
+                        vec![cite(&unique)],
+                    ),
+                    step(
+                        "Gravação",
+                        "A confirmação grava a decisão numa transação, com validação de \
+                         versão.",
+                        "storage-sqlite",
+                        vec![cite(&unique), rule(&rules[1])],
+                    ),
+                ],
+            },
+            OverviewFlow {
+                title: "Revisar uma decisão".into(),
+                description: "Como uma decisão muda sem perder o histórico.".into(),
+                steps: vec![
+                    step(
+                        "Nova revisão",
+                        "Editar cria uma revisão e conserva a anterior.",
+                        "storage-sqlite",
+                        vec![cite(&revise)],
+                    ),
+                    step(
+                        "Consulta",
+                        "O histórico continua consultável em Decisões.",
+                        "application",
+                        vec![cite(&revise)],
+                    ),
+                ],
+            },
+            OverviewFlow {
+                title: "Recuperar jobs".into(),
+                description: "O que acontece quando o app fecha no meio de uma análise.".into(),
+                steps: vec![
+                    step(
+                        "Interrupção",
+                        "Jobs em andamento voltam para a fila ao reabrir.",
+                        "jobs",
+                        vec![cite(&recover)],
+                    ),
+                    step(
+                        "Reenvio seguro",
+                        "Só tarefas idempotentes são repetidas.",
+                        "jobs",
+                        vec![cite(&recover)],
+                    ),
+                ],
+            },
+        ],
+    })?;
     Ok(())
 }
 
@@ -322,10 +556,10 @@ mod tests {
         }
         let graph = application::graph::KnowledgeGraph::new(store.clone());
         let map = graph.project_map("demo-xemnas", None).expect("map");
-        assert_eq!(map.entities.len(), 2, "two seeded components");
+        assert_eq!(map.entities.len(), 8, "components and technologies");
         assert!(
-            map.entities.iter().any(|row| row.decisions == 1),
-            "one confirmed link"
+            map.entities.iter().any(|row| row.decisions == 2),
+            "confirmed links"
         );
         let report = graph
             .refresh_suggestions("demo-xemnas")

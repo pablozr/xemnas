@@ -9,8 +9,8 @@
 
 use gpui::prelude::*;
 use gpui::{
-    px, size, App, Bounds, KeyBinding, TitlebarOptions, WindowBackgroundAppearance, WindowBounds,
-    WindowOptions,
+    point, px, size, App, Bounds, KeyBinding, TitlebarOptions, WindowBackgroundAppearance,
+    WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
 use storage_sqlite::SqliteStore;
@@ -417,12 +417,33 @@ fn run_shell_mode(
         ]);
 
         let compact = demo && std::env::args().any(|argument| argument == "--compact");
+        // Demo-only capture aids: a route to open, the second palette and a
+        // window that opens without taking focus, so a screenshot needs no
+        // input and never lands on whatever the user is doing.
+        let argument_after = |flag: &str| {
+            let arguments: Vec<String> = std::env::args().collect();
+            arguments
+                .iter()
+                .position(|argument| argument == flag)
+                .and_then(|index| arguments.get(index + 1).cloned())
+        };
+        let route = demo.then(|| argument_after("--open")).flatten();
+        let background = demo && std::env::args().any(|argument| argument == "--background");
         let dimensions = if compact {
             size(px(1180.0), px(760.0))
         } else {
             size(px(1440.0), px(1024.0))
         };
-        let bounds = Bounds::centered(None, dimensions, cx);
+        // Off every monitor: the window renders for PrintWindow and never
+        // covers anything on screen.
+        let bounds = if background {
+            Bounds::new(point(px(-12000.0), px(0.0)), dimensions)
+        } else {
+            Bounds::centered(None, dimensions, cx)
+        };
+        if demo && argument_after("--theme").as_deref() == Some("charcoal") {
+            cx.set_global(xemnas_desktop::ui::theme::ThemeMode::Charcoal);
+        }
         let (projects, inbox, decisions, context, map, overview) = match store {
             Ok(store) => (
                 Ok(application::projects::Projects::new(store.clone())),
@@ -461,6 +482,9 @@ fn run_shell_mode(
                 shell.set_overview(overview, cx);
             }
             shell.set_demo(demo);
+            if let Some(route) = route {
+                shell.open_route(route);
+            }
             shell.set_backdrop(backdrop != WindowBackgroundAppearance::Opaque);
             shell.set_activity(capture, activity, cx);
             shell
@@ -490,10 +514,13 @@ fn run_shell_mode(
                 window_min_size: Some(size(px(1180.0), px(760.0))),
                 // Opaque unless `XEMNAS_BACKDROP` asks for a material.
                 window_background: backdrop,
+                focus: !background,
                 ..Default::default()
             },
-            |window, cx| {
-                window.focus(&focus, cx);
+            move |window, cx| {
+                if !background {
+                    window.focus(&focus, cx);
+                }
                 view.clone()
             },
         );
