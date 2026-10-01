@@ -65,6 +65,8 @@ pub enum IconName {
     Lightbulb,
     /// The map drawn as blocks.
     Blocks,
+    /// Xemnas, the assistant: a hood with two eyes.
+    Hood,
     /// Project properties.
     Info,
     /// A tracked project folder.
@@ -168,6 +170,9 @@ impl IconName {
             ),
             Self::Lightbulb => glyph!(
                 r#"<path d="M9 18h6M10 21h4"/><path d="M15 14.5c.2-1 .8-1.8 1.6-2.6A5.8 5.8 0 0 0 18 8a6 6 0 0 0-12 0c0 1.4.5 2.8 1.4 3.9.8.8 1.4 1.6 1.6 2.6"/>"#
+            ),
+            Self::Hood => glyph!(
+                r#"<path d="M12 3a7.5 7.5 0 0 0-7.5 7.5V21h15V10.5A7.5 7.5 0 0 0 12 3z"/><path d="M8.25 16v-4.25a3.75 3.75 0 0 1 7.5 0V16z"/><path d="M10.4 13h.01M13.6 13h.01"/>"#
             ),
             Self::Blocks => glyph!(
                 r#"<rect x="3.5" y="3.5" width="7" height="7" rx="1.25"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.25"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.25"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.25"/>"#

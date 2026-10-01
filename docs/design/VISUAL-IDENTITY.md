@@ -79,6 +79,33 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   e versão), sem build script.
 - Wordmark: "xemnas" em Bricolage Grotesque, minúsculo, ao lado do símbolo.
 
+## Xemnas — o mascote e o assistente
+
+- O mascote é o próprio Xemnas, uma homenagem de chibi à Organização (casaco
+  preto de capuz, cordões e zíper prateados, franja prateada, olhos âmbar
+  acesos no rosto em sombra). É um desenho original: não copia o modelo
+  oficial do personagem nem o emblema dos Nobodies.
+- É 3D pré-renderizado: `tools/mascot/model.py` (modelo de distâncias com
+  sombreamento toon, contorno e brilho nos olhos) e `tools/mascot/render.py`
+  geram `assets/mascot/{idle,blink,glow,left,right}.png` (192 px, mesmo
+  recorte). O app só exibe as imagens; não há 3D em tempo real.
+- Fica no pé da lateral, acima da linha de status: figura de 72 px, "Nº I"
+  em mono prata e uma frase real ("5 para revisar", ou o nome), com ponto
+  âmbar quando há fila. Flutua 2 px num seno lento, pisca e olha para os
+  lados; com movimento reduzido, só pisca. Hover e painel aberto acendem os
+  olhos (`glow`).
+- Clique, Enter ou Ctrl K ("Falar com o Xemnas") abrem o painel ao lado da
+  lateral (400 × 540, `floating`, raio `dialog`, sombra de ênfase): retrato,
+  "Xemnas" em Bricolage, "Nº I · assistente do projeto", a corrente prata,
+  uma fala com os números reais do projeto e "Posso levar você a" com
+  destinos reais. O rodapé diz que perguntas livres chegam quando o
+  assistente for ligado ao provedor; nada de conversa simulada. Esc e o X
+  fecham. Rota de captura: `assistant[:rota]`.
+- Referências à Organização, sempre discretas: numerais romanos para o que
+  tem ordem (etapas do Contexto, fluxos e passos da Visão; `format::roman`),
+  a corrente prata (`chain_rule`) só no assistente, e os tokens
+  `organization.silver` e `mascot.ember`, restritos ao assistente.
+
 ## Projetos — superfície atual
 
 - Lista persistente de projetos de 248 px (linhas de 48 px com nome e caminho) e
@@ -169,7 +196,7 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
 - **Visão geral** sem cartões: linha de estado (ponto de 8 px na cor do
   modo: verde Ativo, azul Medindo, cinza Desligado; frase do que acontece;
   "Mudar modo" ou "Ativar" secundário); "Como chega ao agente" em três
-  colunas numeradas em mono (01–03) divididas por filetes (Fontes com
+  colunas numeradas em romanos (I–III) divididas por filetes (Fontes com
   contagens, Seleção pelo pedido e pela edição, Entrega com orçamento e sem
   repetição na sessão); "Últimos 7 dias" numa faixa plana entre filetes,
   quatro números em `HEADING_1` (entregas enviadas e medidas,
@@ -198,10 +225,10 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   e em âmbar "N decisões novas desde então") e "Atualizar visão" secundário;
   seção Resumo com parágrafos e, abaixo de cada um, chips mono das fontes
   (decisão abre em Decisões; regra é só rótulo); seção Principais fluxos como
-  lista numerada numa borda só (número em mono, título, descrição, passos e
+  lista numerada numa borda só (numeral romano em mono, título, descrição, passos e
   componentes, chevron), nunca grade de cartões.
 - O cartão abre o fluxo na mesma coluna: "Todos os fluxos" (ghost) volta;
-  passos numerados em círculos de 24 px ligados por filete vertical, com
+  passos numerados em romanos em pílulas de 24 px ligados por filete vertical, com
   título, texto, chip do componente (ícone de grafo, abre no Mapa) e fontes.
 - Fontes são chips com ícone (documento = decisão, escudo = regra) e o
   título encurtado em palavra inteira; o texto completo fica no tooltip.

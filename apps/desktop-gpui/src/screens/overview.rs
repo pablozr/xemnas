@@ -17,7 +17,7 @@ use gpui::{
 };
 
 use super::context::OpenDecision;
-use super::format::{clipped, plural, short_date};
+use super::format::{clipped, plural, roman, short_date};
 use crate::ui::controls::{action_button, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
@@ -375,12 +375,12 @@ impl OverviewScreen {
                 .focus_visible(crate::ui::controls::focus_ring(theme))
                 .child(
                     text_style(div(), TypeScale::META)
-                        .w(px(20.0))
+                        .w(px(28.0))
                         .flex_none()
                         .pt(px(2.0))
                         .font_family(Theme::font_mono())
                         .text_color(colors.text_muted())
-                        .child(format!("{:02}", index + 1)),
+                        .child(roman(index + 1)),
                 )
                 .child(
                     div()
@@ -455,7 +455,9 @@ impl OverviewScreen {
                 .items_center()
                 .child(
                     div()
-                        .size(px(24.0))
+                        .min_w(px(24.0))
+                        .h(px(24.0))
+                        .px(px(SpacingScale::S1))
                         .flex()
                         .items_center()
                         .justify_center()
@@ -465,8 +467,9 @@ impl OverviewScreen {
                         .bg(colors.glass_fill_card())
                         .child(
                             text_style(div(), TypeScale::META)
+                                .font_family(Theme::font_mono())
                                 .text_color(colors.text_secondary())
-                                .child((index + 1).to_string()),
+                                .child(roman(index + 1)),
                         ),
                 )
                 .when(!last, |node| {

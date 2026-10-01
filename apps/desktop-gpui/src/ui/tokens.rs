@@ -398,6 +398,18 @@ impl ColorTokens {
         rgb(0xC3CAD6)
     }
 
+    /// `organization.silver` — the Organization's chains and numbers: the
+    /// assistant's "Nº I" and the chain rule under its header.
+    pub fn organization_silver(&self) -> Rgba {
+        rgb(0xC9CDD6)
+    }
+
+    /// `mascot.ember` — the mascot's eyes: its one warm signal (a queue
+    /// waiting), used only by the assistant.
+    pub fn mascot_ember(&self) -> Rgba {
+        rgb(0xF2B35A)
+    }
+
     /// `graph.decision` — decisions in force: the brightest phosphor.
     pub fn graph_decision(&self) -> Rgba {
         rgb(0xB6F2D8)

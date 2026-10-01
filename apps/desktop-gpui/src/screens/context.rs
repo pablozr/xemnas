@@ -1584,7 +1584,7 @@ impl<S: ContextStores> ContextScreen<S> {
             .items_stretch()
             .gap(px(SpacingScale::S5))
             .child(stage(
-                "01",
+                "I",
                 "Fontes",
                 vec![
                     plural(decisions.len(), "decisão em vigor", "decisões em vigor"),
@@ -1593,7 +1593,7 @@ impl<S: ContextStores> ContextScreen<S> {
                 true,
             ))
             .child(stage(
-                "02",
+                "II",
                 "Seleção",
                 vec![
                     "No pedido: o texto e os arquivos citados.".to_owned(),
@@ -1602,7 +1602,7 @@ impl<S: ContextStores> ContextScreen<S> {
                 false,
             ))
             .child(stage(
-                "03",
+                "III",
                 "Entrega",
                 vec![
                     format!("Até {budget} tokens por bloco."),

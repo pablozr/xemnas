@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use crate::fonts::{app_icon, wordmark};
 use crate::palette::{self, PaletteItem};
+use crate::screens::assistant::{AssistantGo, AssistantScreen, Briefing};
 use crate::screens::context::{ContextScreen, ContextServices, ContextStores, OpenDecision};
 use crate::screens::decisions::DecisionsScreen;
 use crate::screens::inbox::InboxScreen;
@@ -85,6 +86,8 @@ actions!(
 const TITLE_BAR_HEIGHT: f32 = 40.0;
 /// Height of the project bar that carries the breadcrumb and destinations.
 const PROJECT_BAR_HEIGHT: f32 = 44.0;
+/// Width of the projects sidebar (`ProjectsScreen::render_sidebar`).
+const SIDEBAR_WIDTH: f32 = 248.0;
 
 /// Whether captures from the OpenCode adapter can reach this app right now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,6 +118,7 @@ enum Command {
     ToggleTheme,
     OpenSettings,
     SettingsAt(SettingsSection),
+    Assistant,
 }
 
 /// The open palette: its query field and highlighted row.
@@ -234,6 +238,12 @@ pub struct Shell<
     backdrop: bool,
     /// Demo-only destination to open once projects load (`--open`).
     route: Option<String>,
+    /// Xemnas, the mascot at the foot of the sidebar and its panel.
+    assistant: Entity<AssistantScreen>,
+    _assistant_subscription: Subscription,
+    /// Where the assistant asked to go; followed on the next render, which
+    /// has the window the switch needs.
+    pending_go: Option<String>,
 }
 
 impl<
@@ -265,6 +275,12 @@ impl<
         search.update(cx, |search, cx| {
             search.set_context("Filtrar candidatos carregados", cx)
         });
+        let assistant = cx.new(AssistantScreen::new);
+        let assistant_subscription =
+            cx.subscribe(&assistant, |shell, _, event: &AssistantGo, cx| {
+                shell.pending_go = Some(event.0.route().to_owned());
+                cx.notify();
+            });
         let search_subscription = cx.subscribe(&search, |shell, _, event: &SearchChanged, cx| {
             if shell.destination == Destination::Review {
                 if let Some(screen) = &shell.inbox {
@@ -397,6 +413,9 @@ impl<
             activity: None,
             backdrop: false,
             route: None,
+            assistant,
+            _assistant_subscription: assistant_subscription,
+            pending_go: None,
         }
     }
 
@@ -565,7 +584,25 @@ impl<
             return;
         };
         projects.update(cx, |screen, cx| screen.select_project(project, window, cx));
-        let (destination, view) = route.split_once(':').unwrap_or((route.as_str(), ""));
+        self.go_route(&route, window, cx);
+    }
+
+    /// Opens `destination[:view]` in the selected project (the demo routes
+    /// and the assistant's places share this).
+    fn go_route(&mut self, route: &str, window: &mut Window, cx: &mut Context<Self>) {
+        // `assistant[:route]` opens the assistant's panel over that place.
+        let route = match route.strip_prefix("assistant") {
+            Some(rest) => {
+                self.assistant.update(cx, |assistant, cx| {
+                    if !assistant.is_open() {
+                        assistant.toggle(cx);
+                    }
+                });
+                rest.trim_start_matches(':')
+            }
+            None => route,
+        };
+        let (destination, view) = route.split_once(':').unwrap_or((route, ""));
         let destination = match destination {
             "overview" => Destination::Overview,
             "decisions" => Destination::Decisions,
@@ -770,6 +807,14 @@ impl<
             shortcut: None,
             command: Command::ToggleTheme,
         });
+        items.push(PaletteItem {
+            group: "Ações",
+            label: "Falar com o Xemnas, o assistente".to_owned(),
+            detail: None,
+            glyph: IconName::Hood,
+            shortcut: None,
+            command: Command::Assistant,
+        });
         if self.settings.is_some() {
             items.push(PaletteItem {
                 group: "Ações",
@@ -872,6 +917,11 @@ impl<
                 }
             }
             Command::ToggleTheme => self.toggle_theme(window, cx),
+            Command::Assistant => self.assistant.update(cx, |assistant, cx| {
+                if !assistant.is_open() {
+                    assistant.toggle(cx);
+                }
+            }),
             Command::OpenSettings => self.toggle_settings(window, cx),
             Command::SettingsAt(section) => self.open_settings_at(section, cx),
         }
@@ -1369,6 +1419,10 @@ impl<
         }
         self.theme = Theme::current(cx);
         let theme = self.theme;
+        if let Some(route) = self.pending_go.take() {
+            self.settings_open = false;
+            self.go_route(&route, window, cx);
+        }
         // The settings page names itself while open; otherwise the project leads
         // the title so Alt+Tab and the taskbar tell windows and projects apart.
         let project_name = self
@@ -1440,7 +1494,25 @@ impl<
             .into_any_element()
         } else if let Some(projects) = self.projects.clone() {
             let status = self.status_line(cx);
-            let sidebar = projects.update(cx, |screen, cx| screen.render_sidebar(status, cx));
+            let briefing = Briefing {
+                project: selected.as_ref().map(|project| project.name().to_owned()),
+                pending: selected.as_ref().and_then(|_| {
+                    self.inbox
+                        .as_ref()
+                        .and_then(|screen| screen.read(cx).total_count())
+                }),
+            };
+            let dock = self.assistant.update(cx, |assistant, cx| {
+                assistant.set_briefing(briefing, cx);
+                assistant.render_dock(cx)
+            });
+            let footer = div()
+                .flex()
+                .flex_col()
+                .child(dock)
+                .children(status)
+                .into_any_element();
+            let sidebar = projects.update(cx, |screen, cx| screen.render_sidebar(Some(footer), cx));
             let mut panel = if self.project_panel {
                 projects.update(cx, |screen, cx| screen.render_project_panel(cx))
             } else {
@@ -1601,6 +1673,20 @@ impl<
         };
 
         let palette = self.render_palette(cx);
+        let assistant_panel = self
+            .assistant
+            .update(cx, |assistant, cx| assistant.render_panel(cx))
+            .map(|panel| {
+                // Beside the sidebar, rising from the mascot's corner.
+                deferred(
+                    div()
+                        .absolute()
+                        .left(px(SIDEBAR_WIDTH + SpacingScale::S3))
+                        .bottom(px(SpacingScale::S3))
+                        .child(panel),
+                )
+                .with_priority(2)
+            });
         div()
             .id("xemnas-shell")
             .role(Role::Application)
@@ -1664,6 +1750,7 @@ impl<
             .relative()
             .child(title)
             .child(div().flex_1().min_h(px(0.0)).overflow_hidden().child(body))
+            .children(assistant_panel)
             .children(palette)
     }
 }
