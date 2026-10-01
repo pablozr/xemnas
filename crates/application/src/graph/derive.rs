@@ -404,10 +404,27 @@ where
             .iter()
             .flat_map(|entity| entity.keys().map(move |key| (entity.kind, key)))
             .collect();
+        // A component is identified by its path. The folder name is a fine
+        // display name until two folders share it (`apps/api`, `services/api`)
+        // or a known entity already has it: then the path names it.
+        let folder = |prefix: &str| prefix.rsplit('/').next().unwrap_or(prefix).to_string();
+        let mut shared: BTreeMap<String, usize> = BTreeMap::new();
+        for prefix in prefixes.keys() {
+            *shared.entry(entity_key(&folder(prefix))).or_default() += 1;
+        }
+        let claimed: BTreeSet<String> = entities
+            .iter()
+            .filter(|entity| entity.kind == EntityKind::Component)
+            .flat_map(|entity| entity.patterns.clone())
+            .collect();
         report.components = prefixes
             .into_iter()
+            .filter(|(prefix, _)| !claimed.contains(&format!("{prefix}/**")))
             .filter_map(|(prefix, ids)| {
-                let name = prefix.rsplit('/').next().unwrap_or(&prefix).to_string();
+                let short = folder(&prefix);
+                let ambiguous = shared.get(&entity_key(&short)).copied().unwrap_or(0) > 1
+                    || known.contains(&(EntityKind::Component, entity_key(&short)));
+                let name = if ambiguous { prefix.clone() } else { short };
                 (!known.contains(&(EntityKind::Component, entity_key(&name)))).then(|| {
                     ComponentProposal {
                         pattern: format!("{prefix}/**"),

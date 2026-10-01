@@ -2664,6 +2664,9 @@ fn change_failure(code: &str) -> String {
         }
         "cycle" => "Esse vínculo criaria um ciclo de componentes.".into(),
         "self_reference" => "Um componente não pode fazer parte de si mesmo.".into(),
+        "second_parent" => {
+            "Esse componente já faz parte de outro. Desfaça o vínculo antigo primeiro.".into()
+        }
         "conflict" => "O item mudou enquanto você editava. O mapa foi atualizado.".into(),
         "invalid_request" => "Use até 20 padrões e 20 apelidos por item.".into(),
         _ => {

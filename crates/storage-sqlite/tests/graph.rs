@@ -485,3 +485,69 @@ fn two_decisions_of_one_capture_keep_their_own_dependencies() {
     );
     assert!(!uses.contains(&ui));
 }
+
+#[test]
+fn folders_with_the_same_name_are_named_by_path_and_a_part_has_one_parent() {
+    let test = support::open("graph-identity", &["p1"]);
+    support::decision_with_diff(
+        &test.store,
+        "p1",
+        "a",
+        "Como expor a API?",
+        &["apps/api/src/main.rs"],
+        "diff --git a/apps/api/src/main.rs b/apps/api/src/main.rs\n+fn main() {}\n",
+    );
+    support::decision_with_diff(
+        &test.store,
+        "p1",
+        "b",
+        "Como servir a API interna?",
+        &["services/api/src/lib.rs"],
+        "diff --git a/services/api/src/lib.rs b/services/api/src/lib.rs\n+pub fn x() {}\n",
+    );
+    let graph = KnowledgeGraph::new(test.store.clone());
+    let report = graph.refresh_suggestions("p1").expect("refresh");
+    let mut names: Vec<(String, String)> = report
+        .components
+        .iter()
+        .map(|proposal| (proposal.name.clone(), proposal.pattern.clone()))
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        vec![
+            ("apps/api".to_string(), "apps/api/**".to_string()),
+            ("services/api".to_string(), "services/api/**".to_string()),
+        ]
+    );
+
+    // C, C++ and C# are three technologies.
+    for name in ["C", "C++", "C#"] {
+        graph
+            .create_entity(NewEntity {
+                project_id: "p1".into(),
+                kind: Some(EntityKind::Technology),
+                name: name.into(),
+                ..NewEntity::default()
+            })
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+
+    let api = component(&graph, "apps/api", "apps/api/**");
+    let backend = component(&graph, "backend", "backend/**");
+    let platform = component(&graph, "platform", "platform/**");
+    let part = |parent: &str| LinkRequest {
+        kind: EdgeKind::PartOf,
+        source_kind: NodeKind::Entity,
+        source_id: api.clone(),
+        entity_id: parent.to_string(),
+    };
+    graph.link(part(&backend)).expect("first parent");
+    assert_eq!(
+        graph
+            .link(part(&platform))
+            .map(|_| ())
+            .map_err(|error| error.code()),
+        Err("second_parent")
+    );
+}

@@ -162,6 +162,8 @@ pub enum EntityError {
     SelfReference,
     /// The `part_of` edge would close a cycle.
     Cycle,
+    /// The component already belongs to another component.
+    SecondParent,
 }
 
 impl EntityError {
@@ -176,6 +178,7 @@ impl EntityError {
             Self::EdgeNotAllowed => "edge_not_allowed",
             Self::SelfReference => "self_reference",
             Self::Cycle => "cycle",
+            Self::SecondParent => "second_parent",
         }
     }
 }
@@ -193,6 +196,7 @@ impl std::fmt::Display for EntityError {
             Self::EdgeNotAllowed => "esse vínculo não liga esses tipos",
             Self::SelfReference => "um componente não pode fazer parte de si mesmo",
             Self::Cycle => "o vínculo criaria um ciclo de componentes",
+            Self::SecondParent => "o componente já faz parte de outro componente",
         })
     }
 }
@@ -220,11 +224,13 @@ pub fn entity_description(text: &str) -> Result<String, EntityError> {
     Ok(text.to_string())
 }
 
-/// Normalized key used to resolve names and aliases: lowercase letters and
-/// digits only ("SQLite 3" → "sqlite3", "storage-sqlite" → "storagesqlite").
+/// Normalized key used to resolve names and aliases: lowercase letters,
+/// digits and the signs that change a name's meaning (`+`, `#`), so "SQLite 3"
+/// → "sqlite3" and "storage-sqlite" → "storagesqlite", while C, C++ and C#
+/// stay three keys.
 pub fn entity_key(name: &str) -> String {
     name.chars()
-        .filter(|character| character.is_alphanumeric())
+        .filter(|character| character.is_alphanumeric() || matches!(character, '+' | '#'))
         .flat_map(char::to_lowercase)
         .collect()
 }
@@ -326,8 +332,10 @@ pub fn component_prefix(path: &str) -> Option<String> {
     }
 }
 
-/// Checks that adding `child part_of parent` keeps the component tree acyclic,
-/// given the existing `(child, parent)` pairs.
+/// Checks that adding `child part_of parent` keeps the components a tree:
+/// no cycle and one parent per component, given the existing `(child,
+/// parent)` pairs. Context is inherited up a single chain, so a second parent
+/// would be silently ignored on read.
 pub fn check_part_of(
     child: &str,
     parent: &str,
@@ -335,6 +343,12 @@ pub fn check_part_of(
 ) -> Result<(), EntityError> {
     if child == parent {
         return Err(EntityError::SelfReference);
+    }
+    if existing
+        .iter()
+        .any(|(from, to)| from == child && to != parent)
+    {
+        return Err(EntityError::SecondParent);
     }
     let mut current = vec![parent.to_string()];
     let mut seen = std::collections::BTreeSet::new();
@@ -364,6 +378,11 @@ mod tests {
         assert_eq!(entity_key("SQLite 3"), "sqlite3");
         assert_eq!(entity_key("storage-sqlite"), "storagesqlite");
         assert_eq!(entity_key("Serviço de Captura"), "serviçodecaptura");
+        // Signs that make different languages stay distinct.
+        assert_eq!(entity_key("C"), "c");
+        assert_eq!(entity_key("C++"), "c++");
+        assert_eq!(entity_key("C#"), "c#");
+        assert_eq!(entity_key("F#"), "f#");
         assert_eq!(entity_name("  GPUI  ").as_deref(), Ok("GPUI"));
         assert_eq!(entity_name(" -- "), Err(EntityError::EmptyName));
         assert_eq!(entity_name(&"x".repeat(81)), Err(EntityError::NameTooLong));
@@ -476,5 +495,16 @@ mod tests {
         );
         assert_eq!(check_part_of("a", "c", &existing), Err(EntityError::Cycle));
         assert!(check_part_of("d", "c", &existing).is_ok());
+    }
+
+    #[test]
+    fn a_component_has_one_parent() {
+        let existing = vec![("api".to_string(), "backend".to_string())];
+        assert_eq!(
+            check_part_of("api", "services", &existing),
+            Err(EntityError::SecondParent)
+        );
+        assert_eq!(check_part_of("api", "backend", &existing), Ok(()));
+        assert_eq!(check_part_of("web", "backend", &existing), Ok(()));
     }
 }

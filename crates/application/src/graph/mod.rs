@@ -152,8 +152,12 @@ impl EntityRecord {
     }
 
     /// Every key that resolves to this entity: its name and aliases.
+    ///
+    /// Computed from the name, so rows stored under an older key rule resolve
+    /// the same way as new ones.
     pub fn keys(&self) -> impl Iterator<Item = String> + '_ {
-        std::iter::once(self.key.clone()).chain(self.aliases.iter().map(|alias| entity_key(alias)))
+        std::iter::once(entity_key(&self.name))
+            .chain(self.aliases.iter().map(|alias| entity_key(alias)))
     }
 }
 
