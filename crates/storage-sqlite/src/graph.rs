@@ -232,17 +232,24 @@ impl GraphStore for SqliteStore {
             .map_err(storage_error)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(storage_error)?;
+        // Only the hunks the decision cites: two decisions of one capture do
+        // not share each other's dependencies.
         let mut hunks = connection
             .prepare(
-                "SELECT content FROM capture_artifacts \
-                 WHERE capture_id = ?1 AND kind = 'diff_hunk' ORDER BY artifact_id",
+                "SELECT a.content FROM evidence_links l \
+                 JOIN capture_artifacts a \
+                   ON a.artifact_id = l.artifact_id AND a.capture_id = ?2 \
+                 WHERE l.decision_id = ?1 AND a.kind = 'diff_hunk' \
+                 ORDER BY l.position",
             )
             .map_err(storage_error)?;
         let mut decisions = Vec::with_capacity(rows.len());
         for (decision_id, question, choice, confirmed_at, summary, capture_id) in rows {
             let diffs = match &capture_id {
                 Some(capture_id) => hunks
-                    .query_map([capture_id], |row| row.get::<_, String>(0))
+                    .query_map(params![decision_id, capture_id], |row| {
+                        row.get::<_, String>(0)
+                    })
                     .map_err(storage_error)?
                     .collect::<Result<Vec<_>, _>>()
                     .map_err(storage_error)?,

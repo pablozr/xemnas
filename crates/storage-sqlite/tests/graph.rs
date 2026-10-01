@@ -359,3 +359,129 @@ fn removing_the_project_removes_its_graph() {
     projects.remove_with_data("p1", "p1").expect("remove");
     assert!(graph.entities("p1").expect("gone").is_empty());
 }
+
+#[test]
+fn two_decisions_of_one_capture_keep_their_own_dependencies() {
+    use application::captures::{
+        CaptureArtifactRecord, CaptureCheckpointRecord, CaptureReceiptRecord, CaptureRepository,
+        CaptureWrite,
+    };
+    use application::extract::{DecisionCandidateRecord, ExtractionStore};
+    use application::inbox::{CandidateEdits, Inbox};
+    use application::jobs::{JobRecord, JobState, ANALYZE_CAPTURE_KIND};
+
+    let test = support::open("graph-scope", &["p1"]);
+    let at = "2026-01-02T00:00:00Z".to_string();
+    let hunk = |id: &str, content: &str, seed: usize| CaptureArtifactRecord {
+        capture_id: "capture-two".into(),
+        artifact_id: id.into(),
+        kind: "diff_hunk".into(),
+        content: content.into(),
+        metadata: "{}".into(),
+        fingerprint: format!("{seed:0>64}"),
+    };
+    test.store
+        .insert_capture(&CaptureWrite {
+            receipt: CaptureReceiptRecord {
+                capture_id: "capture-two".into(),
+                idempotency_key: "key-capture-two".into(),
+                canonical_path: "C:/synthetic/p1".into(),
+                received_at: at.clone(),
+                artifact_count: 2,
+            },
+            artifacts: vec![
+                hunk(
+                    "art-ui",
+                    "diff --git a/web/form.ts b/web/form.ts\n+export const x = 1;\n",
+                    1,
+                ),
+                hunk(
+                    "art-db",
+                    "diff --git a/api/Cargo.toml b/api/Cargo.toml\n@@ -1 +1,2 @@\n \
+                     [dependencies]\n+redis = \"0.25\"\n",
+                    2,
+                ),
+            ],
+            job: JobRecord {
+                id: "job-two".into(),
+                kind: ANALYZE_CAPTURE_KIND.into(),
+                payload: "capture-two".into(),
+                state: JobState::Queued,
+                idempotent: true,
+                attempts: 0,
+                last_error: None,
+                created_at: at.clone(),
+                updated_at: at.clone(),
+            },
+            checkpoint: CaptureCheckpointRecord {
+                adapter: "opencode".into(),
+                adapter_version: "0.1.0".into(),
+                session_id: "s".into(),
+                message_id: "m".into(),
+                capture_id: "capture-two".into(),
+                observed_at: at.clone(),
+                updated_at: at.clone(),
+            },
+        })
+        .expect("capture");
+    let candidate = |key: &str, artifact: &str, file: &str| DecisionCandidateRecord {
+        id: format!("cand-{key}"),
+        project_id: "p1".into(),
+        capture_id: "capture-two".into(),
+        status: "pending".into(),
+        question: format!("pergunta {key}"),
+        choice: format!("escolha {key}"),
+        rationale: "motivo".into(),
+        signals: "[\"public_contract\"]".into(),
+        confidence: 0.7,
+        confidence_reason: "sintético".into(),
+        evidence_refs: format!("[\"{artifact}\"]"),
+        diff_summary: format!("{{\"files\":[\"{file}\"],\"artifacts\":1}}"),
+        dedup_hash: format!("dedup-{key}"),
+        created_at: at.clone(),
+        updated_at: at.clone(),
+        kind: "decision".into(),
+        significance: 1.0,
+        criteria: "[]".into(),
+    };
+    test.store
+        .insert_candidates(&[
+            candidate("ui", "art-ui", "web/form.ts"),
+            candidate("db", "art-db", "api/Cargo.toml"),
+        ])
+        .expect("candidates");
+    let inbox = Inbox::new(test.store.clone());
+    let edits: Option<CandidateEdits> = None;
+    let ui = inbox
+        .confirm("cand-ui", edits.clone())
+        .expect("ui")
+        .decision_id;
+    let db = inbox.confirm("cand-db", edits).expect("db").decision_id;
+
+    let graph = KnowledgeGraph::new(test.store.clone());
+    let redis = graph
+        .create_entity(NewEntity {
+            project_id: "p1".into(),
+            kind: Some(EntityKind::Technology),
+            name: "Redis".into(),
+            ..NewEntity::default()
+        })
+        .expect("technology")
+        .entity_id;
+    graph.refresh_suggestions("p1").expect("refresh");
+    let uses: Vec<String> = graph
+        .suggestions("p1")
+        .expect("suggestions")
+        .into_iter()
+        .filter(|suggestion| {
+            suggestion.kind == EdgeKind::Uses && suggestion.entity.node.id == redis
+        })
+        .map(|suggestion| suggestion.source.node.id)
+        .collect();
+    assert_eq!(
+        uses,
+        vec![db],
+        "only the decision that cites the manifest uses Redis"
+    );
+    assert!(!uses.contains(&ui));
+}

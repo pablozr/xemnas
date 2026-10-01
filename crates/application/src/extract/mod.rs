@@ -341,12 +341,17 @@ where
     // taking the whole batch down.
     let mut validated: Vec<(CandidateProposal, Vec<RelevanceSignal>)> = Vec::new();
     let mut rejected: Option<ExtractError> = None;
+    let sole = proposals
+        .iter()
+        .filter(|proposal| proposal.kind != CandidateKind::Detail)
+        .count()
+        == 1;
     for proposal in proposals {
         // Implementation details are not decisions nor rules.
         if proposal.kind == CandidateKind::Detail {
             continue;
         }
-        let proposal = reconcile_with_evidence(proposal, &evidence);
+        let proposal = reconcile_with_evidence(proposal, &evidence, sole);
         match validate_proposal(&proposal, &evidence, &signals) {
             Ok(canonical) => validated.push((proposal, canonical)),
             Err(error) => {
@@ -429,11 +434,17 @@ where
 /// only when they name a real artifact (a reference that merely contains an
 /// id, such as `artifact <id>`, counts). With no usable reference left, the
 /// whole capture is cited.
+///
+/// The files and dependencies of a proposal come from the artifacts it
+/// cites, not from the whole capture: two decisions of one turn must not
+/// inherit each other's files. When the capture yields a single proposal
+/// that cites no file-bearing artifact (only the conversation), the
+/// capture's diffs and documents are its evidence.
 pub(crate) fn reconcile_with_evidence(
     mut proposal: CandidateProposal,
     evidence: &DecisionEvidence,
+    sole: bool,
 ) -> CandidateProposal {
-    proposal.diff_summary = relevance::diff_summary(evidence);
     let mut references: Vec<String> = Vec::new();
     for reference in &proposal.evidence_refs {
         let reference = reference.trim();
@@ -453,6 +464,33 @@ pub(crate) fn reconcile_with_evidence(
             .map(|artifact| artifact.artifact_id.clone())
             .collect();
     }
+    let bears_files =
+        |artifact: &EvidenceArtifact| matches!(artifact.kind.as_str(), "diff_hunk" | "document");
+    let cites_files = evidence
+        .artifacts
+        .iter()
+        .any(|artifact| references.contains(&artifact.artifact_id) && bears_files(artifact));
+    if sole && !cites_files {
+        for artifact in evidence
+            .artifacts
+            .iter()
+            .filter(|artifact| bears_files(artifact))
+        {
+            if !references.contains(&artifact.artifact_id) {
+                references.push(artifact.artifact_id.clone());
+            }
+        }
+    }
+    let cited = DecisionEvidence {
+        artifacts: evidence
+            .artifacts
+            .iter()
+            .filter(|artifact| references.contains(&artifact.artifact_id))
+            .cloned()
+            .collect(),
+        ..evidence.clone()
+    };
+    proposal.diff_summary = relevance::diff_summary(&cited);
     proposal.evidence_refs = references;
     proposal
 }
@@ -500,8 +538,68 @@ fn dedup_hash(
 #[cfg(test)]
 mod tests {
     use super::{
-        filter_relevant, truncate_content, DecisionEvidence, EvidenceArtifact, RelevanceSignal,
+        filter_relevant, reconcile_with_evidence, truncate_content, CandidateKind,
+        CandidateProposal, DecisionEvidence, EvidenceArtifact, RelevanceSignal,
     };
+
+    fn proposal(refs: &[&str]) -> CandidateProposal {
+        CandidateProposal {
+            question: "q".into(),
+            choice: "c".into(),
+            rationale: "r".into(),
+            confidence: 0.9,
+            confidence_reason: "x".into(),
+            signals: Vec::new(),
+            evidence_refs: refs.iter().map(|reference| reference.to_string()).collect(),
+            diff_summary: String::new(),
+            kind: CandidateKind::Decision,
+            significance: 0.8,
+            criteria: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn each_proposal_keeps_only_the_files_it_cites() {
+        let capture = evidence(vec![
+            artifact(
+                "ui",
+                "diff_hunk",
+                "diff --git a/web/form.ts b/web/form.ts\n+export const x = 1;\n",
+            ),
+            artifact(
+                "cache",
+                "diff_hunk",
+                "diff --git a/api/Cargo.toml b/api/Cargo.toml\n+redis = \"0.25\"\n",
+            ),
+            artifact(
+                "talk",
+                "user_text",
+                "Vamos usar Redis e mudar o formulário.",
+            ),
+        ]);
+        let ui = reconcile_with_evidence(proposal(&["ui", "talk"]), &capture, false);
+        assert!(
+            ui.diff_summary.contains("web/form.ts"),
+            "{}",
+            ui.diff_summary
+        );
+        assert!(
+            !ui.diff_summary.contains("api/Cargo.toml"),
+            "{}",
+            ui.diff_summary
+        );
+        let cache = reconcile_with_evidence(proposal(&["cache"]), &capture, false);
+        assert!(cache.diff_summary.contains("api/Cargo.toml"));
+        assert!(!cache.diff_summary.contains("web/form.ts"));
+
+        // A sole proposal that cites only the conversation keeps the diffs.
+        let sole = reconcile_with_evidence(proposal(&["talk"]), &capture, true);
+        assert!(sole.diff_summary.contains("web/form.ts"));
+        assert!(sole.evidence_refs.contains(&"cache".to_string()));
+        // Several proposals: citing only the conversation brings no files.
+        let shared = reconcile_with_evidence(proposal(&["talk"]), &capture, false);
+        assert!(!shared.diff_summary.contains("web/form.ts"));
+    }
 
     fn artifact(id: &str, kind: &str, content: &str) -> EvidenceArtifact {
         EvidenceArtifact {
