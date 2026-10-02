@@ -16,6 +16,9 @@ alterações pertinentes. O `README.md` da raiz é a apresentação do projeto e
 | [pesquisas/](pesquisas/) | Pesquisas e ideias para o futuro, com status | [README.md](pesquisas/README.md) (índice), [memoria-semantica-local-first.md](pesquisas/memoria-semantica-local-first.md) (recuperação local, automação e custos) |
 | [assets/](assets/) | Imagens usadas pelo README da raiz | — |
 
+Pesquisas recentes: [escalar grafos e blocos](pesquisas/escalabilidade-renderizacao-fontes.md),
+com diagnóstico local, alternativas e benchmark reproduzível.
+
 ## Precedência
 
 Revisão backend sob demanda: [ADR-0009 — revisão consultiva de conhecimento](arquitetura/adr/0009-revisao-consultiva-de-conhecimento.md).
