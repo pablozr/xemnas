@@ -8,6 +8,10 @@ planos de `docs/roadmap/`.
 
 | Documento | Assunto | Status |
 | --- | --- | --- |
+| [dores-dev-cognicao-fontes.md](dores-dev-cognicao-fontes.md) | Oito estudos de cognição, interrupções, compreensão e investigação | Aberta. Fontes consultadas; propostas sem experimento próprio |
+| [dores-dev-conhecimento-equipe-fontes.md](dores-dev-conhecimento-equipe-fontes.md) | Oito estudos de onboarding, revisão, coordenação e dívida técnica | Aberta. Pesquisa exploratória; parte das fontes teve acesso parcial |
+| [dores-dev-ia-verificacao-fontes.md](dores-dev-ia-verificacao-fontes.md) | Oito fontes de IA, produtividade, compreensão, segurança e autonomia | Aberta. Evidência contextual; sem validação no Xemnas |
+| [dores-dev-contratos-reproducao-fontes.md](dores-dev-contratos-reproducao-fontes.md) | Oito estudos de linguagem, contratos, requisitos, alertas e reprodução | Aberta. Pesquisa exploratória; hipóteses não executadas |
 | [oportunidades-produto-memoria-decisional.md](oportunidades-produto-memoria-decisional.md) | Dez propostas de expansão, comparação com capacidades atuais, prioridades e experimentos | Aberta. Síntese concluída; propostas não implementadas nem demanda validada |
 | [produtos-memoria-agentes-fontes.md](produtos-memoria-agentes-fontes.md) | Oito famílias de memória/contexto para agentes, versões, fontes primárias e oportunidades | Aberta. Comparação documental concluída; experimentos pendentes |
 | [produtos-inteligencia-engenharia-fontes.md](produtos-inteligencia-engenharia-fontes.md) | Dez produtos de engenharia, colisões competitivas e hipóteses para o Xemnas | Aberta. Comparação documental concluída; demanda não validada |
