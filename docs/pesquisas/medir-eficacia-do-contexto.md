@@ -199,11 +199,101 @@ automação"; a pesquisa de 2026 reforça, porque o efeito médio de contexto es
 é nulo ou negativo. Quanto mais automático e abrangente o contexto, mais é preciso
 provar que ele paga o custo.
 
+## Regras com verificador automático
+
+As capturas já trazem `diff_hunk`, `tool_summary`, `user_text` e `assistant_text`
+(`ArtifactKind`) agrupadas por sessão, então muitas regras podem ser conferidas
+**depois**, no diff da sessão, sem rodar nada nem guardar prompt. Cinco tipos
+cobrem a maior parte; o que não cabe neles não ganha verificador e é medido por
+retrabalho (L3).
+
+| Tipo | Verifica | Exemplo | Dado necessário |
+| --- | --- | --- | --- |
+| `forbid_added` | Linha adicionada que casa um padrão dentro de um escopo de caminhos | "Sem `unwrap()` em `crates/application/**`"; "cores só em `ui/tokens.rs`" (hex e `rgb(` fora dele) | `diff_hunk` |
+| `forbid_dependency` | Dependência nova que casa um nome (já lemos manifestos: `added_dependencies`) | "Não usar `openssl`"; "SQLite, não Postgres" | `diff_hunk` de manifesto |
+| `forbid_edit` | Edição de caminhos protegidos (com exceção de arquivos novos ou de uma lista) | "Migrations aplicadas não se editam"; "backend não altera `apps/`, só `main.rs`" | caminhos do `diff_hunk` |
+| `require_with` | Se a sessão tocou A, também tocou B | "Migration nova vem com teste"; "mudança em `ui/patterns.rs` atualiza `VISUAL-IDENTITY.md`" | caminhos do `diff_hunk` |
+| `command` | Um comando passa no estado final (código de saída 0) ou foi executado na sessão | `cargo fmt --check`, `cargo test -p architecture` (que já impõe as regras de cor e de camadas), "rodar clippy antes de terminar" | `tool_summary` (executado) ou execução local do comando |
+
+Não ganham verificador: **premissas** ("o app é local"), **objetivos**
+("desempenho é o pilar") e regras **semânticas** ("só tarefas idempotentes voltam
+para a fila", "toda escrita de decisão acontece numa transação"). Para estas, o
+caminho é um `command` que já as testa (um teste de integração) quando existir, ou
+um juiz de modelo amostrado e rotulado como estimativa.
+
+Regras do próprio repositório que cabem já: "cores só em `ui/tokens.rs`"
+(`forbid_added`, e já há o teste de arquitetura como `command`), "backend não
+altera `apps/`" (`forbid_edit`), "validação: fmt, clippy e testes" (`command`),
+"sem segredos" (um verificador sobre o diff com a mesma detecção de `redact`).
+
+**Como cadastrar:** o `check` é um campo opcional da regra (tipo, escopo, padrão).
+O extrator pode **propor** um `check` junto da regra, mas só vale depois de a
+pessoa confirmar, e antes disso o app o **testa contra o histórico**: roda o
+verificador nas sessões já capturadas e mostra quantas teriam violado e quantas
+vezes disparou (falso positivo provável). Isso já entrega valor sem nenhum
+experimento: a taxa histórica de violação é a linha de base.
+
+## Medição concreta
+
+**Unidade.** Uma *oportunidade* é um par (sessão, regra) em que a sessão tocou o
+escopo da regra. Violação é o verificador falhar no diff da sessão. Taxa de
+violação = violações ÷ oportunidades.
+
+**Passo 0, sem custo: linha de base histórica.** Rodar os verificadores nas sessões
+já capturadas. Regras que nunca são violadas não precisam de injeção (o agente já
+cumpre); regras violadas com frequência são as que valem injetar e medir.
+
+**Experimento A, canários (uma semana).**
+- Repositório de teste com 8 regras, uma por tipo de verificador, e 8 tarefas
+  curtas cuja solução natural viola cada uma ("adicione um parser, use `unwrap`
+  para simplificar").
+- Braços: `none` (sem bloco), `inject` (bloco do pack real) e `inject+ruído` (o
+  mesmo bloco com 8 itens irrelevantes, para medir o dano de ruído). Cada tarefa 5
+  vezes por braço, agente em modo não interativo, com limite de voltas.
+- 8 tarefas × 5 repetições = 40 execuções por braço, 120 no total. Com 40 por
+  braço, uma queda de 50% para 20% na taxa de violação é detectável (poder ~80%);
+  diferenças menores que ~30 pontos não são. Custo em tokens: estimativa a medir
+  numa rodada piloto de 6 execuções antes de comprometer o resto.
+- Resultado: taxa de violação por braço com intervalo (bootstrap) e tokens por
+  execução. Aprovado se `inject` reduz a violação com intervalo que exclui zero e o
+  custo médio não sobe mais que 10%.
+
+**Experimento B, uso real (contínuo).** Fração fixa de sessões em `shadow` por hash
+do id da sessão (30% nas primeiras semanas, depois 15%). Comparar `inject` e
+`shadow` em: taxa de violação por regra verificável, candidatos de retrabalho por
+sessão e tokens/voltas por sessão. Tempo até 30 sessões `shadow`:
+`30 ÷ (sessões por semana × fração)`; com 40 sessões por semana e 30%, ~2,5
+semanas; com 10 por semana e 15%, 20 semanas, e então só A e a linha de base são
+confiáveis. A tela mostra o tamanho de amostra e "poucos dados" abaixo de 30.
+
+**Experimento C, recuperação offline.** Para cada regra e decisão com escopo, gerar
+prompts e listas de arquivos que deveriam trazê-la; medir recall@orçamento (300
+tokens) e precisão do `build_pack`. Meta: o gatilho `Edit`, que é determinístico
+pelo mapa, deve ter recall de 100% nos casos de teste; o gatilho `Prompt`, lexical,
+fica com meta de 90% e o que falhar vira caso de ajuste da busca.
+
+**Regras de decisão (limiares iniciais, a ajustar com dados):**
+
+| Situação | Ação |
+| --- | --- |
+| Item entregue ≥ 15 vezes e absorvido 0 | Sai do contexto automático |
+| Regra com violação ≈ 0 nos dois braços | "Não vinculante": o agente já cumpre; sai (economiza tokens) |
+| Regra com violação alta em `shadow` e queda em `inject` | Mantém e sobe de prioridade no pack |
+| `inject+ruído` pior que `inject` além da margem | Reduz o orçamento ou o número de itens |
+| Custo por sessão em `inject` > +10% sem queda de violação ou de retrabalho | Reduz o bloco; contexto não está pagando |
+
+**Eventos a registrar (só ids e contagens, nunca texto):**
+`context_uptake(sessão, entrega, item, versão, sinal, quando)` com os sinais
+`citado` (referência `D:xxxx` ou `R:xxxx` na resposta), `aberto` (MCP),
+`escopo_tocado`, `verificado_ok` e `violacao`; e `session_outcome(sessão, braço,
+voltas, tokens, chamadas, duração)`. O bloco injetado pode pedir "cite a
+referência quando se apoiar nela", o que torna a absorção observável; é uma
+mudança de comportamento e deve valer só no braço `inject`, declarada como tal.
+
 ## Perguntas em aberto
 
-- Quais regras viram **verificáveis** (caminho proibido, dependência vetada,
-  padrão obrigatório)? Isso decide o alcance do nível L2. Pode ser um novo campo
-  opcional na regra, preenchido pela pessoa ou sugerido na Revisão.
+- Quais regras do projeto real viram verificáveis? Os cinco tipos acima são a
+  proposta; falta cadastrar as regras de verdade e medir a linha de base.
 - Qual o volume real de sessões por semana por projeto? Define o tempo de um
   holdout útil e se o painel precisa de um período de aquecimento.
 - Os adaptadores (Claude Code, Codex, OpenCode) expõem o suficiente para detectar
