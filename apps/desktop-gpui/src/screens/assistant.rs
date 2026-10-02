@@ -19,8 +19,9 @@ use gpui::{
 use crate::ui::controls::{focus_ring, icon_action};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::motion::clock::{self, Rate};
-use crate::ui::motion::panel_in;
+use crate::ui::motion::{menu_out, panel_in};
 use crate::ui::patterns::section_label;
+use crate::ui::popup::{reap, Popup};
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{RadiusScale, SpacingScale, TypeScale};
 use crate::ui::tooltip::tooltip;
@@ -104,7 +105,8 @@ pub struct Briefing {
 
 /// The mascot and its panel; the shell places both.
 pub struct AssistantScreen {
-    open: bool,
+    /// The panel, held mounted while it leaves.
+    panel: Popup<()>,
     hovered: bool,
     pose: Pose,
     beat: u64,
@@ -140,7 +142,7 @@ impl AssistantScreen {
         })
         .detach();
         Self {
-            open: false,
+            panel: Popup::default(),
             hovered: false,
             pose: Pose::Idle,
             beat: 0,
@@ -151,7 +153,7 @@ impl AssistantScreen {
 
     /// Whether the panel is open.
     pub fn is_open(&self) -> bool {
-        self.open
+        self.panel.is_open()
     }
 
     /// What the shell knows now: project and queue.
@@ -164,20 +166,24 @@ impl AssistantScreen {
 
     /// Opens or closes the panel.
     pub fn toggle(&mut self, cx: &mut Context<Self>) {
-        self.open = !self.open;
-        cx.notify();
+        if self.panel.is_open() {
+            self.close(cx);
+        } else {
+            self.panel.open(());
+            cx.notify();
+        }
     }
 
     /// Closes the panel.
     pub fn close(&mut self, cx: &mut Context<Self>) {
-        if self.open {
-            self.open = false;
+        if self.panel.begin_close() {
+            reap(cx, |assistant: &mut Self| &mut assistant.panel);
             cx.notify();
         }
     }
 
     fn sprite(&self) -> Arc<Image> {
-        if self.hovered || self.open {
+        if self.hovered || self.panel.is_open() {
             return GLOW.clone();
         }
         match self.pose {
@@ -222,9 +228,11 @@ impl AssistantScreen {
             .rounded(RadiusScale.surface())
             .cursor_pointer()
             .hover(move |style| style.bg(colors.glass_fill_low()))
-            .when(self.open, |dock| dock.bg(colors.glass_fill_medium()))
+            .when(self.panel.is_open(), |dock| {
+                dock.bg(colors.glass_fill_medium())
+            })
             .role(Role::Button)
-            .aria_label(if self.open {
+            .aria_label(if self.panel.is_open() {
                 "Fechar o assistente Xemnas"
             } else {
                 "Abrir o assistente Xemnas"
@@ -243,7 +251,7 @@ impl AssistantScreen {
                         this.toggle(cx);
                         cx.stop_propagation();
                     }
-                    "escape" if this.open => {
+                    "escape" if this.panel.is_open() => {
                         this.close(cx);
                         cx.stop_propagation();
                     }
@@ -289,9 +297,8 @@ impl AssistantScreen {
 
     /// The panel, anchored by the shell beside the sidebar.
     pub fn render_panel(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.open {
-            return None;
-        }
+        self.panel.get()?;
+        let exit = self.panel.exit_progress();
         let theme = Theme::current(cx);
         let colors = theme.colors;
         let greeting = match (&self.briefing.project, self.briefing.pending) {
@@ -363,9 +370,12 @@ impl AssistantScreen {
                     .aria_label(title.clone())
                     .focus_visible(focus_ring(&theme))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.open = false;
+                        // A leaving panel takes no clicks.
+                        if !this.panel.is_open() {
+                            return;
+                        }
+                        this.close(cx);
                         cx.emit(AssistantGo(route));
-                        cx.notify();
                     }))
                     .child(icon(glyph, 16.0, colors.text_muted()))
                     .child(
@@ -494,7 +504,11 @@ impl AssistantScreen {
                          chegam quando o assistente for ligado ao provedor de IA.",
                     ),
             );
-        Some(panel_in("assistant-panel-in", panel).into_any_element())
+        Some(match exit {
+            None => panel_in("assistant-panel-in", panel).into_any_element(),
+            // Sinks back toward the mascot as it fades.
+            Some(t) => menu_out("assistant-panel-out", 16.0, t, panel).into_any_element(),
+        })
     }
 }
 

@@ -29,7 +29,9 @@ use crate::ui::controls::icon_action;
 use crate::ui::feedback::error_state;
 use crate::ui::glass::focus_ring;
 use crate::ui::icons::{icon, IconName};
+use crate::ui::motion::{menu_in, menu_out};
 use crate::ui::patterns::{count_chip, fade_in, kbd, section_label, track_hover};
+use crate::ui::popup::{reap, Popup};
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Backdrop, Theme, ThemeMode};
 use crate::ui::tokens::MotionTokens;
@@ -131,10 +133,6 @@ struct Palette {
 /// Rows shown at once before the palette scrolls.
 const PALETTE_MAX_HEIGHT: f32 = 380.0;
 
-/// Clicks that land on the breadcrumb within this window of a dismissal are
-/// the same gesture that dismissed the panel, not a request to reopen it.
-const PANEL_REOPEN_GUARD: std::time::Duration = std::time::Duration::from_millis(250);
-
 /// The places a selected project can be read from. Its properties are not a
 /// destination: they open in the panel under the project name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -228,10 +226,9 @@ pub struct Shell<
     theme_focus: FocusHandle,
     project_focus: FocusHandle,
     /// Whether the project panel under the breadcrumb is open.
-    project_panel: bool,
-    panel_dismissed_at: Option<std::time::Instant>,
+    project_panel: Popup<()>,
     demo: bool,
-    palette: Option<Palette>,
+    palette: Popup<Palette>,
     capture: Option<CaptureStatus>,
     activity: Option<JobSummary>,
     /// Whether the window was opened over a system material (Mica/Acrylic).
@@ -338,7 +335,7 @@ impl<
                         search.set_context("Filtrar candidatos carregados", cx)
                     });
                 }
-                shell.project_panel = false;
+                shell.dismiss_project_panel(cx);
                 cx.notify();
             })
         });
@@ -405,10 +402,9 @@ impl<
             hovered_tab: None,
             theme_focus: cx.focus_handle().tab_stop(true),
             project_focus: cx.focus_handle().tab_stop(true),
-            project_panel: false,
-            panel_dismissed_at: None,
+            project_panel: Popup::default(),
             demo: false,
-            palette: None,
+            palette: Popup::default(),
             capture: None,
             activity: None,
             backdrop: false,
@@ -692,12 +688,11 @@ impl<
     }
 
     fn toggle_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.palette.take().is_some() {
-            window.focus(&self.focus, cx);
-            cx.notify();
+        if self.palette.is_open() {
+            self.close_palette(window, cx);
             return;
         }
-        self.project_panel = false;
+        self.dismiss_project_panel(cx);
         let field = cx.new(|cx| {
             let mut field = SearchField::new(cx);
             field.stretch();
@@ -705,18 +700,35 @@ impl<
             field
         });
         let subscription = cx.subscribe(&field, |shell, _, _: &SearchChanged, cx| {
-            if let Some(palette) = &mut shell.palette {
+            if let Some(palette) = shell.palette.open_mut() {
                 palette.highlighted = 0;
             }
             cx.notify();
         });
         window.focus(&field.read(cx).focus_handle(cx), cx);
-        self.palette = Some(Palette {
+        self.palette.open(Palette {
             field,
             highlighted: 0,
             _subscription: subscription,
         });
         cx.notify();
+    }
+
+    /// Starts the palette's exit; it stays drawn, without input, while it
+    /// fades toward the top.
+    fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.palette.begin_close() {
+            reap(cx, |shell: &mut Self| &mut shell.palette);
+        }
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    /// Starts the project panel's exit (no focus change).
+    fn dismiss_project_panel(&mut self, cx: &mut Context<Self>) {
+        if self.project_panel.begin_close() {
+            reap(cx, |shell: &mut Self| &mut shell.project_panel);
+        }
     }
 
     /// Everything the palette can reach right now, from data already loaded.
@@ -860,7 +872,7 @@ impl<
     fn visible_palette_items(&self, cx: &App) -> Vec<PaletteItem<Command>> {
         let query = self
             .palette
-            .as_ref()
+            .get()
             .map(|palette| palette.field.read(cx).value().to_owned())
             .unwrap_or_default();
         palette::filter(&self.palette_items(cx), &query)
@@ -868,7 +880,7 @@ impl<
 
     fn move_palette(&mut self, delta: isize, cx: &mut Context<Self>) {
         let count = self.visible_palette_items(cx).len();
-        if let Some(palette) = &mut self.palette {
+        if let Some(palette) = self.palette.open_mut() {
             if count > 0 {
                 palette.highlighted =
                     (palette.highlighted as isize + delta).rem_euclid(count as isize) as usize;
@@ -879,14 +891,13 @@ impl<
 
     fn run_palette(&mut self, index: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
         let items = self.visible_palette_items(cx);
-        let Some(palette) = self.palette.take() else {
+        let Some(highlighted) = self.palette.as_open().map(|palette| palette.highlighted) else {
             return;
         };
-        let Some(item) = items.get(index.unwrap_or(palette.highlighted)).cloned() else {
-            self.palette = Some(palette);
+        let Some(item) = items.get(index.unwrap_or(highlighted)).cloned() else {
             return;
         };
-        window.focus(&self.focus, cx);
+        self.close_palette(window, cx);
         match item.command {
             Command::Go(destination) => self.switch_to(destination, window, cx),
             Command::Project(id) => {
@@ -907,9 +918,9 @@ impl<
                 }
             }
             Command::ProjectPanel => {
-                self.project_panel = false;
-                self.panel_dismissed_at = None;
-                self.toggle_project_panel(window, cx);
+                if !self.project_panel.is_open() {
+                    self.toggle_project_panel(window, cx);
+                }
             }
             Command::OpenFolder => {
                 if let Some(projects) = &self.projects {
@@ -931,8 +942,9 @@ impl<
     /// The palette overlay: a dimmed window and a centred list under a field.
     fn render_palette(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let theme = self.theme;
-        let field = self.palette.as_ref()?.field.clone();
-        let highlighted = self.palette.as_ref()?.highlighted;
+        let field = self.palette.get()?.field.clone();
+        let highlighted = self.palette.get()?.highlighted;
+        let exit = self.palette.exit_progress();
         let items = self.visible_palette_items(cx);
         let mut list = div()
             .id("palette-list")
@@ -972,7 +984,7 @@ impl<
                     .text_color(foreground)
                     .cursor_pointer()
                     .on_mouse_move(cx.listener(move |this, _, _, cx| {
-                        if let Some(palette) = &mut this.palette {
+                        if let Some(palette) = this.palette.open_mut() {
                             if palette.highlighted != index {
                                 palette.highlighted = index;
                                 cx.notify();
@@ -1068,12 +1080,19 @@ impl<
                     .on_mouse_down(
                         gpui::MouseButton::Left,
                         cx.listener(|this, _, window, cx| {
-                            if this.palette.is_some() {
-                                this.toggle_palette(window, cx);
+                            if this.palette.is_open() {
+                                this.close_palette(window, cx);
                             }
                         }),
                     )
-                    .child(fade_in(div().child(panel), "palette-in")),
+                    .opacity(1.0 - exit.unwrap_or(0.0))
+                    .child(match exit {
+                        // Arrives from just above, leaves back toward the top.
+                        None => menu_in("palette-in", -6.0, div().child(panel)).into_any_element(),
+                        Some(t) => {
+                            menu_out("palette-out", -6.0, t, div().child(panel)).into_any_element()
+                        }
+                    }),
             )
             .with_priority(3)
             .into_any_element(),
@@ -1160,31 +1179,31 @@ impl<
     }
 
     fn toggle_project_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let just_dismissed = self
-            .panel_dismissed_at
-            .take()
-            .is_some_and(|at| at.elapsed() < PANEL_REOPEN_GUARD);
-        self.project_panel = !self.project_panel && !just_dismissed;
-        if self.project_panel {
-            if let Some(projects) = &self.projects {
-                window.focus(&projects.read(cx).panel_focus(), cx);
-            }
+        // The press that dismissed the panel (outside click on the crumb)
+        // must not reopen it on the same click.
+        if self.project_panel.take_press_was_open() || self.project_panel.is_open() {
+            self.close_project_panel(window, cx);
+            return;
+        }
+        self.project_panel.open(());
+        if let Some(projects) = &self.projects {
+            window.focus(&projects.read(cx).panel_focus(), cx);
         }
         cx.notify();
     }
 
     fn close_project_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.project_panel {
-            self.project_panel = false;
+        if self.project_panel.is_open() {
+            self.dismiss_project_panel(cx);
             window.focus(&self.project_focus, cx);
-            cx.notify();
         }
+        cx.notify();
     }
 
     /// The project name as a quiet button: it opens the project panel.
     fn project_crumb(&self, name: String, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let open = self.project_panel;
+        let open = self.project_panel.is_open();
         text_style(div(), TypeScale::ROW_TITLE)
             .id("project-crumb")
             .h(px(ControlSize::SM))
@@ -1205,6 +1224,10 @@ impl<
             .track_focus(&self.project_focus)
             .focus_visible(focus_ring(&theme))
             .cursor_pointer()
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|this, _, _, _| this.project_panel.note_trigger_press()),
+            )
             .on_click(cx.listener(|this, _, window, cx| this.toggle_project_panel(window, cx)))
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 if matches!(event.keystroke.key.as_str(), "enter" | "space") {
@@ -1513,7 +1536,8 @@ impl<
                 .children(status)
                 .into_any_element();
             let sidebar = projects.update(cx, |screen, cx| screen.render_sidebar(Some(footer), cx));
-            let mut panel = if self.project_panel {
+            let panel_exit = self.project_panel.exit_progress();
+            let mut panel = if self.project_panel.get().is_some() {
                 projects.update(cx, |screen, cx| screen.render_project_panel(cx))
             } else {
                 None
@@ -1635,12 +1659,24 @@ impl<
                                             .blur_radius(px(32.0))])
                                             .occlude()
                                             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                                                this.project_panel = false;
-                                                this.panel_dismissed_at =
-                                                    Some(std::time::Instant::now());
+                                                this.dismiss_project_panel(cx);
                                                 cx.notify();
                                             }))
-                                            .child(fade_in(div().child(panel), "project-panel-in")),
+                                            .child(match panel_exit {
+                                                None => menu_in(
+                                                    "project-panel-in",
+                                                    -4.0,
+                                                    div().child(panel),
+                                                )
+                                                .into_any_element(),
+                                                Some(t) => menu_out(
+                                                    "project-panel-out",
+                                                    -4.0,
+                                                    t,
+                                                    div().child(panel),
+                                                )
+                                                .into_any_element(),
+                                            }),
                                     )
                                     .with_priority(1)
                                 }))
@@ -1742,7 +1778,7 @@ impl<
                 cx.listener(|this, _: &ConfirmItem, window, cx| this.on_review_key(3, window, cx)),
             )
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                if event.keystroke.key == "escape" && this.project_panel {
+                if event.keystroke.key == "escape" && this.project_panel.is_open() {
                     this.close_project_panel(window, cx);
                     cx.stop_propagation();
                 }

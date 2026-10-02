@@ -374,6 +374,12 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   `with_animation` em repetição: pede a fase a `motion::clock` (30 ou 15 Hz,
   com lease de 300 ms), que estaciona quando nada visível pede. Movimento
   reduzido devolve fase parada.
+- Popovers (paleta, painel do projeto, painel do assistente) guardam o
+  estado em `ui::popup::Popup`: aberto, saindo, fechado. Ao fechar continuam
+  desenhados, sem aceitar clique, enquanto saem; `reap` os descarta depois, e
+  reabrir no meio da saída vale. O gatilho anota no mouse-down se o popover
+  estava montado, então o clique que o dispensou não o reabre (sem guard de
+  tempo).
 - Hover de linhas e abas segue a mola de `hover_tint`.
 
 ## Interação

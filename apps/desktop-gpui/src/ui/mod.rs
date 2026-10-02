@@ -11,6 +11,7 @@ pub mod glass;
 pub mod icons;
 pub mod motion;
 pub mod patterns;
+pub mod popup;
 pub mod search_edit;
 pub mod search_field;
 pub mod theme;
