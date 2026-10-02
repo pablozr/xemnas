@@ -35,6 +35,7 @@ planos de `docs/roadmap/`.
 | [design-vitrine-fontes.md](design-vitrine-fontes.md) | Apps GPUI verificados e inspirações de produtos de ponta, com aplicação e limites | Aberta. Catálogo consultivo concluído |
 | [escalabilidade-renderizacao-fontes.md](escalabilidade-renderizacao-fontes.md) | Diagnóstico de grafos/blocos, GPUI, layout, virtualização, LOD e microbenchmark reproduzível | Aberta. Pesquisa concluída; implementação e benchmark integrado pendentes |
 | [medir-eficacia-do-contexto.md](medir-eficacia-do-contexto.md) | Como saber se o contexto injetado ajuda o agente: pesquisa, métricas, experimentos e fases; opinião sobre agentes autônomos e conhecimento entre projetos | Aberta. Proposta de medição; nada implementado |
+| [analise-do-produto-hoje.md](analise-do-produto-hoje.md) | O que está fraco no produto hoje, por área, e a Visão em C4 (contexto, contêineres, componentes e fluxo dinâmico) | Aberta. Análise sobre capturas da release; proposta não implementada |
 | [glass-na-janela-inteira.md](glass-na-janela-inteira.md) | Material do Windows (Mica, Acrylic) na janela e conteúdo em card | Base de decisão. O glass é opcional (`XEMNAS_BACKDROP`); a regra vigente está em `docs/design/VISUAL-IDENTITY.md` |
 
 ## Como usar esta pasta
