@@ -132,8 +132,11 @@ def normal(p, **kw):
     return n / np.maximum(length(n)[..., None], 1e-9)
 
 
-def render(yaw=0.18, bob=0.0, blink=1.0, glow=1.0, size=S):
-    ys, xs = np.mgrid[0:size, 0:size]
+def render(yaw=0.18, bob=0.0, blink=1.0, glow=1.0, size=S, region=None):
+    """Ray-marches the figure. `region` (x0, y0, x1, y1) limits the work to
+    the part of the square the figure occupies; the rest stays transparent."""
+    x0, y0, x1, y1 = region or (0, 0, size, size)
+    ys, xs = np.mgrid[y0:y1, x0:x1]
     u = (xs + 0.5) / size * 2 - 1
     v = 1 - (ys + 0.5) / size * 2
     ro = V([0.0, 0.55 + bob, 6.0])
@@ -199,8 +202,9 @@ def render(yaw=0.18, bob=0.0, blink=1.0, glow=1.0, size=S):
     col = np.where(edge[..., None], outline, col)
     alpha = np.where(edge, 1.0, alpha)
     rgba = np.concatenate([np.clip(col, 0, 1), alpha[..., None]], -1)
-    img = Image.fromarray((rgba * 255).astype(np.uint8), 'RGBA')
-    return img
+    full = np.zeros((size, size, 4), np.uint8)
+    full[y0:y1, x0:x1] = (rgba * 255).astype(np.uint8)
+    return Image.fromarray(full, 'RGBA')
 
 
 if __name__ == '__main__':

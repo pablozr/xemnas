@@ -5,7 +5,7 @@
 Each pose is ray-marched from the signed-distance model in `model.py` with
 toon shading, an outline and a bloom on the eyes, then every pose is cropped
 to the same square (the union of their silhouettes) so frames line up, and
-saved at 192 px. Takes about a minute per pose; needs numpy and Pillow.
+saved at 192 px. Takes about half a minute per pose; needs numpy and Pillow.
 """
 import os
 import sys
@@ -16,17 +16,25 @@ sys.path.insert(0, os.path.dirname(__file__))
 from model import render  # noqa: E402
 
 OUT = os.path.join(os.path.dirname(__file__), '..', '..', 'apps', 'desktop-gpui', 'assets', 'mascot')
+# Smooth motion is made of many close frames, not a few far ones: the app
+# crossfades between neighbours. Yaw runs right (-0.20) to left (0.55) with
+# the idle pose (0.18) between; the blink has a half-closed frame.
 POSES = {
     'idle': dict(yaw=0.18),
     'blink': dict(yaw=0.18, blink=0.05),
+    'blinkhalf': dict(yaw=0.18, blink=0.45),
     'glow': dict(yaw=0.18, glow=1.25),
     'left': dict(yaw=0.55),
+    'leftmid': dict(yaw=0.37),
     'right': dict(yaw=-0.20),
+    'rightmid': dict(yaw=-0.01),
 }
+# The part of the 512 px square the figure occupies, with margin for bloom.
+REGION = (88, 48, 424, 432)
 
 frames = {}
 for name, pose in POSES.items():
-    frames[name] = render(**pose).resize((256, 256), Image.LANCZOS)
+    frames[name] = render(**pose, region=REGION).resize((256, 256), Image.LANCZOS)
     print(name, flush=True)
 
 box = None
