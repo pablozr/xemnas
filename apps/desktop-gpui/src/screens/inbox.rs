@@ -1124,7 +1124,9 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                     ),
             );
         div()
-            .id("inbox-reading")
+            .id(ElementId::Name(
+                format!("inbox-reading-{}", detail.summary.id).into(),
+            ))
             .size_full()
             .overflow_y_scroll()
             .px(px(SpacingScale::S8))

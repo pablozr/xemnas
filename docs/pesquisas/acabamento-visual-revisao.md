@@ -48,6 +48,11 @@ Ajustado nesta rodada:
 - Blocos do Mapa montavam todos os componentes (259 em escala 1000) e
   varriam todas as entidades por bloco a cada passo de rolagem; agora vêm em
   páginas de 24 com rodapé de revelação e um índice de partes feito uma vez.
+- A página de componente e a leitura da Revisão compartilhavam o mesmo id de
+  rolagem entre itens, então abrir outro item herdava a posição do anterior
+  (o título aparecia cortado); cada item tem agora o seu id.
+- A legenda do grafo ganhou placa translúcida (os nós apareciam por trás das
+  palavras) e a entrada "Agrupadas".
 - A linha de progresso do rodapé de revelação sumia em listas muito longas;
   ganhou largura mínima.
 
@@ -59,9 +64,5 @@ Ajustado nesta rodada:
 2. Não animar entrada de linhas quando a navegação veio do teclado (a cascata
    da Revisão e do índice deve valer só para carga, não para filtrar ou
    navegar).
-3. Página de componente: abre ligeiramente rolada em capturas (o título perde
-   ~25 px de respiro); verificar se a rolagem da página anterior é herdada.
-4. Legenda do grafo se sobrepõe a nós em mapas grandes; tirar do fluxo do
-   desenho ou dar-lhe um fundo.
-5. Capturas comparáveis com o Zeron e com Linear/Raycast para uma lista de
+3. Capturas comparáveis com o Zeron e com Linear/Raycast para uma lista de
    diferenças tela a tela (espaçamento, hierarquia, densidade).

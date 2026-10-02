@@ -2085,7 +2085,7 @@ impl<S: MapStores> MapScreen<S> {
             timeline
         };
         column = column.child(section(theme, "Linha do tempo", timeline));
-        reading_page("map-entity", column).into_any_element()
+        reading_page(format!("map-entity-{id}"), column).into_any_element()
     }
 
     fn render_picker(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Option<Div> {
