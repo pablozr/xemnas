@@ -8,6 +8,7 @@ planos de `docs/roadmap/`.
 
 | Documento | Assunto | Status |
 | --- | --- | --- |
+| [oportunidades-produto-memoria-decisional.md](oportunidades-produto-memoria-decisional.md) | Dez propostas de expansão, comparação com capacidades atuais, prioridades e experimentos | Aberta. Síntese concluída; propostas não implementadas nem demanda validada |
 | [produtos-memoria-agentes-fontes.md](produtos-memoria-agentes-fontes.md) | Oito famílias de memória/contexto para agentes, versões, fontes primárias e oportunidades | Aberta. Comparação documental concluída; experimentos pendentes |
 | [produtos-inteligencia-engenharia-fontes.md](produtos-inteligencia-engenharia-fontes.md) | Dez produtos de engenharia, colisões competitivas e hipóteses para o Xemnas | Aberta. Comparação documental concluída; demanda não validada |
 | [plano-design-vitrine.md](plano-design-vitrine.md) | Plano por superfície, capturas reais, fases, critérios de qualidade e roteiro de demonstração | Aberta. Plano concluído; implementação e mudanças de padrão pendentes |

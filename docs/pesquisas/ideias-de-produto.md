@@ -7,6 +7,11 @@ aprovado; é material para decidir depois do dogfood (`docs/operacao/dogfood-log
 visão de longo prazo continua em `docs/produto/visao-consolidada-do-produto.md` e a
 pesquisa de provedores de IA em `docs/pesquisas/provedores-e-modelos-de-ia.md`.
 
+Atualização de 02/10/2026: a [pesquisa de oportunidades de produto](oportunidades-produto-memoria-decisional.md)
+confronta estas ideias com concorrentes e com o código atual, distinguindo o que
+já foi entregue das extensões propostas. Use-a para a priorização; esta nota
+preserva as perguntas originais de dogfood.
+
 ## 1. Capturar e revisar: o modelo está certo?
 
 **O que funciona.** A autoridade humana (nada vira decisão sem confirmação), a

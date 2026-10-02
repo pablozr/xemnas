@@ -21,6 +21,10 @@ com diagnóstico local, alternativas e benchmark reproduzível; e
 [plano de design para a vitrine](pesquisas/plano-design-vitrine.md), com capturas
 atuais e [catálogo de referências](pesquisas/design-vitrine-fontes.md).
 
+Expansão do produto: [oportunidades para a memória decisional](pesquisas/oportunidades-produto-memoria-decisional.md),
+com dez propostas, fontes de mercado, prioridades e experimentos; pesquisa
+exploratória, sem alteração do escopo aprovado.
+
 ## Precedência
 
 Revisão backend sob demanda: [ADR-0009 — revisão consultiva de conhecimento](arquitetura/adr/0009-revisao-consultiva-de-conhecimento.md).
