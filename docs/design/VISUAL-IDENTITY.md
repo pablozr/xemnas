@@ -12,8 +12,8 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   não espalhar literais de cor pelas telas.
 - Superfícies grandes são quietas. Reservar lavanda para seleção, foco e uma
   ação primária real; campos de busca são neutros em repouso. Não usar card,
-  glow, blur ou animação para mascarar a falta de informação. A única animação é
-  um fade de 160 ms quando o conteúdo é substituído (destino, projeto, item).
+  glow, blur ou animação para mascarar a falta de informação. Movimento segue
+  a seção **Movimento** abaixo.
 - Densidade de ferramenta: interface em 13 px, leitura em 14 px, títulos de
   painel em 12 px esmaecidos. Inter em toda a interface; Bricolage Grotesque só
   no wordmark e no título de leitura (a pergunta). Nomes de família vêm de
@@ -358,6 +358,23 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   sanitizado.
 - Painel do projeto: **Apagar dados…** mede o impacto real e só libera Apagar
   tudo depois de digitar o nome do projeto; a pasta no disco não é tocada.
+
+## Movimento
+
+- Tudo vem de `ui::motion`: curvas cúbicas exatas (`curve`: entrada
+  `cubic-bezier(0.16, 1, 0.3, 1)`, saída `(0.4, 0, 1, 1)`) e o catálogo
+  (`spec`). Tela nenhuma escreve duração ou curva.
+- Conteúdo substituído (destino, projeto, item): `content_in`, 220 ms, fade
+  com subida de 4 px. Menus e popovers: entram em 140 ms vindos do lado do
+  gatilho a partir de 30% de opacidade e saem em 100 ms (`menu_in`,
+  `menu_out`). Painel flutuante maior: `panel_in`, 200 ms, subida de 8 px.
+  Sem escala: `div` não tem transform; o deslocamento usa `relative().top()`
+  para não mover os vizinhos.
+- Movimento contínuo (o flutuar do mascote, o sinal do grafo) nunca usa
+  `with_animation` em repetição: pede a fase a `motion::clock` (30 ou 15 Hz,
+  com lease de 300 ms), que estaciona quando nada visível pede. Movimento
+  reduzido devolve fase parada.
+- Hover de linhas e abas segue a mola de `hover_tint`.
 
 ## Interação
 

@@ -652,9 +652,5 @@ pub fn hover_tint(
 /// the content itself is replaced, which is where an abrupt swap is felt.
 /// `App::reduce_motion` is honoured by GPUI itself.
 pub fn fade_in(content: Div, key: impl Into<ElementId>) -> AnimationElement<Div> {
-    content.with_animation(
-        key,
-        Animation::new(MotionTokens::BASE).with_easing(MotionTokens::enter_easing()),
-        |content, delta| content.opacity(delta),
-    )
+    crate::ui::motion::content_in(key, content)
 }

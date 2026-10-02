@@ -675,25 +675,15 @@ impl MotionTokens {
     /// across a list reads as one soft wave instead of flickering rows.
     pub const HOVER_SPRING: gpui::SpringConfig = gpui::SpringConfig::new(500.0, 44.7, 1.0);
 
-    /// The documented `easing.enter` as a GPUI easing function.
-    ///
-    /// The design system specifies `cubic-bezier(0.16, 1, 0.3, 1)`, but this
-    /// revision of GPUI ships only `linear`, `quadratic`, `ease_in_out` and
-    /// `ease_out_quint` (gpui/src/elements/animation.rs:502-528) — no general
-    /// cubic-bezier evaluator. `ease_out_quint` is the honest approximation:
-    /// fast start, long settle, no overshoot, so a control never appears to
-    /// bounce past its resting state. Swap the body for a Newton solve on
-    /// [`Self::EASING_ENTER`] if a future GPUI exposes one.
+    /// The documented `easing.enter`, `cubic-bezier(0.16, 1, 0.3, 1)`,
+    /// evaluated exactly (`ui::motion::curve`).
     pub fn enter_easing() -> impl Fn(f32) -> f32 {
-        gpui::ease_out_quint()
+        crate::ui::motion::curve::EASE_OUT_EXPO.easing()
     }
 
-    /// The documented `easing.exit` as a GPUI easing function.
-    ///
-    /// Mirrors [`Self::enter_easing`]'s reasoning; `ease_in_out` matches the
-    /// shape of the documented curve (slow start, fast middle, slow end).
+    /// The documented `easing.exit`, `cubic-bezier(0.4, 0, 1, 1)`.
     pub fn exit_easing() -> impl Fn(f32) -> f32 {
-        gpui::ease_in_out
+        crate::ui::motion::curve::EASE_IN.easing()
     }
 }
 

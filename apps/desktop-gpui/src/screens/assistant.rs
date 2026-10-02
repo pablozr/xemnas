@@ -13,12 +13,13 @@ use std::time::Duration;
 
 use gpui::prelude::*;
 use gpui::{
-    div, img, px, Animation, AnimationExt, AnyElement, Context, Div, EventEmitter, Image,
-    ImageFormat, Render, Role, Window,
+    div, img, px, AnyElement, Context, Div, EventEmitter, Image, ImageFormat, Render, Role, Window,
 };
 
 use crate::ui::controls::{focus_ring, icon_action};
 use crate::ui::icons::{icon, IconName};
+use crate::ui::motion::clock::{self, Rate};
+use crate::ui::motion::panel_in;
 use crate::ui::patterns::section_label;
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{RadiusScale, SpacingScale, TypeScale};
@@ -50,6 +51,8 @@ pub const PANEL_WIDTH: f32 = 400.0;
 const PANEL_HEIGHT: f32 = 540.0;
 /// One beat of the idle loop; blinks and glances land on beats.
 const BEAT: Duration = Duration::from_millis(650);
+/// One float cycle of the docked mascot.
+const FLOAT_PERIOD: Duration = Duration::from_millis(3200);
 
 /// Where the assistant can take the person.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -198,24 +201,15 @@ impl AssistantScreen {
     pub fn render_dock(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
         let colors = theme.colors;
-        let still = cx.reduce_motion();
-        let figure = img(self.sprite()).size(px(DOCK_SIZE)).flex_none();
-        let figure: AnyElement = if still {
-            figure.into_any_element()
-        } else {
-            // A slow float: two pixels up and down on a sine.
-            div()
-                .child(figure)
-                .with_animation(
-                    "assistant-float",
-                    Animation::new(Duration::from_millis(3200)).repeat(),
-                    |figure, delta| {
-                        let lift = (delta * std::f32::consts::TAU).sin() * 2.0;
-                        figure.mt(px(2.0 - lift)).mb(px(2.0 + lift))
-                    },
-                )
-                .into_any_element()
-        };
+        // A slow float, two pixels up and down on a sine, driven by the
+        // shared 15 Hz clock (a repeating animation would keep the window
+        // redrawing at the display rate for as long as the mascot shows).
+        let phase = clock::phase(FLOAT_PERIOD, cx.entity_id(), Rate::Calm, cx);
+        let lift = (phase * std::f32::consts::TAU).sin() * 2.0;
+        let figure = div()
+            .child(img(self.sprite()).size(px(DOCK_SIZE)).flex_none())
+            .mt(px(2.0 - lift))
+            .mb(px(2.0 + lift));
         let pending = self.briefing.pending.unwrap_or(0) > 0;
         div()
             .id("assistant-dock")
@@ -500,18 +494,8 @@ impl AssistantScreen {
                          chegam quando o assistente for ligado ao provedor de IA.",
                     ),
             );
-        Some(fade_up(panel).into_any_element())
+        Some(panel_in("assistant-panel-in", panel).into_any_element())
     }
-}
-
-/// The panel rises a few pixels as it fades in.
-fn fade_up(panel: gpui::Stateful<Div>) -> impl IntoElement {
-    panel.with_animation(
-        "assistant-panel-in",
-        Animation::new(crate::ui::tokens::MotionTokens::BASE)
-            .with_easing(crate::ui::tokens::MotionTokens::enter_easing()),
-        |panel, delta| panel.opacity(delta).mt(px((1.0 - delta) * 8.0)),
-    )
 }
 
 /// A thin silver chain under the panel header: alternating flat and upright

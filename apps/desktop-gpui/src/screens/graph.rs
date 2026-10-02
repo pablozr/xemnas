@@ -1124,8 +1124,18 @@ impl Render for GraphCanvas {
         };
         let focus = self.focus_set();
         let motion = !reduce_motion;
-        if busy || bloom < 1.0 || motion || !self.fitted {
+        if busy || bloom < 1.0 || !self.fitted {
+            // Settling, the entrance and camera moves: every frame.
             window.request_animation_frame();
+        } else if motion {
+            // Only the ambient signal moves: the shared 30 Hz clock, which
+            // parks as soon as the graph leaves the screen.
+            crate::ui::motion::clock::phase(
+                std::time::Duration::from_secs(1),
+                cx.entity_id(),
+                crate::ui::motion::clock::Rate::Smooth,
+                cx,
+            );
         }
 
         let scene = Scene {
