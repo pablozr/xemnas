@@ -17,6 +17,7 @@ planos de `docs/roadmap/`.
 | [ideias-de-produto.md](ideias-de-produto.md) | Revisão, contexto do projeto e próximas ideias do produto | Aberta. A aba Contexto já foi entregue (`40ead8a`); o resto segue em discussão até o dogfood |
 | [provedores-e-modelos-de-ia.md](provedores-e-modelos-de-ia.md) | Provedor e modelo para a extração (conta ChatGPT, OpenCode, modelo local, chave de API) | Implementada (ADR-0004): backend, filtro no plugin e tela de IA. Pendente só a assinatura do ID token |
 | [gpui-zeron-e-fork.md](gpui-zeron-e-fork.md) | O que trazer do Zeron (movimento, popovers, material) e se vale um fork do GPUI | Em implementação. Etapa 1 sem fork entregue; fork mínimo e divisão das telas abertos |
+| [listas-e-grafos-em-escala.md](listas-e-grafos-em-escala.md) | Listas virtuais, revelação sob demanda e grafo com milhares de nós | Em implementação. Índices virtuais, rodapé de revelação e grafo agrupado entregues; backend paginado e demais telas abertas |
 | [glass-na-janela-inteira.md](glass-na-janela-inteira.md) | Material do Windows (Mica, Acrylic) na janela e conteúdo em card | Base de decisão. O glass é opcional (`XEMNAS_BACKDROP`); a regra vigente está em `docs/design/VISUAL-IDENTITY.md` |
 
 ## Como usar esta pasta

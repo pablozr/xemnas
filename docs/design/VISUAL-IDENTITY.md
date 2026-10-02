@@ -406,19 +406,39 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
 
 ## Desempenho
 
-- Cada passo de scroll refaz o `render` da view dona da rolagem, e uma view
-  só é reaproveitada se ninguém a notificar. Então o que é construído é o que
-  rola: listas longas montam uma página por vez (`LIST_PAGE` = 12 linhas,
-  `TIMELINE_PAGE` = 30 eventos, `RULES_PAGE` = 10 por tipo) e o resto fica
-  atrás de "Mostrar mais N", que abre mais duas páginas. A linha do tempo,
-  Sugestões, os blocos de decisões e regras de um item e a lente de arquivo
-  seguem isso.
+O pilar do projeto é desempenho e baixo custo; as regras e orçamentos estão
+em `docs/arquitetura/desempenho-e-escala.md`. No visual, isso vira:
+
+- **Listas longas são virtuais.** O índice do Mapa e o índice de Decisões
+  usam a lista do GPUI (`list` + `ListState`): só as linhas em vista viram
+  elementos, então rolar custa o mesmo com 10 ou 10 mil itens. As linhas são
+  chaves baratas (`IndexRow`, `IndexItem`) e cada elemento é montado quando
+  entra na tela. Quando o formato muda, `splice` refaz a medição.
+- **Barra fina que some** (`ui::list::{ScrollMemory, scroll_thumb}`): 3 px,
+  `text_muted` a 55 %, aparece ao rolar, fica 650 ms e some em 350 ms; não é
+  controle, só mostra posição e tamanho. Só pede quadro enquanto visível.
+- **Rodapé de revelação** (`ui::list::reveal_footer`) para listas que crescem
+  sob demanda e não são virtuais (linha do tempo, Sugestões, blocos de um
+  item, lente de arquivo, regras): fio, "N de M" em algarismos tabulares, linha
+  de progresso de 2 px em lavanda, "Mostrar mais N" (duas páginas) e, se o que
+  resta é no máximo 200, "Mostrar todas (N)". Páginas: `LIST_PAGE` = 12,
+  `TIMELINE_PAGE` = 30, `RULES_PAGE` = 10 por tipo.
+- **Grafo em escala.** Um componente com mais decisões ou regras do que o
+  desenho comporta (orçamento de 260 folhas, entre 2 e 10 por componente)
+  mantém uma parte e dobra o resto num nó de grupo ("+590 decisões", anel
+  com núcleo, maior quanto mais guarda) que abre a página do componente; as
+  contagens seguem exatas. A pintura visita só o que está na viewport (com
+  margem de 48 px) e, com mais de 140 links à vista, usa o modo barato:
+  links retos de um traço, sem sinal correndo, nós sem halos e rótulos de
+  componente só a partir de 0,9 de zoom.
 - O que pesa vai para fora da thread da interface: o layout de forças do
   grafo roda em segundo plano, só é feito quando o Grafo é aberto (na visão
   em Blocos espera), é aplicado se ainda for o mais recente e, em mapas com
   mais de 200 nós, usa menos passos. A simulação limita força e velocidade
   para um componente com centenas de decisões não explodir em posições
   infinitas.
+- Nada de copiar listas dentro do `render`: o Mapa guarda sugestões, detalhe,
+  linha do tempo e lente em `Arc` e o render pega um ponteiro.
 - Telas pesadas ficam em views com cache (`cached`) e o mascote é view
   própria: um quadro dele não refaz o app.
 - Medir antes de mexer: `XEMNAS_PERF=1` grava em `xemnas-perf.log` (pasta

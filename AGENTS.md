@@ -1,3 +1,9 @@
+# Pilares
+
+- **Performance e baixo custo são o pilar do projeto** e o primeiro critério de toda decisão técnica ou de interface: entre duas soluções equivalentes, a mais barata. Custo é CPU em repouso, memória, chamadas e tokens de IA e dependências.
+- Na prática: monte só o que está na tela (virtualize), carregue o resto por demanda e resuma antes de listar; exibir tudo de uma vez nunca é a opção. Trabalho pesado vai para fora da thread da interface, e nada de clonar coleções dentro de `render` (cada passo de scroll refaz a view dona da rolagem).
+- Meça antes e depois (`XEMNAS_PERF=1`, `XEMNAS_DEMO_SCALE=N`) e diga o número, e o que não foi medido. Regras, padrões e orçamentos: `docs/arquitetura/desempenho-e-escala.md`.
+
 # Fluxo de trabalho
 
 - Faça um commit local assim que cada alteração estiver concluída e validada proporcionalmente.
