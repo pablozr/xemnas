@@ -23,8 +23,18 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   6 px, e vêm de `action_button`/`icon_action`; telas não desenham botões próprios.
 - Uma receita de seleção para toda lista: fundo `selection` e barra lavanda de
   2 px (`mark_selected`). Foco visível é um anel inset que não desloca o layout.
-- Cada paleta (Quiet Glass e Carvão) é uma tabela `Palette` em `tokens.rs`;
-  toda cor nova precisa existir nas duas.
+- Cada tema é uma tabela `Palette` em `tokens.rs`: Quiet Glass (grafite e
+  lavanda), Carvão, Organização (preto e prata fria), Musgo (verde-tinta e
+  sálvia) e Meia-noite (marinho e ciano frio). O tema define também o
+  destaque (seleção, foco, primário) e a tonalidade dos vidros, véus e
+  bordas; nenhuma cor de tema fica fora da tabela, e o teste de contraste
+  WCAG AA roda em todos. Toda cor nova precisa existir em todos os temas.
+- O tema escolhido fica salvo (`settings/appearance.json`, `ui::appearance`)
+  e vale antes da primeira janela. Escolha pelo botão de contraste da barra
+  de título (menu com os cinco e "Fundo e mais opções…") ou em
+  Configurações › Aparência, onde cada tema é uma linha de rádio com uma
+  miniatura do app naquelas cores. Rotas de captura: `settings:appearance`,
+  `theme-menu[:rota]`; `-Theme <id>` no script de captura.
 - A janela é opaca por padrão. Glass (material do Windows) é experimental e só
   liga com `XEMNAS_BACKDROP=mica-alt`, `mica` ou `acrylic`, com o sistema em
   modo escuro. Camadas, conforme o

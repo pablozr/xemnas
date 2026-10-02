@@ -51,6 +51,14 @@ struct Palette {
     text_secondary: Tone,
     text_muted: Tone,
     status_danger: Tone,
+    /// Hue of the translucent fills, veils and borders (was lavender grey).
+    tint: u32,
+    /// Lighter tint for top-edge highlights and glass borders.
+    tint_light: u32,
+    accent_subtle: Tone,
+    accent_default: Tone,
+    accent_emphasis: Tone,
+    accent_hover: Tone,
 }
 
 /// Blue graphite: the original Quiet Glass palette.
@@ -73,6 +81,12 @@ const QUIET_GLASS: Palette = Palette {
     text_secondary: Tone::solid(0xBEC3D0),
     text_muted: Tone::solid(0x858C9D),
     status_danger: Tone::solid(0xD96776),
+    tint: 0x9790AC,
+    tint_light: 0xCDC7DC,
+    accent_subtle: Tone::solid(0x82799B),
+    accent_default: Tone::solid(0x9188A8),
+    accent_emphasis: Tone::solid(0xA89EBA),
+    accent_hover: Tone::solid(0xB3A5CB),
 };
 
 /// Neutral charcoal: the editorial palette.
@@ -95,6 +109,97 @@ const CHARCOAL: Palette = Palette {
     text_secondary: Tone::solid(0xC0C0CA),
     text_muted: Tone::solid(0xA09FAB),
     status_danger: Tone::solid(0xE27F8D),
+    tint: 0x9790AC,
+    tint_light: 0xCDC7DC,
+    accent_subtle: Tone::solid(0x82799B),
+    accent_default: Tone::solid(0x9188A8),
+    accent_emphasis: Tone::solid(0xA89EBA),
+    accent_hover: Tone::solid(0xB3A5CB),
+};
+
+/// The Organization: near-black with cold silver; the mascot's amber stays a
+/// warning, never the accent.
+const ORGANIZATION: Palette = Palette {
+    canvas: Tone::solid(0x0B0B0E),
+    canvas_raised: Tone::solid(0x111115),
+    canvas_deep: Tone::solid(0x070709),
+    rail: Tone::solid(0x08080B),
+    chrome_glass: Tone(0x08080B, 0.60),
+    content_glass: Tone(0x0B0B0E, 0.84),
+    floating_glass: Tone(0x16161B, 0.95),
+    surface: Tone::solid(0x16161B),
+    surface_hover: Tone::solid(0x1E1E25),
+    selection: Tone::solid(0x1C1D23),
+    glass_surface_lavender: Tone::solid(0x1C1D23),
+    glass_edge_lavender: Tone::solid(0x4D5260),
+    hairline_divider: Tone(0xD4D8E2, 0.09),
+    layer_fill: Tone(0x0B0B0E, 0.72),
+    text_primary: Tone::solid(0xEEF0F4),
+    text_secondary: Tone::solid(0xC0C4CE),
+    text_muted: Tone::solid(0x8A8F9C),
+    status_danger: Tone::solid(0xD96776),
+    tint: 0x9AA0AE,
+    tint_light: 0xD4D8E2,
+    accent_subtle: Tone::solid(0x7D8392),
+    accent_default: Tone::solid(0x9DA3B1),
+    accent_emphasis: Tone::solid(0xC3C8D4),
+    accent_hover: Tone::solid(0xD5D9E3),
+};
+
+/// Moss: green ink with a sage accent; quiet, botanical.
+const MOSS: Palette = Palette {
+    canvas: Tone::solid(0x0E1311),
+    canvas_raised: Tone::solid(0x131916),
+    canvas_deep: Tone::solid(0x0A0E0C),
+    rail: Tone::solid(0x0B0F0D),
+    chrome_glass: Tone(0x0B0F0D, 0.62),
+    content_glass: Tone(0x0E1311, 0.86),
+    floating_glass: Tone(0x18201C, 0.95),
+    surface: Tone::solid(0x18201C),
+    surface_hover: Tone::solid(0x202A25),
+    selection: Tone::solid(0x1B2620),
+    glass_surface_lavender: Tone::solid(0x1B2620),
+    glass_edge_lavender: Tone::solid(0x4A5E52),
+    hairline_divider: Tone(0xC9D8CF, 0.10),
+    layer_fill: Tone(0x0E1311, 0.72),
+    text_primary: Tone::solid(0xEAF0EC),
+    text_secondary: Tone::solid(0xBCC8C0),
+    text_muted: Tone::solid(0x84938A),
+    status_danger: Tone::solid(0xD96776),
+    tint: 0x8FA597,
+    tint_light: 0xC9D8CF,
+    accent_subtle: Tone::solid(0x6F8A78),
+    accent_default: Tone::solid(0x86A391),
+    accent_emphasis: Tone::solid(0xA3BDAB),
+    accent_hover: Tone::solid(0xB5CDBC),
+};
+
+/// Midnight: deep navy with a cold, muted cyan.
+const MIDNIGHT: Palette = Palette {
+    canvas: Tone::solid(0x0A0F1C),
+    canvas_raised: Tone::solid(0x0F1524),
+    canvas_deep: Tone::solid(0x070B15),
+    rail: Tone::solid(0x080C17),
+    chrome_glass: Tone(0x080C17, 0.62),
+    content_glass: Tone(0x0A0F1C, 0.86),
+    floating_glass: Tone(0x141C2E, 0.95),
+    surface: Tone::solid(0x141C2E),
+    surface_hover: Tone::solid(0x1B2539),
+    selection: Tone::solid(0x16233A),
+    glass_surface_lavender: Tone::solid(0x16233A),
+    glass_edge_lavender: Tone::solid(0x3F5776),
+    hairline_divider: Tone(0xC4D2E6, 0.10),
+    layer_fill: Tone(0x0A0F1C, 0.72),
+    text_primary: Tone::solid(0xEAF0F8),
+    text_secondary: Tone::solid(0xBAC6D6),
+    text_muted: Tone::solid(0x8290A6),
+    status_danger: Tone::solid(0xDE6F7E),
+    tint: 0x8798B2,
+    tint_light: 0xC4D2E6,
+    accent_subtle: Tone::solid(0x5F8299),
+    accent_default: Tone::solid(0x7699B0),
+    accent_emphasis: Tone::solid(0x93B8CC),
+    accent_hover: Tone::solid(0xA6C8DA),
 };
 
 /// A token at another opacity: status tints and soft backgrounds are derived
@@ -134,6 +239,38 @@ impl ColorTokens {
             palette: &CHARCOAL,
             glass: false,
         }
+    }
+
+    /// Near-black and silver: the Organization.
+    pub const fn organization() -> Self {
+        Self {
+            palette: &ORGANIZATION,
+            glass: false,
+        }
+    }
+
+    /// Green ink and sage.
+    pub const fn moss() -> Self {
+        Self {
+            palette: &MOSS,
+            glass: false,
+        }
+    }
+
+    /// Navy and cold cyan.
+    pub const fn midnight() -> Self {
+        Self {
+            palette: &MIDNIGHT,
+            glass: false,
+        }
+    }
+
+    fn tinted(&self, alpha: f32) -> Rgba {
+        rgb(self.palette.tint).alpha(alpha)
+    }
+
+    fn tinted_light(&self, alpha: f32) -> Rgba {
+        rgb(self.palette.tint_light).alpha(alpha)
     }
 
     /// The same palette with the window material showing through the chrome.
@@ -276,23 +413,23 @@ impl ColorTokens {
 
     /// `glass.fill-low` — rail and wide surfaces.
     pub fn glass_fill_low(&self) -> Rgba {
-        rgb(0x9790AC).alpha(0.055)
+        self.tinted(0.055)
     }
 
     /// `glass.fill-medium` — selection and proposal surface.
     pub fn glass_fill_medium(&self) -> Rgba {
-        rgb(0x9790AC).alpha(0.095)
+        self.tinted(0.095)
     }
 
     /// `glass.fill-strong` — primary control.
     pub fn glass_fill_strong(&self) -> Rgba {
-        rgb(0xA69EBB).alpha(0.16)
+        self.tinted(0.16)
     }
 
     /// `glass.fill-emphasis` — the saturated fill of a small primary control,
     /// never a large surface.
     pub fn glass_fill_emphasis(&self) -> Rgba {
-        rgb(0xC3BADD).alpha(0.64)
+        self.tinted_light(0.64)
     }
 
     /// `glass.fill-card` — white at 3% over the canvas: lifts a large surface
@@ -313,12 +450,12 @@ impl ColorTokens {
 
     /// `glass.border` — general outline.
     pub fn glass_border(&self) -> Rgba {
-        rgb(0xCDC7DC).alpha(0.13)
+        self.tinted_light(0.13)
     }
 
     /// `glass.border-top` — inner top highlight.
     pub fn glass_border_top(&self) -> Rgba {
-        rgb(0xEAE6F1).alpha(0.20)
+        self.tinted_light(0.20)
     }
 
     /// `glass.border-bottom` — bottom depth.
@@ -343,23 +480,23 @@ impl ColorTokens {
 
     /// `accent.subtle` — selection indicator and edge.
     pub fn accent_subtle(&self) -> Rgba {
-        rgb(0x82799B)
+        self.palette.accent_subtle.rgba()
     }
 
     /// `accent.default` — focus and active icons.
     pub fn accent_default(&self) -> Rgba {
-        rgb(0x9188A8)
+        self.palette.accent_default.rgba()
     }
 
     /// `accent.emphasis` — primary action and strong focus.
     pub fn accent_emphasis(&self) -> Rgba {
-        rgb(0xA89EBA)
+        self.palette.accent_emphasis.rgba()
     }
 
     /// `accent.hover` — the primary action under the pointer and the document
     /// marker: one step lighter than `accent.emphasis`.
     pub fn accent_hover(&self) -> Rgba {
-        rgb(0xB3A5CB)
+        self.palette.accent_hover.rgba()
     }
 
     /// `accent.on-emphasis` — text over light lavender.
@@ -452,12 +589,12 @@ impl ColorTokens {
 
     /// `color.hover-veil` — hover for rows, tabs and ghost controls.
     pub fn hover_veil(&self) -> Rgba {
-        rgb(0x9790AC).alpha(0.07)
+        self.tinted(0.07)
     }
 
     /// `scrollbar.thumb` — the scroll indicator.
     pub fn scrollbar_thumb(&self) -> Rgba {
-        rgb(0x9790AC).alpha(0.22)
+        self.tinted(0.22)
     }
 
     /// `scrim` — dims the window behind a modal surface.
@@ -487,17 +624,17 @@ impl ColorTokens {
 
     /// `glow.lavender` — diffuse edge light, never a saturated fill.
     pub fn glow_lavender(&self) -> Rgba {
-        rgb(0xA89EBA).alpha(0.08)
+        self.accent_emphasis().alpha(0.08)
     }
 
     /// `glow.lavender-strong` — halo under a hovered primary action.
     pub fn glow_lavender_strong(&self) -> Rgba {
-        rgb(0xB3A5CB).alpha(0.35)
+        self.accent_hover().alpha(0.35)
     }
 
     /// The inner top highlight, as an inset shadow colour.
     pub fn inset_highlight(&self) -> Rgba {
-        rgb(0xEAE6F1).alpha(0.20)
+        self.tinted_light(0.20)
     }
 
     /// The inner bottom depth, as an inset shadow colour.
@@ -736,7 +873,13 @@ mod tests {
 
     #[test]
     fn rendered_text_surfaces_meet_wcag_aa() {
-        for colors in [ColorTokens::quiet_glass(), ColorTokens::charcoal()] {
+        for colors in [
+            ColorTokens::quiet_glass(),
+            ColorTokens::charcoal(),
+            ColorTokens::organization(),
+            ColorTokens::moss(),
+            ColorTokens::midnight(),
+        ] {
             let canvas = colors.canvas();
 
             // Every text/surface pair the gallery (and the primitives) actually

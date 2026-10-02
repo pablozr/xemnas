@@ -1,7 +1,7 @@
 //! Themes: the single entry point views use to reach tokens.
 //!
 //! A [`Theme`] bundles the token groups so primitives receive one typed object
-//! instead of reaching for loose values. Both palettes apply to every screen;
+//! instead of reaching for loose values. Every palette applies to every screen;
 //! navigation never changes the user's selected mode.
 
 use std::sync::OnceLock;
@@ -16,28 +16,80 @@ pub enum ThemeMode {
     QuietGlass,
     /// Neutral charcoal palette.
     Charcoal,
+    /// Near-black and cold silver: the Organization.
+    Organization,
+    /// Green ink and sage.
+    Moss,
+    /// Navy and a muted cold cyan.
+    Midnight,
 }
 impl Global for ThemeMode {}
 impl ThemeMode {
-    /// Selects the other supported palette.
+    /// Every theme, in the order the picker lists them.
+    pub const ALL: [Self; 5] = [
+        Self::QuietGlass,
+        Self::Charcoal,
+        Self::Organization,
+        Self::Moss,
+        Self::Midnight,
+    ];
+
+    /// The next theme in [`Self::ALL`] (the palette command cycles).
     pub fn toggled(self) -> Self {
-        match self {
-            Self::QuietGlass => Self::Charcoal,
-            Self::Charcoal => Self::QuietGlass,
-        }
+        let index = Self::ALL.iter().position(|mode| *mode == self).unwrap_or(0);
+        Self::ALL[(index + 1) % Self::ALL.len()]
     }
-    /// Label shown in the global theme control.
+
+    /// Label shown in the theme picker.
     pub fn label(self) -> &'static str {
         match self {
             Self::QuietGlass => "Quiet Glass",
             Self::Charcoal => "Carvão",
+            Self::Organization => "Organização",
+            Self::Moss => "Musgo",
+            Self::Midnight => "Meia-noite",
         }
     }
+
+    /// One line on what the theme feels like.
+    pub fn blurb(self) -> &'static str {
+        match self {
+            Self::QuietGlass => "Grafite azulado com lavanda. O original.",
+            Self::Charcoal => "Carvão neutro, editorial, com lavanda.",
+            Self::Organization => "Preto profundo e prata fria, como os casacos.",
+            Self::Moss => "Verde-tinta com sálvia. Calmo e orgânico.",
+            Self::Midnight => "Azul-marinho com um ciano frio e discreto.",
+        }
+    }
+
+    /// Stable identifier for the saved preference.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::QuietGlass => "quiet-glass",
+            Self::Charcoal => "charcoal",
+            Self::Organization => "organization",
+            Self::Moss => "moss",
+            Self::Midnight => "midnight",
+        }
+    }
+
+    /// The theme saved as `id`, if it still exists.
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|mode| mode.id() == id)
+    }
+
     /// Resolves the complete token set for this mode.
     pub fn theme(self) -> Theme {
-        match self {
-            Self::QuietGlass => Theme::quiet_glass(),
-            Self::Charcoal => Theme::charcoal(),
+        let colors = match self {
+            Self::QuietGlass => ColorTokens::quiet_glass(),
+            Self::Charcoal => ColorTokens::charcoal(),
+            Self::Organization => ColorTokens::organization(),
+            Self::Moss => ColorTokens::moss(),
+            Self::Midnight => ColorTokens::midnight(),
+        };
+        Theme {
+            colors,
+            ..Theme::quiet_glass()
         }
     }
 }

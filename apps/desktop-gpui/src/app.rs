@@ -236,6 +236,8 @@ pub struct Shell<
     project_focus: FocusHandle,
     /// Whether the project panel under the breadcrumb is open.
     project_panel: Popup<()>,
+    /// The quick theme menu under the title bar's contrast button.
+    theme_menu: Popup<()>,
     /// The selected destination's background, gliding between tabs.
     tab_indicator: SlideIndicator,
     demo: bool,
@@ -414,6 +416,7 @@ impl<
             theme_focus: cx.focus_handle().tab_stop(true),
             project_focus: cx.focus_handle().tab_stop(true),
             project_panel: Popup::default(),
+            theme_menu: Popup::default(),
             tab_indicator: SlideIndicator::default(),
             demo: false,
             palette: Popup::default(),
@@ -610,6 +613,25 @@ impl<
             }
             None => route,
         };
+        // `theme-menu[:route]` opens the quick theme menu over that place.
+        let route = match route.strip_prefix("theme-menu") {
+            Some(rest) => {
+                self.theme_menu.open(());
+                rest.trim_start_matches(':')
+            }
+            None => route,
+        };
+        // `settings[:section]` opens the settings page.
+        if let Some(rest) = route.strip_prefix("settings") {
+            let section = match rest.trim_start_matches(':') {
+                "appearance" => SettingsSection::Appearance,
+                "opencode" => SettingsSection::OpenCode,
+                "diagnostics" => SettingsSection::Diagnostics,
+                _ => SettingsSection::Ai,
+            };
+            self.open_settings_at(section, cx);
+            return;
+        }
         let (destination, view) = route.split_once(':').unwrap_or((route, ""));
         let destination = match destination {
             "overview" => Destination::Overview,
@@ -866,6 +888,12 @@ impl<
                     "IA e privacidade",
                     "Configurações › Extração, chave e envio",
                     IconName::Shield,
+                ),
+                (
+                    SettingsSection::Appearance,
+                    "Tema e fundo",
+                    "Configurações › Aparência",
+                    IconName::Contrast,
                 ),
             ] {
                 items.push(PaletteItem {
@@ -1324,12 +1352,12 @@ impl<
     }
 
     fn toggle_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let mode = cx
+        let next = cx
             .try_global::<ThemeMode>()
             .copied()
             .unwrap_or_default()
             .toggled();
-        cx.set_global(mode);
+        crate::ui::appearance::update(cx, |appearance| appearance.theme = next);
         window.refresh();
         cx.notify();
     }
@@ -1339,27 +1367,186 @@ impl<
     fn theme_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let mode = cx.try_global::<ThemeMode>().copied().unwrap_or_default();
-        let label = format!(
-            "Tema: {}. Alternar para {}",
-            mode.label(),
-            mode.toggled().label()
-        );
-        icon_action(&theme, "theme-switch", &label)
-            .tooltip(tooltip(format!("Tema: {}", mode.toggled().label()), None))
-            .mr(px(SpacingScale::S2))
-            .track_focus(&self.theme_focus)
-            .on_click(cx.listener(Self::on_theme_click))
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                    this.toggle_theme(window, cx);
-                    cx.stop_propagation();
+        icon_action(
+            &theme,
+            "theme-switch",
+            &format!("Tema: {}. Escolher tema", mode.label()),
+        )
+        .tooltip(tooltip(format!("Tema: {}", mode.label()), None))
+        .mr(px(SpacingScale::S2))
+        .track_focus(&self.theme_focus)
+        .aria_expanded(self.theme_menu.is_open())
+        .when(self.theme_menu.is_open(), |button| {
+            button.bg(theme.colors.glass_fill_medium())
+        })
+        .on_mouse_down(
+            gpui::MouseButton::Left,
+            cx.listener(|this, _, _, _| this.theme_menu.note_trigger_press()),
+        )
+        .on_click(cx.listener(Self::on_theme_click))
+        .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                this.toggle_theme_menu(window, cx);
+                cx.stop_propagation();
+            }
+        }))
+        .child(icon(
+            IconName::Contrast,
+            16.0,
+            theme.colors.text_secondary(),
+        ))
+    }
+
+    fn toggle_theme_menu(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        if self.theme_menu.take_press_was_open() || self.theme_menu.is_open() {
+            self.close_theme_menu(cx);
+        } else {
+            self.theme_menu.open(());
+            cx.notify();
+        }
+    }
+
+    fn close_theme_menu(&mut self, cx: &mut Context<Self>) {
+        if self.theme_menu.begin_close() {
+            reap(cx, |shell: &mut Self| &mut shell.theme_menu);
+        }
+        cx.notify();
+    }
+
+    /// The quick theme menu: the five themes with a swatch each, and the
+    /// way to the background and the rest of the appearance.
+    fn render_theme_menu(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        self.theme_menu.get()?;
+        let exit = self.theme_menu.exit_progress();
+        let theme = self.theme;
+        let colors = theme.colors;
+        let current = cx.try_global::<ThemeMode>().copied().unwrap_or_default();
+        let mut list = div().flex().flex_col().p(px(SpacingScale::S1));
+        for mode in ThemeMode::ALL {
+            let swatch = mode.theme().colors;
+            let selected = mode == current;
+            list = list.child(
+                div()
+                    .id(("theme-menu-item", mode as usize))
+                    .flex()
+                    .items_center()
+                    .gap(px(SpacingScale::S3))
+                    .h(px(ControlSize::MD))
+                    .px(px(SpacingScale::S2))
+                    .rounded(theme.radius.control())
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(colors.glass_fill_medium()))
+                    .role(Role::MenuItemRadio)
+                    .aria_label(mode.label())
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if !this.theme_menu.is_open() {
+                            return;
+                        }
+                        crate::ui::appearance::update(cx, |appearance| appearance.theme = mode);
+                        this.close_theme_menu(cx);
+                        window.refresh();
+                    }))
+                    .child(
+                        div()
+                            .size(px(18.0))
+                            .flex_none()
+                            .rounded_full()
+                            .border_1()
+                            .border_color(colors.glass_border_card_hover())
+                            .bg(swatch.canvas())
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                div()
+                                    .size(px(8.0))
+                                    .rounded_full()
+                                    .bg(swatch.accent_emphasis()),
+                            ),
+                    )
+                    .child(
+                        text_style(div(), TypeScale::BODY_SMALL)
+                            .flex_1()
+                            .text_color(if selected {
+                                colors.text_primary()
+                            } else {
+                                colors.text_secondary()
+                            })
+                            .child(mode.label()),
+                    )
+                    .when(selected, |row| {
+                        row.child(icon(IconName::Check, 14.0, colors.accent_hover()))
+                    }),
+            );
+        }
+        let more = div()
+            .id("theme-menu-more")
+            .flex()
+            .items_center()
+            .gap(px(SpacingScale::S3))
+            .h(px(ControlSize::MD))
+            .mx(px(SpacingScale::S1))
+            .mb(px(SpacingScale::S1))
+            .px(px(SpacingScale::S2))
+            .rounded(theme.radius.control())
+            .cursor_pointer()
+            .hover(move |style| style.bg(colors.glass_fill_medium()))
+            .role(Role::MenuItem)
+            .aria_label("Fundo e mais opções de aparência")
+            .on_click(cx.listener(|this, _, _, cx| {
+                if !this.theme_menu.is_open() {
+                    return;
                 }
+                this.close_theme_menu(cx);
+                this.open_settings_at(SettingsSection::Appearance, cx);
             }))
-            .child(icon(
-                IconName::Contrast,
-                16.0,
-                theme.colors.text_secondary(),
-            ))
+            .child(icon(IconName::Settings, 14.0, colors.text_muted()))
+            .child(
+                text_style(div(), TypeScale::BODY_SMALL)
+                    .text_color(colors.text_secondary())
+                    .child("Fundo e mais opções…"),
+            );
+        let menu = div()
+            .id("theme-menu")
+            .w(px(240.0))
+            .rounded(theme.radius.surface())
+            .border_1()
+            .border_color(colors.glass_border_card())
+            .bg(colors.floating())
+            .shadow(vec![BoxShadow::new(
+                px(0.0),
+                px(12.0),
+                colors.shadow_emphasis().into(),
+            )
+            .blur_radius(px(32.0))])
+            .occlude()
+            .role(Role::Menu)
+            .aria_label("Tema")
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_theme_menu(cx)))
+            .child(list)
+            .child(
+                div()
+                    .h(px(1.0))
+                    .mx(px(SpacingScale::S2))
+                    .my(px(SpacingScale::S1))
+                    .bg(colors.hairline_divider()),
+            )
+            .child(more);
+        let menu = match exit {
+            None => menu_in("theme-menu-in", -4.0, menu).into_any_element(),
+            Some(t) => menu_out("theme-menu-out", -4.0, t, menu).into_any_element(),
+        };
+        Some(
+            deferred(
+                div()
+                    .absolute()
+                    .top(px(TITLE_BAR_HEIGHT - 2.0))
+                    .right(px(46.0 * 3.0 + SpacingScale::S2))
+                    .child(menu),
+            )
+            .with_priority(2)
+            .into_any_element(),
+        )
     }
 
     /// Opens the app-level settings page, or returns to the projects.
@@ -1427,7 +1614,7 @@ impl<
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.toggle_theme(window, cx);
+        self.toggle_theme_menu(window, cx);
     }
 }
 
@@ -1745,6 +1932,7 @@ impl<
         };
 
         let palette = self.render_palette(cx);
+        let theme_menu = self.render_theme_menu(cx);
         let assistant_panel = self
             .assistant
             .update(cx, |assistant, cx| assistant.render_panel(cx))
@@ -1823,6 +2011,7 @@ impl<
             .child(title)
             .child(div().flex_1().min_h(px(0.0)).overflow_hidden().child(body))
             .children(assistant_panel)
+            .children(theme_menu)
             .children(palette)
     }
 }

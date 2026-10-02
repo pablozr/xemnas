@@ -484,9 +484,30 @@ fn run_shell_mode(
         } else {
             Bounds::centered(None, dimensions, cx)
         };
-        if demo && argument_after("--theme").as_deref() == Some("charcoal") {
-            cx.set_global(xemnas_desktop::ui::theme::ThemeMode::Charcoal);
+        // The saved appearance applies before the first window, so the app
+        // never flashes the default theme. The demo saves nothing and takes
+        // `--theme <id>` instead.
+        let mut appearance = if demo {
+            xemnas_desktop::ui::appearance::Appearance::default()
+        } else {
+            let file = application::AppPaths::from_env()
+                .data_dir
+                .join("settings")
+                .join("appearance.json");
+            let appearance = xemnas_desktop::ui::appearance::Appearance::load(&file);
+            cx.set_global(xemnas_desktop::ui::appearance::AppearanceFile(file));
+            appearance
+        };
+        if demo {
+            if let Some(mode) = argument_after("--theme")
+                .as_deref()
+                .and_then(xemnas_desktop::ui::theme::ThemeMode::from_id)
+            {
+                appearance.theme = mode;
+            }
         }
+        cx.set_global(appearance.theme);
+        cx.set_global(appearance);
         let adoption: Option<Arc<dyn application::adoption::AdoptionApi>> = store
             .as_ref()
             .ok()

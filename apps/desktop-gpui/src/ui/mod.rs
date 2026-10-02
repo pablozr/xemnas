@@ -5,6 +5,7 @@
 //! components (NavigationRail, InboxRow, DisclosureRow, ProposalSurface,
 //! DiffViewer) are deliberately **not** here: they belong to tickets 06/15/16.
 
+pub mod appearance;
 pub mod controls;
 pub mod feedback;
 pub mod glass;

@@ -162,11 +162,13 @@ where
     }
 }
 
+mod appearance;
 mod diagnostics;
 mod opencode;
 mod parts;
 mod providers;
 
+pub use appearance::AppearancePanel;
 pub use diagnostics::{DiagnosticsBackend, DiagnosticsPanel, DiagnosticsService};
 pub use opencode::{IntegrationBackend, IntegrationService, OpenCodePanel};
 
@@ -251,6 +253,8 @@ pub enum SettingsSection {
     OpenCode,
     /// Pipeline health and the sanitized diagnostics document.
     Diagnostics,
+    /// Theme and background.
+    Appearance,
 }
 
 impl SettingsSection {
@@ -259,6 +263,7 @@ impl SettingsSection {
             Self::Ai => "settings-section-ai",
             Self::OpenCode => "settings-section-opencode",
             Self::Diagnostics => "settings-section-diagnostics",
+            Self::Appearance => "settings-section-appearance",
         }
     }
     fn title(self) -> &'static str {
@@ -266,6 +271,7 @@ impl SettingsSection {
             Self::Ai => "IA e privacidade",
             Self::OpenCode => "OpenCode",
             Self::Diagnostics => "Diagnóstico",
+            Self::Appearance => "Aparência",
         }
     }
     fn subtitle(self) -> &'static str {
@@ -273,6 +279,7 @@ impl SettingsSection {
             Self::Ai => PAGE_SUBTITLE,
             Self::OpenCode => "Se as capturas do OpenCode estão chegando e, se não, por quê.",
             Self::Diagnostics => "Como o pipeline está indo e o que se perdeu no caminho.",
+            Self::Appearance => "O tema do app e o fundo atrás das superfícies.",
         }
     }
     fn glyph(self) -> IconName {
@@ -280,6 +287,7 @@ impl SettingsSection {
             Self::Ai => IconName::Shield,
             Self::OpenCode => IconName::Link,
             Self::Diagnostics => IconName::Activity,
+            Self::Appearance => IconName::Contrast,
         }
     }
 }
@@ -289,6 +297,7 @@ pub struct SettingsScreen {
     section: SettingsSection,
     opencode: Option<Entity<OpenCodePanel>>,
     diagnostics: Option<Entity<DiagnosticsPanel>>,
+    appearance: Entity<AppearancePanel>,
     backend: Option<Box<dyn AiBackend>>,
     catalog: Option<Arc<dyn ModelCatalog>>,
     account: Option<Arc<dyn PlanAccount>>,
@@ -342,6 +351,7 @@ impl SettingsScreen {
         } = services;
         let opencode = integration.map(|backend| cx.new(|_| OpenCodePanel::new(backend)));
         let diagnostics = diagnostics.map(|backend| cx.new(|_| DiagnosticsPanel::new(backend)));
+        let appearance = cx.new(|_| AppearancePanel);
         let fields = std::array::from_fn(|index| {
             cx.new(|cx| {
                 let mut field = SearchField::new(cx);
@@ -365,6 +375,7 @@ impl SettingsScreen {
             section: SettingsSection::Ai,
             opencode,
             diagnostics,
+            appearance,
             backend: Some(backend),
             catalog,
             account,
@@ -411,6 +422,7 @@ impl SettingsScreen {
                     panel.update(cx, |panel, cx| panel.refresh(cx));
                 }
             }
+            SettingsSection::Appearance => {}
         }
         cx.notify();
     }
@@ -423,6 +435,7 @@ impl SettingsScreen {
         if self.diagnostics.is_some() {
             sections.push(SettingsSection::Diagnostics);
         }
+        sections.push(SettingsSection::Appearance);
         sections
     }
 
@@ -1396,6 +1409,7 @@ impl Render for SettingsScreen {
             SettingsSection::Ai => None,
             SettingsSection::OpenCode => self.opencode.clone().map(|p| p.into_any_element()),
             SettingsSection::Diagnostics => self.diagnostics.clone().map(|p| p.into_any_element()),
+            SettingsSection::Appearance => Some(self.appearance.clone().into_any_element()),
         };
         let body: AnyElement = if let Some(panel) = panel {
             panel
