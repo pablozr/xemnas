@@ -524,6 +524,37 @@ pub fn segmented(theme: &Theme) -> Div {
         .border_color(theme.colors.hairline_divider())
 }
 
+/// A [`segmented`] option that is only a word (levels, sizes), where a
+/// glyph would say nothing.
+pub fn segment_label(
+    theme: &Theme,
+    id: impl Into<ElementId>,
+    label: &'static str,
+    selected: bool,
+) -> Stateful<Div> {
+    let colors = theme.colors;
+    let hover = colors.glass_fill_low();
+    text_style(div(), TypeScale::LABEL)
+        .id(id)
+        .flex()
+        .items_center()
+        .h(px(26.0))
+        .px(px(SpacingScale::S3))
+        .rounded(px(6.0))
+        .cursor_pointer()
+        .text_color(if selected {
+            colors.text_primary()
+        } else {
+            colors.text_muted()
+        })
+        .when(selected, |item| item.bg(colors.glass_fill_medium()))
+        .when(!selected, |item| item.hover(move |style| style.bg(hover)))
+        .role(gpui::Role::RadioButton)
+        .aria_label(label)
+        .focus_visible(crate::ui::controls::focus_ring(theme))
+        .child(label)
+}
+
 /// One option of a [`segmented`] switch: glyph and label; the chosen one is
 /// raised on `glass_fill_medium`, the others stay quiet until hovered. The
 /// caller adds focus tracking and the press handlers.

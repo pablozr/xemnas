@@ -19,3 +19,4 @@ pub mod search_field;
 pub mod theme;
 pub mod tokens;
 pub mod tooltip;
+pub mod wallpaper;

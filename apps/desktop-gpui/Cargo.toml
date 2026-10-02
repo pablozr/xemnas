@@ -42,3 +42,6 @@ rfd = { version = "0.17.2", default-features = false, features = ["pollster"] }
 unicode-segmentation = "1.13"
 serde_json = "1.0"
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+# Background images: decoded, downscaled, blurred and dimmed once, off the
+# UI thread (`ui::wallpaper`). Same version GPUI already pulls in.
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }

@@ -1933,6 +1933,22 @@ impl<
 
         let palette = self.render_palette(cx);
         let theme_menu = self.render_theme_menu(cx);
+        // The background image, already blurred and darkened, under every
+        // surface; the surfaces are glass over it (`Theme::current`).
+        let chrome = theme.colors.chrome();
+        let wallpaper = crate::ui::wallpaper::current(cx).map(|image| {
+            div()
+                .absolute()
+                .inset_0()
+                .child(
+                    gpui::img(image)
+                        .size_full()
+                        .object_fit(gpui::ObjectFit::Cover),
+                )
+                // The frame's tint, once, over the whole image: title bar,
+                // sidebar and the gutter around the content card share it.
+                .child(div().absolute().inset_0().bg(chrome))
+        });
         let assistant_panel = self
             .assistant
             .update(cx, |assistant, cx| assistant.render_panel(cx))
@@ -1957,7 +1973,10 @@ impl<
             // Over the material the frame tint is painted once, for the whole
             // window: title bar, sidebar and the gutter around the content card
             // are one surface, so no strip shows raw material beside a tinted one.
-            .bg(if theme.colors.is_glass() {
+            .bg(if wallpaper.is_some() {
+                // Under the image: the canvas, never the translucent chrome.
+                theme.colors.canvas()
+            } else if theme.colors.is_glass() {
                 theme.colors.chrome()
             } else {
                 theme.colors.canvas()
@@ -2008,6 +2027,7 @@ impl<
                 }
             }))
             .relative()
+            .children(wallpaper)
             .child(title)
             .child(div().flex_1().min_h(px(0.0)).overflow_hidden().child(body))
             .children(assistant_panel)

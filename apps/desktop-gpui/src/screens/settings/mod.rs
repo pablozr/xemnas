@@ -351,7 +351,7 @@ impl SettingsScreen {
         } = services;
         let opencode = integration.map(|backend| cx.new(|_| OpenCodePanel::new(backend)));
         let diagnostics = diagnostics.map(|backend| cx.new(|_| DiagnosticsPanel::new(backend)));
-        let appearance = cx.new(|_| AppearancePanel);
+        let appearance = cx.new(|_| AppearancePanel::default());
         let fields = std::array::from_fn(|index| {
             cx.new(|cx| {
                 let mut field = SearchField::new(cx);

@@ -216,6 +216,9 @@ pub fn tint(color: Rgba, alpha: f32) -> Rgba {
 pub struct ColorTokens {
     palette: &'static Palette,
     glass: bool,
+    /// Over a background image: the opacity of the chrome and of the
+    /// content card, from the person's "surfaces" choice.
+    veil: Option<(f32, f32)>,
 }
 
 impl Default for ColorTokens {
@@ -230,6 +233,7 @@ impl ColorTokens {
         Self {
             palette: &QUIET_GLASS,
             glass: false,
+            veil: None,
         }
     }
 
@@ -238,6 +242,7 @@ impl ColorTokens {
         Self {
             palette: &CHARCOAL,
             glass: false,
+            veil: None,
         }
     }
 
@@ -246,6 +251,7 @@ impl ColorTokens {
         Self {
             palette: &ORGANIZATION,
             glass: false,
+            veil: None,
         }
     }
 
@@ -254,6 +260,7 @@ impl ColorTokens {
         Self {
             palette: &MOSS,
             glass: false,
+            veil: None,
         }
     }
 
@@ -262,6 +269,7 @@ impl ColorTokens {
         Self {
             palette: &MIDNIGHT,
             glass: false,
+            veil: None,
         }
     }
 
@@ -279,6 +287,14 @@ impl ColorTokens {
         self
     }
 
+    /// Over a background image: glass surfaces at the given chrome and
+    /// content opacities.
+    pub const fn with_veil(mut self, chrome: f32, content: f32) -> Self {
+        self.glass = true;
+        self.veil = Some((chrome, content));
+        self
+    }
+
     /// `color.chrome` — the window frame: painted once on the shell root, so
     /// title bar, sidebar and the gutter around the content card share it.
     ///
@@ -288,10 +304,10 @@ impl ColorTokens {
     /// material, or in a light system theme where the material turns pale, it
     /// is the opaque rail.
     pub fn chrome(&self) -> Rgba {
-        if self.glass {
-            self.palette.chrome_glass.rgba()
-        } else {
-            self.rail()
+        match (self.glass, self.veil) {
+            (true, Some((chrome, _))) => rgb(self.palette.chrome_glass.0).alpha(chrome),
+            (true, None) => self.palette.chrome_glass.rgba(),
+            (false, _) => self.rail(),
         }
     }
 
@@ -299,10 +315,10 @@ impl ColorTokens {
     /// layer: a low-opacity fill that lets the base tint through). Opaque
     /// canvas when there is no material.
     pub fn content(&self) -> Rgba {
-        if self.glass {
-            self.palette.content_glass.rgba()
-        } else {
-            self.canvas()
+        match (self.glass, self.veil) {
+            (true, Some((_, content))) => rgb(self.palette.content_glass.0).alpha(content),
+            (true, None) => self.palette.content_glass.rgba(),
+            (false, _) => self.canvas(),
         }
     }
 

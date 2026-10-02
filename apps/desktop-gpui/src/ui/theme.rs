@@ -125,6 +125,19 @@ impl Theme {
             .try_global::<Backdrop>()
             .is_some_and(|backdrop| backdrop.0);
         theme.colors = theme.colors.with_glass(glass);
+        // A background image turns every frame surface into glass over it;
+        // "surfaces" sets how much of the image shows through.
+        let appearance = crate::ui::appearance::current(cx);
+        if appearance.wallpaper != crate::ui::appearance::Wallpaper::None
+            && !crate::ui::wallpaper::failed(cx)
+        {
+            let (chrome, content) = match appearance.solidity {
+                crate::ui::appearance::Level::Low => (0.34, 0.56),
+                crate::ui::appearance::Level::Medium => (0.48, 0.72),
+                crate::ui::appearance::Level::High => (0.66, 0.88),
+            };
+            theme.colors = theme.colors.with_veil(chrome, content);
+        }
         theme
     }
     /// Interface family (embedded Inter Variable), as the platform named it.

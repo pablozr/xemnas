@@ -21,6 +21,7 @@ param(
     [Parameter(Mandatory = $true)][string]$Name,
     [string]$ExePath = "target\debug\xemnas.exe",
     [ValidateSet('quiet', 'charcoal', 'organization', 'moss', 'midnight')][string]$Theme = 'quiet',
+    [string]$Wallpaper = '',
     [switch]$Compact,
     [int]$SettleMs = 3500
 )
@@ -44,6 +45,7 @@ public static class XemnasBg {
 
 $arguments = @('--demo', '--background', '--open', $Route)
 if ($Theme -ne 'quiet') { $arguments += @('--theme', $Theme) }
+if ($Wallpaper -ne '') { $arguments += @('--wallpaper', $Wallpaper) }
 if ($Compact) { $arguments += '--compact' }
 $proc = Start-Process -FilePath $ExePath -ArgumentList $arguments -PassThru
 try {

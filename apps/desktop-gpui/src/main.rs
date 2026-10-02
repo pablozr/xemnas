@@ -505,6 +505,9 @@ fn run_shell_mode(
             {
                 appearance.theme = mode;
             }
+            if let Some(id) = argument_after("--wallpaper") {
+                appearance.wallpaper = xemnas_desktop::ui::appearance::Wallpaper::Builtin(id);
+            }
         }
         cx.set_global(appearance.theme);
         cx.set_global(appearance);

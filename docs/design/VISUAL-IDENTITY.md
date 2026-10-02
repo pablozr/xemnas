@@ -77,6 +77,29 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   mesma forma sem bolinha; "conflita com" leva o texto em âmbar. Âmbar é
   aviso real (conflito, defasagem, revisar); Pendente é neutro.
 
+## Fundo com imagem
+
+- Configurações › Aparência › Fundo: "Sem fundo", quatro fundos do app e
+  "Sua imagem" (seletor do sistema; PNG, JPEG ou WebP), em blocos de
+  164 × 92 com anel de destaque no escolhido (a borda existe em todos, então
+  escolher não move a grade). Com um fundo, três controles segmentados por
+  palavra (`segment_label`): Desfoque (Leve, Médio, Forte), Escurecer (Pouco,
+  Médio, Bastante) e Superfícies (Mais vidro, Equilibradas, Mais sólidas).
+- O GPUI não desfoca o que está atrás de um painel, então a imagem é
+  desfocada uma vez (`ui::wallpaper`): reduzida (1600, 900 ou 480 px de
+  largura), desfocada, escurecida e guardada, fora da thread da interface; a
+  anterior fica até a nova estar pronta. Barra, lateral e cartão de conteúdo
+  viram vidro sobre ela (`ColorTokens::with_veil`), com o véu do tema pintado
+  uma vez sobre a imagem inteira.
+- Legibilidade: além do nível escolhido, a luminância média da imagem
+  escurecida nunca passa de 0,22; uma imagem clara é puxada para baixo.
+  Arquivo que sumiu vira aviso na seção e o app volta ao tema sólido.
+- Fundos do app, inspirados na Organização (imagens originais, sem arte,
+  logo ou emblema oficial), gerados por `tools/wallpapers/render.py`: "A
+  cidade que nunca existiu" (torres, lua enorme, chuva), "O castelo" (torres
+  brancas no céu violeta), "Onde nada se reúne" (treze tronos em círculo) e
+  "Corrente" (elos prateados e brasas). Captura: `-Wallpaper <id>`.
+
 ## Marca
 
 - Símbolo: cruzamento de decisão. Dois traços em X; o escolhido (lavanda)
