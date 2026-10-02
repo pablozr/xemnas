@@ -210,8 +210,19 @@ where
             .map_err(storage)?
             .map(|record| record.location)
             .unwrap_or_default();
+        // The agent may spell its folder differently from the canonical
+        // location (Windows 8.3 short names such as RUNNER~1, links), so a
+        // path that is not inside the location is tried against the
+        // directory the agent itself named.
         let files = path
-            .map(|path| crate::injection::relative_file(path, &location))
+            .map(|path| {
+                let relative = crate::injection::relative_file(path, &location);
+                if relative == path.trim().replace('\\', "/") {
+                    crate::injection::relative_file(path, directory)
+                } else {
+                    relative
+                }
+            })
             .into_iter()
             .collect();
         let pack = ContextPacks::new(self.store.clone()).build_pack(ContextRequest {
