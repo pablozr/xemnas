@@ -57,6 +57,9 @@ pub struct StepRef {
     pub step: usize,
     /// The step's title: what travels or happens.
     pub title: String,
+    /// The protocol or medium it travels by, when the flow names one.
+    #[serde(default)]
+    pub via: Option<String>,
 }
 
 /// A step of a flow passing between two containers.
@@ -164,6 +167,7 @@ pub fn derive(map: &ProjectMap, graph: &ProjectGraph, flows: &[OverviewFlow]) ->
                     flow: flow_at,
                     step: step_at,
                     title: step.title.clone(),
+                    via: step.via.clone(),
                 };
                 let key = (from.to_owned(), container.to_owned());
                 match pairs.iter_mut().find(|(known, _)| *known == key) {
@@ -323,6 +327,7 @@ mod tests {
             text: String::new(),
             entity_id: component.map(str::to_owned),
             entity_name: component.map(str::to_owned),
+            via: None,
             citations: vec![],
         }
     }

@@ -40,6 +40,8 @@ pub const MAX_STEPS: usize = 8;
 pub const MAX_PARAGRAPHS: usize = 4;
 /// Longest text kept per field.
 const MAX_TEXT_CHARS: usize = 900;
+/// Longest `via` label kept, in characters.
+const MAX_VIA_CHARS: usize = 40;
 /// Documents sent at most.
 pub const MAX_DOCUMENTS: usize = 40;
 /// Characters of documentation sent at most.
@@ -150,6 +152,10 @@ pub struct OverviewStep {
     pub entity_id: Option<String>,
     /// Its name, for display.
     pub entity_name: Option<String>,
+    /// How the previous component reaches this one: the protocol or medium
+    /// (HTTP/JSON, a queue, a function call), when the model names it.
+    #[serde(default)]
+    pub via: Option<String>,
     /// Decisions and rules that govern it.
     pub citations: Vec<Citation>,
 }
@@ -240,13 +246,15 @@ Write in the language of the records. summary: 2 to 4 short paragraphs: what the
 for, how it is organised, the central choices and the rules that weigh most. flows: the 3 to \
 6 main flows of the system (how a request, a piece of data or a user action travels \
 through it), each with 3 to 8 ordered steps; a step names the component where it happens \
-(use the component name exactly as listed, or null) and what happens there.\n\
+(use the component name exactly as listed, or null) and what happens there; via is how the \
+previous step's component reaches this one (protocol or medium, up to four words, e.g. \
+HTTP/JSON, fila SQLite, chamada direta), or null when unknown.\n\
 Every paragraph and every step must cite the records it rests on in refs, using the ids \
 exactly as given (D:xxxxxxxx, R:xxxxxxxx or F:xxxxxxxx). Anything you cannot cite, leave out. Prefer \
 fewer, well-cited flows over many vague ones.\n\
 Reply with one JSON object only, matching exactly: {\"summary\":[{\"text\":string,\
 \"refs\":[string]}],\"flows\":[{\"title\":string,\"description\":string,\"steps\":[{\
-\"title\":string,\"text\":string,\"component\":string|null,\"refs\":[string]}]}]}.";
+\"title\":string,\"text\":string,\"component\":string|null,\"via\":string|null,\"refs\":[string]}]}]}.";
 
 /// Strict JSON Schema of the overview answer.
 pub fn overview_schema() -> serde_json::Value {
@@ -279,11 +287,12 @@ pub fn overview_schema() -> serde_json::Value {
                             "items": {
                                 "type": "object",
                                 "additionalProperties": false,
-                                "required": ["title", "text", "component", "refs"],
+                                "required": ["title", "text", "component", "via", "refs"],
                                 "properties": {
                                     "title": { "type": "string" },
                                     "text": { "type": "string" },
                                     "component": { "type": ["string", "null"] },
+                                    "via": { "type": ["string", "null"] },
                                     "refs": refs
                                 }
                             }
@@ -343,6 +352,8 @@ struct RawStep {
     text: String,
     #[serde(default)]
     component: Option<String>,
+    #[serde(default)]
+    via: Option<String>,
     #[serde(default)]
     refs: Vec<String>,
 }
@@ -405,6 +416,11 @@ pub fn parse_overview(
                         text: bounded(&step.text),
                         entity_id: entity.map(|(id, _)| id.clone()),
                         entity_name: entity.map(|(_, name)| name.clone()),
+                        via: step
+                            .via
+                            .as_deref()
+                            .map(|via| via.trim().chars().take(MAX_VIA_CHARS).collect::<String>())
+                            .filter(|via| !via.is_empty()),
                         citations,
                     })
                 })
@@ -833,7 +849,7 @@ mod tests {
          "flows":[
            {"title":"Gravar","description":"x","steps":[
               {"title":"Recebe","text":"a","component":"Storage","refs":["d:aaaa1111"]},
-              {"title":"Valida","text":"b","component":null,"refs":["R:bbbb2222"]},
+              {"title":"Valida","text":"b","component":null,"via":"  HTTP/JSON ","refs":["R:bbbb2222"]},
               {"title":"Sem fonte","text":"c","component":null,"refs":[]}]},
            {"title":"Vago","description":"y","steps":[
               {"title":"Um","text":"a","component":null,"refs":["D:aaaa1111"]}]}]}
@@ -844,6 +860,8 @@ mod tests {
         assert_eq!(flows[0].steps.len(), 2);
         assert_eq!(flows[0].steps[0].entity_id.as_deref(), Some("ent-1"));
         assert_eq!(flows[0].steps[1].citations[0].kind, "claim");
+        assert_eq!(flows[0].steps[0].via, None, "a step may name no medium");
+        assert_eq!(flows[0].steps[1].via.as_deref(), Some("HTTP/JSON"));
     }
 
     #[test]

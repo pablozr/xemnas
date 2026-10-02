@@ -310,17 +310,27 @@ porque um fluxo passa de um componente a outro.
   numeradas com os mesmos algarismos romanos dos passos; as caixas que ele não
   toca esmaecem; passar o mouse num passo acende a seta. A ordem das colunas
   segue só esse fluxo, então o caminho se lê da esquerda para a direita.
-- **Desenho:** colunas da esquerda para a direita (até 4), caixas de 150 a 224 px
-  por 92 px, seta com cabeça e curva que contorna caixas no caminho; a que pula
-  uma coluna passa por cima, no espaço reservado acima das caixas. Componentes
-  que nenhum fluxo toca ficam numa grade abaixo. Layout determinístico, sem
-  simulação de forças.
+- **Desenho:** colunas da esquerda para a direita (até 4, 14 px de margem livre
+  nas laterais), caixas de 150 a 224 px por 92 px. Setas ortogonais com cantos de
+  9 px e cabeça: saem do lado da caixa, descem pelo canal livre entre as colunas
+  (cada seta num trilho próprio) e entram no lado oposto, então nenhuma atravessa
+  uma caixa (teste com 12 contêineres, ciclos e retornos). A que pula uma coluna
+  ou volta sai pelo canal, corre por cima das caixas numa faixa só dela (9 px
+  entre faixas, reservadas acima só para as setas que de fato as usam) e desce
+  pelo canal antes do destino. Entre caixas da mesma coluna a seta corre na
+  margem. Componentes que nenhum fluxo toca ficam numa grade abaixo; setas deles
+  não são desenhadas. Layout determinístico, sem simulação de forças (fases de
+  Sugiyama: ciclos, camadas, ordem por baricentro, posição, roteamento).
 - **Caixa:** nome, papel (a descrição do componente, 1 linha), tecnologias em mono
   na cor de tecnologia do grafo e "N decisões · M partes". É um elemento real:
   foco visível, `aria_label`, tooltip, clique abre o componente no Mapa. A lista
   de fluxos continua como equivalente textual.
-- Setas sem fluxo selecionado ficam em hairline de 1,2 px a 70% (`text_muted`);
-  com fluxo, as outras caem a 18%.
+- **Conflito** é um ponto âmbar no canto da caixa (e consta no `aria_label`).
+  Passar o mouse numa caixa acende as setas que a tocam e apaga as outras.
+- Setas sem fluxo selecionado ficam em hairline de 1 px a 55% (`text_muted`);
+  com fluxo, as outras caem a 18%. Cada passo pode trazer o meio por onde o
+  componente anterior chega a ele ("via HTTP/JSON", em mono na cor de tecnologia),
+  que o modelo informa ao gerar a Visão (`OverviewStep.via`, opcional).
 
 ## Mapa — o grafo do projeto
 

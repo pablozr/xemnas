@@ -696,6 +696,7 @@ fn seed_map(store: &SqliteStore) -> Result<(), Box<dyn std::error::Error>> {
         text: text.into(),
         entity_id: ids.get(entity).cloned(),
         entity_name: ids.get(entity).map(|_| entity.to_owned()),
+        via: None,
         citations,
     };
     store.save_overview(&ProjectOverview {
@@ -704,7 +705,7 @@ fn seed_map(store: &SqliteStore) -> Result<(), Box<dyn std::error::Error>> {
         decisions: decisions.len(),
         rules: rules.len(),
         documents: documents.len(),
-        architecture: Default::default(),
+        architecture: stress_architecture().unwrap_or_default(),
         summary: vec![
             OverviewParagraph {
                 text: "O xemnas guarda localmente as decisões de engenharia tiradas das \
@@ -1026,4 +1027,73 @@ mod tests {
             SemanticStatus::Cancelled
         );
     }
+}
+
+/// A crowded architecture (12 containers, skips, back edges, a cycle) for
+/// checking the diagram at scale: `XEMNAS_DEMO_ARCH=large`.
+fn stress_architecture() -> Option<application::architecture::Architecture> {
+    use application::architecture::{Architecture, Container, Interaction, StepRef};
+    std::env::var("XEMNAS_DEMO_ARCH")
+        .ok()
+        .filter(|v| v == "large")?;
+    let names = [
+        ("app", "Interface do desktop", "GPUI"),
+        ("api", "API local de capturas", "axum · JSON"),
+        ("jobs", "Fila de análise", "SQLite"),
+        ("ai", "Provedor de IA", "HTTP · JSON"),
+        ("store", "Armazenamento das decisões", "SQLite · FTS5"),
+        ("queue", "Fila de entregas", ""),
+        ("search", "Busca do contexto", "FTS5"),
+        ("mail", "Avisos", ""),
+        ("auth", "Cofre de credenciais", "Windows DPAPI"),
+        ("cache", "Cache de leitura", ""),
+        ("admin", "", ""),
+        ("docs", "Documentação indexada", "Markdown"),
+    ];
+    let link = |from: &str, to: &str, flow: usize, step: usize| Interaction {
+        from: from.into(),
+        to: to.into(),
+        steps: vec![StepRef {
+            flow,
+            step,
+            title: format!("{from} para {to}"),
+            via: None,
+        }],
+    };
+    Some(Architecture {
+        containers: names
+            .iter()
+            .enumerate()
+            .map(|(at, (id, role, tech))| Container {
+                entity_id: (*id).into(),
+                name: (*id).into(),
+                role: (*role).into(),
+                technologies: if tech.is_empty() {
+                    vec![]
+                } else {
+                    vec![(*tech).into()]
+                },
+                parts: at % 5,
+                decisions: 2 + at,
+                conflicts: usize::from(at == 4),
+                flows: vec![0, 1],
+            })
+            .collect(),
+        interactions: vec![
+            link("app", "api", 0, 0),
+            link("api", "jobs", 0, 1),
+            link("jobs", "ai", 0, 2),
+            link("ai", "store", 0, 3),
+            link("api", "auth", 1, 0),
+            link("auth", "store", 1, 1),
+            link("api", "store", 1, 2),
+            link("store", "app", 1, 3),
+            link("jobs", "queue", 0, 4),
+            link("queue", "jobs", 0, 5),
+            link("queue", "mail", 0, 6),
+            link("api", "search", 1, 4),
+            link("search", "store", 1, 5),
+        ],
+        hidden: 3,
+    })
 }

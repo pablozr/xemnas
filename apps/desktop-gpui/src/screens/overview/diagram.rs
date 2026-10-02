@@ -22,6 +22,8 @@ use crate::ui::tooltip::tooltip;
 
 /// Width of the diagram: the reading column.
 const WIDTH: f32 = 760.0;
+/// Free margin at each side, where an arrow between boxes of one column runs.
+const MARGIN: f32 = 14.0;
 /// Most columns (layers) the flows spread over; deeper chains fold into the
 /// last column.
 const MAX_COLUMNS: usize = 4;
@@ -36,16 +38,30 @@ const MIN_WIDTH: f32 = 150.0;
 const MAX_WIDTH: f32 = 224.0;
 /// Side of a step badge.
 const BADGE: f32 = 22.0;
-/// Room above the boxes for an arrow that goes over the top of others.
-const ARC_ROOM: f32 = 64.0;
+/// Space between the lanes an arrow takes over the top of the boxes.
+const LANE_STEP: f32 = 9.0;
+/// Radius of the corners of an arrow.
+const CORNER: f32 = 9.0;
 
 /// Where the containers sit.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Layout {
     /// Top-left of each container, in the order of [`Architecture::containers`].
     pub boxes: Vec<(f32, f32)>,
+    /// Column of each container (`None` for those no flow touches, which wait
+    /// in a grid below).
+    pub column: Vec<Option<usize>>,
     /// Width of every box.
     pub width: f32,
+    /// Space between columns.
+    pub gap: f32,
+    /// Left edge of the first column.
+    pub start_x: f32,
+    /// Room kept above the boxes for the lanes of arrows that go over them.
+    pub arc_room: f32,
+    /// Container pairs whose arrow skips a column or runs backwards, the ones
+    /// that take a lane (the shortest first, the innermost).
+    pub over: Vec<(usize, usize)>,
     /// Total height.
     pub height: f32,
 }
@@ -139,8 +155,9 @@ pub fn layout(architecture: &Architecture, only_flow: Option<usize>) -> Layout {
     };
     let columns = used.len().clamp(1, MAX_COLUMNS);
     let gap = if columns <= 3 { 56.0 } else { 40.0 };
+    let usable = WIDTH - 2.0 * MARGIN;
     let width =
-        ((WIDTH - gap * (columns as f32 - 1.0)) / columns as f32).clamp(MIN_WIDTH, MAX_WIDTH);
+        ((usable - gap * (columns as f32 - 1.0)) / columns as f32).clamp(MIN_WIDTH, MAX_WIDTH);
     let span = columns as f32 * width + (columns as f32 - 1.0) * gap;
     let start_x = (WIDTH - span) / 2.0;
 
@@ -182,12 +199,27 @@ pub fn layout(architecture: &Architecture, only_flow: Option<usize>) -> Layout {
             rows as f32 * BOX_HEIGHT + (rows as f32 - 1.0) * ROW_GAP
         }
     };
-    // An arrow that skips a column goes over the top of what is between; the
-    // room for the arc is reserved above the boxes.
-    let skips = edges.iter().any(|(from, to)| {
-        linked[*from] && linked[*to] && column_of(*from).abs_diff(column_of(*to)) >= 2
-    });
-    let arc_room = if skips { ARC_ROOM } else { 0.0 };
+    // An arrow that skips a column, or runs backwards, goes over the top of
+    // the boxes in a lane of its own; the room for the lanes is kept above.
+    let mut over: Vec<(usize, usize)> = Vec::new();
+    for interaction in architecture.interactions.iter().filter(|interaction| {
+        only_flow.is_none_or(|at| interaction.steps.iter().any(|step| step.flow == at))
+    }) {
+        if let (Some(from), Some(to)) = (index(&interaction.from), index(&interaction.to)) {
+            if from != to && linked[from] && linked[to] && !over.contains(&(from, to)) {
+                let (a, b) = (column_of(from), column_of(to));
+                if a != b && b != a + 1 {
+                    over.push((from, to));
+                }
+            }
+        }
+    }
+    over.sort_by_key(|(from, to)| (column_of(*from).abs_diff(column_of(*to)), *from, *to));
+    let arc_room = if over.is_empty() {
+        0.0
+    } else {
+        LANE_STEP * over.len() as f32 + 20.0
+    };
     let flow_height = column_height(tallest);
     let mut boxes = vec![(0.0, 0.0); count];
     for (column_at, column) in members.iter().enumerate() {
@@ -223,72 +255,214 @@ pub fn layout(architecture: &Architecture, only_flow: Option<usize>) -> Layout {
         height += arc_room;
     }
     Layout {
+        column: (0..count)
+            .map(|node| linked[node].then(|| column_of(node)))
+            .collect(),
         boxes,
         width,
+        gap,
+        start_x,
+        arc_room,
+        over,
         height,
     }
 }
 
-/// Where an arrow leaves a box and enters another: the facing sides.
-fn anchors(from: (f32, f32), to: (f32, f32), width: f32, shift: f32) -> (Point<f32>, Point<f32>) {
-    let centre = |top_left: (f32, f32)| (top_left.0 + width / 2.0, top_left.1 + BOX_HEIGHT / 2.0);
-    let (a, b) = (centre(from), centre(to));
-    if (b.0 - a.0).abs() > width / 2.0 {
-        let right = b.0 > a.0;
-        let start_x = if right { from.0 + width } else { from.0 };
-        let end_x = if right { to.0 } else { to.0 + width };
-        (point(start_x, a.1 + shift), point(end_x, b.1 + shift))
-    } else {
-        let down = b.1 > a.1;
-        let start_y = if down { from.1 + BOX_HEIGHT } else { from.1 };
-        let end_y = if down { to.1 } else { to.1 + BOX_HEIGHT };
-        (point(a.0 + shift, start_y), point(b.0 + shift, end_y))
-    }
-}
-
-/// A point of the arrow's curve (`bend` 0 is a straight line).
-fn quad(start: Point<f32>, end: Point<f32>, bend: f32, t: f32) -> Point<f32> {
-    let control = point(
-        (start.x + end.x) / 2.0 - (end.y - start.y) * bend,
-        (start.y + end.y) / 2.0 + (end.x - start.x) * bend,
-    );
-    let u = 1.0 - t;
-    point(
-        u * u * start.x + 2.0 * u * t * control.x + t * t * end.x,
-        u * u * start.y + 2.0 * u * t * control.y + t * t * end.y,
-    )
-}
-
-/// The first bend (straight, then to either side) whose curve does not run
-/// through a box other than the two it joins.
-fn clear_bend(
-    start: Point<f32>,
-    end: Point<f32>,
-    others: &[(f32, f32)],
-    width: f32,
-) -> Option<f32> {
-    for bend in [0.0, 0.2, -0.2, 0.38, -0.38] {
-        let clear = (1..12).all(|step| {
-            let at = quad(start, end, bend, step as f32 / 12.0);
-            !others.iter().any(|(x, y)| {
-                at.x > x - 4.0
-                    && at.x < x + width + 4.0
-                    && at.y > y - 4.0
-                    && at.y < y + BOX_HEIGHT + 4.0
-            })
-        });
-        if clear {
-            return Some(bend);
+/// Where each interaction's arrow runs, as a polyline in the diagram's own
+/// coordinates (`None` where an end has no place among the columns). The
+/// routes are orthogonal: out of the side of a box, along the free channel
+/// between columns, into the facing side of the next. An arrow that skips a
+/// column or runs backwards leaves by the channel, goes over the boxes in its
+/// own lane and comes down the channel before its target, so it never crosses
+/// a box.
+pub fn route(architecture: &Architecture, laid: &Layout) -> Vec<Option<Vec<Point<f32>>>> {
+    let index = |id: &str| {
+        architecture
+            .containers
+            .iter()
+            .position(|container| container.entity_id == id)
+    };
+    let ends: Vec<Option<(usize, usize)>> = architecture
+        .interactions
+        .iter()
+        .map(|interaction| {
+            let (from, to) = (index(&interaction.from)?, index(&interaction.to)?);
+            (from != to && laid.column[from].is_some() && laid.column[to].is_some())
+                .then_some((from, to))
+        })
+        .collect();
+    // The channels each arrow uses: (gap, pair, end of the arrow).
+    let gaps = |from: usize, to: usize| -> [Option<usize>; 2] {
+        let (a, b) = (laid.column[from].unwrap_or(0), laid.column[to].unwrap_or(0));
+        if a == b {
+            [None, None]
+        } else if b == a + 1 {
+            [Some(a), None]
+        } else if b > a {
+            [Some(a), Some(b - 1)]
+        } else {
+            [Some(a - 1), Some(b)]
+        }
+    };
+    let mut uses: std::collections::BTreeMap<usize, Vec<(usize, usize, usize)>> =
+        std::collections::BTreeMap::new();
+    for (from, to) in ends.iter().flatten() {
+        for (end, gap) in gaps(*from, *to).into_iter().enumerate() {
+            if let Some(gap) = gap {
+                let entry = uses.entry(gap).or_default();
+                if !entry.contains(&(*from, *to, end)) {
+                    entry.push((*from, *to, end));
+                }
+            }
         }
     }
-    None
+    // The x of an arrow's channel in a gap: its slot among those sharing it.
+    let channel = |gap: usize, key: (usize, usize, usize)| -> f32 {
+        let all = &uses[&gap];
+        let slot = all.iter().position(|other| *other == key).unwrap_or(0) as f32;
+        let step = ((laid.gap - 14.0) / all.len() as f32).min(7.0);
+        laid.start_x
+            + gap as f32 * (laid.width + laid.gap)
+            + laid.width
+            + laid.gap / 2.0
+            + (slot - (all.len() as f32 - 1.0) / 2.0) * step
+    };
+    let middle = |node: usize| laid.boxes[node].1 + BOX_HEIGHT / 2.0;
+    architecture
+        .interactions
+        .iter()
+        .enumerate()
+        .map(|(at, interaction)| {
+            let (from, to) = ends[at]?;
+            // The reverse arrow of a pair runs beside this one.
+            let shift = if architecture
+                .interactions
+                .iter()
+                .any(|other| other.from == interaction.to && other.to == interaction.from)
+                && from > to
+            {
+                8.0
+            } else {
+                0.0
+            };
+            let (a, b) = (laid.column[from]?, laid.column[to]?);
+            let (bf, bt) = (laid.boxes[from], laid.boxes[to]);
+            let (yf, yt) = (middle(from) + shift, middle(to) + shift);
+            let w = laid.width;
+            let out = (from, to, 0);
+            let into = (from, to, 1);
+            let lane = laid.over.iter().position(|pair| *pair == (from, to));
+            let lane_y = |lane: usize| laid.arc_room - 12.0 - lane as f32 * LANE_STEP;
+            Some(if a == b {
+                // Same column: down the free margin beside the boxes.
+                let x = bf.0.max(bt.0) + w + 9.0 + shift;
+                vec![
+                    point(bf.0 + w, yf),
+                    point(x, yf),
+                    point(x, yt),
+                    point(bt.0 + w, yt),
+                ]
+            } else if b == a + 1 {
+                let x = channel(a, out);
+                if (yf - yt).abs() < 1.0 {
+                    vec![point(bf.0 + w, yf), point(bt.0, yt)]
+                } else {
+                    vec![
+                        point(bf.0 + w, yf),
+                        point(x, yf),
+                        point(x, yt),
+                        point(bt.0, yt),
+                    ]
+                }
+            } else {
+                let y = lane_y(lane?);
+                if b > a {
+                    let (x1, x2) = (channel(a, out), channel(b - 1, into));
+                    vec![
+                        point(bf.0 + w, yf),
+                        point(x1, yf),
+                        point(x1, y),
+                        point(x2, y),
+                        point(x2, yt),
+                        point(bt.0, yt),
+                    ]
+                } else {
+                    let (x1, x2) = (channel(a - 1, out), channel(b, into));
+                    vec![
+                        point(bf.0, yf),
+                        point(x1, yf),
+                        point(x1, y),
+                        point(x2, y),
+                        point(x2, yt),
+                        point(bt.0 + w, yt),
+                    ]
+                }
+            })
+        })
+        .collect()
+}
+
+/// The polyline with its corners rounded.
+fn rounded(points: &[Point<f32>]) -> Vec<Point<f32>> {
+    if points.len() < 3 {
+        return points.to_vec();
+    }
+    let mut out = vec![points[0]];
+    for corner in 1..points.len() - 1 {
+        let (before, here, after) = (points[corner - 1], points[corner], points[corner + 1]);
+        let toward = |from: Point<f32>, to: Point<f32>, reach: f32| {
+            let (dx, dy) = (to.x - from.x, to.y - from.y);
+            let length = (dx * dx + dy * dy).sqrt().max(0.001);
+            (
+                point(from.x + dx / length * reach, from.y + dy / length * reach),
+                length,
+            )
+        };
+        let reach = |other: Point<f32>| {
+            let (dx, dy) = (other.x - here.x, other.y - here.y);
+            ((dx * dx + dy * dy).sqrt() / 2.0).min(CORNER)
+        };
+        let radius = reach(before).min(reach(after));
+        let (start, _) = toward(here, before, radius);
+        let (end, _) = toward(here, after, radius);
+        out.push(start);
+        for step in 1..4 {
+            let t = step as f32 / 4.0;
+            let u = 1.0 - t;
+            out.push(point(
+                u * u * start.x + 2.0 * u * t * here.x + t * t * end.x,
+                u * u * start.y + 2.0 * u * t * here.y + t * t * end.y,
+            ));
+        }
+        out.push(end);
+    }
+    out.push(points[points.len() - 1]);
+    out
+}
+
+/// The point halfway along a polyline.
+fn halfway(points: &[Point<f32>]) -> Point<f32> {
+    let lengths: Vec<f32> = points
+        .windows(2)
+        .map(|pair| ((pair[1].x - pair[0].x).powi(2) + (pair[1].y - pair[0].y).powi(2)).sqrt())
+        .collect();
+    let mut left = lengths.iter().sum::<f32>() / 2.0;
+    for (pair, length) in points.windows(2).zip(&lengths) {
+        if left <= *length && *length > 0.0 {
+            let t = left / length;
+            return point(
+                pair[0].x + (pair[1].x - pair[0].x) * t,
+                pair[0].y + (pair[1].y - pair[0].y) * t,
+            );
+        }
+        left -= length;
+    }
+    points[0]
 }
 
 /// One arrow to paint, in the diagram's own coordinates.
 struct Arrow {
-    start: Point<f32>,
-    end: Point<f32>,
-    bend: f32,
+    points: Vec<Point<f32>>,
     colour: Hsla,
     width: f32,
 }
@@ -297,27 +471,26 @@ fn paint_arrows(bounds: Bounds<Pixels>, arrows: &[Arrow], window: &mut Window) {
     let (ox, oy) = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
     let at = |p: Point<f32>| point(px(ox + p.x), px(oy + p.y));
     for arrow in arrows {
+        let Some((&tip, rest)) = arrow.points.split_last() else {
+            continue;
+        };
+        let Some(&before) = rest.last() else {
+            continue;
+        };
         let mut line = PathBuilder::stroke(px(arrow.width));
-        line.move_to(at(arrow.start));
-        let steps = 14;
-        for step in 1..=steps {
-            line.line_to(at(quad(
-                arrow.start,
-                arrow.end,
-                arrow.bend,
-                step as f32 / steps as f32,
-            )));
+        line.move_to(at(arrow.points[0]));
+        for p in &arrow.points[1..] {
+            line.line_to(at(*p));
         }
         if let Ok(path) = line.build() {
             window.paint_path(path, arrow.colour);
         }
         // The head: a small triangle on the line's last direction.
-        let before = quad(arrow.start, arrow.end, arrow.bend, 0.94);
-        let (dx, dy) = (arrow.end.x - before.x, arrow.end.y - before.y);
+        let (dx, dy) = (tip.x - before.x, tip.y - before.y);
         let length = (dx * dx + dy * dy).sqrt().max(1.0);
         let (ux, uy) = (dx / length, dy / length);
         let size = 5.0 + arrow.width;
-        let base = point(arrow.end.x - ux * size, arrow.end.y - uy * size);
+        let base = point(tip.x - ux * size, tip.y - uy * size);
         let wing = |sign: f32| {
             point(
                 base.x - uy * size * 0.55 * sign,
@@ -325,7 +498,7 @@ fn paint_arrows(bounds: Bounds<Pixels>, arrows: &[Arrow], window: &mut Window) {
             )
         };
         let mut head = PathBuilder::fill();
-        head.add_polygon(&[at(arrow.end), at(wing(1.0)), at(wing(-1.0))], true);
+        head.add_polygon(&[at(tip), at(wing(1.0)), at(wing(-1.0))], true);
         if let Ok(path) = head.build() {
             window.paint_path(path, arrow.colour);
         }
@@ -350,50 +523,24 @@ impl OverviewScreen {
         let in_flow = |container: &Container| flow.is_none_or(|at| container.flows.contains(&at));
 
         // Arrows: the flow's steps strong, the others a quiet hairline.
-        let index = |id: &str| {
-            architecture
-                .containers
-                .iter()
-                .position(|container| container.entity_id == id)
-        };
+        let routes = route(architecture, &laid);
         let mut arrows: Vec<Arrow> = Vec::new();
         let mut badges: Vec<(Point<f32>, usize)> = Vec::new();
         let muted: Hsla = Hsla::from(colors.text_muted());
         let accent: Hsla = Hsla::from(colors.accent_default());
-        for interaction in &architecture.interactions {
-            let (Some(from), Some(to)) = (index(&interaction.from), index(&interaction.to)) else {
+        let hovered = self.hover_box;
+        for (interaction, path) in architecture.interactions.iter().zip(&routes) {
+            let Some(path) = path else {
                 continue;
             };
-            // The reverse arrow of a pair runs beside this one.
-            let shift = if architecture
-                .interactions
-                .iter()
-                .any(|other| other.from == interaction.to && other.to == interaction.from)
-                && interaction.from > interaction.to
-            {
-                12.0
-            } else {
-                0.0
-            };
-            let (mut start, mut end) = anchors(laid.boxes[from], laid.boxes[to], width, shift);
-            let others: Vec<(f32, f32)> = laid
-                .boxes
-                .iter()
-                .enumerate()
-                .filter(|(at, _)| *at != from && *at != to)
-                .map(|(_, top_left)| *top_left)
-                .collect();
-            let bend = clear_bend(start, end, &others, width).unwrap_or_else(|| {
-                // Over the top: from the top of one box to the top of the
-                // other, in the room the layout kept above the boxes.
-                let centre = |top_left: (f32, f32)| point(top_left.0 + width / 2.0, top_left.1);
-                start = centre(laid.boxes[from]);
-                end = centre(laid.boxes[to]);
-                if end.x > start.x {
-                    -0.26
-                } else {
-                    0.26
-                }
+            let points = rounded(path);
+            let touches = hovered.is_some_and(|at| {
+                [&interaction.from, &interaction.to].iter().any(|id| {
+                    architecture
+                        .containers
+                        .get(at)
+                        .is_some_and(|c| &c.entity_id == *id)
+                })
             });
             let steps: Vec<_> = flow
                 .map(|at| {
@@ -405,23 +552,24 @@ impl OverviewScreen {
                 })
                 .unwrap_or_default();
             if steps.is_empty() {
+                let (colour, width) = match (hovered.is_some(), touches) {
+                    (true, true) => (accent, 1.8),
+                    (true, false) => (muted.opacity(0.14), 1.0),
+                    _ => (muted.opacity(if flow.is_some() { 0.18 } else { 0.55 }), 1.0),
+                };
                 arrows.push(Arrow {
-                    start,
-                    end,
-                    bend,
-                    colour: muted.opacity(if flow.is_some() { 0.18 } else { 0.7 }),
-                    width: 1.2,
+                    points,
+                    colour,
+                    width,
                 });
             } else {
                 let hot = steps.iter().any(|step| Some(step.step) == emphasis);
+                let middle = halfway(&points);
                 arrows.push(Arrow {
-                    start,
-                    end,
-                    bend,
+                    points,
                     colour: accent.opacity(if emphasis.is_none() || hot { 1.0 } else { 0.4 }),
                     width: if hot { 2.6 } else { 1.8 },
                 });
-                let middle = quad(start, end, bend, 0.5);
                 for (order, step) in steps.iter().enumerate() {
                     // Several steps on one arrow stack their badges.
                     badges.push((
@@ -463,7 +611,16 @@ impl OverviewScreen {
                 }
                 facts.join(" · ")
             };
-            let label = format!("{}: {} Abrir no Mapa.", container.name, facts);
+            let label = format!(
+                "{}: {}{} Abrir no Mapa.",
+                container.name,
+                facts,
+                if container.conflicts > 0 {
+                    format!(", {}", plural(container.conflicts, "conflito", "conflitos"))
+                } else {
+                    String::new()
+                }
+            );
             let mut content = div()
                 .flex()
                 .flex_col()
@@ -478,11 +635,7 @@ impl OverviewScreen {
                     text_style(div(), TypeScale::META)
                         .truncate()
                         .text_color(colors.text_muted())
-                        .child(if container.role.is_empty() {
-                            facts.clone()
-                        } else {
-                            container.role.clone()
-                        }),
+                        .child(container.role.clone()),
                 );
             if !container.technologies.is_empty() {
                 content = content.child(
@@ -519,11 +672,38 @@ impl OverviewScreen {
                 .aria_label(label)
                 .tooltip(tooltip(format!("{} · abrir no Mapa", container.name), None))
                 .focus_visible(crate::ui::controls::focus_ring(theme))
+                .when(container.conflicts > 0, |boxed| {
+                    boxed.child(
+                        div()
+                            .absolute()
+                            .top(px(8.0))
+                            .right(px(8.0))
+                            .size(px(7.0))
+                            .rounded_full()
+                            .bg(colors.status_warning()),
+                    )
+                })
+                .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                    let next = if *hovered {
+                        Some(at)
+                    } else if this.hover_box == Some(at) {
+                        None
+                    } else {
+                        this.hover_box
+                    };
+                    if this.hover_box != next {
+                        this.hover_box = next;
+                        cx.notify();
+                    }
+                }))
                 .child(content)
                 .child(
-                    text_style(div(), TypeScale::META)
-                        .text_color(colors.text_muted())
-                        .child(facts),
+                    div().flex().gap(px(SpacingScale::S2)).child(
+                        text_style(div(), TypeScale::META)
+                            .truncate()
+                            .text_color(colors.text_muted())
+                            .child(facts),
+                    ),
                 );
             diagram = diagram.child(self.pressable(
                 boxed,
@@ -581,6 +761,7 @@ mod tests {
                 flow: 0,
                 step: 1,
                 title: "x".into(),
+                via: None,
             }],
         }
     }
@@ -647,6 +828,104 @@ mod tests {
         for (x, _) in &laid.boxes {
             assert!(*x >= 0.0 && x + laid.width <= WIDTH + 0.5);
         }
+    }
+
+    /// 12 containers: a spine of five, branches, a long skip, a back edge, a
+    /// cycle and some that no flow touches.
+    fn busy() -> Architecture {
+        let names = [
+            "app", "api", "jobs", "ai", "store", "queue", "search", "mail", "auth", "cache",
+            "admin", "docs",
+        ];
+        Architecture {
+            containers: names.iter().map(|name| container(name)).collect(),
+            interactions: vec![
+                link("app", "api"),
+                link("api", "jobs"),
+                link("jobs", "ai"),
+                link("ai", "store"),
+                link("api", "auth"),
+                link("auth", "store"),
+                link("api", "store"),
+                link("app", "store"),
+                link("store", "app"),
+                link("jobs", "queue"),
+                link("queue", "jobs"),
+                link("queue", "mail"),
+                link("api", "search"),
+                link("search", "store"),
+                link("api", "cache"),
+            ],
+            hidden: 0,
+        }
+    }
+
+    /// Whether an axis-aligned segment goes through the inside of a box.
+    fn cuts(a: Point<f32>, b: Point<f32>, (x, y): (f32, f32), width: f32) -> bool {
+        let (lo_x, hi_x) = (a.x.min(b.x), a.x.max(b.x));
+        let (lo_y, hi_y) = (a.y.min(b.y), a.y.max(b.y));
+        hi_x > x + 1.0 && lo_x < x + width - 1.0 && hi_y > y + 1.0 && lo_y < y + BOX_HEIGHT - 1.0
+    }
+
+    #[test]
+    fn no_arrow_of_a_busy_architecture_runs_through_a_box() {
+        let architecture = busy();
+        for only_flow in [None, Some(0)] {
+            let laid = layout(&architecture, only_flow);
+            for (interaction, path) in architecture
+                .interactions
+                .iter()
+                .zip(route(&architecture, &laid))
+            {
+                let Some(path) = path else { continue };
+                for pair in path.windows(2) {
+                    for (at, top_left) in laid.boxes.iter().enumerate() {
+                        assert!(
+                            !cuts(pair[0], pair[1], *top_left, laid.width),
+                            "{} to {} runs through {}",
+                            interaction.from,
+                            interaction.to,
+                            architecture.containers[at].name
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_busy_architecture_stays_inside_the_column_and_boxes_never_overlap() {
+        let architecture = busy();
+        let laid = layout(&architecture, None);
+        for (x, _) in &laid.boxes {
+            assert!(*x >= 0.0 && x + laid.width <= WIDTH + 0.5);
+        }
+        for (i, a) in laid.boxes.iter().enumerate() {
+            for b in laid.boxes.iter().skip(i + 1) {
+                let apart = (a.0 - b.0).abs() >= laid.width || (a.1 - b.1).abs() >= BOX_HEIGHT;
+                assert!(apart, "{a:?} overlaps {b:?}");
+            }
+        }
+        for path in route(&architecture, &laid).into_iter().flatten() {
+            for p in path {
+                assert!(p.x >= 0.0 && p.x <= WIDTH && p.y >= 0.0 && p.y <= laid.height);
+            }
+        }
+    }
+
+    #[test]
+    fn every_arrow_between_placed_boxes_gets_a_route() {
+        let architecture = busy();
+        let laid = layout(&architecture, None);
+        let routes = route(&architecture, &laid);
+        assert_eq!(routes.len(), architecture.interactions.len());
+        let linked = architecture
+            .interactions
+            .iter()
+            .zip(&routes)
+            .filter(|(interaction, _)| interaction.from != interaction.to)
+            .count();
+        assert_eq!(routes.iter().flatten().count(), linked);
     }
 
     #[test]

@@ -58,6 +58,8 @@ pub struct OverviewScreen {
     flow: Option<usize>,
     /// The step of the open flow under the pointer, lit on the diagram.
     hover_step: Option<usize>,
+    /// Box of the architecture diagram under the pointer.
+    hover_box: Option<usize>,
     error: Option<String>,
     notice: Option<String>,
     focus: BTreeMap<String, FocusHandle>,
@@ -81,6 +83,7 @@ impl OverviewScreen {
             view: None,
             flow: None,
             hover_step: None,
+            hover_box: None,
             error: None,
             notice: None,
             focus: BTreeMap::new(),
@@ -577,6 +580,12 @@ impl OverviewScreen {
                                     .items_center()
                                     .gap(px(SpacingScale::S2))
                                     .children(component)
+                                    .children(step.via.clone().map(|via| {
+                                        text_style(div(), TypeScale::META)
+                                            .font_family(Theme::font_mono())
+                                            .text_color(colors.graph_technology())
+                                            .child(format!("via {via}"))
+                                    }))
                                     .child(citations),
                             ),
                     ),
