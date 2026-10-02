@@ -23,9 +23,9 @@ use crate::ui::controls::{action_button, button_foreground, ButtonKind};
 use crate::ui::glass::focus_ring;
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
-    action_footer, count_chip, error_banner, fade_in, hover_tint, kbd, mark_selected, panel_title,
-    reading_title, section_header, section_label, skeleton_list, status_pill, tag, toast,
-    track_hover, word_wrapped, READING_WIDTH, TOAST_DURATION,
+    action_footer, count_chip, error_banner, fade_in, hover_tint, kbd, mark_selected, meter,
+    panel_title, reading_title, section_header, section_label, skeleton_list, status_pill, tag,
+    toast, track_hover, word_wrapped, READING_WIDTH, TOAST_DURATION,
 };
 use crate::ui::search_field::SearchField;
 use crate::ui::theme::{text_style, Theme};
@@ -653,21 +653,34 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
         let key_id = id.clone();
         let hover_key = id.clone();
         let hovered = self.hovered.as_deref() == Some(row.id.as_str());
+        let rule = row.kind == CandidateKind::Rule;
+        // A rule is blue, as on the timeline; a decision not yet confirmed
+        // stays neutral.
+        let tone = if rule {
+            theme.colors.status_info()
+        } else {
+            theme.colors.text_muted()
+        };
         let element = div()
             .id((ElementId::from("candidate"), row.id.clone()))
             .relative()
             .px(px(SpacingScale::S4))
             .py(px(SpacingScale::S3))
             .flex()
-            .flex_col()
-            .gap(px(SpacingScale::S1))
+            .gap(px(SpacingScale::S3))
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                 if track_hover(&mut this.hovered, hover_key.clone(), *hovered) {
                     cx.notify();
                 }
             }))
             .role(Role::Button)
-            .aria_label(row.question.clone())
+            .aria_label(format!(
+                "{}: {}. Relevância {:.0}%, confiança {:.0}%.",
+                if rule { "Regra" } else { "Decisão" },
+                row.question,
+                row.significance * 100.0,
+                row.confidence * 100.0
+            ))
             .aria_selected(selected)
             .cursor_pointer()
             .focus_visible(focus_ring(&theme))
@@ -685,28 +698,61 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             }))
             .child(
                 div()
+                    .size(px(22.0))
+                    .flex_none()
                     .flex()
                     .items_center()
-                    .justify_between()
-                    .gap(px(SpacingScale::S2))
+                    .justify_center()
+                    .rounded_full()
+                    .bg(crate::ui::tokens::tint(tone, 0.14))
+                    .child(icon(
+                        if rule {
+                            IconName::Shield
+                        } else {
+                            IconName::Decision
+                        },
+                        12.0,
+                        tone,
+                    )),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S1))
                     .child(
-                        text_style(div(), TypeScale::META)
-                            .text_color(theme.colors.text_muted())
-                            .child(relative(&row.received_at)),
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap(px(SpacingScale::S2))
+                            .child(
+                                text_style(div(), TypeScale::META)
+                                    .text_color(theme.colors.text_muted())
+                                    .child(relative(&row.received_at)),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(SpacingScale::S2))
+                                    .when(row.status != CandidateStatus::Pending, |line| {
+                                        line.child(status_badge(row.status, theme))
+                                    }),
+                            ),
                     )
-                    .when(row.status != CandidateStatus::Pending, |line| {
-                        line.child(status_badge(row.status, theme))
-                    }),
-            )
-            .child(
-                word_wrapped(&row.question, TypeScale::ROW_TITLE, Some(2))
-                    .text_color(theme.colors.text_primary()),
-            )
-            .child(
-                text_style(div(), TypeScale::BODY_SMALL)
-                    .text_color(theme.colors.text_muted())
-                    .line_clamp(2)
-                    .child(row.choice.clone()),
+                    .child(
+                        word_wrapped(&row.question, TypeScale::ROW_TITLE, Some(2))
+                            .text_color(theme.colors.text_primary()),
+                    )
+                    .child(
+                        text_style(div(), TypeScale::BODY_SMALL)
+                            .text_color(theme.colors.text_muted())
+                            .line_clamp(2)
+                            .child(row.choice.clone()),
+                    ),
             );
         let mut element = mark_selected(element, &theme, selected);
         if let Some((_, focus)) = self.row_focus.iter().find(|(id, _)| *id == row.id) {
@@ -1261,20 +1307,11 @@ fn confidence(theme: Theme, value: f32, reason: &str) -> Div {
                 .flex()
                 .items_center()
                 .gap(px(SpacingScale::S3))
-                .child(
-                    div()
-                        .w(px(120.0))
-                        .h(px(4.0))
-                        .rounded_full()
-                        .bg(theme.colors.surface())
-                        .child(
-                            div()
-                                .h_full()
-                                .w(gpui::relative(value))
-                                .rounded_full()
-                                .bg(theme.colors.accent_default()),
-                        ),
-                )
+                .child(div().w(px(120.0)).child(meter(
+                    &theme,
+                    value,
+                    theme.colors.accent_default(),
+                )))
                 .child(
                     text_style(div(), TypeScale::BODY_SMALL)
                         .text_color(theme.colors.text_primary())

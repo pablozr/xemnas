@@ -215,7 +215,7 @@ Onde aplicar, por impacto:
 | Tela | Hoje | Forma proposta |
 | --- | --- | --- |
 | Contexto (feito) | "5 entregas, 162 tokens por bloco" em números | Linha de entregas por dia; barra de orçamento por bloco (já há); funil entregue → absorvido → arquivo tocado (Eficácia) |
-| Revisão | Lista de títulos e datas | Ícone e cor por tipo e risco do candidato; mini-mapa dos componentes que ele toca; barra de adições e remoções da evidência; confiança como medidor (já há) |
+| Revisão (parcial: marcador por tipo e medidor de confiança feitos; faltam risco e mini-mapa) | Lista de títulos e datas | Ícone e cor por tipo e risco do candidato; mini-mapa dos componentes que ele toca; barra de adições e remoções da evidência; confiança como medidor (já há) |
 | Decisões | Lista por mês | Trilho de versões com marcos; vizinhança da decisão (relações) em mini-grafo; idade e "reconsiderar quando" como marca |
 | Mapa em Blocos | Cartões com texto e contagens | Linha de atividade por bloco; selo de conflito; barra de cobertura (decisões por componente) |
 | Visão | Resumo em parágrafos | Pulso do projeto: tira de calor de decisões por semana; arquitetura em C4 (feito) |
