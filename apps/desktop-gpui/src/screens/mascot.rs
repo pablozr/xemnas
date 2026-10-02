@@ -29,8 +29,9 @@ const FRAMES: usize = 32;
 
 /// Frame of the head at rest, looking at the person.
 pub const REST: usize = 13;
-/// The head turned fully one way and the other.
+/// The head turned fully to the right.
 pub const LOOK_RIGHT: usize = 2;
+/// The head turned fully to the left.
 pub const LOOK_LEFT: usize = 24;
 /// First of the four blink frames (75, 50, 25 and 2 percent open).
 pub const BLINK_FIRST: usize = 27;

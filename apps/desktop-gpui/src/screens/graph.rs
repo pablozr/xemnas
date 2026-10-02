@@ -9,6 +9,13 @@
 //! everything but a node's neighborhood, and the pulses that run along the
 //! focused links. Selection opens a side card with the node's ties and the
 //! real actions (open, confirm or reject a suggestion).
+//!
+//! It stays light at any size (the project's pillar is performance). A
+//! component with more decisions or rules than the drawing can show keeps a
+//! handful and folds the rest into one group node ("+590 decisões") that
+//! opens the component's page, where the full lists live; counts stay true.
+//! Painting only visits what is on screen and drops to a cheap mode (straight
+//! single-stroke links, no signal, flat nodes) when many links are in view.
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -54,6 +61,18 @@ const MIN_SCALE: f32 = 0.35;
 const MAX_SCALE: f32 = 2.6;
 /// Below this zoom only components and technologies keep their names.
 const DETAIL_SCALE: f32 = 2.2;
+/// Decisions and rules the whole drawing keeps as individual nodes, shared
+/// among the components that have any; the rest fold into group nodes.
+const LEAF_BUDGET: usize = 260;
+/// Fewest and most leaves one component keeps before folding.
+const MIN_LEAVES: usize = 2;
+const MAX_LEAVES: usize = 10;
+/// Folding fewer than this many is not worth a group node.
+const FOLD_SLACK: usize = 3;
+/// Above this many links in view, painting drops to the cheap mode.
+const CROWDED_LINKS: usize = 140;
+/// Beyond the viewport, how far a node may sit and still be painted.
+const CULL_MARGIN: f32 = 48.0;
 /// Width of the side card.
 const CARD_WIDTH: f32 = 300.0;
 
@@ -91,8 +110,12 @@ enum LinkKind {
 struct Node {
     node: NodeRef,
     kind: Kind,
-    label: String,
-    detail: String,
+    label: SharedString,
+    detail: SharedString,
+    /// For a group node, how many decisions or rules it stands for.
+    folded: usize,
+    /// For a group node, the component whose page lists them.
+    home: Option<SharedString>,
     /// Index of the top-level component it gathers around.
     cluster: Option<usize>,
     degree: usize,
@@ -108,7 +131,19 @@ struct Node {
 }
 
 impl Node {
+    /// What the node is, for the card and screen readers.
+    fn caption(&self) -> &'static str {
+        match (self.folded > 0, self.kind) {
+            (true, Kind::Rule) => "Regras agrupadas",
+            (true, _) => "Decisões agrupadas",
+            _ => self.kind.label(),
+        }
+    }
+
     fn radius(&self) -> f32 {
+        if self.folded > 0 {
+            return (6.0 + (self.folded as f32).ln() * 1.7).min(14.0);
+        }
         match self.kind {
             Kind::Component => 11.0 + (self.degree.min(12) as f32) * 1.3,
             Kind::Technology => 8.5,
@@ -118,6 +153,9 @@ impl Node {
     }
 
     fn charge(&self) -> f32 {
+        if self.folded > 0 {
+            return 1100.0;
+        }
         match self.kind {
             Kind::Component => 5200.0,
             Kind::Technology => 1600.0,
@@ -600,8 +638,9 @@ impl GraphCanvas {
     fn step(&mut self, reduce_motion: bool) -> bool {
         let mut busy = false;
         if self.heat > 0.01 {
-            let links = self.links.clone();
+            let links = std::mem::take(&mut self.links);
             tick(&mut self.nodes, &links, self.heat);
+            self.links = links;
             self.heat *= 0.94;
             busy = true;
         }
@@ -674,7 +713,13 @@ impl GraphCanvas {
 
     fn layer_chips(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Div {
         let colors = theme.colors;
-        let count = |kind: Kind| self.nodes.iter().filter(|node| node.kind == kind).count();
+        let count = |kind: Kind| {
+            self.nodes
+                .iter()
+                .filter(|node| node.kind == kind)
+                .map(|node| node.folded.max(1))
+                .sum::<usize>()
+        };
         let suggested = self
             .links
             .iter()
@@ -905,7 +950,7 @@ impl GraphCanvas {
                 .cursor_pointer()
                 .hover(move |style| style.bg(colors.glass_fill_low()))
                 .role(Role::Button)
-                .aria_label(format!("{}: {}", other_node.kind.label(), other_node.label))
+                .aria_label(format!("{}: {}", other_node.caption(), other_node.label))
                 .focus_visible(focus_ring(theme))
                 .child(swatch(theme, other_node))
                 .child(
@@ -994,16 +1039,20 @@ impl GraphCanvas {
             );
         }
 
-        let (open_label, open_event) = match node.kind {
-            Kind::Component | Kind::Technology => (
+        let (open_label, open_event) = match (&node.home, node.kind) {
+            (Some(home), _) => (
+                Some("Ver todas no Mapa"),
+                Some(GraphEvent::OpenEntity(home.to_string())),
+            ),
+            (_, Kind::Component | Kind::Technology) => (
                 Some("Abrir no Mapa"),
                 Some(GraphEvent::OpenEntity(node.node.id.clone())),
             ),
-            Kind::Decision => (
+            (_, Kind::Decision) => (
                 Some("Abrir em Decisões"),
                 Some(GraphEvent::OpenDecision(node.node.id.clone())),
             ),
-            Kind::Rule => (None, None),
+            (_, Kind::Rule) => (None, None),
         };
         let open = open_label.zip(open_event).map(|(label, event)| {
             let event = Rc::new(Cell::new(Some(event)));
@@ -1066,9 +1115,9 @@ impl GraphCanvas {
                                         text_style(div(), TypeScale::META)
                                             .text_color(colors.text_muted())
                                             .child(if node.conflict {
-                                                format!("{} · em conflito", node.kind.label())
+                                                format!("{} · em conflito", node.caption())
                                             } else {
-                                                node.kind.label().to_owned()
+                                                node.caption().to_owned()
                                             }),
                                     ),
                             )
@@ -1166,7 +1215,7 @@ impl Render for GraphCanvas {
         if busy || bloom < 1.0 || !self.fitted {
             // Settling, the entrance and camera moves: every frame.
             window.request_animation_frame();
-        } else if motion {
+        } else if motion && self.links.len() <= CROWDED_LINKS {
             // Only the ambient signal moves: the shared 30 Hz clock, which
             // parks as soon as the graph leaves the screen.
             crate::ui::motion::clock::phase(
@@ -1196,6 +1245,7 @@ impl Render for GraphCanvas {
             selected: self.selected,
             time: self.clock.elapsed().as_secs_f32(),
             motion,
+            crowded: Cell::new(false),
         };
         let bounds_cell = self.bounds.clone();
         let painter = canvas(
@@ -1225,8 +1275,13 @@ impl Render for GraphCanvas {
             self.nodes
                 .iter()
                 .filter(|n| n.kind == Kind::Decision)
-                .count(),
-            self.nodes.iter().filter(|n| n.kind == Kind::Rule).count(),
+                .map(|n| n.folded.max(1))
+                .sum::<usize>(),
+            self.nodes
+                .iter()
+                .filter(|n| n.kind == Kind::Rule)
+                .map(|n| n.folded.max(1))
+                .sum::<usize>(),
             self.nodes
                 .iter()
                 .filter(|n| n.kind == Kind::Technology)
@@ -1303,6 +1358,8 @@ struct Scene {
     time: f32,
     /// Whether anything moves (off under reduced motion).
     motion: bool,
+    /// Set at paint: many links in view, so the cheap mode is on.
+    crowded: Cell<bool>,
 }
 
 impl Scene {
@@ -1321,12 +1378,16 @@ impl Scene {
 
     fn paint(&self, bounds: Bounds<Pixels>, theme: &Theme, window: &mut Window, cx: &mut App) {
         window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
+            // Only what is on screen is visited: at hundreds of nodes the
+            // frame's cost follows the viewport, not the project.
+            let live = self.on_screen(bounds);
+            let drawn = self.links_on_screen(bounds, &live);
+            self.crowded.set(drawn.len() > CROWDED_LINKS);
             self.paint_grid(bounds, theme, window);
-            self.paint_links(bounds, theme, window);
+            self.paint_links(bounds, theme, window, &drawn);
             // Small first so components sit on top.
-            let mut order: Vec<usize> = (0..self.nodes.len())
-                .filter(|index| self.nodes[*index].1)
-                .collect();
+            let mut order: Vec<usize> =
+                (0..self.nodes.len()).filter(|index| live[*index]).collect();
             order.sort_by_key(|index| -kind_order(self.nodes[*index].0.kind));
             for index in &order {
                 self.paint_node(bounds, *index, theme, window);
@@ -1335,6 +1396,51 @@ impl Scene {
                 self.paint_label(bounds, *index, theme, window, cx);
             }
         });
+    }
+
+    /// Which nodes are shown and inside the viewport (with a margin for
+    /// their halo and label).
+    fn on_screen(&self, bounds: Bounds<Pixels>) -> Vec<bool> {
+        let (ox, oy) = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
+        let (width, height) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+        self.nodes
+            .iter()
+            .map(|(node, shown)| {
+                if !shown {
+                    return false;
+                }
+                let (x, y) = self.screen(bounds, node.pos);
+                x >= ox - CULL_MARGIN
+                    && x <= ox + width + CULL_MARGIN
+                    && y >= oy - CULL_MARGIN
+                    && y <= oy + height + CULL_MARGIN
+            })
+            .collect()
+    }
+
+    /// The links whose box meets the viewport.
+    fn links_on_screen(&self, bounds: Bounds<Pixels>, live: &[bool]) -> Vec<usize> {
+        let (ox, oy) = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
+        let (width, height) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+        self.links
+            .iter()
+            .enumerate()
+            .filter(|(_, link)| {
+                if live[link.a] || live[link.b] {
+                    return true;
+                }
+                // Neither end is in view; a long link can still cross it.
+                let (pa, pb) = (
+                    self.screen(bounds, self.nodes[link.a].0.pos),
+                    self.screen(bounds, self.nodes[link.b].0.pos),
+                );
+                pa.0.min(pb.0) <= ox + width
+                    && pa.0.max(pb.0) >= ox
+                    && pa.1.min(pb.1) <= oy + height
+                    && pa.1.max(pb.1) >= oy
+            })
+            .map(|(number, _)| number)
+            .collect()
     }
 
     /// A faint dot field that pans and zooms with the map.
@@ -1367,11 +1473,18 @@ impl Scene {
 
     /// Luminous hairlines: a wide faint stroke under a thin bright one, drawn
     /// in from the component outward, with signal running along them.
-    fn paint_links(&self, bounds: Bounds<Pixels>, theme: &Theme, window: &mut Window) {
+    fn paint_links(
+        &self,
+        bounds: Bounds<Pixels>,
+        theme: &Theme,
+        window: &mut Window,
+        drawn: &[usize],
+    ) {
         let colors = theme.colors;
         let signal = Hsla::from(colors.graph_component());
         let focus_center = self.focus.as_ref().map(|(center, _)| *center);
-        for (number, link) in self.links.iter().enumerate() {
+        for &number in drawn {
+            let link = &self.links[number];
             let (a, b) = (&self.nodes[link.a].0, &self.nodes[link.b].0);
             // The line grows out of the earlier of its two ends.
             let start_at = a.stagger.min(b.stagger) * 0.55;
@@ -1397,18 +1510,24 @@ impl Scene {
                 LinkKind::PartOf => (signal, 0.55, false),
                 _ => (signal, 0.45, false),
             };
+            // In a crowd, a link is one straight hairline: the glow, the
+            // curve, the dashes and the signal are what make a thousand of
+            // them heavy, and none is readable at that density.
+            let cheap = self.crowded.get() && !lit;
             let strokes: &[(f32, f32)] = if lit {
                 &[(6.0, 0.06), (3.0, 0.14), (1.4, 1.0)]
+            } else if cheap {
+                &[(1.0, core * 0.7)]
             } else {
                 &[(3.5, 0.035), (1.0, core)]
             };
             for &(width, alpha) in strokes {
                 let mut builder = PathBuilder::stroke(px(width));
-                if dashed && width < 2.0 {
+                if dashed && width < 2.0 && !cheap {
                     builder = builder.dash_array(&[px(3.0), px(4.0)]);
                 }
                 builder.move_to(point(px(start.0), px(start.1)));
-                let segments = 18;
+                let segments = if cheap { 1 } else { 18 };
                 for step in 1..=segments {
                     let t = grown * step as f32 / segments as f32;
                     let p = quad_point(start, control, end, t);
@@ -1420,7 +1539,7 @@ impl Scene {
             }
             // Signal: a short comet running along every line; faster and
             // brighter on the focused node's lines.
-            if self.motion && grown >= 1.0 && shade > 0.3 {
+            if self.motion && grown >= 1.0 && shade > 0.3 && !cheap {
                 let (speed, heads, bright) = if lit { (0.55, 2, 1.0) } else { (0.16, 1, 0.55) };
                 let phase = seed(&format!("{number}"), 7);
                 for head in 0..heads {
@@ -1468,21 +1587,25 @@ impl Scene {
         let signal = Hsla::from(colors.graph_component());
         match node.kind {
             Kind::Component => {
-                // A lens: soft bloom, dark body, bright rim, an orbit and a core.
-                circle(
-                    window,
-                    (x, y),
-                    radius + 14.0,
-                    signal.opacity(0.035 * shade),
-                    None,
-                );
-                circle(
-                    window,
-                    (x, y),
-                    radius + 7.0,
-                    signal.opacity(0.05 * shade),
-                    None,
-                );
+                // A lens: soft bloom, dark body, bright rim, an orbit and a
+                // core. In a crowd only the body, rim and core are drawn.
+                let flat = self.crowded.get();
+                if !flat {
+                    circle(
+                        window,
+                        (x, y),
+                        radius + 14.0,
+                        signal.opacity(0.035 * shade),
+                        None,
+                    );
+                    circle(
+                        window,
+                        (x, y),
+                        radius + 7.0,
+                        signal.opacity(0.05 * shade),
+                        None,
+                    );
+                }
                 circle(
                     window,
                     (x, y),
@@ -1490,20 +1613,22 @@ impl Scene {
                     ground.opacity(shade),
                     Some((signal.opacity(0.9 * shade), 1.25)),
                 );
-                circle(
-                    window,
-                    (x, y),
-                    radius + 4.5,
-                    gpui::transparent_black(),
-                    Some((signal.opacity(0.16 * shade), 1.0)),
-                );
-                circle(
-                    window,
-                    (x, y),
-                    radius * 0.34 + 1.5,
-                    signal.opacity(0.25 * shade),
-                    None,
-                );
+                if !flat {
+                    circle(
+                        window,
+                        (x, y),
+                        radius + 4.5,
+                        gpui::transparent_black(),
+                        Some((signal.opacity(0.16 * shade), 1.0)),
+                    );
+                    circle(
+                        window,
+                        (x, y),
+                        radius * 0.34 + 1.5,
+                        signal.opacity(0.25 * shade),
+                        None,
+                    );
+                }
                 circle(
                     window,
                     (x, y),
@@ -1540,14 +1665,39 @@ impl Scene {
                 } else {
                     Hsla::from(colors.graph_decision())
                 };
-                circle(
-                    window,
-                    (x, y),
-                    radius + 4.0,
-                    tint.opacity(0.08 * shade),
-                    None,
-                );
-                circle(window, (x, y), radius, tint.opacity(0.95 * shade), None);
+                if node.folded > 0 {
+                    // A group: a ring around a core, bigger the more it holds.
+                    circle(
+                        window,
+                        (x, y),
+                        radius + 5.0,
+                        tint.opacity(0.07 * shade),
+                        None,
+                    );
+                    circle(
+                        window,
+                        (x, y),
+                        radius,
+                        ground.opacity(shade),
+                        Some((tint.opacity(0.9 * shade), 1.5)),
+                    );
+                    circle(
+                        window,
+                        (x, y),
+                        radius * 0.4,
+                        tint.opacity(0.9 * shade),
+                        None,
+                    );
+                } else {
+                    circle(
+                        window,
+                        (x, y),
+                        radius + 4.0,
+                        tint.opacity(0.08 * shade),
+                        None,
+                    );
+                    circle(window, (x, y), radius, tint.opacity(0.95 * shade), None);
+                }
             }
             Kind::Rule => {
                 let tint = Hsla::from(colors.status_info());
@@ -1563,6 +1713,15 @@ impl Scene {
                     tint.opacity(0.9 * shade),
                     gpui::BorderStyle::Solid,
                 ));
+                if node.folded > 0 {
+                    circle(
+                        window,
+                        (x, y),
+                        radius * 0.4,
+                        tint.opacity(0.9 * shade),
+                        None,
+                    );
+                }
             }
         }
         let focused = self
@@ -1624,7 +1783,7 @@ impl Scene {
             .focus
             .as_ref()
             .is_some_and(|(_, set)| set.contains(&index));
-        let major = matches!(node.kind, Kind::Component | Kind::Technology);
+        let major = matches!(node.kind, Kind::Component | Kind::Technology) || node.folded > 0;
         // Small nodes name themselves only under the pointer (or when zoomed
         // far in): their neighbors are listed in the side card instead.
         let center = self
@@ -1632,7 +1791,8 @@ impl Scene {
             .as_ref()
             .is_some_and(|(center, _)| *center == index);
         let shown = if major {
-            self.camera.scale >= 0.5 || in_focus
+            let floor = if self.crowded.get() { 0.9 } else { 0.5 };
+            self.camera.scale >= floor || in_focus
         } else {
             center || self.camera.scale >= DETAIL_SCALE
         };
@@ -1815,6 +1975,7 @@ fn kind_order(kind: Kind) -> i32 {
 fn build(graph: &ProjectGraph) -> (Vec<Node>, Vec<Link>) {
     // A decision or rule tied to nothing has no place on the drawing: a dot
     // floating alone reads as a glitch. It stays in the lists and counts.
+    let (dropped, crowds) = fold_crowds(graph);
     let tied: BTreeSet<&NodeRef> = graph
         .edges
         .iter()
@@ -1824,7 +1985,10 @@ fn build(graph: &ProjectGraph) -> (Vec<Node>, Vec<Link>) {
     let mut nodes: Vec<Node> = graph
         .nodes
         .iter()
-        .filter(|row| row.summary.node.kind == NodeKind::Entity || tied.contains(&row.summary.node))
+        .filter(|row| {
+            !dropped.contains(&row.summary.node)
+                && (row.summary.node.kind == NodeKind::Entity || tied.contains(&row.summary.node))
+        })
         .map(|row| {
             let summary = &row.summary;
             let kind = match summary.node.kind {
@@ -1835,16 +1999,18 @@ fn build(graph: &ProjectGraph) -> (Vec<Node>, Vec<Link>) {
                 }
                 NodeKind::Entity => Kind::Component,
             };
-            let detail = match kind {
-                Kind::Rule => rule_kind(&summary.detail).to_owned(),
-                Kind::Decision => summary.detail.clone(),
-                _ => String::new(),
+            let detail: SharedString = match kind {
+                Kind::Rule => rule_kind(&summary.detail).into(),
+                Kind::Decision => summary.detail.clone().into(),
+                _ => SharedString::default(),
             };
             Node {
                 node: summary.node.clone(),
                 kind,
-                label: summary.label.clone(),
+                label: summary.label.clone().into(),
                 detail,
+                folded: 0,
+                home: None,
                 cluster: None,
                 degree: 0,
                 weight: (0, 0),
@@ -1856,6 +2022,41 @@ fn build(graph: &ProjectGraph) -> (Vec<Node>, Vec<Link>) {
             }
         })
         .collect();
+    for crowd in &crowds {
+        let rule = crowd.rule;
+        nodes.push(Node {
+            node: NodeRef {
+                kind: if rule {
+                    NodeKind::Claim
+                } else {
+                    NodeKind::Decision
+                },
+                id: format!(
+                    "group:{}:{}",
+                    crowd.home.id,
+                    if rule { "rules" } else { "decisions" }
+                ),
+            },
+            kind: if rule { Kind::Rule } else { Kind::Decision },
+            label: format!(
+                "+{} {}",
+                crowd.count,
+                if rule { "regras" } else { "decisões" }
+            )
+            .into(),
+            detail: "Agrupadas para manter o grafo leve. Abra o componente para ver todas.".into(),
+            folded: crowd.count,
+            home: Some(crowd.home.id.clone().into()),
+            cluster: None,
+            degree: 0,
+            weight: (0, 0),
+            conflict: false,
+            pos: (0.0, 0.0),
+            vel: (0.0, 0.0),
+            shade: 1.0,
+            stagger: 0.0,
+        });
+    }
     let index: BTreeMap<NodeRef, usize> = nodes
         .iter()
         .enumerate()
@@ -1879,6 +2080,35 @@ fn build(graph: &ProjectGraph) -> (Vec<Node>, Vec<Link>) {
             nodes[b].conflict = true;
         }
         links.push(Link { a, b, kind });
+    }
+    // Each group hangs from its component like the leaves it folded.
+    for crowd in &crowds {
+        let group = NodeRef {
+            kind: if crowd.rule {
+                NodeKind::Claim
+            } else {
+                NodeKind::Decision
+            },
+            id: format!(
+                "group:{}:{}",
+                crowd.home.id,
+                if crowd.rule { "rules" } else { "decisions" }
+            ),
+        };
+        if let (Some(&a), Some(&b)) = (index.get(&group), index.get(&crowd.home)) {
+            let kind = if crowd.rule {
+                LinkKind::AppliesTo
+            } else {
+                LinkKind::Affects
+            };
+            links.push(Link { a, b, kind });
+            // The folded ones still count toward what the component carries.
+            if crowd.rule {
+                nodes[b].weight.1 += crowd.count - 1;
+            } else {
+                nodes[b].weight.0 += crowd.count - 1;
+            }
+        }
     }
     for (edge_id, edge) in &graph.suggested {
         let (Some(&a), Some(&b)) = (index.get(&edge.from), index.get(&edge.to)) else {
@@ -1931,6 +2161,52 @@ fn build(graph: &ProjectGraph) -> (Vec<Node>, Vec<Link>) {
         }
     }
     (nodes, links)
+}
+
+/// Decisions or rules folded into one group node for a component.
+struct Crowd {
+    home: NodeRef,
+    rule: bool,
+    count: usize,
+}
+
+/// Finds the components with more decisions or rules than the drawing should
+/// show. Each keeps a share of [`LEAF_BUDGET`] (always the same ones, in id
+/// order) and the rest are folded: the returned set is dropped from the
+/// drawing and a [`Crowd`] stands for them.
+fn fold_crowds(graph: &ProjectGraph) -> (BTreeSet<NodeRef>, Vec<Crowd>) {
+    let mut by_home: BTreeMap<(NodeRef, bool), Vec<NodeRef>> = BTreeMap::new();
+    let mut seen = BTreeSet::new();
+    for edge in &graph.edges {
+        if !matches!(edge.kind.as_str(), "affects" | "applies_to")
+            || edge.from.kind == NodeKind::Entity
+            || edge.to.kind != NodeKind::Entity
+            || !seen.insert(edge.from.clone())
+        {
+            continue;
+        }
+        by_home
+            .entry((edge.to.clone(), edge.from.kind == NodeKind::Claim))
+            .or_default()
+            .push(edge.from.clone());
+    }
+    let cap = (LEAF_BUDGET / by_home.len().max(1)).clamp(MIN_LEAVES, MAX_LEAVES);
+    let mut dropped = BTreeSet::new();
+    let mut crowds = Vec::new();
+    for ((home, rule), mut leaves) in by_home {
+        if leaves.len() < cap + FOLD_SLACK {
+            continue;
+        }
+        leaves.sort();
+        let hidden = leaves.split_off(cap);
+        crowds.push(Crowd {
+            home,
+            rule,
+            count: hidden.len(),
+        });
+        dropped.extend(hidden);
+    }
+    (dropped, crowds)
 }
 
 fn rule_kind(literal: &str) -> &'static str {
@@ -2374,6 +2650,30 @@ mod tests {
             edges,
             suggested: Vec::new(),
         }
+    }
+
+    #[test]
+    fn crowded_components_fold_their_decisions_into_groups() {
+        let (nodes, links) = build(&large());
+        // 40 components, 600 decisions and 200 rules, but the drawing keeps
+        // a bounded number of nodes.
+        assert!(nodes.len() < 400, "{} nodes", nodes.len());
+        let docs = nodes.iter().position(|n| n.label == "modulo-0").unwrap();
+        let group = nodes
+            .iter()
+            .position(|n| {
+                n.folded > 0 && n.kind == Kind::Decision && n.home.as_deref() == Some("c0")
+            })
+            .expect("the crowded component has a group");
+        assert!(links.iter().any(|link| link.a == group && link.b == docs));
+        // Nothing is lost from the counts: group plus leaves is every decision.
+        let decisions: usize = nodes
+            .iter()
+            .filter(|n| n.kind == Kind::Decision)
+            .map(|n| n.folded.max(1))
+            .sum();
+        assert_eq!(decisions, 600);
+        assert!(nodes[docs].weight.0 >= 300);
     }
 
     #[test]
