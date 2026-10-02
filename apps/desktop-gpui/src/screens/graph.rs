@@ -1356,7 +1356,9 @@ impl Render for GraphCanvas {
                 .flex_none()
                 .pt(px(5.0))
                 .text_color(colors.text_muted())
-                .child(if omitted > 0 {
+                .child(if self.pending && self.nodes.is_empty() {
+                    "Organizando o mapa…".to_owned()
+                } else if omitted > 0 {
                     format!("Panorama · {omitted} decisões e regras ocultas · aproxime para vê-las")
                 } else {
                     "Clique para focar · arraste para mover · role para aproximar".to_owned()

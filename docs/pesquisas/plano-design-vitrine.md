@@ -3,8 +3,10 @@
 **Data:** 02/10/2026.
 **Pergunta:** como elevar o acabamento e a experiência do Xemnas usando referências
 GPUI e produtos de ponta, sem perder sua personalidade nem sua autoridade humana?
-**Status:** Aberta. Pesquisa e plano concluídos; propostas de implementação ainda
-não aprovadas. Capturas reais de demo inspecionadas; sem teste com usuários.
+**Status:** Em implementação. Etapas 1 e 2 em boa parte entregues (colisão do
+cabeçalho do grafo, Blocos virtuais, panorama, Barnes–Hut, modo barato); etapas
+3 a 5 e as decisões pendentes abertas. `tools/capture-vitrine.ps1` captura as
+cenas do roteiro. Capturas reais de demo inspecionadas; sem teste com usuários.
 
 ## Direção recomendada
 
