@@ -332,6 +332,21 @@ porque um fluxo passa de um componente a outro.
   componente anterior chega a ele ("via HTTP/JSON", em mono na cor de tecnologia),
   que o modelo informa ao gerar a Visão (`OverviewStep.via`, opcional).
 
+## Formas para números
+
+Um número que vale mostrar vale desenhar (`ui::patterns`, canvas de poucos pixels,
+sem custo por linha). Sempre com o número ou uma frase ao lado, ou `aria_label` no
+pai: a forma não é a única fonte.
+
+- `meter(fração, cor)`: barra de 3 px, uma quantidade contra um limite (tokens do
+  bloco contra o orçamento). `meter_stack(partes)`: barra de 6 px dividida por peso,
+  do que algo é feito (o que será apagado de um projeto).
+- `sparkline(valores, w, h, cor)`: tendência, mais antigo à esquerda, maior no topo,
+  área tingida e ponto no último; sem eixos (entregas e sessões dos últimos 7 dias).
+- `ring(fração, lado, cor)`: anel que enche no sentido horário a partir do topo
+  (média de tokens contra o limite; itens fora do orçamento, âmbar quando há).
+- `share(valor, total)` mantém a fração entre 0 e 1 (total vazio dá 0).
+
 ## Mapa — o grafo do projeto
 
 - Quarto destino do projeto (Ctrl 4, paleta), ADR-0005. Índice à esquerda

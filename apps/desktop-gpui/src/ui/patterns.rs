@@ -866,3 +866,219 @@ pub fn hover_tint(
 pub fn fade_in(content: Div, key: impl Into<ElementId>) -> AnimationElement<Div> {
     crate::ui::motion::content_in(key, content)
 }
+
+// ---------------------------------------------------------------------------
+// Forms for figures: a number worth showing is worth drawing. Each is a few
+// pixels of canvas, so a list can carry one per row at no cost, and each
+// needs the number or a sentence beside it (or an `aria_label` on its parent)
+// for whoever does not see it.
+// ---------------------------------------------------------------------------
+
+/// Share of `value` in `of`, kept in 0 to 1 (an empty whole is 0).
+pub fn share(value: usize, of: usize) -> f32 {
+    if of == 0 {
+        0.0
+    } else {
+        (value as f32 / of as f32).clamp(0.0, 1.0)
+    }
+}
+
+/// A thin bar filled to `fraction` of its width: a quantity against a limit.
+pub fn meter(theme: &Theme, fraction: f32, color: Rgba) -> Div {
+    div()
+        .h(px(3.0))
+        .w_full()
+        .rounded_full()
+        .overflow_hidden()
+        .bg(theme.colors.surface())
+        .child(
+            div()
+                .h_full()
+                .w(gpui::relative(fraction.clamp(0.0, 1.0)))
+                .rounded_full()
+                .bg(color),
+        )
+}
+
+/// A thin bar split in parts by weight: what a whole is made of. Parts with
+/// no weight take no room.
+pub fn meter_stack(theme: &Theme, parts: &[(usize, Rgba)]) -> Div {
+    let total: usize = parts.iter().map(|(weight, _)| weight).sum();
+    let bar = div()
+        .h(px(6.0))
+        .w_full()
+        .flex()
+        .rounded_full()
+        .overflow_hidden()
+        .bg(theme.colors.surface());
+    parts
+        .iter()
+        .filter(|(weight, _)| *weight > 0)
+        .fold(bar, |bar, (weight, color)| {
+            bar.child(
+                div()
+                    .h_full()
+                    .w(gpui::relative(share(*weight, total)))
+                    .border_r_1()
+                    .border_color(theme.colors.canvas_raised())
+                    .bg(*color),
+            )
+        })
+}
+
+/// Where the points of a sparkline sit in a `width` by `height` box: evenly
+/// spaced, the largest value at the top, zero at the bottom (a flat series of
+/// zeros lies on the bottom).
+pub fn spark_points(values: &[f32], width: f32, height: f32) -> Vec<(f32, f32)> {
+    let top = values
+        .iter()
+        .copied()
+        .fold(0.0_f32, f32::max)
+        .max(f32::EPSILON);
+    let last = values.len().saturating_sub(1).max(1) as f32;
+    values
+        .iter()
+        .enumerate()
+        .map(|(at, value)| {
+            (
+                width * at as f32 / last,
+                height - (height - 2.0) * (value / top).clamp(0.0, 1.0) - 1.0,
+            )
+        })
+        .collect()
+}
+
+/// A line of values in a small box with the area under it tinted and a dot on
+/// the last one: a trend, not a chart (no axes). `values` are oldest first.
+pub fn sparkline(values: &[f32], width: f32, height: f32, color: Rgba) -> impl IntoElement {
+    let points = spark_points(values, width, height);
+    let color: gpui::Hsla = color.into();
+    gpui::canvas(
+        |_, _, _| (),
+        move |bounds, _, window, _| {
+            let (ox, oy) = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
+            let at = |(x, y): (f32, f32)| gpui::point(px(ox + x), px(oy + y));
+            let Some(&last) = points.last() else {
+                return;
+            };
+            if points.len() > 1 {
+                let mut area = gpui::PathBuilder::fill();
+                let mut outline: Vec<_> = points.iter().map(|point| at(*point)).collect();
+                outline.push(at((last.0, height)));
+                outline.push(at((0.0, height)));
+                area.add_polygon(&outline, true);
+                if let Ok(path) = area.build() {
+                    window.paint_path(path, color.opacity(0.14));
+                }
+                let mut line = gpui::PathBuilder::stroke(px(1.5));
+                line.move_to(at(points[0]));
+                for point in &points[1..] {
+                    line.line_to(at(*point));
+                }
+                if let Ok(path) = line.build() {
+                    window.paint_path(path, color);
+                }
+            }
+            let dot: Vec<_> = (0..12)
+                .map(|step| {
+                    let angle = step as f32 / 12.0 * std::f32::consts::TAU;
+                    at((last.0 + angle.cos() * 2.4, last.1 + angle.sin() * 2.4))
+                })
+                .collect();
+            let mut head = gpui::PathBuilder::fill();
+            head.add_polygon(&dot, true);
+            if let Ok(path) = head.build() {
+                window.paint_path(path, color);
+            }
+        },
+    )
+    .w(px(width))
+    .h(px(height))
+}
+
+/// The points of an arc that starts at the top and runs clockwise over
+/// `fraction` of a circle of `radius` around (`cx`, `cy`).
+pub fn arc_points(cx: f32, cy: f32, radius: f32, fraction: f32) -> Vec<(f32, f32)> {
+    let sweep = fraction.clamp(0.0, 1.0) * std::f32::consts::TAU;
+    let steps = ((sweep / std::f32::consts::TAU) * 48.0).ceil().max(1.0) as usize;
+    (0..=steps)
+        .map(|step| {
+            let angle = -std::f32::consts::FRAC_PI_2 + sweep * step as f32 / steps as f32;
+            (cx + radius * angle.cos(), cy + radius * angle.sin())
+        })
+        .collect()
+}
+
+/// A ring filled clockwise to `fraction`: one quantity against a limit where
+/// a bar would be too long. `side` is its outer size in pixels.
+pub fn ring(theme: &Theme, fraction: f32, side: f32, color: Rgba) -> impl IntoElement {
+    let track: gpui::Hsla = theme.colors.surface().into();
+    let color: gpui::Hsla = color.into();
+    let stroke = (side / 7.0).max(2.5);
+    let radius = (side - stroke) / 2.0;
+    gpui::canvas(
+        |_, _, _| (),
+        move |bounds, _, window, _| {
+            let (ox, oy) = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
+            let centre = side / 2.0;
+            let draw = |fraction: f32, colour: gpui::Hsla, window: &mut gpui::Window| {
+                let points = arc_points(centre, centre, radius, fraction);
+                let mut path = gpui::PathBuilder::stroke(px(stroke));
+                if let Some(&(x, y)) = points.first() {
+                    path.move_to(gpui::point(px(ox + x), px(oy + y)));
+                }
+                for (x, y) in points.iter().skip(1) {
+                    path.line_to(gpui::point(px(ox + x), px(oy + y)));
+                }
+                if let Ok(path) = path.build() {
+                    window.paint_path(path, colour);
+                }
+            };
+            draw(1.0, track, window);
+            if fraction > 0.0 {
+                draw(fraction, color, window);
+            }
+        },
+    )
+    .w(px(side))
+    .h(px(side))
+}
+
+#[cfg(test)]
+mod form_tests {
+    use super::*;
+
+    #[test]
+    fn share_is_kept_between_zero_and_one() {
+        assert_eq!(share(1, 4), 0.25);
+        assert_eq!(share(9, 4), 1.0);
+        assert_eq!(share(3, 0), 0.0);
+    }
+
+    #[test]
+    fn a_sparkline_puts_the_largest_value_on_top_and_zero_at_the_bottom() {
+        let points = spark_points(&[0.0, 5.0, 10.0], 60.0, 20.0);
+        assert_eq!(points.len(), 3);
+        assert!(points[2].1 < points[1].1 && points[1].1 < points[0].1);
+        assert_eq!((points[0].0, points[2].0), (0.0, 60.0));
+        assert!(points.iter().all(|(_, y)| (0.0..=20.0).contains(y)));
+        // All zeros lie flat on the bottom; one value does not divide by zero.
+        assert!(spark_points(&[0.0, 0.0], 10.0, 10.0)
+            .iter()
+            .all(|(_, y)| *y > 8.0));
+        assert_eq!(spark_points(&[3.0], 10.0, 10.0).len(), 1);
+        assert!(spark_points(&[], 10.0, 10.0).is_empty());
+    }
+
+    #[test]
+    fn a_ring_starts_at_the_top_and_closes_at_a_full_turn() {
+        let quarter = arc_points(10.0, 10.0, 8.0, 0.25);
+        let (x, y) = quarter[0];
+        assert!((x - 10.0).abs() < 0.01 && (y - 2.0).abs() < 0.01, "top");
+        let (x, y) = *quarter.last().unwrap();
+        assert!((x - 18.0).abs() < 0.01 && (y - 10.0).abs() < 0.01, "right");
+        let full = arc_points(10.0, 10.0, 8.0, 1.0);
+        let (a, b) = (full[0], *full.last().unwrap());
+        assert!((a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01);
+    }
+}

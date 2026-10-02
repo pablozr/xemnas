@@ -961,74 +961,6 @@ impl application::knowledge_review::KnowledgeReviewApi for SampleKnowledgeReview
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use application::inbox::{Inbox, InboxFilter};
-
-    #[test]
-    fn demo_is_ephemeral_and_project_scoped_with_readable_sources() {
-        let store = store().expect("demo store");
-        let inbox = Inbox::new(store.clone());
-        for (project, count) in [("demo-xemnas", 5), ("demo-kpi", 1)] {
-            let page = inbox
-                .list(&InboxFilter {
-                    project_id: Some(project.into()),
-                    ..InboxFilter::default()
-                })
-                .expect("list");
-            assert_eq!(page.candidates.len(), count);
-            assert!(page.candidates.iter().all(|row| row.project_id == project));
-            let detail = inbox.detail(&page.candidates[0].id).expect("detail");
-            assert_eq!(detail.artifacts.len(), 2);
-            assert!(detail
-                .artifacts
-                .iter()
-                .all(|artifact| !artifact.content.is_empty()));
-        }
-        let graph = application::graph::KnowledgeGraph::new(store.clone());
-        let map = graph.project_map("demo-xemnas", None).expect("map");
-        assert_eq!(map.entities.len(), 8, "components and technologies");
-        assert!(
-            map.entities.iter().any(|row| row.decisions == 2),
-            "confirmed links"
-        );
-        let report = graph
-            .refresh_suggestions("demo-xemnas")
-            .expect("suggestions");
-        assert!(
-            !report.components.is_empty(),
-            "the other sample files propose components"
-        );
-        assert!(
-            ProjectRepository::list(&SqliteStore::open(":memory:").expect("fresh store"))
-                .expect("projects")
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn review_fixture_preserves_local_findings_and_reports_coverage() {
-        use application::knowledge_review::*;
-        let api = SampleKnowledgeReview;
-        let local = api.inspect("demo-xemnas").unwrap();
-        assert_eq!(local.semantic_status, SemanticStatus::NotRequested);
-        let report = api
-            .review("demo-kpi", ReviewCancellation::default())
-            .unwrap();
-        assert_eq!(report.project_id, "demo-kpi");
-        assert_eq!(report.findings[0], local.findings[0]);
-        assert_eq!(report.semantic_status, SemanticStatus::Partial);
-        assert!(!report.coverage.omissions.is_empty());
-        let token = ReviewCancellation::default();
-        token.cancel();
-        assert_eq!(
-            api.review("demo-kpi", token).unwrap().semantic_status,
-            SemanticStatus::Cancelled
-        );
-    }
-}
-
 /// A crowded architecture (12 containers, skips, back edges, a cycle) for
 /// checking the diagram at scale: `XEMNAS_DEMO_ARCH=large`.
 fn stress_architecture() -> Option<application::architecture::Architecture> {
@@ -1096,4 +1028,72 @@ fn stress_architecture() -> Option<application::architecture::Architecture> {
         ],
         hidden: 3,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use application::inbox::{Inbox, InboxFilter};
+
+    #[test]
+    fn demo_is_ephemeral_and_project_scoped_with_readable_sources() {
+        let store = store().expect("demo store");
+        let inbox = Inbox::new(store.clone());
+        for (project, count) in [("demo-xemnas", 5), ("demo-kpi", 1)] {
+            let page = inbox
+                .list(&InboxFilter {
+                    project_id: Some(project.into()),
+                    ..InboxFilter::default()
+                })
+                .expect("list");
+            assert_eq!(page.candidates.len(), count);
+            assert!(page.candidates.iter().all(|row| row.project_id == project));
+            let detail = inbox.detail(&page.candidates[0].id).expect("detail");
+            assert_eq!(detail.artifacts.len(), 2);
+            assert!(detail
+                .artifacts
+                .iter()
+                .all(|artifact| !artifact.content.is_empty()));
+        }
+        let graph = application::graph::KnowledgeGraph::new(store.clone());
+        let map = graph.project_map("demo-xemnas", None).expect("map");
+        assert_eq!(map.entities.len(), 8, "components and technologies");
+        assert!(
+            map.entities.iter().any(|row| row.decisions == 2),
+            "confirmed links"
+        );
+        let report = graph
+            .refresh_suggestions("demo-xemnas")
+            .expect("suggestions");
+        assert!(
+            !report.components.is_empty(),
+            "the other sample files propose components"
+        );
+        assert!(
+            ProjectRepository::list(&SqliteStore::open(":memory:").expect("fresh store"))
+                .expect("projects")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn review_fixture_preserves_local_findings_and_reports_coverage() {
+        use application::knowledge_review::*;
+        let api = SampleKnowledgeReview;
+        let local = api.inspect("demo-xemnas").unwrap();
+        assert_eq!(local.semantic_status, SemanticStatus::NotRequested);
+        let report = api
+            .review("demo-kpi", ReviewCancellation::default())
+            .unwrap();
+        assert_eq!(report.project_id, "demo-kpi");
+        assert_eq!(report.findings[0], local.findings[0]);
+        assert_eq!(report.semantic_status, SemanticStatus::Partial);
+        assert!(!report.coverage.omissions.is_empty());
+        let token = ReviewCancellation::default();
+        token.cancel();
+        assert_eq!(
+            api.review("demo-kpi", token).unwrap().semantic_status,
+            SemanticStatus::Cancelled
+        );
+    }
 }

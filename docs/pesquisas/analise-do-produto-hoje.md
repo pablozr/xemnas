@@ -198,6 +198,12 @@ regra proposta, para toda tela nova e para revisar as atuais:
 4. **O texto fica para o porquê:** a justificativa, a evidência, a pergunta. Se uma
    frase só repete o que um número ou uma forma já diz, a frase sai.
 
+**Feito:** `meter`, `meter_stack`, `sparkline` e `ring` em `ui::patterns`, aplicados
+no Contexto (tendência de entregas e sessões por dia, anéis de tokens por bloco e de
+itens fora do orçamento, barra de orçamento por entrega) e na confirmação de apagar
+um projeto (composição do que será apagado). Projetos não tem mais dados que nome,
+caminho e data; a tira por projeto depende de o backend expor contagens.
+
 Primitivas pequenas a acrescentar em `ui::patterns` (todas desenhadas em canvas,
 baratas, com equivalente textual no `aria_label`): `meter` (barra com limite),
 `ring` (anel de progresso), `sparkline` (linha de tendência), `heat_strip` (tira
@@ -208,7 +214,7 @@ Onde aplicar, por impacto:
 
 | Tela | Hoje | Forma proposta |
 | --- | --- | --- |
-| Contexto | "5 entregas, 162 tokens por bloco" em números | Linha de entregas por dia; barra de orçamento por bloco (já há); funil entregue → absorvido → arquivo tocado (Eficácia) |
+| Contexto (feito) | "5 entregas, 162 tokens por bloco" em números | Linha de entregas por dia; barra de orçamento por bloco (já há); funil entregue → absorvido → arquivo tocado (Eficácia) |
 | Revisão | Lista de títulos e datas | Ícone e cor por tipo e risco do candidato; mini-mapa dos componentes que ele toca; barra de adições e remoções da evidência; confiança como medidor (já há) |
 | Decisões | Lista por mês | Trilho de versões com marcos; vizinhança da decisão (relações) em mini-grafo; idade e "reconsiderar quando" como marca |
 | Mapa em Blocos | Cartões com texto e contagens | Linha de atividade por bloco; selo de conflito; barra de cobertura (decisões por componente) |

@@ -47,8 +47,9 @@ use super::format::{calendar_date, clock, day_heading, plural, short_date, thous
 use crate::ui::controls::{action_button, button_foreground, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
-    count_chip, count_up, empty_panel, error_banner, index_rail, index_row, radio_list, radio_row,
-    reading_page, section_header, section_label, skeleton_list, status_pill, toast, TOAST_DURATION,
+    count_chip, count_up, empty_panel, error_banner, index_rail, index_row, meter, radio_list,
+    radio_row, reading_page, ring, section_header, section_label, share, skeleton_list, sparkline,
+    status_pill, toast, TOAST_DURATION,
 };
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme};
@@ -1700,7 +1701,12 @@ impl<S: ContextStores> ContextScreen<S> {
             .to_string();
         let summary = DeliverySummary::since(deliveries, &since);
         let measured = summary.deliveries - summary.sent;
-        let figure = |value: usize, label: &'static str, detail: String, first: bool| {
+        let (per_day, sessions_per_day) = daily(deliveries, 7);
+        let figure = |value: usize,
+                      label: &'static str,
+                      detail: String,
+                      first: bool,
+                      form: Option<gpui::AnyElement>| {
             div()
                 .flex_1()
                 .min_w(px(0.0))
@@ -1714,11 +1720,20 @@ impl<S: ContextStores> ContextScreen<S> {
                         .border_l_1()
                         .border_color(colors.hairline_divider())
                 })
-                .child(count_up(
-                    label,
-                    value,
-                    text_style(div(), TypeScale::HEADING_1).text_color(colors.text_primary()),
-                ))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap(px(SpacingScale::S2))
+                        .child(count_up(
+                            label,
+                            value,
+                            text_style(div(), TypeScale::HEADING_1)
+                                .text_color(colors.text_primary()),
+                        ))
+                        .children(form),
+                )
                 .child(
                     text_style(div(), TypeScale::LABEL)
                         .text_color(colors.text_secondary())
@@ -1741,24 +1756,51 @@ impl<S: ContextStores> ContextScreen<S> {
                 "Entregas",
                 format!("{} enviadas · {measured} medidas", summary.sent),
                 true,
+                Some(sparkline(&per_day, 56.0, 22.0, colors.accent_default()).into_any_element()),
             ))
             .child(figure(
                 summary.sessions,
                 "Sessões do agente",
                 "conversas que receberam".to_owned(),
                 false,
+                Some(
+                    sparkline(&sessions_per_day, 56.0, 22.0, colors.status_info())
+                        .into_any_element(),
+                ),
             ))
             .child(figure(
                 summary.average_tokens(),
                 "Tokens por bloco",
                 format!("média · limite {budget}"),
                 false,
+                Some(
+                    ring(
+                        theme,
+                        share(summary.average_tokens(), budget),
+                        26.0,
+                        colors.status_info(),
+                    )
+                    .into_any_element(),
+                ),
             ))
             .child(figure(
                 summary.omitted,
                 "Fora do orçamento",
                 "itens que não couberam".to_owned(),
                 false,
+                Some(
+                    ring(
+                        theme,
+                        share(summary.omitted, summary.items + summary.omitted),
+                        26.0,
+                        if summary.omitted > 0 {
+                            colors.status_warning()
+                        } else {
+                            colors.status_success()
+                        },
+                    )
+                    .into_any_element(),
+                ),
             ));
 
         // The latest deliveries.
@@ -2023,20 +2065,7 @@ impl<S: ContextStores> ContextScreen<S> {
                             .text_color(colors.text_muted())
                             .child(format!("{} / {budget} tokens", delivery.tokens)),
                     )
-                    .child(
-                        div()
-                            .h(px(3.0))
-                            .w_full()
-                            .rounded_full()
-                            .bg(colors.surface())
-                            .child(
-                                div()
-                                    .h_full()
-                                    .w(gpui::relative(fill))
-                                    .rounded_full()
-                                    .bg(tint),
-                            ),
-                    ),
+                    .child(meter(theme, fill, tint)),
             )
             .when(expandable, |row| {
                 row.child(icon(
@@ -2399,9 +2428,65 @@ fn kind_icon(kind: ClaimKind) -> IconName {
     }
 }
 
+/// Deliveries and distinct sessions per day over the last `days` days, oldest
+/// first (days with none count 0), for the trend beside the figures.
+fn daily(deliveries: &[Delivery], days: usize) -> (Vec<f32>, Vec<f32>) {
+    let today = chrono::Utc::now().date_naive();
+    let mut counts = vec![0.0_f32; days];
+    let mut sessions: Vec<std::collections::BTreeSet<&str>> = vec![Default::default(); days];
+    for delivery in deliveries {
+        let Some(day) = delivery
+            .created_at
+            .get(..10)
+            .and_then(|day| chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d").ok())
+        else {
+            continue;
+        };
+        let ago = (today - day).num_days();
+        if (0..days as i64).contains(&ago) {
+            let at = days - 1 - ago as usize;
+            counts[at] += 1.0;
+            sessions[at].insert(delivery.session_id.as_str());
+        }
+    }
+    (
+        counts,
+        sessions.iter().map(|set| set.len() as f32).collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{claim_failure, kind_label, kind_plural};
+    use super::{claim_failure, daily, kind_label, kind_plural};
+    use application::injection::{Delivery, InjectionMode};
+
+    fn delivery(days_ago: i64, session: &str) -> Delivery {
+        Delivery {
+            injection_id: format!("i-{days_ago}-{session}"),
+            session_id: session.into(),
+            mode: InjectionMode::Shadow,
+            tokens: 10,
+            omitted: 0,
+            created_at: (chrono::Utc::now() - chrono::Duration::days(days_ago))
+                .format("%Y-%m-%dT%H:%M:%SZ")
+                .to_string(),
+            items: vec![],
+        }
+    }
+
+    #[test]
+    fn deliveries_are_counted_per_day_oldest_first() {
+        let list = [
+            delivery(0, "a"),
+            delivery(0, "b"),
+            delivery(0, "a"),
+            delivery(2, "a"),
+            delivery(30, "c"),
+        ];
+        let (per_day, sessions) = daily(&list, 7);
+        assert_eq!(per_day, vec![0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 3.0]);
+        assert_eq!(sessions, vec![0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 2.0]);
+    }
     use domain::claims::ClaimKind;
 
     #[test]
