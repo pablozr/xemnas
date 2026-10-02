@@ -18,6 +18,9 @@ use gpui::{
 };
 
 mod diagram;
+mod parts;
+
+use parts::{Explorer, Modal};
 
 use super::context::OpenDecision;
 use super::format::{clipped, plural, roman, short_date};
@@ -60,11 +63,23 @@ pub struct OverviewScreen {
     hover_step: Option<usize>,
     /// Box of the architecture diagram under the pointer.
     hover_box: Option<usize>,
+    /// The modal over the page, if one is open.
+    modal: Option<Modal>,
+    /// Where "Voltar" in a part's modal goes.
+    back: Option<Modal>,
+    /// The explorer's view, flow and picked cell.
+    explorer: Explorer,
+    /// Whether the grid of parts shows all of them.
+    parts_expanded: bool,
+    /// The modal asked for focus (done on the next frame, once it exists).
+    focus_modal: bool,
     error: Option<String>,
     notice: Option<String>,
     focus: BTreeMap<String, FocusHandle>,
     /// Demo-only flow to open once the overview is read.
     route_flow: Option<usize>,
+    /// Demo-only modal to open once the overview is read.
+    route_modal: Option<String>,
 }
 
 impl EventEmitter<OpenDecision> for OverviewScreen {}
@@ -84,10 +99,16 @@ impl OverviewScreen {
             flow: None,
             hover_step: None,
             hover_box: None,
+            modal: None,
+            back: None,
+            explorer: Explorer::default(),
+            parts_expanded: false,
+            focus_modal: false,
             error: None,
             notice: None,
             focus: BTreeMap::new(),
             route_flow: None,
+            route_modal: None,
         }
     }
 
@@ -100,6 +121,10 @@ impl OverviewScreen {
         self.generation += 1;
         self.view = None;
         self.flow = None;
+        self.modal = None;
+        self.back = None;
+        self.explorer = Explorer::default();
+        self.parts_expanded = false;
         self.loaded = false;
         self.error = None;
         self.refresh(cx);
@@ -108,6 +133,12 @@ impl OverviewScreen {
     /// Opens a flow by position once the overview is read (demo captures).
     pub fn open_flow(&mut self, index: usize) {
         self.route_flow = Some(index);
+    }
+
+    /// Opens a modal once the overview is read (demo captures): `part3`,
+    /// `explorer`, `explorer1` (a flow) or `matrix`.
+    pub fn open_demo_modal(&mut self, name: &str) {
+        self.route_modal = Some(name.to_owned());
     }
 
     /// Reads the stored overview again (cheap; never calls the provider).
@@ -168,12 +199,17 @@ impl OverviewScreen {
                         if let Some(flow) = this.route_flow.take() {
                             this.flow = Some(flow);
                         }
+                        if let Some(name) = this.route_modal.take() {
+                            this.open_by_name(&name);
+                        }
                     }
                     Outcome::Generated(Ok(view)) => {
                         this.loaded = true;
                         let queued = view.queued_documents;
                         this.view = Some(view);
                         this.flow = None;
+                        this.modal = None;
+                        this.back = None;
                         this.show_notice(
                             match queued {
                                 0 => "Visão atualizada.".into(),
@@ -591,8 +627,9 @@ impl OverviewScreen {
                     ),
             );
         }
-        let diagram = (!architecture.is_empty()).then(|| {
-            self.architecture_diagram(theme, architecture, Some(flow_at), self.hover_step, cx)
+        let narrowed = architecture.narrowed_to(flow_at);
+        let diagram = (!narrowed.is_empty()).then(|| {
+            self.architecture_diagram(theme, &narrowed, Some(flow_at), self.hover_step, cx)
         });
         div()
             .flex()
@@ -621,7 +658,7 @@ impl OverviewScreen {
                         text_style(div(), TypeScale::BODY_SMALL)
                             .text_color(colors.text_muted())
                             .child(
-                                "Os números são os passos abaixo. Passe o mouse num passo para acender a seta; clique numa caixa para abri-la no Mapa.",
+                                "Os números são os passos abaixo. Passe o mouse num passo para acender a seta; clique numa caixa para ver o que ela chama e quem a chama.",
                             ),
                     )
                     .child(diagram)
@@ -704,8 +741,8 @@ impl OverviewScreen {
         let flows = overview.flows.clone();
         let flows_grid = self.render_flows(theme, &flows, cx);
         let architecture = overview.architecture.clone();
-        let diagram = (!architecture.is_empty())
-            .then(|| self.architecture_diagram(theme, &architecture, None, None, cx));
+        let parts =
+            (!architecture.is_empty()).then(|| self.parts_section(theme, &architecture, cx));
         div()
             .flex()
             .flex_col()
@@ -726,32 +763,7 @@ impl OverviewScreen {
                     .child(section_label(theme, "Resumo"))
                     .child(summary),
             )
-            .children(diagram.map(|diagram| {
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(SpacingScale::S3))
-                    .child(section_label(theme, "Arquitetura"))
-                    .child(
-                        text_style(div(), TypeScale::BODY_SMALL)
-                            .text_color(colors.text_muted())
-                            .child(
-                                "As partes do projeto e por onde os fluxos passam entre elas. Clique numa caixa para abri-la no Mapa; abra um fluxo para ver o caminho numerado.",
-                            ),
-                    )
-                    .child(diagram)
-                    .when(architecture.hidden > 0, |column| {
-                        column.child(
-                            text_style(div(), TypeScale::META)
-                                .text_color(colors.text_muted())
-                                .child(format!(
-                                    "Mostra as {} partes mais ligadas aos fluxos; {} ficam no Mapa.",
-                                    architecture.containers.len(),
-                                    architecture.hidden
-                                )),
-                        )
-                    })
-            }))
+            .children(parts)
             .when(!flows.is_empty(), |column| {
                 column.child(
                     div()
@@ -771,9 +783,10 @@ impl OverviewScreen {
 }
 
 impl Render for OverviewScreen {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _probe = crate::ui::perf::Probe::start("overview");
         let theme = Theme::current(cx);
+        let mut modal: Option<AnyElement> = None;
         let body: AnyElement = if !self.loaded {
             div()
                 .p(px(SpacingScale::S8))
@@ -787,9 +800,23 @@ impl Render for OverviewScreen {
                 let flow_at = self.flow.unwrap_or_default();
                 let page =
                     self.render_flow(&theme, &flow, flow_at, &view.overview.architecture, cx);
+                modal = self.render_modal(
+                    &theme,
+                    &view.overview.flows,
+                    &view.overview.architecture,
+                    window.viewport_size(),
+                    cx,
+                );
                 reading_page("overview-flow-page", page).into_any_element()
             } else {
                 let column = self.render_summary(&theme, &view, cx);
+                modal = self.render_modal(
+                    &theme,
+                    &view.overview.flows,
+                    &view.overview.architecture,
+                    window.viewport_size(),
+                    cx,
+                );
                 reading_page("overview-page", column).into_any_element()
             }
         } else {
@@ -817,6 +844,11 @@ impl Render for OverviewScreen {
                 )
                 .into_any_element()
         };
+        if self.focus_modal && modal.is_some() {
+            self.focus_modal = false;
+            let handle = self.focus_for("overview-modal", cx);
+            cx.defer_in(window, move |_, window, cx| window.focus(&handle, cx));
+        }
         div()
             .size_full()
             .relative()
@@ -833,6 +865,7 @@ impl Render for OverviewScreen {
                     .clone()
                     .map(|notice| toast(&theme, &notice, 24.0)),
             )
+            .children(modal)
     }
 }
 

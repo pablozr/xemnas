@@ -711,6 +711,8 @@ impl<
                             .and_then(|index| index.parse().ok()),
                     ) {
                         screen.update(cx, |screen, _| screen.open_flow(flow));
+                    } else if let Some(screen) = &self.overview {
+                        screen.update(cx, |screen, _| screen.open_demo_modal(&view));
                     }
                 }
                 _ => {}

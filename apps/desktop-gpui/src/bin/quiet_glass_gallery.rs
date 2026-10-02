@@ -24,7 +24,7 @@ use xemnas_desktop::ui::tokens::{SpacingScale, TypeScale};
 
 actions!(quiet_glass_gallery, [TabNext]);
 
-const GLYPHS: [IconName; 22] = [
+const GLYPHS: [IconName; 23] = [
     IconName::List,
     IconName::File,
     IconName::Info,
@@ -47,6 +47,7 @@ const GLYPHS: [IconName; 22] = [
     IconName::Expand,
     IconName::ChevronRight,
     IconName::ChevronDown,
+    IconName::ChevronUp,
 ];
 
 struct Gallery {

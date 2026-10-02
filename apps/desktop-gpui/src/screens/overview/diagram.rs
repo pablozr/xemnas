@@ -14,7 +14,7 @@ use gpui::{
     Window,
 };
 
-use super::{OpenEntity, OverviewScreen};
+use super::OverviewScreen;
 use crate::screens::format::{plural, roman};
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{RadiusScale, SpacingScale, TypeScale};
@@ -602,8 +602,8 @@ impl OverviewScreen {
         for (at, container) in architecture.containers.iter().enumerate() {
             let (x, y) = laid.boxes[at];
             let touched = in_flow(container);
-            let id = container.entity_id.clone();
             let element_id = format!("overview-box-{at}");
+            let id = container.entity_id.clone();
             let facts = {
                 let mut facts = vec![plural(container.decisions, "decisão", "decisões")];
                 if container.parts > 0 {
@@ -612,7 +612,7 @@ impl OverviewScreen {
                 facts.join(" · ")
             };
             let label = format!(
-                "{}: {}{} Abrir no Mapa.",
+                "{}: {}{} Ver detalhes.",
                 container.name,
                 facts,
                 if container.conflicts > 0 {
@@ -670,7 +670,7 @@ impl OverviewScreen {
                 .hover(move |style| style.border_color(colors.glass_border_card_hover()))
                 .role(Role::Link)
                 .aria_label(label)
-                .tooltip(tooltip(format!("{} · abrir no Mapa", container.name), None))
+                .tooltip(tooltip(format!("{} · ver detalhes", container.name), None))
                 .focus_visible(crate::ui::controls::focus_ring(theme))
                 .when(container.conflicts > 0, |boxed| {
                     boxed.child(
@@ -708,7 +708,7 @@ impl OverviewScreen {
             diagram = diagram.child(self.pressable(
                 boxed,
                 &element_id,
-                move |_, cx| cx.emit(OpenEntity(id.clone())),
+                move |this, cx| this.open_part_by_id(&id, cx),
                 cx,
             ));
         }

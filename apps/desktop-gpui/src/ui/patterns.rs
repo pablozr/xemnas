@@ -890,7 +890,7 @@ pub fn meter(theme: &Theme, fraction: f32, color: Rgba) -> Div {
         .w_full()
         .rounded_full()
         .overflow_hidden()
-        .bg(theme.colors.surface())
+        .bg(theme.colors.glass_fill_medium())
         .child(
             div()
                 .h_full()
@@ -910,7 +910,7 @@ pub fn meter_stack(theme: &Theme, parts: &[(usize, Rgba)]) -> Div {
         .flex()
         .rounded_full()
         .overflow_hidden()
-        .bg(theme.colors.surface());
+        .bg(theme.colors.glass_fill_medium());
     parts
         .iter()
         .filter(|(weight, _)| *weight > 0)

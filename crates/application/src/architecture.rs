@@ -73,6 +73,22 @@ pub struct Interaction {
     pub steps: Vec<StepRef>,
 }
 
+/// A container on the other end of an interaction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Neighbour {
+    /// Position of the container in [`Architecture::containers`].
+    pub index: usize,
+    /// The flow steps that make the interaction.
+    pub steps: Vec<StepRef>,
+}
+
+impl Neighbour {
+    /// The first medium a step names, when any does.
+    pub fn via(&self) -> Option<&str> {
+        self.steps.iter().find_map(|step| step.via.as_deref())
+    }
+}
+
 /// The containers of a project and how its flows move between them.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Architecture {
@@ -96,6 +112,88 @@ impl Architecture {
         self.containers
             .iter()
             .find(|container| container.entity_id == entity_id)
+    }
+
+    /// Position of the container with this entity id.
+    pub fn position(&self, entity_id: &str) -> Option<usize> {
+        self.containers
+            .iter()
+            .position(|container| container.entity_id == entity_id)
+    }
+
+    /// The interaction that goes from the container at `from` to the one at
+    /// `to`, when some flow steps that way.
+    pub fn interaction(&self, from: usize, to: usize) -> Option<&Interaction> {
+        let (from, to) = (self.containers.get(from)?, self.containers.get(to)?);
+        self.interactions.iter().find(|interaction| {
+            interaction.from == from.entity_id && interaction.to == to.entity_id
+        })
+    }
+
+    /// Only what one flow touches: its containers (in the same order) and
+    /// the steps of that flow, so a drawing of the flow carries no part it
+    /// does not pass through.
+    pub fn narrowed_to(&self, flow: usize) -> Architecture {
+        Architecture {
+            containers: self
+                .containers
+                .iter()
+                .filter(|container| container.flows.contains(&flow))
+                .cloned()
+                .collect(),
+            interactions: self
+                .interactions
+                .iter()
+                .filter_map(|interaction| {
+                    let steps: Vec<StepRef> = interaction
+                        .steps
+                        .iter()
+                        .filter(|step| step.flow == flow)
+                        .cloned()
+                        .collect();
+                    (!steps.is_empty()).then(|| Interaction {
+                        from: interaction.from.clone(),
+                        to: interaction.to.clone(),
+                        steps,
+                    })
+                })
+                .collect(),
+            hidden: 0,
+        }
+    }
+
+    /// What the container at `index` calls, the most used first.
+    pub fn calls(&self, index: usize) -> Vec<Neighbour> {
+        self.neighbours(index, true)
+    }
+
+    /// What calls the container at `index`, the most used first.
+    pub fn called_by(&self, index: usize) -> Vec<Neighbour> {
+        self.neighbours(index, false)
+    }
+
+    fn neighbours(&self, index: usize, outgoing: bool) -> Vec<Neighbour> {
+        let Some(own) = self.containers.get(index) else {
+            return Vec::new();
+        };
+        let mut found: Vec<Neighbour> = self
+            .interactions
+            .iter()
+            .filter_map(|interaction| {
+                let (mine, other) = if outgoing {
+                    (&interaction.from, &interaction.to)
+                } else {
+                    (&interaction.to, &interaction.from)
+                };
+                (*mine == own.entity_id).then_some(())?;
+                Some(Neighbour {
+                    index: self.position(other)?,
+                    steps: interaction.steps.clone(),
+                })
+            })
+            .collect();
+        found.sort_by_key(|neighbour| (std::cmp::Reverse(neighbour.steps.len()), neighbour.index));
+        found
     }
 
     /// The interactions of one flow, in step order.
@@ -417,6 +515,108 @@ mod tests {
             .unwrap()
             .technologies
             .is_empty());
+    }
+
+    fn container_named(id: &str) -> Container {
+        Container {
+            entity_id: id.into(),
+            name: id.into(),
+            ..Container::default()
+        }
+    }
+
+    fn interaction(from: &str, to: &str, steps: &[(usize, Option<&str>)]) -> Interaction {
+        Interaction {
+            from: from.into(),
+            to: to.into(),
+            steps: steps
+                .iter()
+                .map(|(step, via)| StepRef {
+                    flow: 0,
+                    step: *step,
+                    title: format!("passo {step}"),
+                    via: via.map(str::to_owned),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn neighbours_list_who_calls_and_who_is_called_most_used_first() {
+        let architecture = Architecture {
+            containers: vec![
+                container_named("api"),
+                container_named("jobs"),
+                container_named("store"),
+            ],
+            interactions: vec![
+                interaction("api", "jobs", &[(1, Some("fila"))]),
+                interaction("api", "store", &[(2, None), (3, Some("SQL"))]),
+                interaction("jobs", "store", &[(4, None)]),
+            ],
+            hidden: 0,
+        };
+        let calls = architecture.calls(0);
+        assert_eq!(
+            calls.iter().map(|n| n.index).collect::<Vec<_>>(),
+            vec![2, 1],
+            "two steps beat one"
+        );
+        assert_eq!(
+            calls[0].via(),
+            Some("SQL"),
+            "the first medium any step names"
+        );
+        assert_eq!(calls[1].via(), Some("fila"));
+        let into_store = architecture.called_by(2);
+        assert_eq!(
+            into_store.iter().map(|n| n.index).collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+        assert!(architecture.called_by(0).is_empty());
+        assert!(architecture.calls(2).is_empty());
+        assert!(architecture.calls(9).is_empty(), "no such container");
+        assert_eq!(
+            architecture.interaction(0, 2).map(|i| i.steps.len()),
+            Some(2)
+        );
+        assert!(architecture.interaction(2, 0).is_none());
+    }
+
+    #[test]
+    fn a_flow_keeps_only_its_own_parts_and_steps() {
+        let mut architecture = Architecture {
+            containers: vec![
+                container_named("api"),
+                container_named("jobs"),
+                container_named("store"),
+                container_named("docs"),
+            ],
+            interactions: vec![
+                interaction("api", "jobs", &[(1, None)]),
+                interaction("jobs", "store", &[(2, None)]),
+            ],
+            hidden: 2,
+        };
+        architecture.containers[0].flows = vec![0, 1];
+        architecture.containers[1].flows = vec![0];
+        architecture.containers[2].flows = vec![1];
+        architecture.interactions[1].steps[0].flow = 1;
+        let first = architecture.narrowed_to(0);
+        assert_eq!(
+            first
+                .containers
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["api", "jobs"],
+            "docs and store are not in the flow"
+        );
+        assert_eq!(first.interactions.len(), 1);
+        assert_eq!(first.hidden, 0);
+        let second = architecture.narrowed_to(1);
+        assert_eq!(second.containers.len(), 2);
+        assert!(second.interaction(0, 1).is_none(), "api to jobs is flow 0");
     }
 
     #[test]

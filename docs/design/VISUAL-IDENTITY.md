@@ -295,42 +295,56 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   primário; gerando: "Gerando…" desabilitado; erro em `error_banner`; nota de
   procedência no rodapé. Nunca texto sem fonte.
 
-## Visão — arquitetura em diagrama
+## Visão — arquitetura em partes, modal e explorador
 
-A Visão mostra a arquitetura como figura, não só como texto (C4, nível 2 e a sua
-vista dinâmica). O modelo vem de `application::architecture::derive`, a partir do
-Mapa e dos fluxos da Visão, sem IA nova: as caixas são os componentes de topo, a
-tecnologia de cada uma vem das decisões que a tocam e usam, e uma seta existe só
-porque um fluxo passa de um componente a outro.
+A Visão não desenha o sistema inteiro na página: um desenho com todos os fluxos
+junto vira emaranhado (a literatura de legibilidade de grafos mostra que, acima de
+~20 vértices ou em grafos densos, a matriz vence o nó-e-seta; o nó-e-seta só ganha
+para seguir um caminho). Por isso a arquitetura se mostra aos poucos, no padrão de
+Structurizr (clicar num elemento abre um modal) e IcePanel (um fluxo por vez). O
+modelo vem de `application::architecture`, a partir do Mapa e dos fluxos da Visão,
+sem IA nova: as partes são os componentes de topo, a tecnologia vem das decisões
+que as tocam e uma ligação existe só porque um fluxo passa de uma parte a outra.
 
-- **Na página da Visão**, entre o Resumo e os fluxos: seção "Arquitetura" com uma
-  frase do que é e o diagrama na coluna de 760 px. Até 12 caixas (as que os
-  fluxos mais atravessam primeiro); o resto é contado ("N ficam no Mapa").
-- **No fluxo aberto**: "O caminho no sistema". As setas do fluxo ficam lavanda e
-  numeradas com os mesmos algarismos romanos dos passos; as caixas que ele não
-  toca esmaecem; passar o mouse num passo acende a seta. A ordem das colunas
-  segue só esse fluxo, então o caminho se lê da esquerda para a direita.
-- **Desenho:** colunas da esquerda para a direita (até 4, 14 px de margem livre
-  nas laterais), caixas de 150 a 224 px por 92 px. Setas ortogonais com cantos de
+- **Na página** (entre o Resumo e os fluxos): seção "Arquitetura" com o total, o
+  botão "Ver diagrama" e uma grade de cartões, três por linha, **seis no início**
+  ("Mostrar as outras N" expande; "Mostrar menos" recolhe). Cartão de 112 px, todos
+  iguais: nome, papel (1 linha), tecnologias em mono, barra de decisões contra a
+  parte mais pesada e "→ chama · ← chamada por". Ponto âmbar = conflito. É um
+  botão real (foco, `aria_label`).
+- **Modal da parte** (620 px): cabeçalho com nome e papel; tecnologias; "Quem chama"
+  e "Quem ela chama" lado a lado (cada linha abre aquela parte, com o `via` em mono e
+  a contagem de passos); "Fluxos que passam por ela" (chips que abrem o explorador
+  naquele fluxo); "Em números" (decisões, partes dentro, conflitos como barras).
+  Rodapé: "Voltar" (quando veio de outro modal), "Ver no diagrama" e a única
+  primária, "Abrir no Mapa".
+- **Explorador** (840 px), alternador "Diagrama | Matriz":
+  - *Diagrama*: um fluxo por vez, escolhido em chips numerados; só as partes do
+    fluxo, setas ortogonais numeradas com os algarismos romanos dos passos e, abaixo,
+    os passos como linhas (título, `via`, "de → para"); passar o mouse numa linha
+    acende a seta. Fluxo sem seta entre partes diz isso em vez de desenhar vazio.
+  - *Matriz*: linhas são quem chama, colunas quem é chamado (numeradas, os nomes
+    ficam nas linhas), cada célula cheia traz a quantidade de passos; passar o mouse
+    ou pressionar uma célula mostra quais passos são, de quais fluxos e por qual
+    meio. Sem linhas, sem cruzamentos: segue legível com as 12 partes.
+- **Modal:** `deferred` sobre a área da página, com `scrim`, `panel_in`, painel
+  `floating` de `radius.dialog`, sombra `Dialog`, cabeçalho fixo, corpo que rola e
+  rodapé fixo. Esc, o botão de fechar ou clicar no scrim fecham; ele recebe o foco
+  ao abrir. Altura máxima: a janela menos 150 px. Um modal de cada vez: abrir uma
+  parte por cima do explorador guarda o explorador para o "Voltar".
+- **Desenho do diagrama:** colunas da esquerda para a direita (até 4, 14 px de
+  margem livre), caixas de 150 a 224 px por 92 px. Setas ortogonais com cantos de
   9 px e cabeça: saem do lado da caixa, descem pelo canal livre entre as colunas
   (cada seta num trilho próprio) e entram no lado oposto, então nenhuma atravessa
-  uma caixa (teste com 12 contêineres, ciclos e retornos). A que pula uma coluna
-  ou volta sai pelo canal, corre por cima das caixas numa faixa só dela (9 px
-  entre faixas, reservadas acima só para as setas que de fato as usam) e desce
-  pelo canal antes do destino. Entre caixas da mesma coluna a seta corre na
-  margem. Componentes que nenhum fluxo toca ficam numa grade abaixo; setas deles
-  não são desenhadas. Layout determinístico, sem simulação de forças (fases de
-  Sugiyama: ciclos, camadas, ordem por baricentro, posição, roteamento).
-- **Caixa:** nome, papel (a descrição do componente, 1 linha), tecnologias em mono
-  na cor de tecnologia do grafo e "N decisões · M partes". É um elemento real:
-  foco visível, `aria_label`, tooltip, clique abre o componente no Mapa. A lista
-  de fluxos continua como equivalente textual.
-- **Conflito** é um ponto âmbar no canto da caixa (e consta no `aria_label`).
-  Passar o mouse numa caixa acende as setas que a tocam e apaga as outras.
-- Setas sem fluxo selecionado ficam em hairline de 1 px a 55% (`text_muted`);
-  com fluxo, as outras caem a 18%. Cada passo pode trazer o meio por onde o
-  componente anterior chega a ele ("via HTTP/JSON", em mono na cor de tecnologia),
-  que o modelo informa ao gerar a Visão (`OverviewStep.via`, opcional).
+  uma caixa (teste com 12 partes, ciclos e retornos). A que pula coluna ou volta
+  corre por cima, em faixa própria (9 px entre faixas, reservadas só para as que as
+  usam). Entre caixas da mesma coluna a seta corre na margem. Layout determinístico
+  (fases de Sugiyama: ciclos, camadas, ordem por baricentro, posição, roteamento).
+  A página de um fluxo aberto usa o mesmo desenho do fluxo, com as caixas dele só.
+- **Caixa do diagrama:** nome, papel, tecnologias em mono e "N decisões · M partes";
+  ponto âmbar de conflito; clicar abre o modal da parte. Passar o mouse numa caixa
+  acende as setas que a tocam. Cada passo pode trazer o meio ("via HTTP/JSON", mono
+  na cor de tecnologia), informado pelo modelo ao gerar a Visão (`OverviewStep.via`).
 
 ## Formas para números
 

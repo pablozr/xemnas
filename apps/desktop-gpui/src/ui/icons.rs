@@ -107,6 +107,8 @@ pub enum IconName {
     ChevronRight,
     /// Open disclosure.
     ChevronDown,
+    /// Fold a section back up.
+    ChevronUp,
     /// Application settings.
     Settings,
     /// AI and privacy settings.
@@ -226,6 +228,7 @@ impl IconName {
             Self::Expand => glyph!(r#"<path d="M9 4H4v5M15 4h5v5M4 15v5h5M20 15v5h-5"/>"#),
             Self::ChevronRight => glyph!(r#"<path d="m9.5 6 6 6-6 6"/>"#),
             Self::ChevronDown => glyph!(r#"<path d="m6 9.5 6 6 6-6"/>"#),
+            Self::ChevronUp => glyph!(r#"<path d="m6 14.5 6-6 6 6"/>"#),
             Self::Settings => glyph!(
                 r#"<circle cx="12" cy="12" r="3"/><path d="M12 2.75v2.5M12 18.75v2.5M2.75 12h2.5M18.75 12h2.5M5.46 5.46l1.77 1.77M16.77 16.77l1.77 1.77M5.46 18.54l1.77-1.77M16.77 7.23l1.77-1.77"/><circle cx="12" cy="12" r="6.75"/>"#
             ),

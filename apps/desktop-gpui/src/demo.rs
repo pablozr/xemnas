@@ -989,10 +989,10 @@ fn stress_architecture() -> Option<application::architecture::Architecture> {
             flow,
             step,
             title: format!("{from} para {to}"),
-            via: None,
+            via: step.is_multiple_of(2).then(|| "HTTP/JSON".to_owned()),
         }],
     };
-    Some(Architecture {
+    let mut architecture = Architecture {
         containers: names
             .iter()
             .enumerate()
@@ -1027,7 +1027,22 @@ fn stress_architecture() -> Option<application::architecture::Architecture> {
             link("search", "store", 1, 5),
         ],
         hidden: 3,
-    })
+    };
+    // A part is in the flows whose steps touch it.
+    for container in &mut architecture.containers {
+        let mut flows: Vec<usize> = architecture
+            .interactions
+            .iter()
+            .filter(|interaction| {
+                interaction.from == container.entity_id || interaction.to == container.entity_id
+            })
+            .flat_map(|interaction| interaction.steps.iter().map(|step| step.flow))
+            .collect();
+        flows.sort_unstable();
+        flows.dedup();
+        container.flows = flows;
+    }
+    Some(architecture)
 }
 
 #[cfg(test)]
