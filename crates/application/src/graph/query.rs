@@ -925,7 +925,7 @@ where
 
         let mut events = Vec::new();
         let mut push = |at: &str, kind: TimelineKind, node: NodeRef, other: Option<NodeRef>| {
-            if !in_range(at) || !(wanted(&node) || other.as_ref().is_some_and(&wanted)) {
+            if !in_range(at) || !(wanted(&node) || other.as_ref().is_some_and(wanted)) {
                 return;
             }
             let Some(summary) = snapshot.summary(&node) else {
