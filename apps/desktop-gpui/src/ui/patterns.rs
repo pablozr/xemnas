@@ -43,6 +43,136 @@ pub fn count_up(id: impl Into<SharedString>, value: usize, element: Div) -> Anim
     )
 }
 
+/// A sentence with some words in the strong face: `(text, strong)` parts,
+/// laid out word by word (like [`word_wrapped`]) so it wraps cleanly. Used to
+/// say what a suggestion is about with the names that matter standing out.
+pub fn rich_sentence(theme: &Theme, parts: &[(String, bool)], token: TypeToken) -> Div {
+    let colors = theme.colors;
+    // Words with their face; punctuation that opens a part sticks to the
+    // word before it instead of standing apart.
+    let mut flow: Vec<(String, bool)> = Vec::new();
+    for (text, strong) in parts {
+        for (position, word) in text.split_whitespace().enumerate() {
+            let sticks = position == 0
+                && !flow.is_empty()
+                && word.starts_with(['.', ',', ';', ':', ')', '?', '!']);
+            if sticks {
+                if let Some((last, _)) = flow.last_mut() {
+                    last.push_str(word);
+                }
+            } else {
+                flow.push((word.to_owned(), *strong));
+            }
+        }
+    }
+    let words = flow.into_iter().map(|(word, strong)| {
+        let word = div().flex_none().child(word);
+        if strong {
+            word.font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(colors.text_primary())
+        } else {
+            word.text_color(colors.text_secondary())
+        }
+    });
+    text_style(div(), token)
+        .w_full()
+        .min_w(px(0.0))
+        .flex()
+        .flex_wrap()
+        .gap_x(px(token.size * 0.27))
+        .children(words)
+}
+
+/// A suggestion the person can accept or reject, written to be understood
+/// without opening anything else: what it is (`lead`, a sentence), the text
+/// that gave rise to it, and what confirming changes. The buttons come from
+/// the screen (`actions`), which owns their focus and what they do.
+pub fn suggestion_card(
+    theme: &Theme,
+    lead: impl IntoElement,
+    evidence: Option<String>,
+    effect: &str,
+    actions: impl IntoElement,
+) -> Div {
+    let colors = theme.colors;
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SpacingScale::S3))
+        .p(px(SpacingScale::S4))
+        .rounded(RadiusScale.surface())
+        .border_1()
+        .border_color(colors.glass_border_card())
+        .bg(colors.glass_fill_card())
+        .child(lead)
+        .when_some(evidence, |card, quote| {
+            card.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S1))
+                    .child(
+                        text_style(div(), TypeScale::META)
+                            .text_color(colors.text_muted())
+                            .child("Trecho que originou a sugestão"),
+                    )
+                    .child(
+                        text_style(div(), TypeScale::BODY_SMALL)
+                            .pl(px(SpacingScale::S3))
+                            .border_l_2()
+                            .border_color(colors.hairline_divider())
+                            .text_color(colors.text_secondary())
+                            .child(format!("“{quote}”")),
+                    ),
+            )
+        })
+        .child(
+            div()
+                .flex()
+                .items_start()
+                .gap(px(SpacingScale::S2))
+                .child(
+                    div()
+                        .mt(px(6.0))
+                        .size(px(6.0))
+                        .flex_none()
+                        .rounded_full()
+                        .bg(colors.accent_default()),
+                )
+                .child(
+                    text_style(div(), TypeScale::BODY_SMALL)
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .text_color(colors.text_secondary())
+                        .child(format!("Ao confirmar, {effect}")),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_end()
+                .gap(px(SpacingScale::S2))
+                .child(actions),
+        )
+}
+
+/// A section of suggestions: its label, a sentence saying what the section
+/// is and what confirming does there, then the cards.
+pub fn suggestion_section(theme: &Theme, label: &str, intro: &str, cards: Div) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SpacingScale::S3))
+        .child(section_label(theme, label))
+        .child(
+            text_style(div(), TypeScale::BODY_SMALL)
+                .text_color(theme.colors.text_muted())
+                .child(intro.to_owned()),
+        )
+        .child(cards)
+}
+
 /// A small numeric chip: tab badges, panel counts, versions.
 pub fn count_chip(theme: &Theme, value: impl Into<SharedString>) -> Div {
     tabular(text_style(div(), TypeScale::META))

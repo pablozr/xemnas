@@ -39,9 +39,9 @@ use crate::ui::controls::{action_button, icon_action, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::list::{reveal_footer, scroll_thumb, ScrollMemory};
 use crate::ui::patterns::{
-    count_chip, empty_panel, error_banner, mark_selected, panel_title, reading_page,
-    section_header, section_label, segment, segmented, skeleton_list, tag, toast, READING_WIDTH,
-    TOAST_DURATION,
+    count_chip, empty_panel, error_banner, mark_selected, panel_title, reading_page, rich_sentence,
+    section_header, section_label, segment, segmented, skeleton_list, suggestion_card,
+    suggestion_section, tag, toast, READING_WIDTH, TOAST_DURATION,
 };
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme};
@@ -1429,61 +1429,51 @@ impl<S: MapStores> MapScreen<S> {
                     RelationKind::ConflictsWith => "conflita com",
                     RelationKind::Supersedes => "substitui",
                 };
-                list = list.child(
+                let (sentence, effect) = relation_wording(
+                    record.kind,
+                    &suggestion.from_question,
+                    &suggestion.to_question,
+                );
+                let lead = div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S2))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(SpacingScale::S2))
+                            .child(
+                                tag(theme, verb)
+                                    .when(record.kind == RelationKind::ConflictsWith, |tag| {
+                                        tag.text_color(colors.status_warning())
+                                    }),
+                            )
+                            .child(
+                                text_style(div(), TypeScale::META)
+                                    .text_color(colors.text_muted())
+                                    .child("entre duas decisões"),
+                            ),
+                    )
+                    .child(rich_sentence(theme, &sentence, TypeScale::BODY))
+                    .when(!record.reason.is_empty(), |lead| {
+                        lead.child(
+                            text_style(div(), TypeScale::BODY_SMALL)
+                                .text_color(colors.text_muted())
+                                .child(format!("Por quê: {}", record.reason)),
+                        )
+                    });
+                list = list.child(suggestion_card(
+                    theme,
+                    lead,
+                    Some(record.quote.clone()),
+                    &effect,
                     div()
                         .flex()
-                        .items_start()
-                        .gap(px(SpacingScale::S3))
-                        .py(px(SpacingScale::S3))
-                        .when(index > 0, |row| {
-                            row.border_t_1().border_color(colors.hairline_divider())
-                        })
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(0.0))
-                                .flex()
-                                .flex_col()
-                                .gap(px(SpacingScale::S1))
-                                .child(
-                                    text_style(div(), TypeScale::ROW_TITLE)
-                                        .child(suggestion.from_question.clone()),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(SpacingScale::S2))
-                                        .child(tag(theme, verb).when(
-                                            record.kind == RelationKind::ConflictsWith,
-                                            |tag| tag.text_color(colors.status_warning()),
-                                        ))
-                                        .child(
-                                            text_style(div(), TypeScale::BODY_SMALL)
-                                                .text_color(colors.text_secondary())
-                                                .child(suggestion.to_question.clone()),
-                                        ),
-                                )
-                                .child(
-                                    text_style(div(), TypeScale::BODY_SMALL)
-                                        .mt(px(SpacingScale::S1))
-                                        .pl(px(SpacingScale::S3))
-                                        .border_l_2()
-                                        .border_color(colors.hairline_divider())
-                                        .text_color(colors.text_secondary())
-                                        .child(format!("“{}”", record.quote)),
-                                )
-                                .when(!record.reason.is_empty(), |column| {
-                                    column.child(
-                                        text_style(div(), TypeScale::META)
-                                            .text_color(colors.text_muted())
-                                            .child(record.reason.clone()),
-                                    )
-                                }),
-                        )
+                        .gap(px(SpacingScale::S2))
                         .child(reject)
                         .child(confirm),
-                );
+                ));
             }
             if relations.len() > shown {
                 list = list.child(self.more_row(
@@ -1493,7 +1483,14 @@ impl<S: MapStores> MapScreen<S> {
                     cx,
                 ));
             }
-            column = column.child(section(theme, "Relações entre decisões", list));
+            column = column.child(suggestion_section(
+                theme,
+                "Relações entre decisões",
+                "Ao ler as decisões confirmadas, o xemnas notou que algumas se apoiam, \
+                 substituem ou contradizem outras. Cada cartão diz quais duas decisões, \
+                 qual é a relação e o trecho em que ela aparece.",
+                list,
+            ));
         }
         if !derived.is_empty() {
             let mut list = div().flex().flex_col();
@@ -1545,60 +1542,73 @@ impl<S: MapStores> MapScreen<S> {
                             .join(", ")
                     )
                 };
-                list = list.child(
+                let kind_name = claim_label(record.kind.as_str());
+                let lead = div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S2))
+                    .child(rich_sentence(
+                        theme,
+                        &[
+                            ("Da decisão".to_owned(), false),
+                            (format!("“{}”", suggestion.decision_question), true),
+                            (
+                                format!(
+                                    "o xemnas tirou {} {}:",
+                                    claim_article(record.kind.as_str()),
+                                    kind_name.to_lowercase()
+                                ),
+                                false,
+                            ),
+                        ],
+                        TypeScale::BODY_SMALL,
+                    ))
+                    .child(
+                        div()
+                            .flex()
+                            .items_start()
+                            .gap(px(SpacingScale::S2))
+                            .child(tag(theme, kind_name))
+                            .child(
+                                text_style(div(), TypeScale::BODY)
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .text_color(colors.text_primary())
+                                    .child(record.statement.clone()),
+                            ),
+                    );
+                let effect = format!(
+                    "vira {} {} do projeto ({}) e o agente passa a recebê-{} no contexto.",
+                    claim_article(record.kind.as_str()),
+                    kind_name.to_lowercase(),
+                    scope.to_lowercase(),
+                    claim_pronoun(record.kind.as_str()),
+                );
+                list = list.child(suggestion_card(
+                    theme,
+                    lead,
+                    Some(record.quote.clone()),
+                    &effect,
                     div()
                         .flex()
-                        .items_start()
-                        .gap(px(SpacingScale::S3))
-                        .py(px(SpacingScale::S3))
-                        .when(index > 0, |row| {
-                            row.border_t_1().border_color(colors.hairline_divider())
-                        })
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(0.0))
-                                .flex()
-                                .flex_col()
-                                .gap(px(SpacingScale::S1))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(SpacingScale::S2))
-                                        .child(tag(theme, claim_label(record.kind.as_str())))
-                                        .child(
-                                            text_style(div(), TypeScale::ROW_TITLE)
-                                                .child(record.statement.clone()),
-                                        ),
-                                )
-                                .child(
-                                    text_style(div(), TypeScale::META)
-                                        .text_color(colors.text_muted())
-                                        .child(format!(
-                                            "Da decisão: {} · {scope}",
-                                            suggestion.decision_question
-                                        )),
-                                )
-                                .child(
-                                    text_style(div(), TypeScale::BODY_SMALL)
-                                        .mt(px(SpacingScale::S1))
-                                        .pl(px(SpacingScale::S3))
-                                        .border_l_2()
-                                        .border_color(colors.hairline_divider())
-                                        .text_color(colors.text_secondary())
-                                        .child(format!("“{}”", record.quote)),
-                                ),
-                        )
+                        .gap(px(SpacingScale::S2))
                         .child(reject)
                         .child(confirm),
-                );
+                ));
             }
             if derived.len() > shown {
                 list =
                     list.child(self.more_row("sug-context", LIST_PAGE, derived.len() - shown, cx));
             }
-            column = column.child(section(theme, "Contexto sugerido", list));
+            column = column.child(suggestion_section(
+                theme,
+                "Contexto sugerido",
+                "Regras, premissas e restrições que parecem valer para o projeto, tiradas do \
+                 texto de decisões já confirmadas. Confirmar transforma a frase em uma regra \
+                 do projeto (aba Contexto); rejeitar descarta a frase e ela não volta.",
+                list,
+            ));
         }
         if !suggestions.is_empty() {
             let mut list = div().flex().flex_col();
@@ -1632,40 +1642,19 @@ impl<S: MapStores> MapScreen<S> {
                     },
                     cx,
                 );
-                list = list.child(
+                let (sentence, effect) = link_wording(suggestion);
+                let lead = rich_sentence(theme, &sentence, TypeScale::BODY);
+                list = list.child(suggestion_card(
+                    theme,
+                    lead,
+                    None,
+                    &effect,
                     div()
                         .flex()
-                        .items_center()
-                        .gap(px(SpacingScale::S3))
-                        .py(px(SpacingScale::S3))
-                        .when(index > 0, |row| {
-                            row.border_t_1().border_color(colors.hairline_divider())
-                        })
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(0.0))
-                                .flex()
-                                .flex_col()
-                                .gap(px(2.0))
-                                .child(
-                                    text_style(div(), TypeScale::ROW_TITLE)
-                                        .child(suggestion.source.label.clone()),
-                                )
-                                .child(
-                                    text_style(div(), TypeScale::BODY_SMALL)
-                                        .text_color(colors.text_muted())
-                                        .child(format!(
-                                            "{} {} · por {}",
-                                            edge_verb(suggestion.kind),
-                                            suggestion.entity.label,
-                                            suggestion.reason
-                                        )),
-                                ),
-                        )
+                        .gap(px(SpacingScale::S2))
                         .child(reject)
                         .child(confirm),
-                );
+                ));
             }
             // Several ties from the same evidence are usually confirmed
             // together; one action takes them all.
@@ -1698,6 +1687,16 @@ impl<S: MapStores> MapScreen<S> {
                     .flex_col()
                     .gap(px(SpacingScale::S3))
                     .child(section_header(theme, "Vínculos sugeridos").children(all))
+                    .child(
+                        text_style(div(), TypeScale::BODY_SMALL)
+                            .text_color(colors.text_muted())
+                            .child(
+                                "Decisões e regras que tocaram arquivos ou dependências ligados a \
+                                 um componente ou tecnologia do Mapa. Confirmar liga os dois: a \
+                                 decisão aparece na página do componente e acompanha quem edita \
+                                 aqueles arquivos.",
+                            ),
+                    )
                     .child(list),
             );
         }
@@ -1753,66 +1752,39 @@ impl<S: MapStores> MapScreen<S> {
                     },
                     cx,
                 );
-                list = list.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(SpacingScale::S3))
-                        .py(px(SpacingScale::S3))
-                        .when(index > 0, |row| {
-                            row.border_t_1().border_color(colors.hairline_divider())
-                        })
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(0.0))
-                                .flex()
-                                .flex_col()
-                                .gap(px(SpacingScale::S1))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(SpacingScale::S2))
-                                        .child(tag(
-                                            theme,
-                                            match kind {
-                                                EntityKind::Component => "Componente",
-                                                EntityKind::Technology => "Tecnologia",
-                                            },
-                                        ))
-                                        .child(text_style(div(), TypeScale::ROW_TITLE).child(name)),
-                                )
-                                .child(
-                                    text_style(div(), TypeScale::META)
-                                        .text_color(colors.text_muted())
-                                        .child(match (pattern, declared) {
-                                            (Some(pattern), Some(source)) => format!(
-                                                "{pattern} · declarado no {}",
-                                                source.label()
-                                            ),
-                                            (Some(pattern), None) => {
-                                                format!(
-                                                    "{pattern} · {}",
-                                                    plural(decisions, "decisão", "decisões")
-                                                )
-                                            }
-                                            (None, _) => format!(
-                                                "dependência adicionada em {}",
-                                                plural(decisions, "decisão", "decisões")
-                                            ),
-                                        }),
-                                )
-                                .when(!description.is_empty(), |column| {
-                                    column.child(
-                                        text_style(div(), TypeScale::META)
-                                            .text_color(colors.text_muted())
-                                            .child(description.clone()),
-                                    )
-                                }),
+                let (sentence, effect) =
+                    item_wording(kind, &name, pattern.as_deref(), declared, decisions);
+                let lead = div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S2))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(SpacingScale::S2))
+                            .child(tag(theme, kind_label(kind)))
+                            .child(
+                                text_style(div(), TypeScale::ROW_TITLE)
+                                    .text_color(colors.text_primary())
+                                    .child(name.clone()),
+                            ),
+                    )
+                    .child(rich_sentence(theme, &sentence, TypeScale::BODY))
+                    .when(!description.is_empty(), |lead| {
+                        lead.child(
+                            text_style(div(), TypeScale::BODY_SMALL)
+                                .text_color(colors.text_muted())
+                                .child(description.clone()),
                         )
-                        .child(create),
-                );
+                    });
+                list = list.child(suggestion_card(
+                    theme,
+                    lead,
+                    None,
+                    &effect,
+                    div().flex().child(create),
+                ));
             }
             // Declared members can be taken together.
             let declared: Vec<NewEntity> = components
@@ -3876,12 +3848,183 @@ fn weight(row: &MapEntity) -> String {
     parts.join(" · ")
 }
 
-fn edge_verb(kind: EdgeKind) -> &'static str {
+/// "a" or "o" for a kind of rule, as the Portuguese sentence needs it.
+fn claim_article(kind: &str) -> &'static str {
     match kind {
-        EdgeKind::Affects => "afeta",
-        EdgeKind::Uses => "usa",
-        EdgeKind::AppliesTo => "vale para",
-        EdgeKind::PartOf => "faz parte de",
+        "assumption" => "uma",
+        "constraint" => "uma",
+        "goal" => "um",
+        "convention" => "uma",
+        _ => "uma",
+    }
+}
+
+/// The pronoun that goes with [`claim_article`] ("recebê-la", "recebê-lo").
+fn claim_pronoun(kind: &str) -> &'static str {
+    match claim_article(kind) {
+        "um" => "lo",
+        _ => "la",
+    }
+}
+
+/// A quoted name in the strong face.
+fn named(text: &str) -> (String, bool) {
+    (format!("“{}”", clipped(text, 90)), true)
+}
+
+fn plain(text: &str) -> (String, bool) {
+    (text.to_owned(), false)
+}
+
+/// What a relation between two decisions says in a sentence, and what
+/// confirming it changes.
+fn relation_wording(kind: RelationKind, from: &str, to: &str) -> (Vec<(String, bool)>, String) {
+    match kind {
+        RelationKind::DependsOn => (
+            vec![
+                plain("A decisão"),
+                named(from),
+                plain("depende da decisão"),
+                named(to),
+                plain("só faz sentido porque a segunda foi tomada."),
+            ],
+            "a relação fica registrada na seção Relações das duas decisões, e quem ler a \
+             primeira vê de qual outra ela depende."
+                .to_owned(),
+        ),
+        RelationKind::ConflictsWith => (
+            vec![
+                plain("A decisão"),
+                named(from),
+                plain("parece contradizer a decisão"),
+                named(to),
+                plain("."),
+            ],
+            "a contradição fica registrada nas duas decisões; resolva substituindo uma delas."
+                .to_owned(),
+        ),
+        RelationKind::Supersedes => (
+            vec![
+                plain("A decisão"),
+                named(from),
+                plain("parece ter substituído a decisão"),
+                named(to),
+                plain("."),
+            ],
+            "a substituição fica registrada na seção Relações das duas decisões.".to_owned(),
+        ),
+    }
+}
+
+/// What a suggested tie says in a sentence (by what it ties and why), and
+/// what confirming it changes.
+fn link_wording(suggestion: &Suggestion) -> (Vec<(String, bool)>, String) {
+    let source = &suggestion.source.label;
+    let target = &suggestion.entity.label;
+    let rule = suggestion.source.node.kind == NodeKind::Claim;
+    let what = if rule { "A regra" } else { "A decisão" };
+    match suggestion.kind {
+        EdgeKind::Uses => (
+            vec![
+                plain(what),
+                named(source),
+                plain("adicionou a dependência"),
+                (suggestion.reason.clone(), true),
+                plain("que é a tecnologia"),
+                named(target),
+                plain("do Mapa."),
+            ],
+            format!(
+                "{target} passa a constar como tecnologia usada por essa decisão, na página dela e \
+                 na do Mapa."
+            ),
+        ),
+        _ if rule => (
+            vec![
+                plain(what),
+                named(source),
+                plain("se aplica a mudanças em"),
+                (suggestion.reason.clone(), true),
+                plain(", arquivo que pertence ao componente"),
+                named(target),
+                plain("."),
+            ],
+            format!(
+                "a regra passa a valer em {target} e é entregue ao agente quando ele edita \
+                 arquivos desse componente."
+            ),
+        ),
+        _ => (
+            vec![
+                plain(what),
+                named(source),
+                plain("mexeu em"),
+                (suggestion.reason.clone(), true),
+                plain(", arquivo que pertence ao componente"),
+                named(target),
+                plain("."),
+            ],
+            format!(
+                "a decisão passa a valer para {target}: aparece na página do componente e é \
+                 entregue ao agente quando ele edita arquivos dele."
+            ),
+        ),
+    }
+}
+
+/// What a proposed component or technology says in a sentence, and what
+/// creating it changes.
+fn item_wording(
+    kind: EntityKind,
+    name: &str,
+    pattern: Option<&str>,
+    declared: Option<application::graph::WorkspaceKind>,
+    decisions: usize,
+) -> (Vec<(String, bool)>, String) {
+    match (kind, pattern, declared) {
+        (EntityKind::Component, Some(pattern), Some(source)) => (
+            vec![
+                plain("O"),
+                plain(source.label()),
+                plain("declara a parte"),
+                named(name),
+                plain("("),
+                (pattern.to_owned(), true),
+                plain("), mas ela ainda não está no Mapa."),
+            ],
+            "o componente entra no Mapa e as decisões que mexeram nesses arquivos passam a \
+             poder ser ligadas a ele."
+                .to_owned(),
+        ),
+        (EntityKind::Component, pattern, _) => (
+            vec![
+                plain(&format!(
+                    "{} {} mexeu{} em arquivos de",
+                    if decisions == 1 { "Uma" } else { "Várias" },
+                    if decisions == 1 { "decisão" } else { "decisões" },
+                    if decisions == 1 { "" } else { "ram" },
+                )),
+                (pattern.unwrap_or(name).to_owned(), true),
+                plain("que nenhum componente do Mapa cobre."),
+            ],
+            format!(
+                "o componente {name} entra no Mapa e {} ligada{} a ele.",
+                plural(decisions, "decisão fica", "decisões ficam"),
+                if decisions == 1 { "" } else { "s" },
+            ),
+        ),
+        (EntityKind::Technology, ..) => (
+            vec![
+                plain(&format!(
+                    "A dependência {name} foi adicionada em {}, mas ainda não é uma tecnologia do Mapa.",
+                    plural(decisions, "decisão", "decisões")
+                )),
+            ],
+            format!(
+                "{name} entra no Mapa como tecnologia e as decisões que a usam passam a estar \
+                 ligadas a ela."
+            ),
+        ),
     }
 }
 

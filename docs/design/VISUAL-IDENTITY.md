@@ -361,6 +361,28 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
 - A **Vizinhança** do detalhe continua determinística em camadas. Nada entra
   no mapa sem confirmação; aposentar e rejeitar não apagam.
 
+## Sugestões — cada cartão se explica
+
+Sugestões (Mapa) tinha linhas curtas que só faziam sentido para quem já sabia o
+que era um "vínculo" ou uma "relação". Agora cada seção abre com uma frase que
+diz o que ela é e o que confirmar faz, e cada sugestão é um cartão
+(`ui::patterns::suggestion_card`, `suggestion_section`, `rich_sentence`):
+
+- **O que é**, numa frase com os nomes em negrito: "A decisão “X” depende da
+  decisão “Y” só faz sentido porque a segunda foi tomada"; "A decisão “X”
+  mexeu em `arquivo`, que pertence ao componente “Z”"; "Da decisão “X” o xemnas
+  tirou uma restrição: …"; "A dependência `serde` foi adicionada em 3
+  decisões, mas ainda não é uma tecnologia do Mapa".
+- **De onde veio**: o trecho citado ("Trecho que originou a sugestão") e, nas
+  relações, o motivo.
+- **O que muda ao confirmar**, numa linha com marcador lavanda ("Ao confirmar,
+  a decisão passa a valer para Z: aparece na página do componente e é entregue
+  ao agente quando ele edita arquivos dele"). Só se descreve o que o
+  produto de fato faz; nada de promessa.
+- Rejeitar e Confirmar no rodapé do cartão (uma ação por sugestão, nenhuma
+  primária concorrendo); "Confirmar os N" fica no cabeçalho da seção de
+  vínculos.
+
 ## Configurações
 
 - Página do app (engrenagem na barra de título, paleta Ctrl K ou a linha de
