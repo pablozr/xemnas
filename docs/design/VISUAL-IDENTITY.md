@@ -120,20 +120,25 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   oficial do personagem nem o emblema dos Nobodies.
 - É 3D pré-renderizado: `tools/mascot/model.py` (modelo de distâncias com
   sombreamento toon, contorno e brilho nos olhos) e `tools/mascot/render.py`
-  geram `assets/mascot/{idle,blink,glow,left,right}.png` (192 px, mesmo
-  recorte). O app só exibe as imagens; não há 3D em tempo real.
+  geram `assets/mascot/sheet.png` (32 quadros de 160 px, 8 × 4, mesmo
+  recorte) e `idle`, `blink`, `glow` avulsos para retrato e estados vazios.
+  O app só exibe as imagens; não há 3D em tempo real.
 - Fica no pé da lateral, acima da linha de status: figura de 72 px, "Nº I"
   em mono prata e uma frase real ("5 para revisar", ou o nome), com ponto
-  âmbar quando há fila. Respira a cada ~5 s (sobe 3 px e assenta em 1,8 s,
-  na taxa do monitor) e fica parado entre uma respiração e outra; pisca e
-  olha para os lados. Todo movimento anda por quadros próximos e funde um
-  no outro (crossfade de 45 a 140 ms): o piscar é aberto, meio, fechado,
-  meio, aberto em ~260 ms; o olhar passa pelo quadro do meio. Oito quadros
-  (`idle`, `blink`, `blinkhalf`, `glow`, `left`, `leftmid`, `right`,
-  `rightmid`); saltos entre poses distantes parecem um vídeo travado. É uma view própria e as telas são views em cache
-  (`cached`), então um quadro do mascote não refaz o app. Com movimento
-  reduzido, só pisca. Hover e painel aberto acendem os
-  olhos (`glow`).
+  âmbar quando há fila. Respira a cada ~5 s (sobe 3 px e assenta em 2,2 s)
+  e fica parado entre uma respiração e outra; pisca e olha para os lados.
+- Fluidez vem do relógio, não do layout (`screens/mascot.rs`). A folha tem
+  27 giros da cabeça (a cada 0,03 rad), 4 passos de piscada e 1 quadro de
+  olhos acesos; cada gesto escolhe o quadro pelo tempo decorrido, com
+  entrada e saída suaves (`smooth`, cosseno elevado na respiração). Cada
+  quadro sobe com margem e é pintado numa janela fixa, alinhada ao pixel,
+  enquanto a imagem desliza por frações de pixel (o GPUI recorta a origem
+  em texels, ~0,45 px a 72 px): a flutuação deixa de andar de 1 em 1 px. O
+  olho aceso é o quadro `glow` sobre o base, com opacidade de 160 ms. Só se
+  pede o próximo quadro enquanto um gesto dura; parado, não redesenha. É uma
+  view própria e as telas são views em cache (`cached`), então um quadro do
+  mascote não refaz o app. Com movimento reduzido, só pisca. Hover e painel
+  aberto acendem os olhos.
 - Clique, Enter ou Ctrl K ("Falar com o Xemnas") abrem o painel ao lado da
   lateral (400 × 540, `floating`, raio `dialog`, sombra de ênfase): retrato,
   "Xemnas" em Bricolage, "Nº I · assistente do projeto", a corrente prata,

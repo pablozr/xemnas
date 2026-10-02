@@ -59,7 +59,10 @@ def smax(a, b, k):
     return -smin(-a, -b, k)
 
 
-V = np.array
+def V(*args):
+    """Float32 vectors: the march is memory-bound, and 32 bits are plenty."""
+    return np.array(*args, dtype=np.float32)
+
 
 # material ids
 COAT, FACE, EYE, SILVER, HAIR = 1, 2, 3, 4, 5
