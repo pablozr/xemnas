@@ -1139,9 +1139,18 @@ impl<
                     .border_t_1()
                     .border_color(theme.colors.hairline_divider())
                     .text_color(theme.colors.text_muted())
-                    .child("↑↓ navegar")
-                    .child("Enter abrir")
-                    .child("Esc fechar"),
+                    .children(
+                        [("↑↓", "Navegar"), ("↵", "Abrir"), ("esc", "Fechar")]
+                            .into_iter()
+                            .map(|(key, label)| {
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(SpacingScale::S2))
+                                    .child(kbd(theme.colors.text_muted(), key))
+                                    .child(label)
+                            }),
+                    ),
             );
         Some(
             deferred(
