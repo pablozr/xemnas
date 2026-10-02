@@ -40,6 +40,7 @@ public struct XemnasBgRect { public int Left; public int Top; public int Right; 
 public static class XemnasBg {
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, ref XemnasBgRect r);
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
+    [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int width, int height, uint flags);
 }
 '@
 
@@ -56,6 +57,12 @@ try {
         Start-Sleep -Milliseconds 50
     }
     if ($proc.MainWindowHandle -eq [IntPtr]::Zero) { throw "no window appeared" }
+    if ($Compact) {
+        # SWP_NOZORDER | SWP_NOACTIVATE: resize offscreen without focus or input.
+        if (-not [XemnasBg]::SetWindowPos($proc.MainWindowHandle, [IntPtr]::Zero, -12000, 0, 1180, 760, 0x14)) {
+            throw "background compact resize failed"
+        }
+    }
     Start-Sleep -Milliseconds $SettleMs
 
     $rect = New-Object XemnasBgRect
