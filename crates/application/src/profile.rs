@@ -566,6 +566,11 @@ where
         Self { profiles, secrets }
     }
 
+    /// Loads the stored profile without seeding or writing settings.
+    pub fn load(&self) -> Result<Option<AiProfile>, ProfileError> {
+        self.profiles.load()
+    }
+
     /// Loads the stored profile, creating the offline default when absent.
     pub fn load_or_seed(&self) -> Result<AiProfile, ProfileError> {
         match self.profiles.load()? {
@@ -1103,6 +1108,19 @@ mod tests {
         assert_eq!(
             choose_extractor(Some(&revoked)),
             ExtractorChoice::ExternalBlocked
+        );
+    }
+
+    #[test]
+    fn read_only_load_never_seeds_an_absent_profile() {
+        let settings = AiSettings::new(MemoryProfiles::default(), MemorySecrets::default());
+        assert_eq!(settings.load().expect("read absent profile"), None);
+        assert_eq!(settings.profiles.load().expect("still absent"), None);
+        let profile = external_profile();
+        settings.save(&profile).expect("save fixture");
+        assert_eq!(
+            settings.load().expect("read existing profile"),
+            Some(profile)
         );
     }
 

@@ -18,6 +18,8 @@ alterações pertinentes. O `README.md` da raiz é a apresentação do projeto e
 
 ## Precedência
 
+Revisão backend sob demanda: [ADR-0009 — revisão consultiva de conhecimento](arquitetura/adr/0009-revisao-consultiva-de-conhecimento.md).
+
 Quando dois documentos divergirem, vale nesta ordem:
 
 1. `produto/MVP-SPEC.md` para escopo, e `produto/CONTEXT.md` para os termos do domínio.

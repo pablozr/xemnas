@@ -20,6 +20,7 @@ pub mod inbox;
 pub mod injection;
 pub mod integration;
 pub mod jobs;
+pub mod knowledge_review;
 pub mod outbox;
 pub mod overview;
 pub mod paths;
