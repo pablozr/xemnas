@@ -91,3 +91,29 @@ hoje não têm interface.
 3. Importar ADRs/`AGENTS.md` existentes.
 4. Exportar resumo para `AGENTS.md`.
 5. Proposta de decisão pela conversa (MCP de escrita), depois de ADR.
+
+## 5. Direções anotadas em 02/10/2026 (para o futuro)
+
+Duas ideias da conversa de 02/10, guardadas aqui para decidir depois. A opinião e
+a proposta de medição estão em
+[medir-eficacia-do-contexto.md](medir-eficacia-do-contexto.md).
+
+1. **Controlar agentes autônomos e um assistente de decisão entre projetos.** No
+   futuro o xemnas se integra aos agentes para controlá-los como agentes autônomos
+   (como orquestradores do tipo Symphony/Codex da OpenAI). O assistente serviria à
+   tomada de decisão, apoiado nas decisões e contextos de **todos os projetos já
+   feitos**, para aproveitar o que eles têm em comum quando um projeto novo
+   começa. Cuidados já apontados: níveis de autonomia por risco (a Revisão vira o
+   portão do que passa do limite), condições de aplicabilidade em cada decisão
+   (para não transferir conselho fora de contexto), fronteiras de
+   confidencialidade entre projetos e custo (busca local primeiro).
+2. **Medir se o contexto injetado ajuda na implementação.** Mecanismo para saber
+   se a injeção tem efeito na implementação do agente e qual. Proposta: escada de
+   evidência (exposição, absorção, adesão, retrabalho, resultado), canários,
+   holdout em `shadow`, repetição offline e painel de Eficácia em Contexto. É
+   pré-requisito da ideia 1.
+
+Também anotado: **filtrar a documentação** que entra na Revisão (feito em
+`documents::digest`: só partes centrais; ver ADR-0008). Falta aprender com o que a
+pessoa dispensa e mostrar, na aba Contexto, quais documentos entram e por quê.
+
