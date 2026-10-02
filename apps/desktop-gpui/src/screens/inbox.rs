@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use application::adoption::{AdoptionApi, AdoptionError, AdoptionPreview, ProposedLink};
+use application::auto_approval::{ApprovalsApi, LedgerRow};
 use application::briefing::Briefing;
 use application::extract::{CandidateKind, MIN_SIGNIFICANCE};
 use application::inbox::{
@@ -13,10 +14,11 @@ use application::inbox::{
 use domain::entities::{EdgeKind, EntityKind};
 use gpui::prelude::*;
 use gpui::{
-    div, px, AnyElement, Context, Div, ElementId, Entity, FocusHandle, Render, Role, ScrollHandle,
-    Stateful, Subscription, Window,
+    div, px, AnyElement, Context, Div, ElementId, Entity, EventEmitter, FocusHandle, Render, Role,
+    ScrollHandle, Stateful, Subscription, Window,
 };
 
+use super::context::OpenDecision;
 use super::evidence;
 use super::format::{plural, relative, short_date};
 use super::review_editor::{EditorEvent, ReviewEditor};
@@ -44,7 +46,13 @@ enum Undo {
 
 /// A page, the queue's size, how many are kept out for low significance and,
 /// on a first page after a visit, what changed since the previous visit.
-type PageLoad = (InboxPage, usize, usize, Option<Briefing>);
+type PageLoad = (
+    InboxPage,
+    usize,
+    usize,
+    Option<Briefing>,
+    Option<Vec<LedgerRow>>,
+);
 
 enum Outcome {
     Page(Result<PageLoad, InboxError>, bool),
@@ -112,7 +120,21 @@ pub struct InboxScreen<S: InboxStore + Send + 'static> {
     /// Whether the written reason is open (it starts closed: the evidence
     /// comes first and the explanation can nudge a decision).
     reason_open: bool,
+    /// The automatic approval, when the store has it.
+    approvals: Option<Arc<dyn ApprovalsApi>>,
+    /// What the automatic approval holds or accepted in this project.
+    ledger: Vec<LedgerRow>,
+    /// Whether the list of what was accepted on its own is open.
+    ledger_open: bool,
+    /// When the last confirmations happened, to notice a reflex.
+    streak: Vec<std::time::Instant>,
 }
+
+/// Confirmations in a row, each within `STREAK_GAP`, that read as a reflex.
+const STREAK_LEN: usize = 8;
+const STREAK_GAP: std::time::Duration = std::time::Duration::from_secs(4);
+
+impl<S: InboxStore + Send + 'static> EventEmitter<OpenDecision> for InboxScreen<S> {}
 
 /// The "No mapa" section of one candidate.
 struct MapLinks {
@@ -123,6 +145,12 @@ struct MapLinks {
 }
 
 impl<S: InboxStore + Send + 'static> InboxScreen<S> {
+    /// Confirms through the adoption use case, so a decision lands on the
+    /// map with the ties the person kept.
+    pub fn set_approvals(&mut self, approvals: Arc<dyn ApprovalsApi>) {
+        self.approvals = Some(approvals);
+    }
+
     /// Confirms through the adoption use case, so a decision lands on the
     /// map with the ties the person kept.
     pub fn set_adoption(&mut self, adoption: Arc<dyn AdoptionApi>) {
@@ -232,6 +260,10 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             pending_undo: None,
             undo: None,
             reason_open: false,
+            approvals: None,
+            ledger: Vec::new(),
+            ledger_open: false,
+            streak: Vec::new(),
         }
     }
 
@@ -267,6 +299,8 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
         self.generation += 1;
         self.briefing = None;
         self.briefing_hidden = false;
+        self.ledger.clear();
+        self.streak.clear();
         self.since_visit = self
             .project_id
             .as_deref()
@@ -327,7 +361,20 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
         } else {
             self.since_visit.take().zip(self.project_id.clone())
         };
+        let approvals = if append {
+            None
+        } else {
+            self.approvals.clone().zip(self.project_id.clone())
+        };
         self.run(cx, move |inbox| {
+            // The automatic approval looks at the queue before it is listed:
+            // it holds what is in its band and accepts what has waited a day.
+            let ledger = approvals.as_ref().map(|(api, project)| {
+                if let Err(error) = api.run(project) {
+                    tracing::warn!(error = %error, "automatic approval pass failed");
+                }
+                api.ledger(project).unwrap_or_default()
+            });
             Outcome::Page(
                 inbox.list(&filter).and_then(|page| {
                     let count = inbox.count(&filter)?;
@@ -336,7 +383,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                         .saturating_sub(inbox.count(&relevant)?);
                     let briefing =
                         visit.and_then(|(since, project)| inbox.briefing(&project, &since).ok());
-                    Ok((page, count, hidden, briefing))
+                    Ok((page, count, hidden, briefing, ledger))
                 }),
                 append,
             )
@@ -395,9 +442,12 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                     return;
                 }
                 match outcome {
-                    Outcome::Page(Ok((page, total, hidden, briefing)), append) => {
+                    Outcome::Page(Ok((page, total, hidden, briefing, ledger)), append) => {
                         this.total = Some(total);
                         this.hidden_low = hidden;
+                        if let Some(ledger) = ledger {
+                            this.ledger = ledger;
+                        }
                         if briefing.is_some() {
                             this.briefing = briefing;
                         }
@@ -457,6 +507,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                         this.editor_subscription = None;
                         this.notice = Some(notice);
                         this.undo = this.pending_undo.take();
+                        this.note_confirmation(notice);
                         this.page(false, cx);
                     }
                     Outcome::Page(Err(error), _)
@@ -646,6 +697,32 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             };
             Outcome::Action(result, notice)
         });
+    }
+
+    /// Keeps the time of each confirmation. A run of them, each a few seconds
+    /// after the last, is the habit that makes approving stop being checking
+    /// (approval rises and scrutiny falls with practice), so the notice says
+    /// so once and does not block anything.
+    fn note_confirmation(&mut self, notice: &'static str) {
+        if !notice.starts_with("Candidato confirmado") && !notice.starts_with("Ajustes confirmados")
+        {
+            self.streak.clear();
+            return;
+        }
+        let now = std::time::Instant::now();
+        if self
+            .streak
+            .last()
+            .is_some_and(|last| now.duration_since(*last) > STREAK_GAP)
+        {
+            self.streak.clear();
+        }
+        self.streak.push(now);
+        if self.streak.len() >= STREAK_LEN {
+            self.streak.clear();
+            self.notice =
+                Some("Ritmo alto: abra a evidência de um dos próximos antes de confirmar.");
+        }
     }
 
     /// Takes back the last rejection or deferral.
@@ -861,7 +938,12 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                                     .gap(px(SpacingScale::S2))
                                     .when(row.status != CandidateStatus::Pending, |line| {
                                         line.child(status_badge(row.status, theme))
-                                    }),
+                                    })
+                                    .children(self.held_label(&row.id).map(|label| {
+                                        text_style(div(), TypeScale::META)
+                                            .text_color(theme.colors.status_info())
+                                            .child(label)
+                                    })),
                             ),
                     )
                     .child(
@@ -914,6 +996,113 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
     }
 
     /// Shows or hides the low-significance candidates kept out of the queue.
+    /// "aceita sozinha em 21 h" for a candidate the automatic approval holds.
+    fn held_label(&self, candidate_id: &str) -> Option<String> {
+        let due = self
+            .ledger
+            .iter()
+            .find(|row| row.candidate_id == candidate_id && row.accepted_at.is_none())?
+            .due_at
+            .as_deref()?;
+        let due = chrono::DateTime::parse_from_rfc3339(due).ok()?;
+        let hours = (due.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_hours();
+        Some(if hours < 1 {
+            "aceita sozinha em breve".to_owned()
+        } else {
+            format!("aceita sozinha em {hours} h")
+        })
+    }
+
+    /// What the automatic approval accepted on its own, a short list under
+    /// the queue that opens on request; each line opens the decision.
+    fn ledger_section(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<Div> {
+        let accepted: Vec<&LedgerRow> = self
+            .ledger
+            .iter()
+            .filter(|row| row.accepted_at.is_some())
+            .collect();
+        if accepted.is_empty() {
+            return None;
+        }
+        let colors = theme.colors;
+        let open = self.ledger_open;
+        let header = div()
+            .id("inbox-ledger-toggle")
+            .flex()
+            .items_center()
+            .gap(px(SpacingScale::S2))
+            .px(px(SpacingScale::S4))
+            .py(px(SpacingScale::S2))
+            .cursor_pointer()
+            .role(Role::Button)
+            .aria_label("Mostrar o que foi aceito sozinho")
+            .focus_visible(focus_ring(theme))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.ledger_open = !this.ledger_open;
+                cx.notify();
+            }))
+            .child(icon(
+                if open {
+                    IconName::ChevronDown
+                } else {
+                    IconName::ChevronRight
+                },
+                13.0,
+                colors.text_muted(),
+            ))
+            .child(
+                text_style(div(), TypeScale::META)
+                    .text_color(colors.text_secondary())
+                    .child(format!("Aceitas sozinhas · {}", accepted.len())),
+            );
+        let mut list = div().flex().flex_col();
+        if open {
+            for (index, row) in accepted.iter().enumerate() {
+                let Some(decision) = row.decision_id.clone() else {
+                    continue;
+                };
+                list = list.child(
+                    div()
+                        .id(("inbox-ledger-row", index))
+                        .px(px(SpacingScale::S4))
+                        .py(px(SpacingScale::S2))
+                        .cursor_pointer()
+                        .role(Role::Link)
+                        .aria_label(format!("Abrir a decisão: {}", row.question))
+                        .hover(move |style| style.bg(colors.glass_fill_low()))
+                        .focus_visible(focus_ring(theme))
+                        .on_click(
+                            cx.listener(move |_, _, _, cx| cx.emit(OpenDecision(decision.clone()))),
+                        )
+                        .child(
+                            text_style(div(), TypeScale::BODY_SMALL)
+                                .line_clamp(2)
+                                .text_color(colors.text_primary())
+                                .child(row.question.clone()),
+                        )
+                        .child(
+                            text_style(div(), TypeScale::META)
+                                .text_color(colors.text_muted())
+                                .child(
+                                    row.accepted_at
+                                        .as_deref()
+                                        .map(|at| format!("aceita sozinha {}", relative(at)))
+                                        .unwrap_or_default(),
+                                ),
+                        ),
+                );
+            }
+        }
+        Some(
+            div()
+                .flex_none()
+                .border_t_1()
+                .border_color(colors.hairline_divider())
+                .child(header)
+                .child(list),
+        )
+    }
+
     /// One quiet line of what changed since the previous visit: the cue to
     /// resume from. Nothing when nothing changed or the person closed it.
     fn briefing_strip(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<Div> {
@@ -1444,6 +1633,7 @@ impl<S: InboxStore + Send + 'static> Render for InboxScreen<S> {
                             if !self.loaded { "Atualize para carregar os candidatos." }
                             else if self.rows.is_empty() { "Fila vazia." }
                             else { "Nenhum candidato carregado corresponde à busca." }))))
+                    .children(self.ledger_section(&theme, cx))
                     .when(self.cursor.is_some() || self.rows.len() != visible.len(), |rail| rail.child(text_style(div(), TypeScale::META).flex_none().px(px(SpacingScale::S4)).py(px(SpacingScale::S2))
                         .flex().items_center().justify_between()
                         .border_t_1().border_color(theme.colors.hairline_divider()).text_color(theme.colors.text_muted())

@@ -157,7 +157,8 @@ impl ApprovalStore for SqliteStore {
             .prepare(
                 "SELECT a.lane, c.status, a.decision_id IS NOT NULL \
                  FROM auto_approvals a JOIN decision_candidates c ON c.id = a.candidate_id \
-                 WHERE (?1 IS NULL OR a.project_id = ?1)",
+                 WHERE (?1 IS NULL OR a.project_id = ?1) \
+                 ORDER BY a.created_at, a.candidate_id",
             )
             .map_err(storage_error)?;
         let rows = statement

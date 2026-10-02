@@ -151,6 +151,11 @@ pub(crate) fn store() -> Result<SqliteStore, Box<dyn std::error::Error>> {
             if index == 0 && std::env::var_os("XEMNAS_DEMO_CALIBRATION").is_some() {
                 seed_decided(&store, &candidate)?;
             }
+            if index == 0 && project == "demo-xemnas" {
+                if let Ok(state) = std::env::var("XEMNAS_DEMO_APPROVAL") {
+                    seed_approval(&store, &candidate, &state)?;
+                }
+            }
             candidate.id = format!("confirmed-{}", candidate.id);
             candidate.dedup_hash = format!("confirmed-{}", candidate.dedup_hash);
             store.insert_candidates(&[candidate.clone()])?;
@@ -985,6 +990,98 @@ fn seed_decided(
         candidate.status = if kept { "accepted" } else { "dismissed" }.into();
         candidate.confidence = confidence;
         store.insert_candidates(&[candidate])?;
+    }
+    Ok(())
+}
+
+/// The automatic approval in a given state, to see its page and its marks:
+/// `XEMNAS_DEMO_APPROVAL=watching|ready|on`. Sixty decided candidates whose
+/// confidence predicts what was kept, then the checks the policy collected
+/// while watching (5, or 12 for `ready` and `on`); `on` also turns the mode on
+/// and leaves two candidates held and three accepted on their own.
+fn seed_approval(
+    store: &SqliteStore,
+    template: &DecisionCandidateRecord,
+    state: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use application::auto_approval::{ApprovalStore, Entry, Lane, Mode};
+    let record = |id: String, status: &str, confidence: f64| {
+        let mut candidate = template.clone();
+        candidate.dedup_hash = id.clone();
+        candidate.id = id;
+        candidate.status = status.into();
+        candidate.confidence = confidence;
+        candidate
+    };
+    for at in 0..60_usize {
+        let confidence = 0.3 + at as f64 * 0.0115;
+        let kept = if confidence < 0.5 {
+            at % 7 == 0
+        } else if confidence < 0.7 {
+            at % 2 == 0
+        } else {
+            at % 15 != 0
+        };
+        store.insert_candidates(&[record(
+            format!("decided-{at}"),
+            if kept { "accepted" } else { "dismissed" },
+            confidence,
+        )])?;
+    }
+    let checks = if state == "watching" { 5 } else { 12 };
+    for at in 0..checks {
+        let id = format!("watched-{at}");
+        store.insert_candidates(&[record(id.clone(), "accepted", 0.95)])?;
+        store.insert_auto_entry(&Entry {
+            candidate_id: id,
+            project_id: template.project_id.clone(),
+            lane: Lane::Audit,
+            created_at: "2026-09-29T08:00:00Z".into(),
+            due_at: None,
+            resolved_at: None,
+            decision_id: None,
+        })?;
+    }
+    if state == "on" {
+        store.set_approval_mode(Mode::Automatic, "2026-09-29T09:00:00Z")?;
+        let soon = [
+            ("held-0", 9, "Como limitar o tamanho de cada captura?"),
+            ("held-1", 20, "Onde registrar o motivo de uma rejeição?"),
+        ];
+        let now = chrono::Utc::now();
+        for (id, hours, question) in soon {
+            let mut held = record(id.to_owned(), "pending", 0.93);
+            held.question = question.into();
+            store.insert_candidates(&[held])?;
+            store.insert_auto_entry(&Entry {
+                candidate_id: id.to_owned(),
+                project_id: template.project_id.clone(),
+                lane: Lane::Held,
+                created_at: "2026-09-29T09:00:00Z".into(),
+                due_at: Some(
+                    (now + chrono::Duration::hours(hours))
+                        .format("%Y-%m-%dT%H:%M:%SZ")
+                        .to_string(),
+                ),
+                resolved_at: None,
+                decision_id: None,
+            })?;
+        }
+        for at in 0..3 {
+            let id = format!("auto-accepted-{at}");
+            let mut done = record(id.clone(), "accepted", 0.93);
+            done.question = format!("Como tratar o caso {at} de arquivos temporários?");
+            store.insert_candidates(&[done])?;
+            store.insert_auto_entry(&Entry {
+                candidate_id: id,
+                project_id: template.project_id.clone(),
+                lane: Lane::Held,
+                created_at: "2026-09-28T09:00:00Z".into(),
+                due_at: Some("2026-09-29T09:00:00Z".into()),
+                resolved_at: Some("2026-09-29T09:00:01Z".into()),
+                decision_id: Some(format!("decision-auto-{at}")),
+            })?;
+        }
     }
     Ok(())
 }

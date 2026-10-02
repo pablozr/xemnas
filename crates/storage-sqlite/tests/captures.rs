@@ -215,10 +215,10 @@ fn upgrade_reapplies_the_missing_migrations() {
         )
         .expect("count distinct migrations");
     assert_eq!(
-        versions, 19,
-        "0004, 0005, 0006 and 0008 to 0020 must be re-applied on upgrade"
+        versions, 20,
+        "0004, 0005, 0006 and 0008 to 0021 must be re-applied on upgrade"
     );
-    assert_eq!(distinct, 19);
+    assert_eq!(distinct, 20);
 
     let _ = std::fs::remove_dir_all(&root);
 }

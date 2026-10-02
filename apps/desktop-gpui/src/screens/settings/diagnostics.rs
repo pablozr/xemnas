@@ -8,6 +8,7 @@
 
 use std::path::PathBuf;
 
+use application::auto_approval::{ApprovalsApi, Blocked, Mode, Status, MIN_AUDITS};
 use application::calibration::{Verdict, MIN_DECIDED, PREDICTS_AT};
 use application::diagnostics::{
     Diagnostics, DiagnosticsDocument, DiagnosticsStore, Distribution, JobDiagnostic,
@@ -34,18 +35,31 @@ pub trait DiagnosticsBackend: Send + 'static {
     fn reprocess(&self, job_id: &str) -> Result<(), String>;
     /// Cancels a queued job.
     fn cancel(&self, job_id: &str) -> Result<(), String>;
+    /// Where the automatic approval stands.
+    fn approval(&self) -> Result<Status, String>;
+    /// Turns the automatic approval on or off (on only when nothing blocks it).
+    fn set_approval(&self, automatic: bool) -> Result<(), String>;
 }
 
 /// The diagnostics and jobs use cases over one store.
 pub struct DiagnosticsService<S, P, K> {
     diagnostics: Diagnostics<S, P, K>,
     jobs: Jobs<S>,
+    approvals: std::sync::Arc<dyn ApprovalsApi>,
 }
 
 impl<S, P, K> DiagnosticsService<S, P, K> {
     /// Wraps the use cases built by the composition root.
-    pub fn new(diagnostics: Diagnostics<S, P, K>, jobs: Jobs<S>) -> Self {
-        Self { diagnostics, jobs }
+    pub fn new(
+        diagnostics: Diagnostics<S, P, K>,
+        jobs: Jobs<S>,
+        approvals: std::sync::Arc<dyn ApprovalsApi>,
+    ) -> Self {
+        Self {
+            diagnostics,
+            jobs,
+            approvals,
+        }
     }
 }
 
@@ -73,10 +87,32 @@ where
             "Não foi possível cancelar a tarefa; ela pode já ter começado.".to_owned()
         })
     }
+    fn approval(&self) -> Result<Status, String> {
+        self.approvals.status().map_err(|error| {
+            tracing::error!(error = %error, operation = "approval_status", "status failed");
+            "Não foi possível ler o estado da aprovação automática.".to_owned()
+        })
+    }
+    fn set_approval(&self, automatic: bool) -> Result<(), String> {
+        let mode = if automatic {
+            Mode::Automatic
+        } else {
+            Mode::Manual
+        };
+        self.approvals.set_mode(mode).map_err(|error| match error {
+            application::auto_approval::ApprovalError::Blocked(_) => {
+                "A aprovação automática ainda não pode ser ligada.".to_owned()
+            }
+            other => {
+                tracing::error!(error = %other, operation = "approval_mode", "change failed");
+                "Não foi possível mudar a aprovação automática.".to_owned()
+            }
+        })
+    }
 }
 
 enum Outcome {
-    Loaded(Result<Box<DiagnosticsDocument>, String>),
+    Loaded(Result<Box<(DiagnosticsDocument, Option<Status>)>, String>),
     Changed(Result<&'static str, String>),
     Saved(Result<Option<PathBuf>, String>),
 }
@@ -86,6 +122,7 @@ pub struct DiagnosticsPanel {
     backend: Option<Box<dyn DiagnosticsBackend>>,
     busy: bool,
     document: Option<DiagnosticsDocument>,
+    approval: Option<Status>,
     error: Option<String>,
     notice: Option<String>,
 }
@@ -97,6 +134,7 @@ impl DiagnosticsPanel {
             backend: Some(backend),
             busy: false,
             document: None,
+            approval: None,
             error: None,
             notice: None,
         }
@@ -105,7 +143,13 @@ impl DiagnosticsPanel {
     /// Reloads the document; called each time the section opens.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         self.run(
-            |backend| Outcome::Loaded(backend.document().map(Box::new)),
+            |backend| {
+                Outcome::Loaded(
+                    backend
+                        .document()
+                        .map(|document| Box::new((document, backend.approval().ok()))),
+                )
+            },
             cx,
         );
     }
@@ -133,7 +177,11 @@ impl DiagnosticsPanel {
                 this.backend = Some(backend);
                 this.busy = false;
                 match outcome {
-                    Outcome::Loaded(Ok(document)) => this.document = Some(*document),
+                    Outcome::Loaded(Ok(loaded)) => {
+                        let (document, approval) = *loaded;
+                        this.document = Some(document);
+                        this.approval = approval;
+                    }
                     Outcome::Changed(Ok(message)) => {
                         this.show_notice(message.to_owned(), cx);
                         this.refresh(cx);
@@ -164,6 +212,21 @@ impl DiagnosticsPanel {
             });
         })
         .detach();
+    }
+
+    fn set_approval(&mut self, automatic: bool, cx: &mut Context<Self>) {
+        self.run(
+            move |backend| {
+                Outcome::Changed(backend.set_approval(automatic).map(|_| {
+                    if automatic {
+                        "Aprovação automática ligada."
+                    } else {
+                        "Aprovação automática desligada."
+                    }
+                }))
+            },
+            cx,
+        );
     }
 
     fn export(&mut self, cx: &mut Context<Self>) {
@@ -389,6 +452,103 @@ impl DiagnosticsPanel {
                             calibration.dismissed
                         ))
                 })),
+        )
+    }
+
+    /// The automatic approval: what it does, where it stands and the one
+    /// switch. It is closed by default and opens only when the numbers allow.
+    fn render_approval(&self, theme: &Theme, status: &Status, cx: &mut Context<Self>) -> Div {
+        let colors = theme.colors;
+        let checks = status.health.checked;
+        let agreed = status.health.agreed;
+        let (tone, line) = match (status.automatic, status.blocked()) {
+            (true, _) => (
+                colors.status_success(),
+                format!(
+                    "Ligada. {} aguardando; um em dez é conferido às cegas. {agreed} de {checks} \
+                     conferências recentes concordaram.",
+                    status.held
+                ),
+            ),
+            (false, Some(Blocked::NotCalibrated)) => (
+                colors.text_muted(),
+                "Bloqueada: a confiança da extração ainda não prevê o que você aceita (cartão \
+                 acima)."
+                    .to_owned(),
+            ),
+            (false, Some(Blocked::BandUnproven)) => (
+                colors.text_muted(),
+                "Bloqueada: a faixa de 85% a 100% ainda não tem 10 decisões com 90% mantidas."
+                    .to_owned(),
+            ),
+            (false, Some(Blocked::Unobserved)) => (
+                colors.status_info(),
+                format!(
+                    "Em observação: {checks} de {MIN_AUDITS} conferências. O sistema registra o \
+                     que aprovaria e compara com o que você decide, sem aceitar nada."
+                ),
+            ),
+            (false, Some(Blocked::Tripped)) => (
+                colors.status_warning(),
+                format!(
+                    "Fechada: as conferências recentes discordaram ({agreed} de {checks} \
+                     concordaram). Ela volta a poder ser ligada quando concordarem de novo."
+                ),
+            ),
+            (false, None) => (
+                colors.status_success(),
+                format!(
+                    "Pronta para ligar: {agreed} de {checks} conferências recentes concordaram."
+                ),
+            ),
+        };
+        let automatic = status.automatic;
+        let blocked = !automatic && status.blocked().is_some();
+        let switch = action_button(
+            theme,
+            "approval-switch",
+            ButtonKind::Secondary,
+            !self.busy && !blocked,
+        )
+        .aria_label(if automatic {
+            "Desligar a aprovação automática"
+        } else {
+            "Ligar a aprovação automática"
+        })
+        .on_click(cx.listener(move |this, _, _, cx| this.set_approval(!automatic, cx)))
+        .child(if automatic { "Desligar" } else { "Ligar" });
+        card(
+            theme,
+            "Aprovação automática",
+            "Decisões de alta confiança esperam 24 h na Revisão e entram sozinhas se você não \
+             agir. Desligada por padrão.",
+        )
+        .child(
+            card_body()
+                .gap(px(SpacingScale::S3))
+                .child(
+                    div()
+                        .flex()
+                        .items_start()
+                        .gap(px(SpacingScale::S3))
+                        .child(div().mt(px(5.0)).size(px(6.0)).flex_none().rounded_full().bg(tone))
+                        .child(
+                            text_style(div(), TypeScale::BODY_SMALL)
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .text_color(colors.text_primary())
+                                .child(line),
+                        )
+                        .child(switch),
+                )
+                .child(
+                    text_style(div(), TypeScale::META)
+                        .text_color(colors.text_muted())
+                        .child(
+                            "Regras, decisões parecidas com o que já foi registrado, pouca evidência \
+                             e mudanças em muitos arquivos ficam sempre para você.",
+                        ),
+                ),
         )
     }
 
@@ -648,12 +808,17 @@ impl Render for DiagnosticsPanel {
             Some(document) => {
                 let jobs = self.render_jobs(&theme, &document.recent_jobs, cx);
                 let about = self.render_about(&theme, &document, cx);
+                let approval = self
+                    .approval
+                    .clone()
+                    .map(|status| self.render_approval(&theme, &status, cx));
                 div()
                     .flex()
                     .flex_col()
                     .gap(px(SpacingScale::S5))
                     .child(Self::render_metrics(&theme, &document))
                     .child(Self::render_calibration(&theme, &document))
+                    .children(approval)
                     .child(Self::render_losses(&theme, &document))
                     .child(jobs)
                     .child(about)

@@ -355,6 +355,10 @@ where
                     outbox_dir,
                 ),
                 application::jobs::Jobs::new(store.clone()),
+                Arc::new(application::auto_approval::Approvals::new(
+                    store.clone(),
+                    Arc::new(application::adoption::Adoption::new(store.clone())),
+                )),
             )) as Box<dyn xemnas_desktop::screens::settings::DiagnosticsBackend>
         }),
     }
@@ -562,6 +566,15 @@ fn run_shell_mode(
             .map(|store| -> Arc<dyn application::adoption::AdoptionApi> {
                 Arc::new(application::adoption::Adoption::new(store.clone()))
             });
+        let approvals: Option<Arc<dyn application::auto_approval::ApprovalsApi>> =
+            store.as_ref().ok().map(
+                |store| -> Arc<dyn application::auto_approval::ApprovalsApi> {
+                    Arc::new(application::auto_approval::Approvals::new(
+                        store.clone(),
+                        Arc::new(application::adoption::Adoption::new(store.clone())),
+                    ))
+                },
+            );
         let (projects, inbox, decisions, context, map, overview) = match store {
             Ok(store) => (
                 Ok(application::projects::Projects::new(store.clone())),
@@ -609,6 +622,9 @@ fn run_shell_mode(
             }
             if let Some(adoption) = adoption {
                 shell.set_adoption(adoption, cx);
+            }
+            if let Some(approvals) = approvals {
+                shell.set_approvals(approvals, cx);
             }
             shell.set_demo(demo);
             if let Some(route) = route {

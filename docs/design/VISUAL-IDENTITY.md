@@ -364,6 +364,26 @@ que as tocam e uma ligação existe só porque um fluxo passa de uma parte a out
   vem primeiro.
 - **Desfazer em vez de confirmar:** Rejeitar e Adiar mostram "Desfazer" no aviso.
 
+## Aprovação automática
+
+Desligada por padrão. A chave fica em Ajustes, Diagnóstico, no cartão "Aprovação
+automática", logo abaixo de "A confiança da extração presta?" (que mostra a calibração
+com as quatro faixas em medidor). O cartão diz em uma frase onde está: **bloqueada**
+(a confiança ainda não prevê o que você aceita; a faixa de 85% a 100% ainda não tem 10
+decisões com 90% mantidas), **em observação** (N de 10 conferências: o sistema registra o
+que aprovaria e compara com o que você decide, sem aceitar nada), **fechada** (as
+conferências recentes discordaram), **pronta para ligar** ou **ligada**. O botão
+Ligar fica inativo enquanto algo bloqueia. Uma linha fixa lembra o que nunca é
+automático: regras, decisões parecidas com o já registrado, pouca evidência, muitos
+arquivos.
+
+Na Revisão, o candidato retido leva "aceita sozinha em 19 h" no alto da linha, em azul
+de informação; ele continua na fila e pode ser aceito ou rejeitado antes (rejeitar
+conta como discordância). Sob a lista, "Aceitas sozinhas · N" abre as últimas aceitas
+pela política; cada linha abre a decisão. Uma sequência de oito confirmações com
+poucos segundos entre elas mostra "Ritmo alto: abra a evidência de um dos próximos
+antes de confirmar", uma vez, sem bloquear.
+
 ## Contexto — quatro entradas
 
 O índice do Contexto tem quatro entradas (Visão geral, Fontes, Entregas, Ajustes), sem

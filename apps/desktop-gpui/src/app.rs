@@ -236,6 +236,7 @@ pub struct Shell<
     _search_subscription: Subscription,
     _project_subscription: Option<Subscription>,
     _inbox_subscription: Option<Subscription>,
+    _inbox_opens: Option<Subscription>,
     projects: Option<Entity<ProjectsScreen<R>>>,
     inbox: Option<Entity<InboxScreen<R>>>,
     decisions: Option<Entity<DecisionsScreen<R>>>,
@@ -399,6 +400,11 @@ impl<
         let inbox_subscription = inbox
             .as_ref()
             .map(|screen| cx.observe(screen, |_, _, cx| cx.notify()));
+        let inbox_opens = inbox.as_ref().map(|screen| {
+            cx.subscribe(screen, |shell, _, event: &OpenDecision, cx| {
+                shell.show_decision(event.0.clone(), cx)
+            })
+        });
         let decisions = decisions.map(|(decisions, export, relations)| {
             cx.new(|cx| DecisionsScreen::new(cx, decisions, export, relations))
         });
@@ -434,6 +440,7 @@ impl<
             _search_subscription: search_subscription,
             _project_subscription: project_subscription,
             _inbox_subscription: inbox_subscription,
+            _inbox_opens: inbox_opens,
             projects: screen,
             inbox,
             decisions,
@@ -588,6 +595,17 @@ impl<
     /// Records that the window has a system material behind it.
     pub fn set_backdrop(&mut self, backdrop: bool) {
         self.backdrop = backdrop;
+    }
+
+    /// Lets Revisão run the automatic approval and show what it did.
+    pub fn set_approvals(
+        &mut self,
+        approvals: Arc<dyn application::auto_approval::ApprovalsApi>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(inbox) = &self.inbox {
+            inbox.update(cx, |screen, _| screen.set_approvals(approvals));
+        }
     }
 
     /// Lets Revisão confirm candidates together with their ties on the map.

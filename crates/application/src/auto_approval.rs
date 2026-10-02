@@ -24,6 +24,11 @@
 //!   agree, the mode returns to manual and says why.
 //! * **Never automatic.** Rules (they change what an agent does), anything
 //!   that resembles a recorded question, thin evidence, many files.
+//! * **Watch first.** In manual mode the policy still looks at what it would
+//!   have done and keeps every eligible candidate for a check, accepting
+//!   nothing. The mode cannot be turned on until ten of those checks exist and
+//!   nine in ten agree, and the same watching lets a closed mode win its way
+//!   back.
 //!
 //! The policy is a pure function over a stored candidate; the use case reads
 //! and writes through [`ApprovalStore`] and accepts through the same
@@ -51,6 +56,8 @@ pub const AUDIT_ONE_IN: u64 = 10;
 pub const MIN_AUDITS: usize = 10;
 /// Share of checks that must agree.
 pub const MIN_AGREEMENT: f64 = 0.9;
+/// The most recent checks that count, so a mode that closed can recover.
+pub const HEALTH_WINDOW: usize = 20;
 /// Most files a candidate may touch and still be eligible.
 pub const MAX_FILES: usize = 3;
 /// Lowest confidence of the band (the lower edge of the top bin).
@@ -181,11 +188,13 @@ impl Health {
 /// Why the automatic mode cannot be on right now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Blocked {
-    /// The extractor's confidence has not been shown to predict acceptance.
+    /// The confidence of the extractor has not been shown to predict acceptance.
     NotCalibrated,
     /// The top confidence band has too few decisions or too few kept.
     BandUnproven,
-    /// Blind checks disagreed with the policy.
+    /// Fewer than ten checks exist yet: the policy has not been watched.
+    Unobserved,
+    /// The checks disagreed with the policy.
     Tripped,
 }
 
@@ -209,12 +218,14 @@ pub struct Status {
 impl Status {
     /// Why the mode cannot be turned on, if it cannot.
     pub fn blocked(&self) -> Option<Blocked> {
-        if self.health.tripped() {
-            Some(Blocked::Tripped)
-        } else if !self.predicts {
+        if !self.predicts {
             Some(Blocked::NotCalibrated)
         } else if !self.band_proven {
             Some(Blocked::BandUnproven)
+        } else if self.health.tripped() {
+            Some(Blocked::Tripped)
+        } else if self.health.checked < MIN_AUDITS {
+            Some(Blocked::Unobserved)
         } else {
             None
         }
@@ -295,8 +306,9 @@ pub trait ApprovalStore {
     /// The ledger: held and accepted entries of a project, newest first.
     fn ledger(&self, project_id: &str, limit: usize) -> Result<Vec<LedgerRow>, ApprovalError>;
 
-    /// Every entry of a project with the candidate's present status and
-    /// whether the policy itself accepted it (`resolved_at` set).
+    /// Every entry (of a project, or of all), oldest first, with the
+    /// candidate's present status and whether the policy itself accepted it
+    /// (a decision created).
     fn auto_outcomes(
         &self,
         project_id: Option<&str>,
@@ -445,7 +457,7 @@ where
 
     /// How the checks fared across the projects.
     pub fn health(&self) -> Result<Health, ApprovalError> {
-        let mut health = Health::default();
+        let mut answered_checks: Vec<bool> = Vec::new();
         for (lane, status, by_policy) in self.store.auto_outcomes(None)? {
             let kept = matches!(
                 status,
@@ -459,11 +471,15 @@ where
                 Lane::Held => !by_policy && (kept || status == CandidateStatus::Dismissed),
             };
             if answered {
-                health.checked += 1;
-                health.agreed += usize::from(kept);
+                answered_checks.push(kept);
             }
         }
-        Ok(health)
+        // Oldest first: only the latest checks speak for the policy now.
+        let recent = &answered_checks[answered_checks.len().saturating_sub(HEALTH_WINDOW)..];
+        Ok(Health {
+            checked: recent.len(),
+            agreed: recent.iter().filter(|kept| **kept).count(),
+        })
     }
 
     /// Candidates of a project, by status.
@@ -502,10 +518,8 @@ where
     /// One pass at the given moment (RFC 3339), so tests do not wait a day.
     pub fn run_at(&self, project_id: &str, now: &str) -> Result<RunReport, ApprovalError> {
         let mut report = RunReport::default();
-        if self.store.approval_mode()? != Mode::Automatic {
-            return Ok(report);
-        }
-        if self.health()?.tripped() {
+        let mode = self.store.approval_mode()?;
+        if mode == Mode::Automatic && self.health()?.tripped() {
             self.store.set_approval_mode(Mode::Manual, now)?;
             report.tripped = true;
             return Ok(report);
@@ -549,7 +563,9 @@ where
             if !eligible(candidate, &calibration, &others) {
                 continue;
             }
-            let lane = if is_audited(&candidate.id) {
+            // Watching (manual) keeps every eligible one for a check; acting
+            // (automatic) holds nine in ten.
+            let lane = if mode == Mode::Manual || is_audited(&candidate.id) {
                 Lane::Audit
             } else {
                 Lane::Held
@@ -570,6 +586,10 @@ where
                 Lane::Held => report.held += 1,
                 Lane::Audit => report.audited += 1,
             }
+        }
+
+        if mode != Mode::Automatic {
+            return Ok(report);
         }
 
         // Accept what has waited out its day and is still pending.
@@ -809,9 +829,17 @@ mod tests {
             ..base.clone()
         };
         assert_eq!(calibrated.blocked(), Some(Blocked::BandUnproven));
-        let ready = Status {
+        let unwatched = Status {
             band_proven: true,
             ..calibrated.clone()
+        };
+        assert_eq!(unwatched.blocked(), Some(Blocked::Unobserved));
+        let ready = Status {
+            health: Health {
+                checked: 12,
+                agreed: 12,
+            },
+            ..unwatched
         };
         assert_eq!(ready.blocked(), None);
         let tripped = Status {
