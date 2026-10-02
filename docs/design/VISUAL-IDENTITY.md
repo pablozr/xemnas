@@ -364,6 +364,15 @@ que as tocam e uma ligação existe só porque um fluxo passa de uma parte a out
   vem primeiro.
 - **Desfazer em vez de confirmar:** Rejeitar e Adiar mostram "Desfazer" no aviso.
 
+## Contexto — quatro entradas
+
+O índice do Contexto tem quatro entradas (Visão geral, Fontes, Entregas, Ajustes), sem
+cabeçalhos de grupo; só Entregas leva contagem. As páginas de um grupo se alternam numa
+chave segmentada fina no topo da página, e cada entrada abre na página que a pessoa
+usou por último naquele grupo (Fontes: Decisões, Regras, Documentação, Revisar com IA;
+Entregas: Histórico, Testar uma tarefa). As rotas de captura (`context:rules`,
+`context:test`, `context:knowledge-review`) seguem iguais.
+
 ## Formas para números
 
 Um número que vale mostrar vale desenhar (`ui::patterns`, canvas de poucos pixels,

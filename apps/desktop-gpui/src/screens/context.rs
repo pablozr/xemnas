@@ -131,43 +131,106 @@ enum Section {
     Mode,
 }
 
-impl Section {
+/// The four entries of the index. The pages inside a group are reached by a
+/// switch at the top of the page, so the index stays at four (a person holds
+/// about four things at a glance) while every page is still two presses away.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Group {
+    Overview,
+    Sources,
+    Deliveries,
+    Settings,
+}
+
+impl Group {
+    const ALL: [Self; 4] = [
+        Self::Overview,
+        Self::Sources,
+        Self::Deliveries,
+        Self::Settings,
+    ];
+
     fn label(self) -> &'static str {
         match self {
-            Self::KnowledgeReview => "Revisar conhecimento",
             Self::Overview => "Visão geral",
+            Self::Sources => "Fontes",
             Self::Deliveries => "Entregas",
-            Self::Test => "Testar uma tarefa",
-            Self::Decisions => "Decisões em vigor",
-            Self::Rules => "Regras",
-            Self::Documents => "Documentação",
-            Self::Mode => "Modo de entrega",
+            Self::Settings => "Ajustes",
         }
     }
 
     fn glyph(self) -> IconName {
         match self {
-            Self::KnowledgeReview => IconName::Layers,
             Self::Overview => IconName::Gauge,
+            Self::Sources => IconName::Book,
             Self::Deliveries => IconName::Clock,
-            Self::Test => IconName::Flask,
-            Self::Decisions => IconName::Decision,
-            Self::Rules => IconName::Shield,
-            Self::Documents => IconName::Book,
-            Self::Mode => IconName::Settings,
+            Self::Settings => IconName::Settings,
         }
     }
 
     fn id(self) -> &'static str {
         match self {
-            Self::KnowledgeReview => "context-nav-knowledge-review",
             Self::Overview => "context-nav-overview",
+            Self::Sources => "context-nav-sources",
             Self::Deliveries => "context-nav-deliveries",
-            Self::Test => "context-nav-test",
-            Self::Decisions => "context-nav-decisions",
-            Self::Rules => "context-nav-rules",
-            Self::Documents => "context-nav-documents",
-            Self::Mode => "context-nav-mode",
+            Self::Settings => "context-nav-mode",
+        }
+    }
+
+    /// The pages of the group, in the order of its switch.
+    fn members(self) -> &'static [Section] {
+        match self {
+            Self::Overview => &[Section::Overview],
+            Self::Sources => &[
+                Section::Decisions,
+                Section::Rules,
+                Section::Documents,
+                Section::KnowledgeReview,
+            ],
+            Self::Deliveries => &[Section::Deliveries, Section::Test],
+            Self::Settings => &[Section::Mode],
+        }
+    }
+}
+
+impl Section {
+    /// The index entry this page belongs to.
+    fn group(self) -> Group {
+        match self {
+            Self::Overview => Group::Overview,
+            Self::Decisions | Self::Rules | Self::Documents | Self::KnowledgeReview => {
+                Group::Sources
+            }
+            Self::Deliveries | Self::Test => Group::Deliveries,
+            Self::Mode => Group::Settings,
+        }
+    }
+
+    /// The id of the page's tab on the group's switch.
+    fn tab_id(self) -> &'static str {
+        match self {
+            Self::Decisions => "context-tab-decisions",
+            Self::Rules => "context-tab-rules",
+            Self::Documents => "context-tab-documents",
+            Self::KnowledgeReview => "context-tab-knowledge-review",
+            Self::Deliveries => "context-tab-deliveries",
+            Self::Test => "context-tab-test",
+            Self::Overview => "context-tab-overview",
+            Self::Mode => "context-tab-mode",
+        }
+    }
+
+    /// The word on the group's switch.
+    fn tab(self) -> &'static str {
+        match self {
+            Self::Decisions => "Decisões",
+            Self::Rules => "Regras",
+            Self::Documents => "Documentação",
+            Self::KnowledgeReview => "Revisar com IA",
+            Self::Deliveries => "Histórico",
+            Self::Test => "Testar uma tarefa",
+            Self::Overview => "Visão geral",
+            Self::Mode => "Modo de entrega",
         }
     }
 }
@@ -224,6 +287,8 @@ pub struct ContextScreen<S: ContextStores> {
     /// Demo-only: scroll to the end once loaded (`--open context:end`).
     scroll_to_end: bool,
     section: Section,
+    /// The page last open in each index group, by group id.
+    last_in_group: BTreeMap<&'static str, Section>,
     /// The delivery whose items are open in the history.
     open_delivery: Option<String>,
     focus: std::collections::BTreeMap<&'static str, gpui::FocusHandle>,
@@ -262,6 +327,7 @@ impl<S: ContextStores> ContextScreen<S> {
             self.leave_review(cx);
         }
         self.section = section;
+        self.last_in_group.insert(section.group().id(), section);
         self.scroll.set_offset(gpui::point(px(0.0), px(0.0)));
         cx.notify();
     }
@@ -330,6 +396,7 @@ impl<S: ContextStores> ContextScreen<S> {
             scroll: gpui::ScrollHandle::new(),
             scroll_to_end: false,
             section: Section::Overview,
+            last_in_group: BTreeMap::new(),
             open_delivery: None,
             focus: std::collections::BTreeMap::new(),
             _subscriptions: subscriptions,
@@ -1398,63 +1465,49 @@ impl<S: ContextStores> ContextScreen<S> {
                 snapshot.deliveries.len(),
             )
         });
-        let groups: [(&str, &[Section]); 3] = [
-            (
-                "Agente",
-                &[Section::Overview, Section::Deliveries, Section::Test],
-            ),
-            (
-                "Fontes",
-                &[Section::Decisions, Section::Rules, Section::Documents],
-            ),
-            ("Ajustes", &[Section::KnowledgeReview, Section::Mode]),
-        ];
         let mut list = div()
             .flex()
             .flex_col()
             .gap(px(2.0))
-            .px(px(SpacingScale::S2));
-        for (label, sections) in groups {
+            .px(px(SpacingScale::S2))
+            .pt(px(SpacingScale::S4));
+        for group in Group::ALL {
+            // Only the deliveries carry a count: the others are lists whose
+            // size says nothing about whether something needs attention.
+            let badge = counts
+                .map(|(_, _, _, deliveries)| deliveries)
+                .filter(|count| group == Group::Deliveries && *count > 0)
+                .map(|count| count.to_string());
+            // A group opens on the page the person last used in it.
+            let section = if self.section.group() == group {
+                self.section
+            } else {
+                self.last_in_group
+                    .get(group.id())
+                    .copied()
+                    .unwrap_or(group.members()[0])
+            };
+            let focus = self.focus_for(group.id(), cx);
             list = list.child(
-                div()
-                    .px(px(SpacingScale::S3))
-                    .pt(px(SpacingScale::S4))
-                    .pb(px(SpacingScale::S1))
-                    .child(section_label(theme, label)),
+                index_row(
+                    theme,
+                    group.id(),
+                    self.section.group() == group,
+                    group.glyph(),
+                    group.label(),
+                    badge,
+                )
+                .track_focus(&focus)
+                .on_click(cx.listener(move |this, _, _, cx| this.go(section, cx)))
+                .on_key_down(cx.listener(
+                    move |this, event: &gpui::KeyDownEvent, _, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                            this.go(section, cx);
+                            cx.stop_propagation();
+                        }
+                    },
+                )),
             );
-            for &section in sections {
-                let badge = counts
-                    .and_then(|(decisions, rules, documents, deliveries)| match section {
-                        Section::Decisions => Some(decisions),
-                        Section::Rules => Some(rules),
-                        Section::Documents => Some(documents),
-                        Section::Deliveries => Some(deliveries),
-                        _ => None,
-                    })
-                    .filter(|count| *count > 0)
-                    .map(|count| count.to_string());
-                let focus = self.focus_for(section.id(), cx);
-                list = list.child(
-                    index_row(
-                        theme,
-                        section.id(),
-                        self.section == section,
-                        section.glyph(),
-                        section.label(),
-                        badge,
-                    )
-                    .track_focus(&focus)
-                    .on_click(cx.listener(move |this, _, _, cx| this.go(section, cx)))
-                    .on_key_down(cx.listener(
-                        move |this, event: &gpui::KeyDownEvent, _, cx| {
-                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                this.go(section, cx);
-                                cx.stop_propagation();
-                            }
-                        },
-                    )),
-                );
-            }
         }
         let foot = self.snapshot.as_ref().map(|snapshot| {
             let mode = snapshot.settings.mode;
@@ -1496,6 +1549,50 @@ impl<S: ContextStores> ContextScreen<S> {
                     .child(list),
             )
             .children(foot)
+    }
+
+    /// The switch between the pages of the open group ("Decisões | Regras |
+    /// Documentação | Revisar com IA"); a group of one page has none.
+    fn render_switch(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Option<Div> {
+        let members = self.section.group().members();
+        if members.len() < 2 {
+            return None;
+        }
+        let mut track = crate::ui::patterns::segmented(theme)
+            .id("context-switch")
+            .role(Role::RadioGroup);
+        for &section in members {
+            let focus = self.focus_for(section.tab_id(), cx);
+            track = track.child(
+                crate::ui::patterns::segment_label(
+                    theme,
+                    section.tab_id(),
+                    section.tab(),
+                    self.section == section,
+                )
+                .track_focus(&focus)
+                .on_click(cx.listener(move |this, _, _, cx| this.go(section, cx)))
+                .on_key_down(cx.listener(
+                    move |this, event: &gpui::KeyDownEvent, _, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                            this.go(section, cx);
+                            cx.stop_propagation();
+                        }
+                    },
+                )),
+            );
+        }
+        Some(
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .px(px(SpacingScale::S4))
+                .py(px(SpacingScale::S2))
+                .border_b_1()
+                .border_color(theme.colors.hairline_divider())
+                .child(track),
+        )
     }
 
     /// The page of the selected section.
@@ -2223,13 +2320,25 @@ impl<S: ContextStores> Render for ContextScreen<S> {
         let _probe = crate::ui::perf::Probe::start("context");
         let theme = Theme::current(cx);
         let rail = self.render_rail(&theme, cx);
+        let switch = self.render_switch(&theme, cx);
         if self.section == Section::KnowledgeReview {
-            return div()
-                .size_full()
-                .relative()
-                .flex()
-                .child(rail)
-                .child(self.review.clone());
+            return div().size_full().relative().flex().child(rail).child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .children(switch)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h(px(0.0))
+                            .flex()
+                            .flex_col()
+                            .child(self.review.clone()),
+                    ),
+            );
         }
         if self.snapshot.is_none() && !self.busy && self.error.is_none() && self.project.is_some() {
             self.refresh(cx);
@@ -2286,6 +2395,7 @@ impl<S: ContextStores> Render for ContextScreen<S> {
                             .role(Role::Alert)
                             .children(retry)
                     }))
+                    .children(switch)
                     .child(div().flex_1().min_h(px(0.0)).flex().flex_col().child(body)),
             )
             .children(
