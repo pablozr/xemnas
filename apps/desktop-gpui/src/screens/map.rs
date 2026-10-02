@@ -100,6 +100,8 @@ const RECENT_DAYS: i64 = 14;
 /// Rows a long list builds first, and how many more "Mostrar mais" adds
 /// (twice this).
 const LIST_PAGE: usize = 12;
+/// Component blocks built at first in the Blocos layout (two per row).
+const BLOCKS_PAGE: usize = 24;
 /// Most rows a "show all" builds at once; beyond it only pages are offered.
 const MOST_AT_ONCE: usize = 200;
 /// Timeline events built first.
@@ -145,7 +147,7 @@ enum Layout {
 }
 
 struct MapData {
-    map: ProjectMap,
+    map: Arc<ProjectMap>,
     graph: ProjectGraph,
     /// Relations between decisions waiting for confirmation.
     relations: Arc<Vec<RelationSuggestionView>>,
@@ -2653,8 +2655,8 @@ impl<S: MapStores> MapScreen<S> {
         let Some(data) = self.data.as_ref() else {
             return div().into_any_element();
         };
-        let entities = data.map.entities.clone();
-        let part_of = data.map.part_of.clone();
+        let map = Arc::clone(&data.map);
+        let entities = &map.entities;
         if entities.is_empty() {
             let open = self.button(
                 "map-overview-suggestions",
@@ -2685,40 +2687,51 @@ impl<S: MapStores> MapScreen<S> {
         let recent_since = (chrono::Utc::now() - chrono::Duration::days(RECENT_DAYS))
             .format("%Y-%m-%dT%H:%M:%SZ")
             .to_string();
-        let parent_of: BTreeMap<String, String> = part_of.into_iter().collect();
-        let tops: Vec<MapEntity> = entities
+        let parent_of: BTreeMap<&str, &str> = map
+            .part_of
+            .iter()
+            .map(|(part, parent)| (part.as_str(), parent.as_str()))
+            .collect();
+        let tops: Vec<&MapEntity> = entities
             .iter()
             .filter(|row| {
                 row.entity.kind == EntityKind::Component
-                    && !parent_of.contains_key(&row.entity.entity_id)
+                    && !parent_of.contains_key(row.entity.entity_id.as_str())
             })
-            .cloned()
             .collect();
-        let technologies: Vec<MapEntity> = entities
+        let technologies: Vec<&MapEntity> = entities
             .iter()
             .filter(|row| row.entity.kind == EntityKind::Technology)
-            .cloned()
             .collect();
+        // Parts by parent, found once instead of a scan per block.
+        let mut parts_of: BTreeMap<&str, Vec<&MapEntity>> = BTreeMap::new();
+        for part in entities {
+            if let Some(parent) = parent_of.get(part.entity.entity_id.as_str()) {
+                parts_of.entry(parent).or_default().push(part);
+            }
+        }
 
+        // Blocks are built a page at a time: a project with hundreds of
+        // components keeps the first screens light.
+        let shown = tops.len().min(self.limit("map-blocks", BLOCKS_PAGE));
         let mut grid = div().flex().flex_col().gap(px(SpacingScale::S3));
-        for pair in tops.chunks(2) {
+        for pair in tops[..shown].chunks(2) {
             // Blocks on one line share a height; weight is in the text.
             let mut line = div().flex().gap(px(SpacingScale::S3)).items_stretch();
             for row in pair {
-                let parts: Vec<MapEntity> = entities
-                    .iter()
-                    .filter(|part| {
-                        parent_of.get(&part.entity.entity_id) == Some(&row.entity.entity_id)
-                    })
-                    .cloned()
-                    .collect();
-                let block = self.component_block(theme, row, &parts, &recent_since, cx);
+                let parts = parts_of
+                    .get(row.entity.entity_id.as_str())
+                    .map_or(&[][..], Vec::as_slice);
+                let block = self.component_block(theme, row, parts, &recent_since, cx);
                 line = line.child(div().flex_1().min_w(px(0.0)).flex().child(block.flex_1()));
             }
             if pair.len() == 1 {
                 line = line.child(div().flex_1());
             }
             grid = grid.child(line);
+        }
+        if shown < tops.len() {
+            grid = grid.child(self.more_row("map-blocks", BLOCKS_PAGE, tops.len() - shown, cx));
         }
 
         let mut chips = div().flex().flex_wrap().gap(px(SpacingScale::S2));
@@ -2782,7 +2795,7 @@ impl<S: MapStores> MapScreen<S> {
         &mut self,
         theme: &Theme,
         row: &MapEntity,
-        parts: &[MapEntity],
+        parts: &[&MapEntity],
         recent_since: &str,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
@@ -3289,7 +3302,7 @@ fn load<S: MapStores>(backend: &MapServices<S>, project: &str) -> Result<MapData
             )
         })?;
     Ok(MapData {
-        map,
+        map: Arc::new(map),
         graph,
         relations: Arc::new(relations),
         derived: Arc::new(derived),
