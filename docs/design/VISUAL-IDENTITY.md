@@ -126,7 +126,11 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   em mono prata e uma frase real ("5 para revisar", ou o nome), com ponto
   âmbar quando há fila. Respira a cada ~5 s (sobe 3 px e assenta em 1,8 s,
   na taxa do monitor) e fica parado entre uma respiração e outra; pisca e
-  olha para os lados. É uma view própria e as telas são views em cache
+  olha para os lados. Todo movimento anda por quadros próximos e funde um
+  no outro (crossfade de 45 a 140 ms): o piscar é aberto, meio, fechado,
+  meio, aberto em ~260 ms; o olhar passa pelo quadro do meio. Oito quadros
+  (`idle`, `blink`, `blinkhalf`, `glow`, `left`, `leftmid`, `right`,
+  `rightmid`); saltos entre poses distantes parecem um vídeo travado. É uma view própria e as telas são views em cache
   (`cached`), então um quadro do mascote não refaz o app. Com movimento
   reduzido, só pisca. Hover e painel aberto acendem os
   olhos (`glow`).
@@ -394,6 +398,29 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   sanitizado.
 - Painel do projeto: **Apagar dados…** mede o impacto real e só libera Apagar
   tudo depois de digitar o nome do projeto; a pasta no disco não é tocada.
+
+## Desempenho
+
+- Cada passo de scroll refaz o `render` da view dona da rolagem, e uma view
+  só é reaproveitada se ninguém a notificar. Então o que é construído é o que
+  rola: listas longas montam uma página por vez (`LIST_PAGE` = 12 linhas,
+  `TIMELINE_PAGE` = 30 eventos, `RULES_PAGE` = 10 por tipo) e o resto fica
+  atrás de "Mostrar mais N", que abre mais duas páginas. A linha do tempo,
+  Sugestões, os blocos de decisões e regras de um item e a lente de arquivo
+  seguem isso.
+- O que pesa vai para fora da thread da interface: o layout de forças do
+  grafo roda em segundo plano, só é feito quando o Grafo é aberto (na visão
+  em Blocos espera), é aplicado se ainda for o mais recente e, em mapas com
+  mais de 200 nós, usa menos passos. A simulação limita força e velocidade
+  para um componente com centenas de decisões não explodir em posições
+  infinitas.
+- Telas pesadas ficam em views com cache (`cached`) e o mascote é view
+  própria: um quadro dele não refaz o app.
+- Medir antes de mexer: `XEMNAS_PERF=1` grava em `xemnas-perf.log` (pasta
+  temporária) o tempo de montagem de cada tela (`ui::perf::Probe`), e
+  `XEMNAS_DEMO_SCALE=N` semeia N decisões, N/4 componentes e N/3 regras, a
+  maior parte num componente "docs". A janela fora da tela tem ritmo próprio
+  da plataforma (~36 ms entre quadros): o número útil é o tempo de montagem.
 
 ## Movimento
 
