@@ -8,6 +8,7 @@
 
 use std::path::PathBuf;
 
+use application::calibration::{Verdict, MIN_DECIDED, PREDICTS_AT};
 use application::diagnostics::{
     Diagnostics, DiagnosticsDocument, DiagnosticsStore, Distribution, JobDiagnostic,
 };
@@ -21,7 +22,7 @@ use super::parts::{card, card_body, card_footer, stat_tile};
 use crate::screens::format::{date_time, plural};
 use crate::ui::controls::{action_button, ButtonKind};
 use crate::ui::icons::{icon, IconName};
-use crate::ui::patterns::{error_banner, skeleton_list, status_pill, toast, TOAST_DURATION};
+use crate::ui::patterns::{error_banner, meter, skeleton_list, status_pill, toast, TOAST_DURATION};
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{RadiusScale, SpacingScale, TypeScale};
 
@@ -265,6 +266,130 @@ impl DiagnosticsPanel {
                         context.shadow.blocks
                     )),
             )
+    }
+
+    /// Whether the extractor's confidence predicts what is accepted: the
+    /// gate for any automatic approval (docs/pesquisas/exibicao-e-aprovacao.md).
+    fn render_calibration(theme: &Theme, document: &DiagnosticsDocument) -> Div {
+        let calibration = &document.metrics.calibration;
+        let colors = theme.colors;
+        let (tone, verdict) = match calibration.verdict {
+            Verdict::TooFew => (
+                colors.text_muted(),
+                format!(
+                    concat!(
+                        "Ainda não dá para saber: {} de {} decisões, e é preciso ter aceitado ",
+                        "e descartado pelo menos uma."
+                    ),
+                    calibration.decided, MIN_DECIDED
+                ),
+            ),
+            Verdict::NoSignal => (
+                colors.status_danger(),
+                concat!(
+                    "A confiança não separa o que você aceita do que descarta. ",
+                    "Aprovação automática não deve se apoiar nela."
+                )
+                .to_owned(),
+            ),
+            Verdict::Weak => (
+                colors.status_warning(),
+                concat!(
+                    "A confiança separa um pouco o que você aceita, mas não o bastante ",
+                    "para aprovar sozinha."
+                )
+                .to_owned(),
+            ),
+            Verdict::Predicts => (
+                colors.status_success(),
+                concat!(
+                    "A confiança prevê o que você aceita: ",
+                    "dá para apoiar aprovação automática nela."
+                )
+                .to_owned(),
+            ),
+        };
+        let rows = calibration
+            .bins
+            .iter()
+            .filter(|bin| bin.total > 0)
+            .map(|bin| {
+                let share = bin.kept_share().unwrap_or(0.0) as f32;
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(SpacingScale::S3))
+                    .child(
+                        text_style(div(), TypeScale::META)
+                            .w(px(72.0))
+                            .flex_none()
+                            .font_family(Theme::font_mono())
+                            .text_color(colors.text_secondary())
+                            .child(format!("{:.0}–{:.0}%", bin.from * 100.0, bin.to * 100.0)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .child(meter(theme, share, colors.accent_default())),
+                    )
+                    .child(
+                        text_style(div(), TypeScale::META)
+                            .w(px(150.0))
+                            .flex_none()
+                            .text_color(colors.text_muted())
+                            .child(format!(
+                                "{:.0}% mantidas · {}",
+                                share * 100.0,
+                                plural(bin.total as usize, "decisão", "decisões")
+                            )),
+                    )
+            });
+        card(
+            theme,
+            "A confiança da extração presta?",
+            "Entre os candidatos que você já decidiu: quanto da faixa de confiança foi aceito.",
+        )
+        .child(
+            card_body()
+                .gap(px(SpacingScale::S3))
+                .child(
+                    div()
+                        .flex()
+                        .items_start()
+                        .gap(px(SpacingScale::S3))
+                        .child(
+                            div()
+                                .mt(px(5.0))
+                                .size(px(6.0))
+                                .flex_none()
+                                .rounded_full()
+                                .bg(tone),
+                        )
+                        .child(
+                            text_style(div(), TypeScale::BODY_SMALL)
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .text_color(colors.text_primary())
+                                .child(verdict),
+                        ),
+                )
+                .children(rows)
+                .children(calibration.confidence_separation.map(|value| {
+                    text_style(div(), TypeScale::META)
+                        .text_color(colors.text_muted())
+                        .child(format!(
+                            concat!(
+                                "Separação {:.2} (0,50 é acaso; {:.2} ou mais prevê) · ",
+                                "{} aceitas, {} editadas, {} descartadas"
+                            ),
+                            value,
+                            PREDICTS_AT,
+                            calibration.accepted,
+                            calibration.edited,
+                            calibration.dismissed
+                        ))
+                })),
+        )
     }
 
     fn render_losses(theme: &Theme, document: &DiagnosticsDocument) -> Div {
@@ -528,6 +653,7 @@ impl Render for DiagnosticsPanel {
                     .flex_col()
                     .gap(px(SpacingScale::S5))
                     .child(Self::render_metrics(&theme, &document))
+                    .child(Self::render_calibration(&theme, &document))
                     .child(Self::render_losses(&theme, &document))
                     .child(jobs)
                     .child(about)

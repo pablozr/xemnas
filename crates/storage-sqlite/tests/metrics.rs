@@ -247,6 +247,22 @@ fn metrics_are_aggregated_from_seeded_timestamps() {
     assert_eq!(document.metrics.noise.decided_total, 4);
     assert_eq!(document.metrics.noise.dismissed_ratio, Some(0.25));
 
+    let calibration = &document.metrics.calibration;
+    assert_eq!(calibration.decided, 4);
+    assert_eq!(
+        (
+            calibration.accepted,
+            calibration.edited,
+            calibration.dismissed
+        ),
+        (2, 1, 1)
+    );
+    assert_eq!(
+        calibration.verdict,
+        application::calibration::Verdict::TooFew,
+        "four decisions answer nothing"
+    );
+
     assert_eq!(document.metrics.losses.assessments_failed, 2);
     assert_eq!(document.metrics.losses.assessments_skipped, 1);
     assert_eq!(document.metrics.losses.jobs_failed, 1);

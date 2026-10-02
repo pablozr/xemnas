@@ -71,6 +71,7 @@ impl DiagnosticsStore for FakeStore {
 
     fn metrics(&self) -> Result<DiagnosticsMetrics, DiagnosticsError> {
         Ok(DiagnosticsMetrics {
+            calibration: Default::default(),
             latency_capture_to_candidate_ms: Distribution {
                 samples: 3,
                 p50: Some(100),
@@ -117,6 +118,7 @@ impl DiagnosticsStore for EmptyStore {
     }
     fn metrics(&self) -> Result<DiagnosticsMetrics, DiagnosticsError> {
         Ok(DiagnosticsMetrics {
+            calibration: Default::default(),
             latency_capture_to_candidate_ms: Distribution {
                 samples: 0,
                 p50: None,

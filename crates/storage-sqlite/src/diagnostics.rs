@@ -8,6 +8,35 @@ use application::diagnostics::{
 };
 use std::collections::BTreeMap;
 
+/// How the extractor's confidence relates to what was decided.
+fn calibration(
+    connection: &rusqlite::Connection,
+) -> Result<application::calibration::Calibration, DiagnosticsError> {
+    use application::calibration::{calibrate, Outcome, Sample};
+    let mut statement = connection
+        .prepare(
+            "SELECT confidence, significance, status FROM decision_candidates              WHERE status IN ('dismissed', 'accepted', 'edited_and_accepted')",
+        )
+        .map_err(storage_error)?;
+    let samples = statement
+        .query_map([], |row| {
+            let status: String = row.get(2)?;
+            Ok(Sample {
+                confidence: row.get(0)?,
+                significance: row.get(1)?,
+                outcome: match status.as_str() {
+                    "accepted" => Outcome::Accepted,
+                    "edited_and_accepted" => Outcome::Edited,
+                    _ => Outcome::Dismissed,
+                },
+            })
+        })
+        .map_err(storage_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(storage_error)?;
+    Ok(calibrate(&samples))
+}
+
 /// Converts a query failure into a storage error.
 fn storage_error(error: rusqlite::Error) -> DiagnosticsError {
     DiagnosticsError::Storage(error.to_string())
@@ -228,7 +257,9 @@ impl DiagnosticsStore for SqliteStore {
             )
             .map_err(storage_error)?;
 
+        let calibration = calibration(&connection)?;
         Ok(DiagnosticsMetrics {
+            calibration,
             latency_capture_to_candidate_ms: latency,
             review_time_ms: review,
             noise: NoiseMetrics {

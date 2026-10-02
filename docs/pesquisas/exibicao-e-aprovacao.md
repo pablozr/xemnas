@@ -158,7 +158,7 @@ quanto as revisadas.
 
 | Passo | O que | Custo | Critério de sucesso |
 | --- | --- | --- | --- |
-| 1 | Medir a calibração com o histórico de aceitar e rejeitar | Baixo, sem interface | A confiança separa o que foi aceito do que foi rejeitado melhor que o acaso |
+| 1 | Medir a calibração com o histórico de aceitar e rejeitar | Baixo, sem interface | A confiança separa o que foi aceito do que foi rejeitado melhor que o acaso. **Feito:** `application::calibration` e o cartão "A confiança da extração presta?" em Ajustes, Diagnóstico (separação de 0,70 ou mais prevê; 30 decisões no mínimo) |
 | 2 | Faixa "desde a última vez" e um único contador de pendências | Baixo | O desenvolvedor retoma sem procurar o que mudou |
 | 3 | Evidência antes do motivo na Revisão; ação padrão com desfazer | Baixo | Menos cliques por decisão sem queda na qualidade |
 | 4 | Fila única de aprovação (candidatos, sugestões do Mapa e documentos) | Médio | Um lugar para agir; menos destinos para aprender |

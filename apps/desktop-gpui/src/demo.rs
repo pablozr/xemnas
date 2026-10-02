@@ -148,6 +148,9 @@ pub(crate) fn store() -> Result<SqliteStore, Box<dyn std::error::Error>> {
                 criteria: "[]".to_string(),
             };
             store.insert_candidates(&[candidate.clone()])?;
+            if index == 0 && std::env::var_os("XEMNAS_DEMO_CALIBRATION").is_some() {
+                seed_decided(&store, &candidate)?;
+            }
             candidate.id = format!("confirmed-{}", candidate.id);
             candidate.dedup_hash = format!("confirmed-{}", candidate.dedup_hash);
             store.insert_candidates(&[candidate.clone()])?;
@@ -959,6 +962,31 @@ impl application::knowledge_review::KnowledgeReviewApi for SampleKnowledgeReview
         });
         Ok(report)
     }
+}
+
+/// Forty-five decided candidates whose confidence mostly predicts what was
+/// kept, to see the calibration card filled: `XEMNAS_DEMO_CALIBRATION=1`.
+fn seed_decided(
+    store: &SqliteStore,
+    template: &DecisionCandidateRecord,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for at in 0..45_usize {
+        let confidence = 0.3 + at as f64 * 0.015;
+        let kept = if confidence < 0.5 {
+            at % 6 == 0
+        } else if confidence < 0.7 {
+            at % 2 == 0
+        } else {
+            at % 8 != 0
+        };
+        let mut candidate = template.clone();
+        candidate.id = format!("decided-{at}");
+        candidate.dedup_hash = format!("decided-{at}");
+        candidate.status = if kept { "accepted" } else { "dismissed" }.into();
+        candidate.confidence = confidence;
+        store.insert_candidates(&[candidate])?;
+    }
+    Ok(())
 }
 
 /// A crowded architecture (12 containers, skips, back edges, a cycle) for
