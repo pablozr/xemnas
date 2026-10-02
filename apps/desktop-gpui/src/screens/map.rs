@@ -94,6 +94,11 @@ const PICK_LIMIT: usize = 100;
 const RECENT_FILES: usize = 6;
 /// Days an entity counts as recently active on the overview.
 const RECENT_DAYS: i64 = 14;
+/// Rows a long list builds first, and how many more "Mostrar mais" adds
+/// (twice this).
+const LIST_PAGE: usize = 12;
+/// Timeline events built first.
+const TIMELINE_PAGE: usize = 30;
 /// Nodes per side of the neighborhood diagram.
 const MAX_SIDE: usize = 6;
 /// Height of a neighborhood node.
@@ -187,6 +192,13 @@ pub struct MapScreen<S: MapStores> {
     error: Option<String>,
     notice: Option<String>,
     focus: BTreeMap<String, FocusHandle>,
+    /// How many rows of each long list are shown (by list key); the rest
+    /// waits behind "Mostrar mais". Every scroll step rebuilds the view, so
+    /// what is built is what scrolls: a long list is built a page at a time.
+    shown: BTreeMap<String, usize>,
+    /// Whether the graph holds older data than the map: its layout is made
+    /// when the Grafo layout is first shown.
+    graph_stale: bool,
     /// Demo-only view to open once the map loads (`--open map:<view>`).
     route: Option<String>,
     layout: Layout,
@@ -246,6 +258,8 @@ impl<S: MapStores> MapScreen<S> {
             error: None,
             notice: None,
             focus: BTreeMap::new(),
+            shown: BTreeMap::new(),
+            graph_stale: true,
             route: None,
             layout: Layout::Blocks,
             graph,
@@ -275,6 +289,13 @@ impl<S: MapStores> MapScreen<S> {
 
     /// Hands fresh data to the graph; a new project plays the entrance.
     fn fill_graph(&mut self, cx: &mut Context<Self>) {
+        // The graph's layout is costly and only the Grafo layout shows it:
+        // in Blocos it waits, and is made when the person opens it.
+        if self.layout != Layout::Graph {
+            self.graph_stale = true;
+            return;
+        }
+        self.graph_stale = false;
         let Some(data) = self.data.as_ref() else {
             return;
         };
@@ -287,6 +308,9 @@ impl<S: MapStores> MapScreen<S> {
 
     fn set_layout(&mut self, layout: Layout, cx: &mut Context<Self>) {
         self.layout = layout;
+        if layout == Layout::Graph && self.graph_stale {
+            self.fill_graph(cx);
+        }
         cx.notify();
     }
 
@@ -340,6 +364,7 @@ impl<S: MapStores> MapScreen<S> {
         self.lens = None;
         self.picker = None;
         self.view = View::Overview;
+        self.shown.clear();
         self.error = None;
         self.notice = None;
         self.refresh(cx);
@@ -490,6 +515,7 @@ impl<S: MapStores> MapScreen<S> {
             return;
         };
         self.view = View::Entity(id.clone());
+        self.shown.clear();
         self.picker = None;
         self.confirm_retire = false;
         if self
@@ -521,6 +547,7 @@ impl<S: MapStores> MapScreen<S> {
     }
 
     fn open_view(&mut self, view: View, cx: &mut Context<Self>) {
+        self.shown.clear();
         self.picker = None;
         self.confirm_retire = false;
         match &view {
@@ -931,6 +958,43 @@ impl<S: MapStores> MapScreen<S> {
 
     // ---- small builders -------------------------------------------------
 
+    /// Rows of list `key` to build now; `first` is the opening page.
+    fn limit(&self, key: &str, first: usize) -> usize {
+        self.shown.get(key).copied().unwrap_or(first)
+    }
+
+    /// The "Mostrar mais N" row under a list cut at `shown` of `total`:
+    /// opens two more pages of it.
+    fn more_row(
+        &mut self,
+        key: &'static str,
+        first: usize,
+        remaining: usize,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let button = self.button(
+            format!("map-more-{key}"),
+            ButtonKind::Ghost,
+            true,
+            if remaining == 1 {
+                "Mostrar mais 1".to_owned()
+            } else {
+                format!("Mostrar mais {remaining}")
+            },
+            move |this, cx| {
+                let shown = this.limit(key, first);
+                this.shown.insert(key.to_owned(), shown + 2 * first);
+                cx.notify();
+            },
+            cx,
+        );
+        div()
+            .flex()
+            .px(px(SpacingScale::S2))
+            .pt(px(SpacingScale::S1))
+            .child(button)
+    }
+
     fn focus_for(&mut self, id: &str, cx: &mut Context<Self>) -> FocusHandle {
         self.focus
             .entry(id.to_owned())
@@ -1251,7 +1315,8 @@ impl<S: MapStores> MapScreen<S> {
             ));
         if !relations.is_empty() {
             let mut list = div().flex().flex_col();
-            for (index, suggestion) in relations.iter().enumerate() {
+            let shown = relations.len().min(self.limit("sug-relations", LIST_PAGE));
+            for (index, suggestion) in relations.iter().take(shown).enumerate() {
                 let record = &suggestion.record;
                 let confirm_id = record.suggestion_id.clone();
                 let reject_id = record.suggestion_id.clone();
@@ -1344,11 +1409,20 @@ impl<S: MapStores> MapScreen<S> {
                         .child(confirm),
                 );
             }
+            if relations.len() > shown {
+                list = list.child(self.more_row(
+                    "sug-relations",
+                    LIST_PAGE,
+                    relations.len() - shown,
+                    cx,
+                ));
+            }
             column = column.child(section(theme, "Relações entre decisões", list));
         }
         if !derived.is_empty() {
             let mut list = div().flex().flex_col();
-            for (index, suggestion) in derived.iter().enumerate() {
+            let shown = derived.len().min(self.limit("sug-context", LIST_PAGE));
+            for (index, suggestion) in derived.iter().take(shown).enumerate() {
                 let record = &suggestion.record;
                 let confirm_id = record.suggestion_id.clone();
                 let reject_id = record.suggestion_id.clone();
@@ -1444,11 +1518,16 @@ impl<S: MapStores> MapScreen<S> {
                         .child(confirm),
                 );
             }
+            if derived.len() > shown {
+                list =
+                    list.child(self.more_row("sug-context", LIST_PAGE, derived.len() - shown, cx));
+            }
             column = column.child(section(theme, "Contexto sugerido", list));
         }
         if !suggestions.is_empty() {
             let mut list = div().flex().flex_col();
-            for (index, suggestion) in suggestions.iter().enumerate() {
+            let shown = suggestions.len().min(self.limit("sug-links", LIST_PAGE));
+            for (index, suggestion) in suggestions.iter().take(shown).enumerate() {
                 let confirm_id = suggestion.edge_id.clone();
                 let reject_id = suggestion.edge_id.clone();
                 let confirm = self.button(
@@ -1931,11 +2010,17 @@ impl<S: MapStores> MapScreen<S> {
                 impact,
             ));
         }
-        column = column.child(section(
+        let (timeline, hidden) = timeline_list(
             theme,
-            "Linha do tempo",
-            timeline_list(theme, &events),
-        ));
+            &events,
+            self.limit("map-entity-timeline", TIMELINE_PAGE),
+        );
+        let timeline = if hidden > 0 {
+            timeline.child(self.more_row("map-entity-timeline", TIMELINE_PAGE, hidden, cx))
+        } else {
+            timeline
+        };
+        column = column.child(section(theme, "Linha do tempo", timeline));
         reading_page("map-entity", column).into_any_element()
     }
 
@@ -2034,7 +2119,7 @@ impl<S: MapStores> MapScreen<S> {
     fn node_list(
         &mut self,
         theme: &Theme,
-        prefix: &str,
+        prefix: &'static str,
         rows: &[NodeSummary],
         decisions: bool,
         empty: &'static str,
@@ -2049,7 +2134,9 @@ impl<S: MapStores> MapScreen<S> {
                     .child(empty),
             );
         }
-        for (index, row) in rows.iter().enumerate() {
+        let key = prefix;
+        let shown = rows.len().min(self.limit(key, LIST_PAGE));
+        for (index, row) in rows.iter().take(shown).enumerate() {
             let id = row.node.id.clone();
             let body = div()
                 .flex_1()
@@ -2093,6 +2180,9 @@ impl<S: MapStores> MapScreen<S> {
                         .child(body),
                 );
             }
+        }
+        if rows.len() > shown {
+            list = list.child(self.more_row(key, LIST_PAGE, rows.len() - shown, cx));
         }
         list
     }
@@ -2249,13 +2339,20 @@ impl<S: MapStores> MapScreen<S> {
         reading_page("map-file", column).into_any_element()
     }
 
-    fn render_timeline(&mut self, theme: &Theme) -> AnyElement {
+    fn render_timeline(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let Some(events) = self.timeline.clone() else {
             return reading_page(
                 "map-timeline-loading",
                 skeleton_list(theme, "map-timeline-skeleton", 6),
             )
             .into_any_element();
+        };
+        let (timeline, hidden) =
+            timeline_list(theme, &events, self.limit("map-timeline", TIMELINE_PAGE));
+        let timeline = if hidden > 0 {
+            timeline.child(self.more_row("map-timeline", TIMELINE_PAGE, hidden, cx))
+        } else {
+            timeline
         };
         let column = div()
             .flex()
@@ -2266,7 +2363,7 @@ impl<S: MapStores> MapScreen<S> {
                 "Linha do tempo",
                 "O que passou a valer e o que deixou de valer no projeto, do mais recente ao mais antigo.",
             ))
-            .child(timeline_list(theme, &events));
+            .child(timeline);
         reading_page("map-timeline", column).into_any_element()
     }
 
@@ -3000,6 +3097,7 @@ fn legend_item(theme: &Theme, mark: Div, label: &str) -> Div {
 
 impl<S: MapStores> Render for MapScreen<S> {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _probe = crate::ui::perf::Probe::start("map");
         let theme = Theme::current(cx);
         let index = self.render_index(&theme, cx);
         let body: AnyElement = if self.data.is_none() {
@@ -3023,7 +3121,7 @@ impl<S: MapStores> Render for MapScreen<S> {
                 View::Overview => self.render_overview(&theme, cx),
                 View::Suggestions => self.render_suggestions(&theme, cx),
                 View::File => self.render_file(&theme, cx),
-                View::Timeline => self.render_timeline(&theme),
+                View::Timeline => self.render_timeline(&theme, cx),
                 View::Entity(id) => self.render_entity(&id, &theme, cx),
                 View::Form(editing) => self.render_form(editing, &theme, cx),
             }
@@ -3214,18 +3312,23 @@ const MARKER: f32 = 22.0;
 /// with one marker per kind (Primer Timeline anatomy). Decisions and rules
 /// are full items; map upkeep (items created, links confirmed) collapses
 /// into one condensed line per run so it never drowns what changed.
-fn timeline_list(theme: &Theme, events: &[TimelineEvent]) -> Div {
+fn timeline_list(theme: &Theme, events: &[TimelineEvent], limit: usize) -> (Div, usize) {
     let colors = theme.colors;
     let mut list = div().flex().flex_col();
     if events.is_empty() {
-        return list.child(
-            text_style(div(), TypeScale::BODY_SMALL)
-                .text_color(colors.text_muted())
-                .child("Nada aconteceu aqui ainda."),
+        return (
+            list.child(
+                text_style(div(), TypeScale::BODY_SMALL)
+                    .text_color(colors.text_muted())
+                    .child("Nada aconteceu aqui ainda."),
+            ),
+            0,
         );
     }
     let mut ordered: Vec<&TimelineEvent> = events.iter().collect();
     ordered.sort_by(|left, right| right.at.cmp(&left.at));
+    let hidden = ordered.len().saturating_sub(limit);
+    ordered.truncate(limit);
 
     // Day → runs of events (a run is one full event or consecutive upkeep
     // of the same kind).
@@ -3285,7 +3388,7 @@ fn timeline_list(theme: &Theme, events: &[TimelineEvent]) -> Div {
             ));
         }
     }
-    list
+    (list, hidden)
 }
 
 /// The day an event belongs to; rule validity is a calendar date.

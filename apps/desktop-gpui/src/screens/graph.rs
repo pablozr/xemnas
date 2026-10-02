@@ -199,6 +199,12 @@ pub struct GraphCanvas {
     /// Simulation heat while a node is dragged.
     heat: f32,
     fitted: bool,
+    /// Layouts started; a result is installed only if it is the latest.
+    generation: u64,
+    /// Whether a layout is still being computed.
+    pending: bool,
+    /// A node to select once the layout in progress is installed (demo).
+    select_later: Option<String>,
     focus: FocusHandle,
     buttons: BTreeMap<String, FocusHandle>,
 }
@@ -231,6 +237,9 @@ impl GraphCanvas {
             clock: Instant::now(),
             heat: 0.0,
             fitted: false,
+            generation: 0,
+            pending: false,
+            select_later: None,
             focus: cx.focus_handle().tab_stop(true),
             buttons: BTreeMap::new(),
         }
@@ -238,7 +247,15 @@ impl GraphCanvas {
 
     /// Replaces the data, keeping the place of nodes already shown; only a
     /// first load (or a new project) plays the entrance.
+    ///
+    /// The force layout is the heaviest thing the app computes (hundreds of
+    /// milliseconds at a few hundred nodes, seconds at a thousand), so it
+    /// runs off the interface thread and is installed when ready; a newer
+    /// call supersedes an older one still running.
     pub fn set_graph(&mut self, graph: &ProjectGraph, fresh: bool, cx: &mut Context<Self>) {
+        self.generation += 1;
+        self.pending = true;
+        let generation = self.generation;
         let previous: BTreeMap<NodeRef, (f32, f32)> = if fresh {
             BTreeMap::new()
         } else {
@@ -251,29 +268,49 @@ impl GraphCanvas {
             .selected
             .and_then(|index| self.nodes.get(index))
             .map(|node| node.node.clone());
-        let (mut nodes, links) = build(graph);
-        let known = place(&mut nodes, &links, &previous);
-        settle(
-            &mut nodes,
-            &links,
-            if known {
-                SETTLE_STEPS / 4
-            } else {
-                SETTLE_STEPS
-            },
-            known,
-        );
-        stagger(&mut nodes);
-        self.nodes = nodes;
-        self.links = links;
-        self.hover = None;
-        self.selected =
-            selected.and_then(|node| self.nodes.iter().position(|row| row.node == node));
-        if fresh || !self.fitted {
-            self.born = Instant::now();
-            self.fitted = false;
-        }
-        cx.notify();
+        let graph = graph.clone();
+        cx.spawn(async move |this, cx| {
+            let (nodes, links) = cx
+                .background_executor()
+                .spawn(async move {
+                    let _probe = crate::ui::perf::Probe::start("graph-layout");
+                    let (mut nodes, links) = build(&graph);
+                    let known = place(&mut nodes, &links, &previous);
+                    settle(
+                        &mut nodes,
+                        &links,
+                        if known {
+                            SETTLE_STEPS / 4
+                        } else {
+                            SETTLE_STEPS
+                        },
+                        known,
+                    );
+                    stagger(&mut nodes);
+                    (nodes, links)
+                })
+                .await;
+            let _ = this.update(cx, |canvas, cx| {
+                if canvas.generation != generation {
+                    return;
+                }
+                canvas.pending = false;
+                canvas.nodes = nodes;
+                canvas.links = links;
+                canvas.hover = None;
+                canvas.selected =
+                    selected.and_then(|node| canvas.nodes.iter().position(|row| row.node == node));
+                if let Some(label) = canvas.select_later.take() {
+                    canvas.selected = canvas.nodes.iter().position(|node| node.label == label);
+                }
+                if fresh || !canvas.fitted {
+                    canvas.born = Instant::now();
+                    canvas.fitted = false;
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Selects the node named `label`, so demo captures reach the focus
@@ -283,6 +320,8 @@ impl GraphCanvas {
         if found.is_some() {
             self.selected = found;
             cx.notify();
+        } else if self.pending {
+            self.select_later = Some(label.to_owned());
         }
     }
 
@@ -1978,9 +2017,18 @@ fn place(nodes: &mut [Node], links: &[Link], previous: &BTreeMap<NodeRef, (f32, 
 /// Runs the simulation to rest.
 fn settle(nodes: &mut [Node], links: &[Link], steps: usize, gentle: bool) {
     let mut heat: f32 = if gentle { 0.3 } else { 1.0 };
+    // A big map gets fewer, proportionally cooler steps: the cost of a step
+    // grows with the pairs of nodes, and the picture settles all the same.
+    let planned = steps;
+    let steps = if nodes.len() > FULL_STEPS_UP_TO {
+        (steps * FULL_STEPS_UP_TO / nodes.len()).max(steps / 4)
+    } else {
+        steps
+    };
+    let cooling = 0.988_f32.powf(planned as f32 / steps.max(1) as f32);
     for _ in 0..steps {
         tick(nodes, links, heat);
-        heat = (heat * 0.988).max(0.02);
+        heat = (heat * cooling).max(0.02);
     }
     for node in nodes.iter_mut() {
         node.vel = (0.0, 0.0);
@@ -1991,8 +2039,30 @@ fn settle(nodes: &mut [Node], links: &[Link], steps: usize, gentle: bool) {
 /// collision.
 fn tick(nodes: &mut [Node], links: &[Link], heat: f32) {
     let count = nodes.len();
+    // Repulsion fades with the square of the distance and nothing collides
+    // beyond a few dozen pixels, so pairs farther apart than REACH are not
+    // looked at: nodes are bucketed in a grid of that size and each one
+    // meets only its own and the eight surrounding cells, in index order,
+    // exactly the pairs (and the order) the all-pairs loop would have used
+    // within reach. This is what keeps a thousand nodes from taking seconds.
+    let mut grid: std::collections::HashMap<(i32, i32), Vec<usize>> =
+        std::collections::HashMap::with_capacity(count);
+    for (index, node) in nodes.iter().enumerate() {
+        grid.entry(cell_of(node.pos)).or_default().push(index);
+    }
+    let mut near: Vec<usize> = Vec::new();
     for i in 0..count {
-        for j in (i + 1)..count {
+        near.clear();
+        let (cx, cy) = cell_of(nodes[i].pos);
+        for gx in cx - 1..=cx + 1 {
+            for gy in cy - 1..=cy + 1 {
+                if let Some(cell) = grid.get(&(gx, gy)) {
+                    near.extend(cell.iter().copied().filter(|j| *j > i));
+                }
+            }
+        }
+        near.sort_unstable();
+        for &j in &near {
             let (dx, dy) = (
                 nodes[j].pos.0 - nodes[i].pos.0,
                 nodes[j].pos.1 - nodes[i].pos.1,
@@ -2002,7 +2072,8 @@ fn tick(nodes: &mut [Node], links: &[Link], heat: f32) {
                 d2 = 0.01;
             }
             let distance = d2.sqrt();
-            let strength = (nodes[i].charge() + nodes[j].charge()) * 0.5 / d2 * heat;
+            let strength =
+                ((nodes[i].charge() + nodes[j].charge()) * 0.5 / d2 * heat).min(MAX_PUSH);
             let (ux, uy) = (dx / distance, dy / distance);
             nodes[i].vel.0 -= ux * strength;
             nodes[i].vel.1 -= uy * strength;
@@ -2068,6 +2139,12 @@ fn tick(nodes: &mut [Node], links: &[Link], heat: f32) {
         // the map reads as one picture instead of scattered parts.
         node.vel.0 -= node.pos.0 * 0.011 * heat;
         node.vel.1 -= node.pos.1 * 0.011 * heat;
+        let speed = node.vel.0.hypot(node.vel.1);
+        if speed > MAX_STEP {
+            let scale = MAX_STEP / speed;
+            node.vel.0 *= scale;
+            node.vel.1 *= scale;
+        }
         node.pos.0 += node.vel.0;
         node.pos.1 += node.vel.1;
         node.vel.0 *= 0.55;
@@ -2093,6 +2170,25 @@ fn stagger(nodes: &mut [Node]) {
 }
 
 // ---- math -------------------------------------------------------------------
+
+/// Up to this many nodes the layout takes all its steps.
+const FULL_STEPS_UP_TO: usize = 200;
+/// The strongest push one pair of nodes can give in a step. Without it, two
+/// nodes born almost on the same point (a component with hundreds of
+/// decisions) push each other with a force that grows without bound, and
+/// the positions end up infinite.
+const MAX_PUSH: f32 = 30.0;
+/// The farthest a node moves in one step.
+const MAX_STEP: f32 = 45.0;
+/// Pairs of nodes farther apart than this do not repel each other.
+const REACH: f32 = 420.0;
+
+/// The grid cell of a position. Clamped, so a runaway position (or NaN)
+/// can neither overflow the neighbour arithmetic nor panic.
+fn cell_of(pos: (f32, f32)) -> (i32, i32) {
+    let cell = |value: f32| (value / REACH).floor().clamp(-100_000.0, 100_000.0) as i32;
+    (cell(pos.0), cell(pos.1))
+}
 
 fn lerp(from: f32, to: f32, amount: f32) -> f32 {
     from + (to - from) * amount
@@ -2223,6 +2319,82 @@ mod tests {
                     b.label
                 );
             }
+        }
+    }
+
+    /// A long-lived project: tens of components, hundreds of decisions and
+    /// rules. The layout must stay finite and bounded (the grid ignores far
+    /// pairs, so a regression would show as nodes flying apart).
+    fn large() -> ProjectGraph {
+        let mut nodes = Vec::new();
+        let mut edges = Vec::new();
+        for c in 0..40 {
+            nodes.push(node(
+                NodeKind::Entity,
+                &format!("c{c}"),
+                &format!("modulo-{c}"),
+                "component",
+            ));
+            if c % 5 != 0 {
+                edges.push(edge(
+                    NodeRef::entity(format!("c{c}")),
+                    NodeRef::entity(format!("c{}", c - c % 5)),
+                    "part_of",
+                ));
+            }
+        }
+        for d in 0..600 {
+            nodes.push(node(
+                NodeKind::Decision,
+                &format!("d{d}"),
+                &format!("Decisão {d}"),
+                "Sim",
+            ));
+            edges.push(edge(
+                NodeRef::decision(format!("d{d}")),
+                NodeRef::entity(format!("c{}", if d % 5 < 3 { 0 } else { d % 40 })),
+                "affects",
+            ));
+        }
+        for r in 0..200 {
+            nodes.push(node(
+                NodeKind::Claim,
+                &format!("r{r}"),
+                &format!("Regra {r}"),
+                "convention",
+            ));
+            edges.push(edge(
+                NodeRef::claim(format!("r{r}")),
+                NodeRef::entity(format!("c{}", r % 40)),
+                "applies_to",
+            ));
+        }
+        ProjectGraph {
+            nodes,
+            edges,
+            suggested: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_large_map_settles_finite_and_bounded() {
+        let (mut nodes, links) = build(&large());
+        place(&mut nodes, &links, &BTreeMap::new());
+        let started = std::time::Instant::now();
+        settle(&mut nodes, &links, SETTLE_STEPS, false);
+        eprintln!("settled {} nodes in {:?}", nodes.len(), started.elapsed());
+        for node in &nodes {
+            assert!(
+                node.pos.0.is_finite() && node.pos.1.is_finite(),
+                "{}",
+                node.label
+            );
+            assert!(
+                node.pos.0.abs() < 20_000.0 && node.pos.1.abs() < 20_000.0,
+                "{}: {:?}",
+                node.label,
+                node.pos
+            );
         }
     }
 

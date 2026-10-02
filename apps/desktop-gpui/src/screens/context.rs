@@ -33,6 +33,8 @@ use application::injection::{
 use application::projects::ProjectRepository;
 use application::relations::RelationStore;
 use domain::claims::ClaimKind;
+use std::collections::BTreeMap;
+
 use gpui::prelude::*;
 use gpui::{
     div, px, AnyElement, Context, Div, Entity, EventEmitter, Render, Role, Subscription, Toggled,
@@ -163,6 +165,8 @@ impl Section {
 
 /// Documents listed per kind before "e mais N".
 const DOCUMENTS_SHOWN: usize = 8;
+/// Rules of each kind built first, and how many "Mostrar mais" adds (twice).
+const RULES_PAGE: usize = 10;
 
 /// How many decisions in force the screen lists.
 const IN_FORCE_LIMIT: usize = 50;
@@ -199,6 +203,10 @@ pub struct ContextScreen<S: ContextStores> {
     task: Entity<SearchField>,
     claim_kind: ClaimKind,
     confirm_retire: Option<String>,
+    /// Rules built per kind (by kind index); the rest waits behind
+    /// "Mostrar mais": every scroll step rebuilds the page, so what is
+    /// built is what scrolls.
+    shown_rules: BTreeMap<usize, usize>,
     pack: Option<ContextPack>,
     error: Option<String>,
     notice: Option<String>,
@@ -276,6 +284,7 @@ impl<S: ContextStores> ContextScreen<S> {
             task,
             claim_kind: ClaimKind::Convention,
             confirm_retire: None,
+            shown_rules: BTreeMap::new(),
             pack: None,
             error: None,
             notice: None,
@@ -914,19 +923,48 @@ impl<S: ContextStores> ContextScreen<S> {
                 .flex_col()
                 .gap(px(SpacingScale::S4))
                 .children(groups.map(|(kind, items)| {
+                    let total = items.len();
+                    let shown = self
+                        .shown_rules
+                        .get(&(kind as usize))
+                        .copied()
+                        .unwrap_or(RULES_PAGE);
+                    let hidden = total.saturating_sub(shown);
                     div()
                         .flex()
                         .flex_col()
                         .gap(px(SpacingScale::S1))
                         .child(
                             section_header(theme, kind_plural(kind))
-                                .child(count_chip(theme, items.len().to_string())),
+                                .child(count_chip(theme, total.to_string())),
                         )
                         .children(
                             items
                                 .into_iter()
+                                .take(shown)
                                 .map(|claim| self.claim_row(theme, claim, cx)),
                         )
+                        .when(hidden > 0, |group| {
+                            group.child(
+                                div().flex().child(
+                                    action_button(
+                                        theme,
+                                        ("context-rules-more", kind as usize),
+                                        ButtonKind::Ghost,
+                                        true,
+                                    )
+                                    .aria_label(format!("Mostrar mais {hidden} regras"))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        *this
+                                            .shown_rules
+                                            .entry(kind as usize)
+                                            .or_insert(RULES_PAGE) += 2 * RULES_PAGE;
+                                        cx.notify();
+                                    }))
+                                    .child(format!("Mostrar mais {hidden}")),
+                                ),
+                            )
+                        })
                 }))
                 .into_any_element()
         };
@@ -2108,6 +2146,7 @@ fn empty_deliveries(mode: ContextMode) -> &'static str {
 
 impl<S: ContextStores> Render for ContextScreen<S> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _probe = crate::ui::perf::Probe::start("context");
         let theme = Theme::current(cx);
         let rail = self.render_rail(&theme, cx);
         let body: AnyElement = match self.snapshot.as_ref() {
