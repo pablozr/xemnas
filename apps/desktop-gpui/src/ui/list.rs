@@ -149,6 +149,8 @@ pub fn reveal_footer(
                             div()
                                 .h_full()
                                 .w(relative(fraction))
+                                // Never thinner than a dot, so a long list still shows progress.
+                                .min_w(px(4.0))
                                 .rounded_full()
                                 .bg(colors.accent_default().alpha(0.7)),
                         ),
