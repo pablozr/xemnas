@@ -48,4 +48,23 @@ Ver `docs/arquitetura/desempenho-e-escala.md` e a seção Desempenho de
   entrega o mapa inteiro de uma vez); pedir à sessão de backend.
 - Grafo: expandir um grupo no lugar, layout incremental local e nível de
   detalhe por zoom nos rótulos de decisões.
-- Medir em escala 1000 e 5000 com a release e registrar os números aqui.
+- Semear 5000 decisões demora mais de 100 s com um núcleo cheio (1250
+  componentes criados por `create_entity`, provavelmente custo quadrático no
+  backend ou no semeador): investigar com a sessão de backend, pois uma
+  importação grande real sofreria o mesmo.
+
+## Medições (release, janela fora da tela, `XEMNAS_PERF=1`)
+
+Tempo de montagem por render, mediana e máximo, em ms (2026-10-02):
+
+| Escala | Tela | Renders | Mediana | Máximo |
+| --- | --- | --- | --- | --- |
+| 1000 | Mapa | 23 | 4,3 | 8,9 |
+| 1000 | Decisões | 9 | 0,5 | 1,4 |
+| 1000 | Revisão | 12 | 0,6 | 2,0 |
+| 2500 | Mapa | 375 | 0,5 | 18,2 |
+
+O layout do grafo em 2500 (625 componentes) levou 566 ms, fora da thread da
+interface. 5000 não foi medido (semeadura lenta, acima). O que estes números
+não dizem: fluidez de rolagem e do grafo em uso real; o ritmo de quadros fora
+da tela é artefato da plataforma.
