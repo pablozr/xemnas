@@ -16,7 +16,9 @@ fn project_with_docs(test: &support::TestStore) -> std::path::PathBuf {
     std::fs::create_dir_all(repo.join("docs/adr")).expect("docs");
     std::fs::write(
         repo.join("README.md"),
-        "# Xemnas\n\nGuarda decisões de engenharia localmente.\n",
+        "# Xemnas\n\nGuarda decisões de engenharia localmente.\n\n## Instalação\n\nBaixe o app.\n\n\
+         ## Arquitetura\n\nDecidimos guardar tudo em SQLite em vez de um servidor. Nunca \
+         gravamos segredos no banco.\n",
     )
     .expect("readme");
     std::fs::write(
@@ -204,9 +206,24 @@ fn documents_go_to_review_once_per_version_tied_to_the_code_they_cite() {
     // A new version of the README is queued again.
     std::fs::write(
         repo.join("README.md"),
-        "# Xemnas\n\nDecidimos guardar tudo localmente.\n",
+        "# Xemnas\n\n## Arquitetura\n\nDecidimos guardar tudo localmente em vez de na nuvem.\n",
     )
     .expect("edit");
     documents.index("docs-p").expect("reindex");
     assert_eq!(documents.propose("docs-p", 10).expect("changed"), 1);
+
+    // A README with only install steps has no central part, and a changelog
+    // is not a source of decisions: neither is queued.
+    std::fs::write(
+        repo.join("README.md"),
+        "# Xemnas\n\n## Instalação\n\nBaixe o app.\n\n## Uso\n\nAbra.\n",
+    )
+    .expect("plain readme");
+    std::fs::write(
+        repo.join("docs/CHANGELOG.md"),
+        "# Mudanças\n\nDecidimos tudo.\n",
+    )
+    .expect("changelog");
+    documents.index("docs-p").expect("reindex plain");
+    assert_eq!(documents.propose("docs-p", 10).expect("noise"), 0);
 }

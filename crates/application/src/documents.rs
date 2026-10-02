@@ -59,6 +59,10 @@ const MAX_HEADINGS: usize = 12;
 /// Characters of the opening paragraph kept.
 const EXCERPT_CHARS: usize = 600;
 
+mod digest;
+
+pub use digest::{digest as digest_document, Digest, Verdict, DIGEST_CHARS};
+
 /// Artifact kind of a document sent to extraction.
 pub const DOCUMENT_ARTIFACT: &str = "document";
 /// Adapter recorded on document captures.
@@ -259,11 +263,10 @@ where
             .map_err(|error| DocumentError::Storage(error.to_string()))?
             .ok_or(DocumentError::ProjectNotFound)?;
         let root = PathBuf::from(&project.location);
-        let mut queued = 0;
+        // What would be queued: new or changed documents that have central
+        // parts, with only those parts. The rest never reaches Revisão.
+        let mut candidates: Vec<(ProjectDocument, digest::Digest)> = Vec::new();
         for document in self.list(project_id)? {
-            if queued >= limit {
-                break;
-            }
             let key = document_capture_key(project_id, &document);
             if self
                 .store
@@ -283,11 +286,31 @@ where
             if content.trim().is_empty() {
                 continue;
             }
+            let digest = digest::digest(document.kind, &document.path, &content);
+            if digest.verdict == digest::Verdict::Central {
+                candidates.push((document, digest));
+            }
+        }
+        // ADRs and specifications first, and within a kind the ones that
+        // speak most in decisions.
+        candidates.sort_by(|left, right| {
+            (left.0.kind, std::cmp::Reverse(left.1.score), &left.0.path).cmp(&(
+                right.0.kind,
+                std::cmp::Reverse(right.1.score),
+                &right.0.path,
+            ))
+        });
+        let mut queued = 0;
+        for (document, digest) in candidates {
+            if queued >= limit {
+                break;
+            }
+            let key = document_capture_key(project_id, &document);
             match self.store.insert_capture(&document_capture(
                 &project.location,
                 &key,
                 &document,
-                content,
+                digest,
             )) {
                 Ok(()) => queued += 1,
                 Err(CaptureError::DuplicateIdempotencyKey) => {}
@@ -310,14 +333,16 @@ fn document_capture(
     location: &str,
     key: &str,
     document: &ProjectDocument,
-    content: String,
+    digest: digest::Digest,
 ) -> CaptureWrite {
+    let content = digest.text;
     let now = crate::clock::now_rfc3339();
     let capture_id = uuid::Uuid::now_v7().to_string();
     let metadata = serde_json::json!({
         "file": document.path,
         "doc_kind": document.kind.as_str(),
         "title": document.title,
+        "sections": digest.sections,
     })
     .to_string();
     CaptureWrite {
