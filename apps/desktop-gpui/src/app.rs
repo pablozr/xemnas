@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use crate::fonts::{app_icon, wordmark};
 use crate::palette::{self, PaletteItem};
-use crate::screens::assistant::{AssistantGo, AssistantScreen, Briefing};
+use crate::screens::assistant::{AssistantGo, AssistantScreen, AssistantToggled, Briefing};
 use crate::screens::context::{ContextScreen, ContextServices, ContextStores, OpenDecision};
 use crate::screens::decisions::DecisionsScreen;
 use crate::screens::inbox::InboxScreen;
@@ -266,6 +266,7 @@ pub struct Shell<
     /// Xemnas, the mascot at the foot of the sidebar and its panel.
     assistant: Entity<AssistantScreen>,
     _assistant_subscription: Subscription,
+    _assistant_toggled: Subscription,
     /// Where the assistant asked to go; followed on the next render, which
     /// has the window the switch needs.
     pending_go: Option<String>,
@@ -306,6 +307,8 @@ impl<
                 shell.pending_go = Some(event.0.route().to_owned());
                 cx.notify();
             });
+        let assistant_toggled =
+            cx.subscribe(&assistant, |_, _, _: &AssistantToggled, cx| cx.notify());
         let search_subscription = cx.subscribe(&search, |shell, _, event: &SearchChanged, cx| {
             if shell.destination == Destination::Review {
                 if let Some(screen) = &shell.inbox {
@@ -445,6 +448,7 @@ impl<
             route: None,
             assistant,
             _assistant_subscription: assistant_subscription,
+            _assistant_toggled: assistant_toggled,
             pending_go: None,
         }
     }
@@ -1814,10 +1818,9 @@ impl<
                         .and_then(|screen| screen.read(cx).total_count())
                 }),
             };
-            let dock = self.assistant.update(cx, |assistant, cx| {
-                assistant.set_briefing(briefing, cx);
-                assistant.render_dock(cx)
-            });
+            self.assistant
+                .update(cx, |assistant, cx| assistant.set_briefing(briefing, cx));
+            let dock = self.assistant.clone();
             let footer = div()
                 .flex()
                 .flex_col()
@@ -1845,27 +1848,52 @@ impl<
             let content = if selected.is_some() && self.destination == Destination::Overview {
                 self.overview
                     .as_ref()
-                    .map(|screen| screen.clone().into_any_element())
+                    .map(|screen| {
+                        screen
+                            .clone()
+                            .cached(gpui::StyleRefinement::default().size_full())
+                            .into_any_element()
+                    })
                     .unwrap_or_else(|| div().into_any_element())
             } else if selected.is_some() && self.destination == Destination::Map {
                 self.map
                     .as_ref()
-                    .map(|screen| screen.clone().into_any_element())
+                    .map(|screen| {
+                        screen
+                            .clone()
+                            .cached(gpui::StyleRefinement::default().size_full())
+                            .into_any_element()
+                    })
                     .unwrap_or_else(|| div().into_any_element())
             } else if selected.is_some() && self.destination == Destination::Context {
                 self.context
                     .as_ref()
-                    .map(|screen| screen.clone().into_any_element())
+                    .map(|screen| {
+                        screen
+                            .clone()
+                            .cached(gpui::StyleRefinement::default().size_full())
+                            .into_any_element()
+                    })
                     .unwrap_or_else(|| div().into_any_element())
             } else if selected.is_some() && self.destination == Destination::Decisions {
                 self.decisions
                     .as_ref()
-                    .map(|screen| screen.clone().into_any_element())
+                    .map(|screen| {
+                        screen
+                            .clone()
+                            .cached(gpui::StyleRefinement::default().size_full())
+                            .into_any_element()
+                    })
                     .unwrap_or_else(|| div().into_any_element())
             } else if selected.is_some() && self.destination == Destination::Review {
                 self.inbox
                     .as_ref()
-                    .map(|screen| screen.clone().into_any_element())
+                    .map(|screen| {
+                        screen
+                            .clone()
+                            .cached(gpui::StyleRefinement::default().size_full())
+                            .into_any_element()
+                    })
                     .unwrap_or_else(|| div().into_any_element())
             } else {
                 projects.update(cx, |screen, cx| screen.render_details(cx))

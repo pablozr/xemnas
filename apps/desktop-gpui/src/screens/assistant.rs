@@ -13,12 +13,12 @@ use std::time::Duration;
 
 use gpui::prelude::*;
 use gpui::{
-    div, img, px, AnyElement, Context, Div, EventEmitter, Image, ImageFormat, Render, Role, Window,
+    div, img, px, Animation, AnimationExt, AnyElement, Context, Div, ElementId, EventEmitter,
+    Image, ImageFormat, Render, Role, Window,
 };
 
 use crate::ui::controls::{focus_ring, icon_action};
 use crate::ui::icons::{icon, IconName};
-use crate::ui::motion::clock::{self, Rate};
 use crate::ui::motion::{menu_out, panel_in};
 use crate::ui::patterns::section_label;
 use crate::ui::popup::{reap, Popup};
@@ -62,8 +62,10 @@ pub const PANEL_WIDTH: f32 = 400.0;
 const PANEL_HEIGHT: f32 = 540.0;
 /// One beat of the idle loop; blinks and glances land on beats.
 const BEAT: Duration = Duration::from_millis(650);
-/// One float cycle of the docked mascot.
-const FLOAT_PERIOD: Duration = Duration::from_millis(3200);
+/// One breath of the docked mascot: rise and settle.
+const BREATH: Duration = Duration::from_millis(1800);
+/// Beats between breaths (~5 s at [`BEAT`]).
+const BREATH_EVERY: u64 = 8;
 
 /// Where the assistant can take the person.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -120,6 +122,8 @@ pub struct AssistantScreen {
     hovered: bool,
     pose: Pose,
     beat: u64,
+    /// Breaths taken: each one keys a fresh one-shot rise.
+    breath: u64,
     briefing: Briefing,
     focus: gpui::FocusHandle,
 }
@@ -141,8 +145,15 @@ impl AssistantScreen {
                     10 if !still => Pose::Right,
                     _ => Pose::Idle,
                 };
-                if next != screen.pose {
-                    screen.pose = next;
+                let mut changed = next != screen.pose;
+                screen.pose = next;
+                // A breath every eight beats: one smooth rise and settle at
+                // the display's own rate, then stillness until the next.
+                if !still && screen.beat % BREATH_EVERY == 1 {
+                    screen.breath = screen.breath.wrapping_add(1);
+                    changed = true;
+                }
+                if changed {
                     cx.notify();
                 }
             });
@@ -156,6 +167,7 @@ impl AssistantScreen {
             hovered: false,
             pose: Pose::Idle,
             beat: 0,
+            breath: 0,
             briefing: Briefing::default(),
             focus: cx.focus_handle().tab_stop(true),
         }
@@ -180,6 +192,7 @@ impl AssistantScreen {
             self.close(cx);
         } else {
             self.panel.open(());
+            cx.emit(AssistantToggled);
             cx.notify();
         }
     }
@@ -188,6 +201,7 @@ impl AssistantScreen {
     pub fn close(&mut self, cx: &mut Context<Self>) {
         if self.panel.begin_close() {
             reap(cx, |assistant: &mut Self| &mut assistant.panel);
+            cx.emit(AssistantToggled);
             cx.notify();
         }
     }
@@ -214,18 +228,28 @@ impl AssistantScreen {
     }
 
     /// The mascot docked at the foot of the sidebar.
-    pub fn render_dock(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_dock(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
         let colors = theme.colors;
-        // A slow float, two pixels up and down on a sine, driven by the
-        // shared 15 Hz clock (a repeating animation would keep the window
-        // redrawing at the display rate for as long as the mascot shows).
-        let phase = clock::phase(FLOAT_PERIOD, cx.entity_id(), Rate::Calm, cx);
-        let lift = (phase * std::f32::consts::TAU).sin() * 2.0;
+        // The breath: a one-shot rise of 3 px and back, at the display's
+        // rate, keyed by the breath count so each plays once. Between
+        // breaths nothing animates and nothing redraws. A continuous float
+        // stepped at a throttled rate read as lag; a full-rate one would
+        // never let the window rest.
         let figure = div()
-            .child(img(self.sprite()).size(px(DOCK_SIZE)).flex_none())
-            .mt(px(2.0 - lift))
-            .mb(px(2.0 + lift));
+            .relative()
+            .child(img(self.sprite()).size(px(DOCK_SIZE)).flex_none());
+        let figure: AnyElement = if cx.reduce_motion() || self.breath == 0 {
+            figure.into_any_element()
+        } else {
+            figure
+                .with_animation(
+                    ElementId::Name(format!("assistant-breath-{}", self.breath).into()),
+                    Animation::new(BREATH).with_easing(gpui::ease_in_out),
+                    |figure, t| figure.top(px(-3.0 * (t * std::f32::consts::PI).sin())),
+                )
+                .into_any_element()
+        };
         let pending = self.briefing.pending.unwrap_or(0) > 0;
         div()
             .id("assistant-dock")
@@ -551,9 +575,16 @@ pub fn chain_rule(theme: &Theme) -> Div {
 /// Links in the chain rule: a short length, centred, not a dotted line.
 const CHAIN_LINKS: usize = 15;
 
+/// Emitted when the panel opens or closes: the shell, which draws the
+/// panel, repaints.
+pub struct AssistantToggled;
+
+impl EventEmitter<AssistantToggled> for AssistantScreen {}
+
 impl Render for AssistantScreen {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        // The shell draws the dock and the panel where they belong.
-        div()
+    /// The dock, as a view of its own: a blink or a breath repaints only
+    /// this, not the screens beside it. The panel is drawn by the shell.
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.render_dock(cx)
     }
 }

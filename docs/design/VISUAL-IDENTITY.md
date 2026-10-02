@@ -124,8 +124,11 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   recorte). O app só exibe as imagens; não há 3D em tempo real.
 - Fica no pé da lateral, acima da linha de status: figura de 72 px, "Nº I"
   em mono prata e uma frase real ("5 para revisar", ou o nome), com ponto
-  âmbar quando há fila. Flutua 2 px num seno lento, pisca e olha para os
-  lados; com movimento reduzido, só pisca. Hover e painel aberto acendem os
+  âmbar quando há fila. Respira a cada ~5 s (sobe 3 px e assenta em 1,8 s,
+  na taxa do monitor) e fica parado entre uma respiração e outra; pisca e
+  olha para os lados. É uma view própria e as telas são views em cache
+  (`cached`), então um quadro do mascote não refaz o app. Com movimento
+  reduzido, só pisca. Hover e painel aberto acendem os
   olhos (`glow`).
 - Clique, Enter ou Ctrl K ("Falar com o Xemnas") abrem o painel ao lado da
   lateral (400 × 540, `floating`, raio `dialog`, sombra de ênfase): retrato,
@@ -403,10 +406,12 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   `menu_out`). Painel flutuante maior: `panel_in`, 200 ms, subida de 8 px.
   Sem escala: `div` não tem transform; o deslocamento usa `relative().top()`
   para não mover os vizinhos.
-- Movimento contínuo (o flutuar do mascote, o sinal do grafo) nunca usa
+- Movimento contínuo (o sinal do grafo) nunca usa
   `with_animation` em repetição: pede a fase a `motion::clock` (30 ou 15 Hz,
   com lease de 300 ms), que estaciona quando nada visível pede. Movimento
-  reduzido devolve fase parada.
+  reduzido devolve fase parada. Movimento grande e lento a 15 Hz anda aos
+  degraus: para o mascote, respirações curtas na taxa cheia, com repouso
+  entre elas, em vez de um flutuar contínuo.
 - Popovers (paleta, painel do projeto, painel do assistente) guardam o
   estado em `ui::popup::Popup`: aberto, saindo, fechado. Ao fechar continuam
   desenhados, sem aceitar clique, enquanto saem; `reap` os descarta depois, e
