@@ -297,6 +297,18 @@ pub const TOAST_DURATION: std::time::Duration = std::time::Duration::from_millis
 /// A confirmation that floats over the bottom of a surface and leaves on its
 /// own. The parent must be `relative()`; `bottom` clears its action footer.
 pub fn toast(theme: &Theme, message: &str, bottom: f32) -> AnyElement {
+    toast_with(theme, message, bottom, None)
+}
+
+/// A [`toast`] with one action at its end ("Desfazer"), for what a person
+/// can take back: the confirmation says what happened and the way out is one
+/// press away, so nothing has to ask "tem certeza?" first.
+pub fn toast_with(
+    theme: &Theme,
+    message: &str,
+    bottom: f32,
+    action: Option<AnyElement>,
+) -> AnyElement {
     let pill = div()
         .flex()
         .items_center()
@@ -320,7 +332,8 @@ pub fn toast(theme: &Theme, message: &str, bottom: f32) -> AnyElement {
             text_style(div(), TypeScale::BODY_SMALL)
                 .text_color(theme.colors.text_primary())
                 .child(message.to_owned()),
-        );
+        )
+        .children(action);
     deferred(
         div()
             .id("toast")

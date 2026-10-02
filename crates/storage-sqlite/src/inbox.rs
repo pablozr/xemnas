@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use application::briefing::Briefing;
 use application::inbox::{
     ArtifactView, CandidateStatus, DecisionSeed, InboxError, InboxQuery, InboxStore,
     StoredCandidate, ValidatedEdits,
@@ -142,6 +143,25 @@ fn cas_batch(
 }
 
 impl InboxStore for SqliteStore {
+    fn briefing(&self, project_id: &str, since: &str) -> Result<Briefing, InboxError> {
+        let (new_candidates, decisions, deliveries, sessions): (i64, i64, i64, i64) = self
+            .lock()
+            .query_row(
+                "SELECT                  (SELECT COUNT(*) FROM decision_candidates                     WHERE project_id = ?1 AND created_at > ?2),                  (SELECT COUNT(*) FROM engineering_decisions                     WHERE project_id = ?1 AND confirmed_at > ?2),                  (SELECT COUNT(*) FROM context_injections                     WHERE project_id = ?1 AND mode = 'inject' AND created_at > ?2),                  (SELECT COUNT(DISTINCT session_id) FROM context_injections                     WHERE project_id = ?1 AND mode = 'inject' AND created_at > ?2)",
+                rusqlite::params![project_id, since],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .map_err(storage_error)?;
+        let count = |value: i64| usize::try_from(value).unwrap_or(0);
+        Ok(Briefing {
+            since: since.to_owned(),
+            new_candidates: count(new_candidates),
+            decisions: count(decisions),
+            deliveries: count(deliveries),
+            sessions: count(sessions),
+        })
+    }
+
     fn count(
         &self,
         project_id: Option<&str>,
@@ -490,6 +510,17 @@ impl InboxStore for SqliteStore {
             self,
             id,
             &[CandidateStatus::Snoozed],
+            CandidateStatus::Pending,
+            None,
+            updated_at,
+        )
+    }
+
+    fn reopen_one(&self, id: &str, updated_at: &str) -> Result<bool, InboxError> {
+        cas(
+            self,
+            id,
+            &[CandidateStatus::Dismissed],
             CandidateStatus::Pending,
             None,
             updated_at,

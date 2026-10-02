@@ -21,6 +21,7 @@ use crate::screens::assistant::{AssistantGo, AssistantScreen, AssistantToggled, 
 use crate::screens::context::{ContextScreen, ContextServices, ContextStores, OpenDecision};
 use crate::screens::decisions::DecisionsScreen;
 use crate::screens::inbox::InboxScreen;
+use crate::screens::map::OpenSuggestions;
 use crate::screens::map::{MapScreen, MapServices};
 use crate::screens::overview::{OpenEntity, OverviewScreen};
 use crate::screens::projects::{ProjectChanged, ProjectsScreen};
@@ -154,6 +155,14 @@ struct Palette {
 /// Rows shown at once before the palette scrolls.
 const PALETTE_MAX_HEIGHT: f32 = 380.0;
 
+/// What the Revisão is showing: the candidates, or the suggested ties the
+/// map derives (one place to act on everything waiting for a person).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReviewTab {
+    Candidates,
+    Ties,
+}
+
 /// The places a selected project can be read from. Its properties are not a
 /// destination: they open in the panel under the project name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -240,6 +249,9 @@ pub struct Shell<
     _context_subscription: Option<Subscription>,
     map: Option<Entity<MapScreen<R>>>,
     _map_subscription: Option<Subscription>,
+    _map_suggestions: Option<Subscription>,
+    /// Which list the Revisão shows.
+    review_tab: ReviewTab,
     /// Parks the motion loops while the window is not focused.
     _activation: Option<Subscription>,
     overview: Option<Entity<OverviewScreen>>,
@@ -402,6 +414,11 @@ impl<
                 shell.show_decision(event.0.clone(), cx)
             })
         });
+        let map_suggestions = map.as_ref().map(|screen| {
+            cx.subscribe(screen, |shell, _, _: &OpenSuggestions, cx| {
+                shell.show_ties(cx)
+            })
+        });
         let settings = settings.map(|services| cx.new(|cx| SettingsScreen::new(cx, services)));
         let settings_subscription = settings.as_ref().map(|screen| {
             cx.subscribe(screen, |shell, _, _: &CloseSettings, cx| {
@@ -436,6 +453,8 @@ impl<
             _context_subscription: context_subscription,
             map,
             _map_subscription: map_subscription,
+            _map_suggestions: map_suggestions,
+            review_tab: ReviewTab::Candidates,
             overview: None,
             _overview_subscriptions: Vec::new(),
             hovered_tab: None,
@@ -673,6 +692,11 @@ impl<
             self.open_settings_at(section, cx);
             return;
         }
+        if matches!(route, "map:suggestions" | "review:ties") {
+            self.review_tab = ReviewTab::Ties;
+            self.switch_to(Destination::Review, window, cx);
+            return;
+        }
         let (destination, view) = route.split_once(':').unwrap_or((route, ""));
         let destination = match destination {
             "overview" => Destination::Overview,
@@ -719,6 +743,112 @@ impl<
             }
         }
         self.switch_to(destination, window, cx);
+    }
+
+    /// Suggested ties waiting for a person, from the map.
+    fn pending_ties(&self, cx: &Context<Self>) -> usize {
+        self.map
+            .as_ref()
+            .map_or(0, |screen| screen.read(cx).pending_suggestions())
+    }
+
+    /// Opens the Revisão on the suggested ties.
+    fn show_ties(&mut self, cx: &mut Context<Self>) {
+        self.retire_context_surface(cx);
+        self.destination = Destination::Review;
+        self.set_review_tab(ReviewTab::Ties, cx);
+    }
+
+    fn set_review_tab(&mut self, tab: ReviewTab, cx: &mut Context<Self>) {
+        self.review_tab = tab;
+        if let Some(screen) = &self.map {
+            screen.update(cx, |screen, cx| {
+                screen.set_embedded(tab == ReviewTab::Ties, cx);
+                if tab == ReviewTab::Ties {
+                    screen.refresh(cx);
+                }
+            });
+        }
+        cx.notify();
+    }
+
+    /// The Revisão: the candidates, plus the map's suggested ties when there
+    /// are any. One place and one count for everything that waits for a
+    /// person; the switch only appears when there is a second list.
+    fn render_review(&mut self, theme: &Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let colors = theme.colors;
+        let ties = self.pending_ties(cx);
+        let candidates = self
+            .inbox
+            .as_ref()
+            .and_then(|screen| screen.read(cx).total_count());
+        let body = if self.review_tab == ReviewTab::Ties {
+            self.map.as_ref().map(|screen| {
+                screen
+                    .clone()
+                    .cached(gpui::StyleRefinement::default().size_full())
+                    .into_any_element()
+            })
+        } else {
+            self.inbox.as_ref().map(|screen| {
+                screen
+                    .clone()
+                    .cached(gpui::StyleRefinement::default().size_full())
+                    .into_any_element()
+            })
+        }
+        .unwrap_or_else(|| div().into_any_element());
+        if ties == 0 && self.review_tab == ReviewTab::Candidates {
+            return body;
+        }
+        let mut switch = crate::ui::patterns::segmented(theme).id("review-switch");
+        for (tab, id, label) in [
+            (
+                ReviewTab::Candidates,
+                "review-tab-candidates",
+                "Decisões propostas",
+            ),
+            (ReviewTab::Ties, "review-tab-ties", "Ligações sugeridas"),
+        ] {
+            switch = switch.child(
+                crate::ui::patterns::segment_label(theme, id, label, self.review_tab == tab)
+                    .on_click(cx.listener(move |this, _, _, cx| this.set_review_tab(tab, cx))),
+            );
+        }
+        let count_of = |count: usize, one: &str, many: &str| {
+            format!("{count} {}", if count == 1 { one } else { many })
+        };
+        let waiting = format!(
+            "{} · {}",
+            candidates.map_or_else(
+                || "…".to_owned(),
+                |count| count_of(count, "decisão", "decisões")
+            ),
+            count_of(ties, "ligação", "ligações")
+        );
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(px(SpacingScale::S4))
+                    .px(px(SpacingScale::S4))
+                    .py(px(SpacingScale::S2))
+                    .border_b_1()
+                    .border_color(colors.hairline_divider())
+                    .child(switch)
+                    .child(
+                        text_style(div(), TypeScale::META)
+                            .text_color(colors.text_muted())
+                            .child(format!("Aguardando você: {waiting}")),
+                    ),
+            )
+            .child(div().flex_1().min_h(px(0.0)).child(body))
+            .into_any_element()
     }
 
     /// Identifies opt-in sample data visibly, without changing navigation.
@@ -1288,6 +1418,13 @@ impl<
                 if let Some(screen) = &self.inbox {
                     screen.update(cx, |screen, cx| screen.refresh(cx));
                 }
+                let ties = self.review_tab == ReviewTab::Ties;
+                if let Some(screen) = &self.map {
+                    screen.update(cx, |screen, cx| {
+                        screen.set_embedded(ties, cx);
+                        screen.refresh(cx);
+                    });
+                }
             }
             Destination::Decisions => {
                 if let Some(screen) = &self.decisions {
@@ -1301,7 +1438,10 @@ impl<
             }
             Destination::Map => {
                 if let Some(screen) = &self.map {
-                    screen.update(cx, |screen, cx| screen.refresh(cx));
+                    screen.update(cx, |screen, cx| {
+                        screen.set_embedded(false, cx);
+                        screen.refresh(cx);
+                    });
                 }
             }
             Destination::Overview => {
@@ -1390,7 +1530,7 @@ impl<
             self.inbox
                 .as_ref()
                 .and_then(|screen| screen.read(cx).total_count())
-                .map(|count| count.to_string())
+                .map(|count| (count + self.pending_ties(cx)).to_string())
                 .unwrap_or_else(|| "…".into())
         });
         text_style(div(), TypeScale::BODY_SMALL)
@@ -1788,8 +1928,23 @@ impl<
 {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self._activation.is_none() {
-            self._activation = Some(cx.observe_window_activation(window, |_, window, cx| {
+            self._activation = Some(cx.observe_window_activation(window, |shell, window, cx| {
                 crate::ui::motion::clock::set_window_active(window.is_window_active(), cx);
+                // Leaving the window is the end of a visit: the next briefing
+                // counts from here.
+                if !window.is_window_active() {
+                    if let Some(project) = shell
+                        .projects
+                        .as_ref()
+                        .and_then(|projects| projects.read(cx).selected_project())
+                    {
+                        crate::ui::visits::mark(
+                            cx,
+                            project.id().as_str(),
+                            &crate::ui::visits::now(),
+                        );
+                    }
+                }
             }));
         }
         let _probe = crate::ui::perf::Probe::start("shell");
@@ -1959,15 +2114,7 @@ impl<
                     })
                     .unwrap_or_else(|| div().into_any_element())
             } else if selected.is_some() && self.destination == Destination::Review {
-                self.inbox
-                    .as_ref()
-                    .map(|screen| {
-                        screen
-                            .clone()
-                            .cached(gpui::StyleRefinement::default().size_full())
-                            .into_any_element()
-                    })
-                    .unwrap_or_else(|| div().into_any_element())
+                self.render_review(&theme, cx)
             } else {
                 projects.update(cx, |screen, cx| screen.render_details(cx))
             };

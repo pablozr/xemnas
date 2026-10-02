@@ -208,6 +208,8 @@ pub struct MapScreen<S: MapStores> {
     /// that shows only those in view; the rows are rebuilt when their shape
     /// changes.
     index_rows: Vec<IndexRow>,
+    /// Shown inside the Revisão: only the suggestions page, no index.
+    embedded: bool,
     index_list: ListState,
     index_scroll: ScrollMemory,
     /// The Blocos layout: what it reads from the map, its rows and the
@@ -228,7 +230,12 @@ pub struct MapScreen<S: MapStores> {
     _subscriptions: Vec<Subscription>,
 }
 
+/// Asks the shell to open the queue of suggested ties (the Revisão), where
+/// the map's suggestions are reviewed beside the candidates.
+pub struct OpenSuggestions;
+
 impl<S: MapStores> EventEmitter<OpenDecision> for MapScreen<S> {}
+impl<S: MapStores> EventEmitter<OpenSuggestions> for MapScreen<S> {}
 
 impl<S: MapStores> MapScreen<S> {
     /// Mounts the screen; nothing is read until a project is set.
@@ -286,6 +293,7 @@ impl<S: MapStores> MapScreen<S> {
             focus: BTreeMap::new(),
             shown: BTreeMap::new(),
             index_rows: Vec::new(),
+            embedded: false,
             index_list,
             index_scroll,
             overview_index: None,
@@ -347,6 +355,35 @@ impl<S: MapStores> MapScreen<S> {
         cx.notify();
     }
 
+    /// Shows only the suggestions page (inside the Revisão) or the map
+    /// again. The Revisão is where suggestions are reviewed; the map's own
+    /// index no longer lists them.
+    pub fn set_embedded(&mut self, embedded: bool, cx: &mut Context<Self>) {
+        if self.embedded == embedded {
+            return;
+        }
+        self.embedded = embedded;
+        self.view = if embedded {
+            View::Suggestions
+        } else {
+            View::Overview
+        };
+        cx.notify();
+    }
+
+    /// Suggestions waiting for a person: ties between decisions and map
+    /// items, derived context, and components or technologies the project
+    /// declares that the map does not have yet.
+    pub fn pending_suggestions(&self) -> usize {
+        self.data.as_ref().map_or(0, |data| {
+            data.suggestions.len()
+                + data.relations.len()
+                + data.derived.len()
+                + data.proposals.components.len()
+                + data.proposals.technologies.len()
+        })
+    }
+
     /// Opens `timeline`, `suggestions`, `file` or `entity:<name>` once the
     /// map is loaded; used by the demo to reach a view without input.
     pub fn open_route(&mut self, route: String) {
@@ -366,7 +403,6 @@ impl<S: MapStores> MapScreen<S> {
                 self.graph
                     .update(cx, |canvas, cx| canvas.select_named(&name, cx));
             }
-            "suggestions" => self.open_view(View::Suggestions, cx),
             "file" => self.open_view(View::File, cx),
             other => {
                 let name = other.strip_prefix("entity:").unwrap_or(other);
@@ -396,7 +432,11 @@ impl<S: MapStores> MapScreen<S> {
         self.timeline = None;
         self.lens = None;
         self.picker = None;
-        self.view = View::Overview;
+        self.view = if self.embedded {
+            View::Suggestions
+        } else {
+            View::Overview
+        };
         self.shown.clear();
         self.error = None;
         self.notice = None;
@@ -468,7 +508,7 @@ impl<S: MapStores> MapScreen<S> {
                     if self.entity(&id).is_some() {
                         self.open_entity(id, cx);
                     } else {
-                        self.view = View::Suggestions;
+                        self.view = View::Overview;
                     }
                 }
             }
@@ -498,7 +538,7 @@ impl<S: MapStores> MapScreen<S> {
                             if self.entity(&id).is_some() {
                                 self.open_entity(id, cx);
                             } else {
-                                self.view = View::Suggestions;
+                                self.view = View::Overview;
                             }
                         }
                     }
@@ -1250,22 +1290,9 @@ impl<S: MapStores> MapScreen<S> {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let colors = theme.colors;
-        let pending = self.data.as_ref().map_or(0, |data| {
-            data.suggestions.len()
-                + data.relations.len()
-                + data.derived.len()
-                + data.proposals.components.len()
-                + data.proposals.technologies.len()
-        });
-        let (view, glyph, label, badge) = match position {
+        let (view, glyph, label, badge): (View, IconName, &str, Option<String>) = match position {
             0 => (View::Overview, IconName::Graph, "Visão geral", None),
-            1 => (
-                View::Suggestions,
-                IconName::Lightbulb,
-                "Sugestões",
-                (pending > 0).then(|| pending.to_string()),
-            ),
-            2 => (View::File, IconName::File, "Lente de arquivo", None),
+            1 => (View::File, IconName::File, "Lente de arquivo", None),
             _ => (View::Timeline, IconName::Clock, "Linha do tempo", None),
         };
         let selected = self.view == view;
@@ -1919,7 +1946,7 @@ impl<S: MapStores> MapScreen<S> {
             }, cx);
             let confirm = self.button("map-retire-confirm", ButtonKind::Secondary, !busy, "Aposentar item", move |this, cx| {
                 let id = retire_id.clone();
-                this.view = View::Suggestions;
+                this.view = View::Overview;
                 this.mutate(cx, "Item aposentado; a história continua.", move |backend| backend.graph.retire_entity(&id).map(|_| None));
             }, cx);
             div()
@@ -2440,7 +2467,7 @@ impl<S: MapStores> MapScreen<S> {
             true,
             "Cancelar",
             move |this, cx| {
-                let view = back.clone().map_or(View::Suggestions, View::Entity);
+                let view = back.clone().map_or(View::Overview, View::Entity);
                 this.open_view(view, cx)
             },
             cx,
@@ -2647,7 +2674,7 @@ impl<S: MapStores> MapScreen<S> {
                 ButtonKind::Primary,
                 true,
                 "Ver sugestões",
-                |this, cx| this.open_view(View::Suggestions, cx),
+                |_, cx| cx.emit(OpenSuggestions),
                 cx,
             );
             return reading_page(
@@ -3213,7 +3240,7 @@ impl<S: MapStores> Render for MapScreen<S> {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _probe = crate::ui::perf::Probe::start("map");
         let theme = Theme::current(cx);
-        let index = self.render_index(&theme, cx);
+        let index = (!self.embedded).then(|| self.render_index(&theme, cx));
         let body: AnyElement = if self.data.is_none() {
             if self.error.is_some() {
                 empty_panel(
@@ -3250,7 +3277,7 @@ impl<S: MapStores> Render for MapScreen<S> {
             .size_full()
             .relative()
             .flex()
-            .child(index)
+            .children(index)
             .child(
                 div()
                     .flex_1()
@@ -3392,7 +3419,7 @@ fn today() -> String {
 /// when they scroll into view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum IndexRow {
-    /// One of the four fixed views.
+    /// One of the three fixed views.
     View(usize),
     /// The heading of a kind.
     Heading(EntityKind),
@@ -3405,7 +3432,7 @@ enum IndexRow {
 /// The index's rows for these entities: the views, then each kind with its
 /// entities in order.
 fn index_rows(entities: &[MapEntity]) -> Vec<IndexRow> {
-    let mut rows: Vec<IndexRow> = (0..4).map(IndexRow::View).collect();
+    let mut rows: Vec<IndexRow> = (0..3).map(IndexRow::View).collect();
     for kind in EntityKind::ALL {
         rows.push(IndexRow::Heading(kind));
         let before = rows.len();

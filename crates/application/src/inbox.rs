@@ -430,6 +430,19 @@ pub struct ConfirmOutcome {
 
 /// Persistence port the Inbox use case needs.
 pub trait InboxStore {
+    /// Counts what changed in a project since `since` (RFC 3339). Stores
+    /// without the data answer with nothing changed.
+    fn briefing(
+        &self,
+        _project_id: &str,
+        since: &str,
+    ) -> Result<crate::briefing::Briefing, InboxError> {
+        Ok(crate::briefing::Briefing {
+            since: since.to_owned(),
+            ..Default::default()
+        })
+    }
+
     /// Counts the whole filtered queue, independent of pagination. Stores can
     /// override this paginated fallback with an aggregate query.
     fn count(
@@ -503,6 +516,12 @@ pub trait InboxStore {
 
     /// Returns one candidate from `snoozed` to `pending`.
     fn unsnooze_one(&self, id: &str, updated_at: &str) -> Result<bool, InboxError>;
+
+    /// Returns one candidate from `dismissed` to `pending` (undoing a
+    /// rejection). Stores that cannot answer `false`.
+    fn reopen_one(&self, _id: &str, _updated_at: &str) -> Result<bool, InboxError> {
+        Ok(false)
+    }
 }
 
 /// Decision Inbox use case over an [`InboxStore`].
@@ -512,6 +531,15 @@ pub struct Inbox<S> {
 }
 
 impl<S: InboxStore> Inbox<S> {
+    /// What changed in a project since `since` (the previous visit).
+    pub fn briefing(
+        &self,
+        project_id: &str,
+        since: &str,
+    ) -> Result<crate::briefing::Briefing, InboxError> {
+        self.store.briefing(project_id, since)
+    }
+
     /// Counts every matching candidate; page size and cursor do not limit it.
     pub fn count(&self, filter: &InboxFilter) -> Result<usize, InboxError> {
         if filter.statuses.is_empty() {
@@ -694,6 +722,18 @@ impl<S: InboxStore> Inbox<S> {
         Self::validate_batch(ids)?;
         let affected = self.store.snooze_batch(ids, &now_rfc3339())?;
         self.after_batch(ids, affected)
+    }
+
+    /// Undoes a rejection: a dismissed candidate returns to the pending queue.
+    pub fn reopen(&self, id: &str) -> Result<(), InboxError> {
+        let current = self.store.get(id)?.ok_or(InboxError::NotFound)?;
+        if current.status != CandidateStatus::Dismissed {
+            return Err(InboxError::InvalidState);
+        }
+        if !self.store.reopen_one(id, &now_rfc3339())? {
+            return Err(InboxError::InvalidState);
+        }
+        Ok(())
     }
 
     /// Returns a snoozed candidate to the pending queue.

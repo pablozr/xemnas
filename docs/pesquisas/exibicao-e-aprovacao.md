@@ -159,9 +159,9 @@ quanto as revisadas.
 | Passo | O que | Custo | Critério de sucesso |
 | --- | --- | --- | --- |
 | 1 | Medir a calibração com o histórico de aceitar e rejeitar | Baixo, sem interface | A confiança separa o que foi aceito do que foi rejeitado melhor que o acaso. **Feito:** `application::calibration` e o cartão "A confiança da extração presta?" em Ajustes, Diagnóstico (separação de 0,70 ou mais prevê; 30 decisões no mínimo) |
-| 2 | Faixa "desde a última vez" e um único contador de pendências | Baixo | O desenvolvedor retoma sem procurar o que mudou |
-| 3 | Evidência antes do motivo na Revisão; ação padrão com desfazer | Baixo | Menos cliques por decisão sem queda na qualidade |
-| 4 | Fila única de aprovação (candidatos, sugestões do Mapa e documentos) | Médio | Um lugar para agir; menos destinos para aprender |
+| 2 | Faixa "desde a última vez" e um único contador de pendências | Baixo | O desenvolvedor retoma sem procurar o que mudou. **Feito:** uma linha no topo da lista da Revisão ("Desde a última visita, há 3 d: 10 candidatos novos · 5 decisões · 3 entregas ao agente"), calculada por `Inbox::briefing` e guardada por projeto em `settings/visits.json`; o contador da aba soma candidatos e ligações |
+| 3 | Evidência antes do motivo na Revisão; ação padrão com desfazer | Baixo | Menos cliques por decisão sem queda na qualidade. **Feito:** a evidência vem antes e o motivo escrito pela IA fica recolhido; Rejeitar e Adiar mostram "Desfazer" no aviso (`Inbox::reopen`). Confirmar não tem desfazer: cria a decisão, que se edita ou aposenta em Decisões |
+| 4 | Fila única de aprovação (candidatos, sugestões do Mapa e documentos) | Médio | Um lugar para agir; menos destinos para aprender. **Feito:** a Revisão ganha a aba "Ligações sugeridas" (as sugestões do Mapa, que saíram do índice do Mapa) quando há alguma; propostas de documentos já chegam como candidatos |
 | 5 | Contexto de oito seções para quatro | Médio | Menos navegação para chegar ao mesmo dado |
 | 6 | Faixa A com provisória, livro de aceitas sozinhas e amostragem às cegas | Alto; exige backend | Concordância na amostragem acima do limite, taxa de desfazer baixa |
 

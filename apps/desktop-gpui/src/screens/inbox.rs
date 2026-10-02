@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use application::adoption::{AdoptionApi, AdoptionError, AdoptionPreview, ProposedLink};
+use application::briefing::Briefing;
 use application::extract::{CandidateKind, MIN_SIGNIFICANCE};
 use application::inbox::{
     CandidateDetail, CandidateEdits, CandidateStatus, CandidateSummary, Inbox, InboxError,
@@ -17,7 +18,7 @@ use gpui::{
 };
 
 use super::evidence;
-use super::format::{relative, short_date};
+use super::format::{plural, relative, short_date};
 use super::review_editor::{EditorEvent, ReviewEditor};
 use crate::ui::controls::{action_button, button_foreground, ButtonKind};
 use crate::ui::glass::focus_ring;
@@ -25,14 +26,28 @@ use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
     action_footer, count_chip, error_banner, fade_in, hover_tint, kbd, mark_selected, meter,
     panel_title, reading_title, section_header, section_label, skeleton_list, status_pill, tag,
-    toast, track_hover, word_wrapped, READING_WIDTH, TOAST_DURATION,
+    toast_with, track_hover, word_wrapped, READING_WIDTH, TOAST_DURATION,
 };
 use crate::ui::search_field::SearchField;
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{SpacingScale, TypeScale};
+use crate::ui::visits;
+
+/// What a person can take back from the last action.
+#[derive(Clone)]
+enum Undo {
+    /// A rejected candidate goes back to the queue.
+    Reject(String),
+    /// A snoozed candidate goes back to the queue.
+    Snooze(String),
+}
+
+/// A page, the queue's size, how many are kept out for low significance and,
+/// on a first page after a visit, what changed since the previous visit.
+type PageLoad = (InboxPage, usize, usize, Option<Briefing>);
 
 enum Outcome {
-    Page(Result<(InboxPage, usize, usize), InboxError>, bool),
+    Page(Result<PageLoad, InboxError>, bool),
     Detail(Result<Box<CandidateDetail>, InboxError>),
     Action(Result<(), InboxError>, &'static str),
 }
@@ -84,6 +99,19 @@ pub struct InboxScreen<S: InboxStore + Send + 'static> {
     adoption: Option<Arc<dyn AdoptionApi>>,
     /// The ties the selected candidate's evidence points to, each kept or not.
     links: Option<MapLinks>,
+    /// The previous visit to the project, read once to build the briefing.
+    since_visit: Option<String>,
+    /// What changed since that visit, shown as one quiet line.
+    briefing: Option<Briefing>,
+    /// Whether the person dismissed the briefing line.
+    briefing_hidden: bool,
+    /// The undo the current action would offer once it succeeds.
+    pending_undo: Option<Undo>,
+    /// The undo offered beside the notice, until the notice goes away.
+    undo: Option<Undo>,
+    /// Whether the written reason is open (it starts closed: the evidence
+    /// comes first and the explanation can nudge a decision).
+    reason_open: bool,
 }
 
 /// The "No mapa" section of one candidate.
@@ -198,6 +226,12 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             low_focus: cx.focus_handle().tab_stop(true),
             adoption: None,
             links: None,
+            since_visit: None,
+            briefing: None,
+            briefing_hidden: false,
+            pending_undo: None,
+            undo: None,
+            reason_open: false,
         }
     }
 
@@ -231,6 +265,15 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
         }
         self.project_id = project_id;
         self.generation += 1;
+        self.briefing = None;
+        self.briefing_hidden = false;
+        self.since_visit = self
+            .project_id
+            .as_deref()
+            .and_then(|project| visits::previous(cx, project));
+        if let Some(project) = self.project_id.as_deref() {
+            visits::mark(cx, project, &visits::now());
+        }
         self.rows.clear();
         self.cursor = None;
         self.selected = None;
@@ -279,6 +322,11 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             cursor: None,
             ..filter.clone()
         };
+        let visit = if append {
+            None
+        } else {
+            self.since_visit.take().zip(self.project_id.clone())
+        };
         self.run(cx, move |inbox| {
             Outcome::Page(
                 inbox.list(&filter).and_then(|page| {
@@ -286,7 +334,9 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                     let hidden = inbox
                         .count(&everything)?
                         .saturating_sub(inbox.count(&relevant)?);
-                    Ok((page, count, hidden))
+                    let briefing =
+                        visit.and_then(|(since, project)| inbox.briefing(&project, &since).ok());
+                    Ok((page, count, hidden, briefing))
                 }),
                 append,
             )
@@ -300,6 +350,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
         self.selected = Some(id.clone());
         self.detail = None;
         self.links = None;
+        self.reason_open = false;
         self.source_index = 0;
         self.source_focus.clear();
         self.editor = None;
@@ -344,9 +395,12 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                     return;
                 }
                 match outcome {
-                    Outcome::Page(Ok((page, total, hidden)), append) => {
+                    Outcome::Page(Ok((page, total, hidden, briefing)), append) => {
                         this.total = Some(total);
                         this.hidden_low = hidden;
+                        if briefing.is_some() {
+                            this.briefing = briefing;
+                        }
                         this.loaded = true;
                         if !append {
                             this.rows.clear();
@@ -402,11 +456,13 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                         this.editor = None;
                         this.editor_subscription = None;
                         this.notice = Some(notice);
+                        this.undo = this.pending_undo.take();
                         this.page(false, cx);
                     }
                     Outcome::Page(Err(error), _)
                     | Outcome::Detail(Err(error))
                     | Outcome::Action(Err(error), _) => {
+                        this.pending_undo = None;
                         tracing::warn!(code = error.code(), "inbox view operation failed");
                         this.error = Some(failure_copy(&error));
                     }
@@ -556,6 +612,12 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
         let adoption = self.adoption.clone();
         let chosen = self.chosen_links(&id);
         self.notice = None;
+        self.undo = None;
+        self.pending_undo = match action {
+            ReviewAction::Reject => Some(Undo::Reject(id.clone())),
+            ReviewAction::Snooze if !snoozed => Some(Undo::Snooze(id.clone())),
+            _ => None,
+        };
         window.focus(&self.refresh_focus, cx);
         self.run(cx, move |inbox| {
             let (result, notice) = match action {
@@ -584,6 +646,65 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             };
             Outcome::Action(result, notice)
         });
+    }
+
+    /// Takes back the last rejection or deferral.
+    fn undo(&mut self, cx: &mut Context<Self>) {
+        let Some(undo) = self.undo.take() else {
+            return;
+        };
+        self.notice = None;
+        self.run(cx, move |inbox| match undo {
+            Undo::Reject(id) => Outcome::Action(inbox.reopen(&id), "Rejeição desfeita."),
+            Undo::Snooze(id) => Outcome::Action(inbox.unsnooze(&id), "Adiamento desfeito."),
+        });
+    }
+
+    /// The written reason, closed until asked for: the evidence above it is
+    /// what a decision should rest on, and a persuasive explanation raises
+    /// acceptance whether or not it is right.
+    fn reason_disclosure(&self, theme: &Theme, rationale: &str, cx: &mut Context<Self>) -> Div {
+        let colors = theme.colors;
+        let open = self.reason_open;
+        let toggle = div()
+            .id("inbox-reason-toggle")
+            .flex()
+            .items_center()
+            .gap(px(SpacingScale::S2))
+            .cursor_pointer()
+            .role(Role::Button)
+            .aria_label(if open {
+                "Esconder o motivo escrito pela IA"
+            } else {
+                "Mostrar o motivo escrito pela IA"
+            })
+            .focus_visible(focus_ring(theme))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.reason_open = !this.reason_open;
+                cx.notify();
+            }))
+            .child(icon(
+                if open {
+                    IconName::ChevronDown
+                } else {
+                    IconName::ChevronRight
+                },
+                13.0,
+                colors.text_muted(),
+            ))
+            .child(section_label(theme, "Motivo escrito pela IA"));
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(SpacingScale::S2))
+            .child(toggle)
+            .when(open, |column| {
+                column.child(
+                    text_style(div(), TypeScale::BODY)
+                        .text_color(colors.text_secondary())
+                        .child(rationale.to_owned()),
+                )
+            })
     }
 
     fn review_actions(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -793,6 +914,72 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
     }
 
     /// Shows or hides the low-significance candidates kept out of the queue.
+    /// One quiet line of what changed since the previous visit: the cue to
+    /// resume from. Nothing when nothing changed or the person closed it.
+    fn briefing_strip(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<Div> {
+        let briefing = self
+            .briefing
+            .as_ref()
+            .filter(|briefing| !briefing.is_quiet() && !self.briefing_hidden)?;
+        let colors = theme.colors;
+        let mut parts = Vec::new();
+        if briefing.new_candidates > 0 {
+            parts.push(plural(
+                briefing.new_candidates,
+                "candidato novo",
+                "candidatos novos",
+            ));
+        }
+        if briefing.decisions > 0 {
+            parts.push(plural(briefing.decisions, "decisão", "decisões"));
+        }
+        if briefing.deliveries > 0 {
+            parts.push(format!(
+                "{} ao agente ({})",
+                plural(briefing.deliveries, "entrega", "entregas"),
+                plural(briefing.sessions, "sessão", "sessões")
+            ));
+        }
+        let label = format!(
+            "Desde a última visita, há {}: {}",
+            relative(&briefing.since),
+            parts.join(" · ")
+        );
+        Some(
+            div()
+                .flex()
+                .items_start()
+                .gap(px(SpacingScale::S2))
+                .mx(px(SpacingScale::S4))
+                .mb(px(SpacingScale::S3))
+                .px(px(SpacingScale::S3))
+                .py(px(SpacingScale::S2))
+                .rounded(theme.radius.control())
+                .bg(colors.glass_fill_low())
+                .child(
+                    div()
+                        .mt(px(2.0))
+                        .child(icon(IconName::Clock, 12.0, colors.text_muted())),
+                )
+                .child(
+                    text_style(div(), TypeScale::META)
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .text_color(colors.text_secondary())
+                        .child(label),
+                )
+                .child(
+                    crate::ui::controls::icon_action(theme, "inbox-briefing-close", "Dispensar")
+                        .size(px(18.0))
+                        .child(icon(IconName::Close, 10.0, colors.text_muted()))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.briefing_hidden = true;
+                            cx.notify();
+                        })),
+                ),
+        )
+    }
+
     fn low_toggle(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let theme = Theme::current(cx);
         let label = if self.show_low {
@@ -1121,8 +1308,6 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                             .child(detail.summary.choice.clone()),
                     ),
             )
-            .child(section(theme, "Motivo", &detail.rationale))
-            .children(self.map_section(&theme, &detail.summary.id, detail.summary.kind, cx))
             .child(
                 div()
                     .pt(px(SpacingScale::S2))
@@ -1138,6 +1323,8 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                     )))
                     .child(evidence_block),
             )
+            .child(self.reason_disclosure(&theme, &detail.rationale, cx))
+            .children(self.map_section(&theme, &detail.summary.id, detail.summary.kind, cx))
             .child(
                 div()
                     .pt(px(SpacingScale::S5))
@@ -1202,6 +1389,7 @@ impl<S: InboxStore + Send + 'static> Render for InboxScreen<S> {
                 let _ = this.update(cx, |screen, cx| {
                     if screen.notice == shown {
                         screen.notice = None;
+                        screen.undo = None;
                         screen.notice_scheduled = None;
                         cx.notify();
                     }
@@ -1217,7 +1405,16 @@ impl<S: InboxStore + Send + 'static> Render for InboxScreen<S> {
         });
         div().size_full().relative().flex().flex_col()
             .children(self.error.map(|message| error_banner(&theme, message).id("inbox-error").role(Role::Alert).children(retry)))
-            .children(self.notice.map(|message| toast(&theme, message, 72.0)))
+            .children(self.notice.map(|message| {
+                let action = self.undo.is_some().then(|| {
+                    action_button(&theme, "inbox-undo", ButtonKind::Ghost, !self.busy)
+                        .aria_label("Desfazer")
+                        .on_click(cx.listener(|this, _, _, cx| this.undo(cx)))
+                        .child("Desfazer")
+                        .into_any_element()
+                });
+                toast_with(&theme, message, 72.0, action)
+            }))
             .child(div().flex_1().min_h(px(0.0)).flex()
                 .child(div().w(px(320.0)).flex_none().h_full().flex().flex_col().bg(theme.colors.pane())
                     .border_r_1().border_color(theme.colors.hairline_divider())
@@ -1231,6 +1428,7 @@ impl<S: InboxStore + Send + 'static> Render for InboxScreen<S> {
                         .child(div().flex_1())
                         .child(self.button("inbox-refresh", "Atualizar", false, cx)))
                     .child(div().px(px(SpacingScale::S4)).pb(px(SpacingScale::S3)).children(self.search.clone()))
+                    .children(self.briefing_strip(&theme, cx))
                     .when(self.hidden_low > 0 || self.show_low, |rail| rail.child(self.low_toggle(cx)))
                     .child(div().id("inbox-list").flex_1().min_h(px(0.0)).overflow_y_scroll().track_scroll(&self.list_scroll)
                         .children(visible.iter().enumerate().map(|(index, row)| {

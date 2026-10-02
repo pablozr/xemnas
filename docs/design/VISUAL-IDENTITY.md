@@ -346,6 +346,24 @@ que as tocam e uma ligação existe só porque um fluxo passa de uma parte a out
   acende as setas que a tocam. Cada passo pode trazer o meio ("via HTTP/JSON", mono
   na cor de tecnologia), informado pelo modelo ao gerar a Visão (`OverviewStep.via`).
 
+## Revisão — uma fila, evidência primeiro
+
+- **Uma fila para tudo o que espera uma pessoa.** A Revisão mostra os candidatos; quando
+  o Mapa tem sugestões (relações entre decisões, contexto sugerido, vínculos), uma barra
+  fina com "Decisões propostas | Ligações sugeridas" aparece no topo, com o total. O
+  número na aba é a soma. O Mapa deixou de listar Sugestões no índice (três visões:
+  Visão geral, Lente de arquivo, Linha do tempo).
+- **Desde a última visita:** uma linha discreta no topo da lista (relógio, "há 3 d: 10
+  candidatos novos · 5 decisões · 3 entregas ao agente"), que se dispensa. Some quando
+  nada mudou. O momento da última visita é guardado por projeto em
+  `settings/visits.json` e atualizado quando a janela perde o foco.
+- **Marcador por tipo** em cada candidato (decisão em cinza, regra em azul).
+- **Evidência antes do motivo:** no detalhe a ordem é pergunta, escolha sugerida,
+  evidências, "Motivo escrito pela IA" (recolhido por padrão), No mapa, confiança. Uma
+  explicação convincente aumenta a aceitação certa ou errada, então a fonte verificável
+  vem primeiro.
+- **Desfazer em vez de confirmar:** Rejeitar e Adiar mostram "Desfazer" no aviso.
+
 ## Formas para números
 
 Um número que vale mostrar vale desenhar (`ui::patterns`, canvas de poucos pixels,

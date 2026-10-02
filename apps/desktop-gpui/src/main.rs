@@ -542,6 +542,20 @@ fn run_shell_mode(
         }
         cx.set_global(appearance.theme);
         cx.set_global(appearance);
+        // When each project was last looked at (the Revisão's briefing); the
+        // demo pretends the last look was before its sample data.
+        if demo {
+            cx.set_global(xemnas_desktop::ui::visits::DemoVisit(
+                "2026-09-29T09:30:00Z".into(),
+            ));
+        } else {
+            cx.set_global(xemnas_desktop::ui::visits::VisitsFile(
+                application::AppPaths::from_env()
+                    .data_dir
+                    .join("settings")
+                    .join("visits.json"),
+            ));
+        }
         let adoption: Option<Arc<dyn application::adoption::AdoptionApi>> = store
             .as_ref()
             .ok()
