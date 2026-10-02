@@ -8,6 +8,7 @@ use crate::ui::controls::{action_button, button_foreground, ButtonKind};
 use crate::ui::{
     glass::focus_ring,
     icons::{icon, IconName},
+    list::{scroll_thumb, ScrollMemory},
     patterns::{
         count_chip, empty_panel, error_banner, fade_in, hover_tint, mark_selected, panel_title,
         reading_title, section_header, section_label, skeleton_list, status_pill, toast,
@@ -28,8 +29,8 @@ use application::relations::{DecisionRelations, RelationDirection, RelationStore
 use domain::relations::RelationKind;
 use gpui::prelude::*;
 use gpui::{
-    div, px, AnyElement, ClipboardItem, Context, Entity, FocusHandle, Focusable, Render, Role,
-    Subscription, Window,
+    div, list, px, AnyElement, ClipboardItem, Context, Entity, FocusHandle, Focusable,
+    ListAlignment, ListState, Render, Role, Subscription, Window,
 };
 use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 
@@ -47,11 +48,25 @@ struct LinkItem {
     question: String,
     superseded: bool,
 }
+/// One line of the index, by key: the entry itself is read from the screen's
+/// data only when the line scrolls into view.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IndexItem {
+    /// The heading of the month of the row at this position.
+    Month(usize),
+    /// A confirmed decision, by position in the loaded rows.
+    Row(usize),
+    /// A search hit, by position.
+    Hit(usize),
+    /// The button that loads the next page.
+    More,
+    Skeleton,
+    Empty,
+}
 struct IndexEntry {
     id: String,
     question: String,
     meta: String,
-    month: String,
     version: Option<i64>,
     status: Option<DecisionStatus>,
 }
@@ -90,6 +105,11 @@ enum Action {
 pub struct DecisionsScreen<S: DecisionStore + InboxStore + RelationStore + Send + 'static> {
     /// Row under the pointer, driving the hover spring.
     hovered: Option<String>,
+    /// What the index shows, as cheap keys, and the virtual list that builds
+    /// only the rows in view.
+    index_items: Vec<IndexItem>,
+    index_list: ListState,
+    index_scroll: ScrollMemory,
     backend: Option<Backend<S>>,
     project: Option<String>,
     generation: u64,
@@ -166,8 +186,14 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
             .detach();
             cx.notify();
         });
+        let index_scroll = ScrollMemory::default();
+        let index_list = ListState::new(0, ListAlignment::Top, px(480.0));
+        index_scroll.attach(&index_list);
         Self {
             hovered: None,
+            index_items: Vec::new(),
+            index_list,
+            index_scroll,
             backend: Some(Backend {
                 decisions,
                 export,
@@ -711,152 +737,42 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
             self.all_statuses,
             cx,
         );
-        let mut list = div()
-            .id("decision-index-list")
-            .flex_1()
-            .min_h(px(0.0))
-            .overflow_y_scroll()
-            .pb(px(SpacingScale::S3));
-        let entries: Vec<IndexEntry> = if searching {
-            self.hits
-                .iter()
-                .map(|hit| IndexEntry {
-                    id: hit.decision_id.clone(),
-                    question: hit.question.clone(),
-                    meta: hit.snippet.replace(['[', ']'], ""),
-                    month: String::new(),
-                    version: None,
-                    status: None,
-                })
-                .collect()
+        // The lines of the index as keys; a month heading starts wherever the
+        // month of the row changes (compared on the date's year and month,
+        // without building the label).
+        let mut items: Vec<IndexItem> = Vec::new();
+        if searching {
+            items.extend((0..self.hits.len()).map(IndexItem::Hit));
         } else {
-            self.rows
-                .iter()
-                .map(|row| IndexEntry {
-                    id: row.decision_id.clone(),
-                    question: row.question.clone(),
-                    meta: short_date(&row.confirmed_at),
-                    month: month_label(&row.confirmed_at),
-                    version: Some(row.version),
-                    status: Some(row.status),
-                })
-                .collect()
-        };
-        let mut group = String::new();
-        for IndexEntry {
-            id,
-            question,
-            meta,
-            month,
-            version,
-            status,
-        } in entries
-        {
-            if month != group {
-                group = month.clone();
-                list = list.child(
-                    section_label(&t, &month)
-                        .px(px(SpacingScale::S4))
-                        .pt(px(SpacingScale::S4))
-                        .pb(px(SpacingScale::S2)),
-                );
+            let mut month = "";
+            for (position, row) in self.rows.iter().enumerate() {
+                let key = row.confirmed_at.get(..7).unwrap_or("");
+                if key != month || position == 0 {
+                    month = key;
+                    items.push(IndexItem::Month(position));
+                }
+                items.push(IndexItem::Row(position));
             }
-            let active = self.selected.as_deref() == Some(&id);
-            let focus = self
-                .focus
-                .entry(format!("row-{id}"))
-                .or_insert_with(|| cx.focus_handle().tab_stop(true))
-                .clone();
-            let key_id = id.clone();
-            let hovered = self.hovered.as_deref() == Some(id.as_str());
-            let hover_key = id.clone();
-            let hover_id = gpui::ElementId::Name(format!("decision-hover-{id}").into());
-            let row = div()
-                .id(format!("decision-{id}"))
-                .relative()
-                .px(px(SpacingScale::S4))
-                .py(px(SpacingScale::S3))
-                .flex()
-                .flex_col()
-                .gap(px(SpacingScale::S1))
-                .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                    if track_hover(&mut this.hovered, hover_key.clone(), *hovered) {
-                        cx.notify();
-                    }
-                }))
-                .role(Role::Button)
-                .aria_label(question.clone())
-                .aria_selected(active)
-                .track_focus(&focus)
-                .focus_visible(focus_ring(&t))
-                .cursor_pointer()
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.act(Action::Select(id.clone()), window, cx)
-                }))
-                .on_key_down(
-                    cx.listener(move |this, event: &gpui::KeyDownEvent, window, cx| {
-                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                            this.act(Action::Select(key_id.clone()), window, cx);
-                            cx.stop_propagation();
-                        }
-                    }),
-                );
-            let row = mark_selected(row, &t, active)
-                // Date and version lead; the state only appears when it
-                // differs from the confirmed default the index is filtered to.
-                .children(status.map(|status| {
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(SpacingScale::S2))
-                        .child(
-                            text_style(div(), TypeScale::META)
-                                .text_color(t.colors.text_muted())
-                                .child(meta.clone()),
-                        )
-                        .child(div().flex_1())
-                        .when(status != DecisionStatus::Accepted, |line| {
-                            line.child(status_pill(&t, t.colors.text_muted(), "Substituída"))
-                        })
-                        .children(version.map(|version| count_chip(&t, format!("v{version}"))))
-                }))
-                .child(
-                    word_wrapped(&question, TypeScale::ROW_TITLE, Some(2))
-                        .text_color(t.colors.text_primary()),
-                )
-                .when(status.is_none(), |row| {
-                    row.child(
-                        text_style(div(), TypeScale::META)
-                            .text_color(t.colors.text_muted())
-                            .child(meta),
-                    )
-                });
-            list = list.child(hover_tint(row, hover_id, hovered, !active, &t));
         }
         if self.cursor.is_some() && !searching {
-            list = list.child(self.button(
-                "more-decisions".into(),
-                "Carregar mais".into(),
-                Action::More,
-                false,
-                cx,
-            ));
+            items.push(IndexItem::More);
         }
         if self.busy && count == 0 {
-            list = list.child(skeleton_list(&t, "decision-skeleton", 4));
+            items.push(IndexItem::Skeleton);
         }
         if self.loaded && count == 0 {
-            list = list.child(
-                text_style(div(), TypeScale::BODY_SMALL)
-                    .p(px(SpacingScale::S3))
-                    .text_color(t.colors.text_muted())
-                    .child(if searching {
-                        "Nenhum resultado. Tente outra palavra."
-                    } else {
-                        "As decisões confirmadas aparecerão aqui."
-                    }),
-            );
+            items.push(IndexItem::Empty);
         }
+        if items != self.index_items {
+            let old = self.index_items.len();
+            self.index_list.splice(0..old, items.len());
+            self.index_items = items;
+        }
+        let rows = list(
+            self.index_list.clone(),
+            cx.processor(|this, ix: usize, _, cx| this.index_item(ix, cx)),
+        )
+        .size_full();
         div()
             .w(px(if compact { 248.0 } else { 296.0 }))
             .flex_none()
@@ -893,7 +809,16 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
                         )
                     }),
             )
-            .child(list)
+            .child(
+                div()
+                    .id("decision-index-list")
+                    .relative()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .pb(px(SpacingScale::S3))
+                    .child(rows)
+                    .child(scroll_thumb(&t, &self.index_list, &self.index_scroll)),
+            )
             .child(
                 text_style(div(), TypeScale::META)
                     .flex_none()
@@ -919,6 +844,155 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
             )
             .into_any_element()
     }
+    /// One line of the index, built when the virtual list asks for it.
+    fn index_item(&mut self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
+        let t = Theme::current(cx);
+        let Some(&item) = self.index_items.get(ix) else {
+            return div().into_any_element();
+        };
+        match item {
+            IndexItem::Month(position) => {
+                let month = self
+                    .rows
+                    .get(position)
+                    .map(|row| month_label(&row.confirmed_at))
+                    .unwrap_or_default();
+                section_label(&t, &month)
+                    .px(px(SpacingScale::S4))
+                    .pt(px(SpacingScale::S4))
+                    .pb(px(SpacingScale::S2))
+                    .into_any_element()
+            }
+            IndexItem::Row(position) => {
+                let Some(row) = self.rows.get(position) else {
+                    return div().into_any_element();
+                };
+                let entry = IndexEntry {
+                    id: row.decision_id.clone(),
+                    question: row.question.clone(),
+                    meta: short_date(&row.confirmed_at),
+                    version: Some(row.version),
+                    status: Some(row.status),
+                };
+                self.index_entry(entry, &t, cx)
+            }
+            IndexItem::Hit(position) => {
+                let Some(hit) = self.hits.get(position) else {
+                    return div().into_any_element();
+                };
+                let entry = IndexEntry {
+                    id: hit.decision_id.clone(),
+                    question: hit.question.clone(),
+                    meta: hit.snippet.replace(['[', ']'], ""),
+                    version: None,
+                    status: None,
+                };
+                self.index_entry(entry, &t, cx)
+            }
+            IndexItem::More => self
+                .button(
+                    "more-decisions".into(),
+                    "Carregar mais".into(),
+                    Action::More,
+                    false,
+                    cx,
+                )
+                .into_any_element(),
+            IndexItem::Skeleton => skeleton_list(&t, "decision-skeleton", 4),
+            IndexItem::Empty => text_style(div(), TypeScale::BODY_SMALL)
+                .p(px(SpacingScale::S3))
+                .text_color(t.colors.text_muted())
+                .child(if self.query.trim().is_empty() {
+                    "As decisões confirmadas aparecerão aqui."
+                } else {
+                    "Nenhum resultado. Tente outra palavra."
+                })
+                .into_any_element(),
+        }
+    }
+
+    /// A decision (or search hit) of the index.
+    fn index_entry(&mut self, entry: IndexEntry, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let IndexEntry {
+            id,
+            question,
+            meta,
+            version,
+            status,
+        } = entry;
+        let active = self.selected.as_deref() == Some(&id);
+        let focus = self
+            .focus
+            .entry(format!("row-{id}"))
+            .or_insert_with(|| cx.focus_handle().tab_stop(true))
+            .clone();
+        let key_id = id.clone();
+        let hovered = self.hovered.as_deref() == Some(id.as_str());
+        let hover_key = id.clone();
+        let hover_id = gpui::ElementId::Name(format!("decision-hover-{id}").into());
+        let row = div()
+            .id(format!("decision-{id}"))
+            .relative()
+            .px(px(SpacingScale::S4))
+            .py(px(SpacingScale::S3))
+            .flex()
+            .flex_col()
+            .gap(px(SpacingScale::S1))
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                if track_hover(&mut this.hovered, hover_key.clone(), *hovered) {
+                    cx.notify();
+                }
+            }))
+            .role(Role::Button)
+            .aria_label(question.clone())
+            .aria_selected(active)
+            .track_focus(&focus)
+            .focus_visible(focus_ring(t))
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.act(Action::Select(id.clone()), window, cx)
+            }))
+            .on_key_down(
+                cx.listener(move |this, event: &gpui::KeyDownEvent, window, cx| {
+                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                        this.act(Action::Select(key_id.clone()), window, cx);
+                        cx.stop_propagation();
+                    }
+                }),
+            );
+        let row = mark_selected(row, t, active)
+            // Date and version lead; the state only appears when it
+            // differs from the confirmed default the index is filtered to.
+            .children(status.map(|status| {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(SpacingScale::S2))
+                    .child(
+                        text_style(div(), TypeScale::META)
+                            .text_color(t.colors.text_muted())
+                            .child(meta.clone()),
+                    )
+                    .child(div().flex_1())
+                    .when(status != DecisionStatus::Accepted, |line| {
+                        line.child(status_pill(t, t.colors.text_muted(), "Substituída"))
+                    })
+                    .children(version.map(|version| count_chip(t, format!("v{version}"))))
+            }))
+            .child(
+                word_wrapped(&question, TypeScale::ROW_TITLE, Some(2))
+                    .text_color(t.colors.text_primary()),
+            )
+            .when(status.is_none(), |row| {
+                row.child(
+                    text_style(div(), TypeScale::META)
+                        .text_color(t.colors.text_muted())
+                        .child(meta),
+                )
+            });
+        hover_tint(row, hover_id, hovered, !active, t).into_any_element()
+    }
+
     fn document(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let t = Theme::current(cx);
         let Some(mut detail) = self.detail.clone() else {
