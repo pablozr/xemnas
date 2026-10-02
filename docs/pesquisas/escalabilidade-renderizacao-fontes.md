@@ -402,17 +402,18 @@ e [tick-resultados.csv](assets/escalabilidade/tick-resultados.csv).
 
 | Nós | Arestas | Mediana dos 420 passos | Faixa das 3 execuções |
 | --- | --- | --- | --- |
-| 100 | 96 | 11,161 ms | 10,931–11,195 ms |
-| 500 | 480 | 263,944 ms | 246,631–274,015 ms |
-| 1.000 | 960 | 993,760 ms | 977,244–1.002,236 ms |
-| 2.500 | 2.400 | 6.121,699 ms | 6.095,581–6.298,100 ms |
+| 100 | 96 | 10,458 ms | 10,012–10,495 ms |
+| 500 | 480 | 253,924 ms | 240,016–262,364 ms |
+| 1.000 | 960 | 970,915 ms | 957,654–1.007,133 ms |
+| 2.500 | 2.400 | 6.070,531 ms | 6.001,959–6.147,006 ms |
 
 A ordem de grandeza é compatível com um bloqueio perceptível se esse trabalho
 acontece na thread de UI. **Não é o tempo de abertura do aplicativo, FPS ou uma
 prova de toda a causa do travamento relatado.** Não mede `build`, `place`, strings,
 consulta SQLite, pintura, GPU, drag, máscaras, acessibilidade nem topologias densas.
-Não mede Barnes–Hut ou qualquer ganho da solução proposta. A rodada preliminar
-com 5.000 nós teve concorrência com build/capturas e foi descartada da tabela.
+Não mede Barnes–Hut ou qualquer ganho da solução proposta. Rodadas preliminares
+tiveram concorrência com build/capturas e foram descartadas da tabela, inclusive
+uma de 5.000 nós. Os dados versionados são da execução final sem esses trabalhos.
 
 Reprodução no PowerShell, da raiz, com saída fora do repositório:
 
