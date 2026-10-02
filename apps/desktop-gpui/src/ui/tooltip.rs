@@ -31,12 +31,10 @@ impl Render for Tooltip {
             .border_color(theme.colors.hairline_divider())
             .bg(theme.colors.floating())
             .text_color(theme.colors.text_primary())
-            .shadow(vec![gpui::BoxShadow::new(
-                px(0.0),
-                px(4.0),
-                theme.colors.shadow_emphasis().into(),
-            )
-            .blur_radius(px(12.0))])
+            .shadow(crate::ui::material::elevation(
+                &theme,
+                crate::ui::material::Elevation::Hint,
+            ))
             .child(self.label.clone())
             .children(
                 self.shortcut

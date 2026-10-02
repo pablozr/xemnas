@@ -926,9 +926,9 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
                 return div().into_any_element();
             }
             return if self.query.trim().is_empty() {
-                empty_panel(
+                crate::ui::patterns::empty_panel_mascot(
                     &t,
-                    IconName::Decision,
+                    crate::screens::assistant::portrait(),
                     "Decisões",
                     "Decisões que permanecem",
                     "Confirme uma escolha na Revisão para preservar o documento, suas evidências e seu histórico aqui.",

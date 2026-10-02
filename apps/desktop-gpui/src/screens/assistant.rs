@@ -43,6 +43,16 @@ static GLOW: LazyLock<Arc<Image>> = sprite!("glow.png");
 static LEFT: LazyLock<Arc<Image>> = sprite!("left.png");
 static RIGHT: LazyLock<Arc<Image>> = sprite!("right.png");
 
+/// The mascot at rest, eyes lit: for the opening mark and empty states.
+pub fn portrait() -> Arc<Image> {
+    GLOW.clone()
+}
+
+/// The mascot with its eyes closed: for "nothing to do here".
+pub fn resting() -> Arc<Image> {
+    BLINK.clone()
+}
+
 /// Side of the mascot on the sidebar.
 const DOCK_SIZE: f32 = 72.0;
 /// Side of the portrait in the panel header.
@@ -409,12 +419,10 @@ impl AssistantScreen {
             .border_1()
             .border_color(colors.glass_border_card())
             .bg(colors.floating())
-            .shadow(vec![gpui::BoxShadow::new(
-                px(0.0),
-                px(16.0),
-                colors.shadow_emphasis().into(),
-            )
-            .blur_radius(px(40.0))])
+            .shadow(crate::ui::material::elevation(
+                &theme,
+                crate::ui::material::Elevation::Dialog,
+            ))
             .overflow_hidden()
             .role(Role::Dialog)
             .aria_label("Assistente Xemnas")

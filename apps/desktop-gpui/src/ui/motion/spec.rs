@@ -67,8 +67,41 @@ pub const MENU_OUT: MotionSpec = MotionSpec::new(100, EASE_IN);
 pub const PANEL_IN: MotionSpec = MotionSpec::new(200, EASE_OUT_EXPO);
 /// A selection indicator gliding to its new place.
 pub const SLIDE: MotionSpec = MotionSpec::new(180, EASE_OUT_QUINT);
+/// The sidebar folding away or back (focus mode).
+pub const FOLD: MotionSpec = MotionSpec::new(220, EASE_OUT_QUINT);
+/// The opening mark lifting away.
+pub const OPENING_OUT: MotionSpec = MotionSpec::new(300, EASE_IN);
 /// A toast arriving at the foot of a surface.
 pub const TOAST_IN: MotionSpec = MotionSpec::new(180, EASE_OUT_EXPO);
+
+/// Rows of a list arriving one after another: each waits this long after
+/// the previous; only the first [`CASCADE_ROWS`] wait, so a long list
+/// never makes the last row lag.
+pub const CASCADE_STEP_MS: u64 = 35;
+/// How many rows take part in a cascade.
+pub const CASCADE_ROWS: usize = 6;
+
+/// One row of a list arriving in its place in the cascade: it holds
+/// invisible for its delay, then fades in rising 6 px. Keyed by the row's
+/// own id, it plays once, when the row first appears, not on every render.
+pub fn cascade<E>(id: impl Into<ElementId>, index: usize, element: E) -> AnimationElement<E>
+where
+    E: Styled + IntoElement + 'static,
+{
+    let delay = CASCADE_STEP_MS * index.min(CASCADE_ROWS) as u64;
+    let total = delay + CONTENT_IN.duration_ms;
+    let animation = Animation::new(Duration::from_millis(total)).with_easing(move |t| {
+        let elapsed = t * total as f32;
+        if elapsed <= delay as f32 {
+            0.0
+        } else {
+            CONTENT_IN.progress((elapsed - delay as f32) / CONTENT_IN.duration_ms as f32)
+        }
+    });
+    element.with_animation(id, animation, |element, t| {
+        element.relative().opacity(t).top(px(6.0 * (1.0 - t)))
+    })
+}
 
 /// Content arriving: opacity 0 → 1 while settling 4 px up into place.
 pub fn content_in<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>

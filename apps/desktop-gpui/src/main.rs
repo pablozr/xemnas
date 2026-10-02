@@ -19,7 +19,8 @@ use std::sync::Arc;
 use xemnas_desktop::app::{
     ActivitySource, AdjustItem, CaptureStatus, ConfirmItem, FocusSearch, GoContext, GoDecisions,
     GoMap, GoOverview, GoReview, NextItem, PaletteClose, PaletteDown, PaletteRun, PaletteUp,
-    PrevItem, RejectItem, SaveEditor, Shell, SnoozeItem, TabNext, TabPrev, TogglePalette,
+    PrevItem, RejectItem, SaveEditor, Shell, SnoozeItem, TabNext, TabPrev, ToggleFocusMode,
+    TogglePalette,
 };
 use xemnas_desktop::screens::settings::SettingsServices;
 use xemnas_desktop::ui::search_field::{
@@ -422,6 +423,7 @@ fn run_shell_mode(
             KeyBinding::new("tab", TabNext, None),
             KeyBinding::new("shift-tab", TabPrev, None),
             KeyBinding::new("ctrl-k", TogglePalette, Some("xemnas")),
+            KeyBinding::new("ctrl-\\", ToggleFocusMode, Some("xemnas")),
             KeyBinding::new("ctrl-f", FocusSearch, Some("xemnas")),
             // Single-key shortcuts never fire while a text field has focus.
             KeyBinding::new("j", NextItem, Some("xemnas && !SearchField")),

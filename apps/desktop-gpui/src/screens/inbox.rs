@@ -23,9 +23,9 @@ use crate::ui::controls::{action_button, button_foreground, ButtonKind};
 use crate::ui::glass::focus_ring;
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
-    action_footer, count_chip, empty_panel, error_banner, fade_in, hover_tint, kbd, mark_selected,
-    panel_title, reading_title, section_header, section_label, skeleton_list, status_pill, tag,
-    toast, track_hover, word_wrapped, READING_WIDTH, TOAST_DURATION,
+    action_footer, count_chip, error_banner, fade_in, hover_tint, kbd, mark_selected, panel_title,
+    reading_title, section_header, section_label, skeleton_list, status_pill, tag, toast,
+    track_hover, word_wrapped, READING_WIDTH, TOAST_DURATION,
 };
 use crate::ui::search_field::SearchField;
 use crate::ui::theme::{text_style, Theme};
@@ -936,9 +936,9 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             .filter(|detail| matches_query(&detail.summary, &self.query));
         let Some(detail) = visible_detail else {
             if self.loaded && self.rows.is_empty() && !self.busy {
-                return empty_panel(
+                return crate::ui::patterns::empty_panel_mascot(
                     &theme,
-                    IconName::Inbox,
+                    crate::screens::assistant::resting(),
                     "Fila de revisão",
                     "Nada aguardando revisão",
                     "Quando uma sessão do OpenCode registrar uma escolha de engenharia, o extrator propõe um candidato aqui para você confirmar, ajustar ou rejeitar.",
@@ -1184,7 +1184,13 @@ impl<S: InboxStore + Send + 'static> Render for InboxScreen<S> {
                     .child(div().px(px(SpacingScale::S4)).pb(px(SpacingScale::S3)).children(self.search.clone()))
                     .when(self.hidden_low > 0 || self.show_low, |rail| rail.child(self.low_toggle(cx)))
                     .child(div().id("inbox-list").flex_1().min_h(px(0.0)).overflow_y_scroll().track_scroll(&self.list_scroll)
-                        .children(visible.iter().map(|row| self.row(row, cx)))
+                        .children(visible.iter().enumerate().map(|(index, row)| {
+                            crate::ui::motion::cascade(
+                                ElementId::Name(format!("candidate-in-{}", row.id).into()),
+                                index,
+                                div().child(self.row(row, cx)),
+                            )
+                        }))
                         .when(visible.is_empty() && self.busy, |list| list.child(skeleton_list(&theme, "inbox-skeleton", 5)))
                         .when(visible.is_empty() && !self.busy, |list| list.child(text_style(div(), TypeScale::BODY_SMALL).p(px(SpacingScale::S4))
                             .text_color(theme.colors.text_muted()).child(

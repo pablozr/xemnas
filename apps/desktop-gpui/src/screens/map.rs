@@ -3277,7 +3277,12 @@ fn timeline_list(theme: &Theme, events: &[TimelineEvent]) -> Div {
         );
         let last = runs.len().saturating_sub(1);
         for (index, run) in runs.into_iter().enumerate() {
-            list = list.child(timeline_item(theme, &run, index == last));
+            let key = format!("timeline-in-{day_index}-{index}");
+            list = list.child(crate::ui::motion::cascade(
+                gpui::ElementId::Name(key.into()),
+                index,
+                timeline_item(theme, &run, index == last),
+            ));
         }
     }
     list

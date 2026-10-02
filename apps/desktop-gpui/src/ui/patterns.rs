@@ -23,9 +23,29 @@ pub fn panel_title(theme: &Theme, label: impl Into<SharedString>) -> Div {
         .child(label.into())
 }
 
+/// Figures in equal-width digits (`tnum`), so a count that changes from 9
+/// to 10 or from 1 to 8 never shifts what follows it.
+pub fn tabular<E: Styled>(element: E) -> E {
+    element.font_features(gpui::FontFeatures(std::sync::Arc::new(vec![(
+        "tnum".into(),
+        1,
+    )])))
+}
+
+/// A figure that counts up to `value` when it first appears (and again when
+/// it changes), in equal-width digits.
+pub fn count_up(id: impl Into<SharedString>, value: usize, element: Div) -> AnimationElement<Div> {
+    let key = ElementId::Name(format!("{}-{value}", id.into()).into());
+    tabular(element).with_animation(
+        key,
+        Animation::new(MotionTokens::SLOW * 2).with_easing(MotionTokens::enter_easing()),
+        move |element, t| element.child(((value as f32 * t).round() as usize).to_string()),
+    )
+}
+
 /// A small numeric chip: tab badges, panel counts, versions.
 pub fn count_chip(theme: &Theme, value: impl Into<SharedString>) -> Div {
-    text_style(div(), TypeScale::META)
+    tabular(text_style(div(), TypeScale::META))
         .flex_none()
         .px(px(6.0))
         .rounded(px(4.0))
@@ -157,12 +177,10 @@ pub fn toast(theme: &Theme, message: &str, bottom: f32) -> AnyElement {
         .border_1()
         .border_color(theme.colors.hairline_divider())
         .bg(theme.colors.floating())
-        .shadow(vec![gpui::BoxShadow::new(
-            px(0.0),
-            px(8.0),
-            theme.colors.shadow_emphasis().into(),
-        )
-        .blur_radius(px(24.0))])
+        .shadow(crate::ui::material::elevation(
+            theme,
+            crate::ui::material::Elevation::Hint,
+        ))
         .child(icon(
             IconName::CheckCircle,
             14.0,
@@ -265,6 +283,51 @@ pub fn skeleton_list(theme: &Theme, id: &'static str, rows: usize) -> AnyElement
 /// The empty state of a reading surface: a quiet mark, what this place is,
 /// and what makes it fill. No card, no glow.
 pub fn empty_panel(theme: &Theme, glyph: IconName, eyebrow: &str, title: &str, body: &str) -> Div {
+    empty_panel_with(
+        theme,
+        div()
+            .size(px(40.0))
+            .mb(px(SpacingScale::S2))
+            .rounded(theme.radius.surface())
+            .border_1()
+            .border_color(theme.colors.hairline_divider())
+            .bg(theme.colors.surface())
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(icon(glyph, 20.0, theme.colors.text_secondary())),
+        eyebrow,
+        title,
+        body,
+    )
+}
+
+/// [`empty_panel`] with the mascot in the glyph's place: the resting pose
+/// (eyes closed) when there is simply nothing to do, the lit one when the
+/// surface waits for the person's first step.
+pub fn empty_panel_mascot(
+    theme: &Theme,
+    figure: std::sync::Arc<gpui::Image>,
+    eyebrow: &str,
+    title: &str,
+    body: &str,
+) -> Div {
+    empty_panel_with(
+        theme,
+        gpui::img(figure).size(px(96.0)).ml(px(-SpacingScale::S3)),
+        eyebrow,
+        title,
+        body,
+    )
+}
+
+fn empty_panel_with(
+    theme: &Theme,
+    figure: impl IntoElement,
+    eyebrow: &str,
+    title: &str,
+    body: &str,
+) -> Div {
     div()
         .size_full()
         .flex()
@@ -278,19 +341,7 @@ pub fn empty_panel(theme: &Theme, glyph: IconName, eyebrow: &str, title: &str, b
                 .flex_col()
                 .items_start()
                 .gap(px(SpacingScale::S3))
-                .child(
-                    div()
-                        .size(px(40.0))
-                        .mb(px(SpacingScale::S2))
-                        .rounded(theme.radius.surface())
-                        .border_1()
-                        .border_color(theme.colors.hairline_divider())
-                        .bg(theme.colors.surface())
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(icon(glyph, 20.0, theme.colors.text_secondary())),
-                )
+                .child(figure)
                 .child(section_label(theme, eyebrow))
                 .child(
                     text_style(div(), TypeScale::HEADING_1)

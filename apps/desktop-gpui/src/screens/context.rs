@@ -43,7 +43,7 @@ use super::format::{calendar_date, clock, day_heading, plural, short_date, thous
 use crate::ui::controls::{action_button, button_foreground, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
-    count_chip, empty_panel, error_banner, index_rail, index_row, radio_list, radio_row,
+    count_chip, count_up, empty_panel, error_banner, index_rail, index_row, radio_list, radio_row,
     reading_page, section_header, section_label, skeleton_list, status_pill, toast, TOAST_DURATION,
 };
 use crate::ui::search_field::{SearchChanged, SearchField};
@@ -1617,7 +1617,7 @@ impl<S: ContextStores> ContextScreen<S> {
             .to_string();
         let summary = DeliverySummary::since(deliveries, &since);
         let measured = summary.deliveries - summary.sent;
-        let figure = |value: String, label: &'static str, detail: String, first: bool| {
+        let figure = |value: usize, label: &'static str, detail: String, first: bool| {
             div()
                 .flex_1()
                 .min_w(px(0.0))
@@ -1631,11 +1631,11 @@ impl<S: ContextStores> ContextScreen<S> {
                         .border_l_1()
                         .border_color(colors.hairline_divider())
                 })
-                .child(
-                    text_style(div(), TypeScale::HEADING_1)
-                        .text_color(colors.text_primary())
-                        .child(value),
-                )
+                .child(count_up(
+                    label,
+                    value,
+                    text_style(div(), TypeScale::HEADING_1).text_color(colors.text_primary()),
+                ))
                 .child(
                     text_style(div(), TypeScale::LABEL)
                         .text_color(colors.text_secondary())
@@ -1654,25 +1654,25 @@ impl<S: ContextStores> ContextScreen<S> {
             .border_b_1()
             .border_color(colors.hairline_divider())
             .child(figure(
-                summary.deliveries.to_string(),
+                summary.deliveries,
                 "Entregas",
                 format!("{} enviadas · {measured} medidas", summary.sent),
                 true,
             ))
             .child(figure(
-                summary.sessions.to_string(),
+                summary.sessions,
                 "Sessões do agente",
                 "conversas que receberam".to_owned(),
                 false,
             ))
             .child(figure(
-                summary.average_tokens().to_string(),
+                summary.average_tokens(),
                 "Tokens por bloco",
                 format!("média · limite {budget}"),
                 false,
             ))
             .child(figure(
-                summary.omitted.to_string(),
+                summary.omitted,
                 "Fora do orçamento",
                 "itens que não couberam".to_owned(),
                 false,

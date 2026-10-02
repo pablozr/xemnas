@@ -74,6 +74,8 @@ actions!(
         GoOverview,
         /// Opens or closes the command palette.
         TogglePalette,
+        /// Hides or shows the projects sidebar (focus mode).
+        ToggleFocusMode,
         /// Moves the palette highlight down.
         PaletteDown,
         /// Moves the palette highlight up.
@@ -91,6 +93,10 @@ const TITLE_BAR_HEIGHT: f32 = 40.0;
 const PROJECT_BAR_HEIGHT: f32 = 44.0;
 /// Width of the projects sidebar (`ProjectsScreen::render_sidebar`).
 const SIDEBAR_WIDTH: f32 = 248.0;
+/// Grain tiles laid over a background: enough for a 4K-wide window.
+const GRAIN_TILES: usize = 16 * 10;
+/// How long the opening mark stays, its fade included.
+const OPENING: std::time::Duration = std::time::Duration::from_millis(650);
 /// The project's destinations, in the order the tab row shows them.
 const TAB_ORDER: [Destination; 5] = [
     Destination::Overview,
@@ -130,6 +136,7 @@ enum Command {
     OpenSettings,
     SettingsAt(SettingsSection),
     Assistant,
+    FocusMode,
 }
 
 /// The open palette: its query field and highlighted row.
@@ -238,6 +245,14 @@ pub struct Shell<
     project_panel: Popup<()>,
     /// The quick theme menu under the title bar's contrast button.
     theme_menu: Popup<()>,
+    /// Focus mode: the projects sidebar folded away.
+    focus_mode: bool,
+    /// How many times focus mode was toggled: 0 draws the sidebar still
+    /// (no slide on launch); each toggle keys a fresh slide.
+    focus_toggles: u32,
+    /// When the window opened, for the brief opening mark.
+    opened_at: std::time::Instant,
+    opening_scheduled: bool,
     /// The selected destination's background, gliding between tabs.
     tab_indicator: SlideIndicator,
     demo: bool,
@@ -417,6 +432,10 @@ impl<
             project_focus: cx.focus_handle().tab_stop(true),
             project_panel: Popup::default(),
             theme_menu: Popup::default(),
+            focus_mode: false,
+            focus_toggles: 0,
+            opened_at: std::time::Instant::now(),
+            opening_scheduled: false,
             tab_indicator: SlideIndicator::default(),
             demo: false,
             palette: Popup::default(),
@@ -855,6 +874,18 @@ impl<
         });
         items.push(PaletteItem {
             group: "Ações",
+            label: if self.focus_mode {
+                "Mostrar a lateral".to_owned()
+            } else {
+                "Modo foco: esconder a lateral".to_owned()
+            },
+            detail: None,
+            glyph: IconName::Expand,
+            shortcut: Some("Ctrl \\"),
+            command: Command::FocusMode,
+        });
+        items.push(PaletteItem {
+            group: "Ações",
             label: "Falar com o Xemnas, o assistente".to_owned(),
             detail: None,
             glyph: IconName::Hood,
@@ -968,6 +999,7 @@ impl<
                 }
             }
             Command::ToggleTheme => self.toggle_theme(window, cx),
+            Command::FocusMode => self.toggle_focus_mode(cx),
             Command::Assistant => self.assistant.update(cx, |assistant, cx| {
                 if !assistant.is_open() {
                     assistant.toggle(cx);
@@ -1069,12 +1101,10 @@ impl<
             .border_1()
             .border_color(theme.colors.hairline_divider())
             .bg(theme.colors.floating())
-            .shadow(vec![BoxShadow::new(
-                px(0.0),
-                px(24.0),
-                theme.colors.shadow_emphasis().into(),
-            )
-            .blur_radius(px(48.0))])
+            .shadow(crate::ui::material::elevation(
+                &theme,
+                crate::ui::material::Elevation::Dialog,
+            ))
             .occlude()
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_action(cx.listener(|this, _: &PaletteDown, _, cx| this.move_palette(1, cx)))
@@ -1397,6 +1427,71 @@ impl<
         ))
     }
 
+    /// The opening mark: the mascot and the wordmark over the theme's
+    /// canvas for a beat, then a fade that lifts away. Gone after
+    /// [`OPENING`]; skipped under reduced motion.
+    fn opening_mark(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        if cx.reduce_motion() || self.opened_at.elapsed() >= OPENING {
+            return None;
+        }
+        let theme = self.theme;
+        let spec = crate::ui::motion::spec::OPENING_OUT;
+        let hold = OPENING.saturating_sub(spec.duration());
+        let total = OPENING.as_millis() as f32;
+        let hold_ms = hold.as_millis() as f32;
+        // Keep painting until the mark is gone, then one last frame drops it.
+        if !self.opening_scheduled {
+            self.opening_scheduled = true;
+            let done = self.opened_at + OPENING;
+            cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(done.saturating_duration_since(std::time::Instant::now()))
+                    .await;
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
+        }
+        Some(
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(theme.colors.canvas())
+                .occlude()
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .gap(px(SpacingScale::S3))
+                        .child(gpui::img(crate::screens::assistant::portrait()).size(px(112.0)))
+                        .child(wordmark(&theme, 22.0, 600.0)),
+                )
+                .with_animation(
+                    "opening-mark",
+                    gpui::Animation::new(OPENING),
+                    move |mark, t| {
+                        let elapsed = t * total;
+                        let out = if elapsed <= hold_ms {
+                            0.0
+                        } else {
+                            spec.progress((elapsed - hold_ms) / (total - hold_ms))
+                        };
+                        mark.opacity(1.0 - out).top(px(-8.0 * out))
+                    },
+                )
+                .into_any_element(),
+        )
+    }
+
+    fn toggle_focus_mode(&mut self, cx: &mut Context<Self>) {
+        self.focus_mode = !self.focus_mode;
+        self.focus_toggles = self.focus_toggles.wrapping_add(1);
+        cx.notify();
+    }
+
     fn toggle_theme_menu(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         if self.theme_menu.take_press_was_open() || self.theme_menu.is_open() {
             self.close_theme_menu(cx);
@@ -1513,12 +1608,10 @@ impl<
             .border_1()
             .border_color(colors.glass_border_card())
             .bg(colors.floating())
-            .shadow(vec![BoxShadow::new(
-                px(0.0),
-                px(12.0),
-                colors.shadow_emphasis().into(),
-            )
-            .blur_radius(px(32.0))])
+            .shadow(crate::ui::material::elevation(
+                &theme,
+                crate::ui::material::Elevation::Floating,
+            ))
             .occlude()
             .role(Role::Menu)
             .aria_label("Tema")
@@ -1777,6 +1870,30 @@ impl<
             } else {
                 projects.update(cx, |screen, cx| screen.render_details(cx))
             };
+            // The sidebar folds away in focus mode: the outer width slides,
+            // the sidebar inside keeps its width so nothing reflows mid-way.
+            let (from, to) = if self.focus_mode {
+                (SIDEBAR_WIDTH, 0.0)
+            } else {
+                (0.0, SIDEBAR_WIDTH)
+            };
+            let sidebar = div()
+                .h_full()
+                .flex_none()
+                .overflow_hidden()
+                .w(px(to))
+                .child(div().w(px(SIDEBAR_WIDTH)).h_full().child(sidebar));
+            let sidebar = if self.focus_toggles == 0 {
+                sidebar.into_any_element()
+            } else {
+                sidebar
+                    .with_animation(
+                        ElementId::Name(format!("sidebar-fold-{}", self.focus_toggles).into()),
+                        crate::ui::motion::spec::FOLD.animation(),
+                        move |sidebar, t| sidebar.w(px(from + (to - from) * t)),
+                    )
+                    .into_any_element()
+            };
             div()
                 .size_full()
                 .flex()
@@ -1874,12 +1991,10 @@ impl<
                                             .border_1()
                                             .border_color(theme.colors.hairline_divider())
                                             .bg(theme.colors.floating())
-                                            .shadow(vec![BoxShadow::new(
-                                                px(0.0),
-                                                px(12.0),
-                                                theme.colors.shadow_emphasis().into(),
-                                            )
-                                            .blur_radius(px(32.0))])
+                                            .shadow(crate::ui::material::elevation(
+                                                &theme,
+                                                crate::ui::material::Elevation::Floating,
+                                            ))
                                             .occlude()
                                             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                                                 this.dismiss_project_panel(cx);
@@ -1948,6 +2063,21 @@ impl<
                 // The frame's tint, once, over the whole image: title bar,
                 // sidebar and the gutter around the content card share it.
                 .child(div().absolute().inset_0().bg(chrome))
+                // A fine grain over the image (tiled; GPUI has no repeat).
+                .child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .overflow_hidden()
+                        .flex()
+                        .flex_wrap()
+                        .opacity(0.6)
+                        .children((0..GRAIN_TILES).map(|_| {
+                            gpui::img(crate::ui::wallpaper::grain())
+                                .flex_none()
+                                .size(px(crate::ui::wallpaper::GRAIN_TILE))
+                        })),
+                )
         });
         let assistant_panel = self
             .assistant
@@ -1991,6 +2121,7 @@ impl<
             .on_action(
                 cx.listener(|this, _: &TogglePalette, window, cx| this.toggle_palette(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &ToggleFocusMode, _, cx| this.toggle_focus_mode(cx)))
             .on_action(cx.listener(|this, _: &GoReview, window, cx| {
                 this.switch_to(Destination::Review, window, cx)
             }))
@@ -2033,6 +2164,7 @@ impl<
             .children(assistant_panel)
             .children(theme_menu)
             .children(palette)
+            .children(self.opening_mark(cx))
     }
 }
 

@@ -417,10 +417,29 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   até a aba escolhida (`motion::glide::SlideIndicator`, 180 ms): parte de
   onde está, mesmo no meio de outro deslize; a primeira colocação, um resize
   e o movimento reduzido chegam sem viagem.
+- Listas que carregam entram em cascata (`motion::cascade`): cada linha
+  35 ms depois da anterior, só as 6 primeiras esperam, fade com subida de
+  6 px, uma vez por linha (chave pelo id). Na Revisão e na linha do tempo.
+- Números de destaque contam até o valor (`count_up`) e todo contador usa
+  algarismos de largura fixa (`tabular`, `tnum`), para nada pular quando o
+  número muda.
+- Modo foco (Ctrl \, paleta): a lateral se recolhe em 220 ms; a largura de
+  fora desliza e a lateral de dentro mantém a largura, sem refluxo.
+- Abertura: o mascote e o wordmark sobre o fundo do tema por 650 ms, o
+  final num fade que sobe 8 px; sem isso com movimento reduzido.
 - Hover de linhas e abas segue a mola de `hover_tint`.
 
 ## Interação
 
+- **Elevação** em três níveis (`material::elevation`): dica (tooltip,
+  toast), flutuante (menus, painel do projeto) e diálogo (paleta,
+  assistente); cada um com sombra larga, sombra de contato e um realce
+  claro na borda de cima. Nenhuma superfície flutuante define sombra própria.
+- Estados vazios sem nada a fazer mostram o mascote de olhos fechados
+  (Revisão); os que esperam o primeiro passo, de olhos acesos (Decisões)
+  (`empty_panel_mascot`).
+- Com fundo de imagem, um grão finíssimo (tile de 256 px) fica sobre a
+  imagem e sob as superfícies: aspecto fosco, nunca sobre o texto.
 - Botões são **placas** (`ui::material`): gradiente vertical iluminado de
   cima, borda fina, realce de 1 px na borda de cima e sombra curta embaixo.
   O secundário é a placa neutra (branco translúcido); o primário é a placa

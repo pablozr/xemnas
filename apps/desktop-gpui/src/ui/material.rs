@@ -117,3 +117,31 @@ pub fn accent_pressed(theme: &Theme) -> Plate {
         shadows: vec![shadow(black(0.18), 1.0, 2.0, true)],
     }
 }
+
+/// How high a surface floats. Every floating surface takes one of these
+/// instead of a shadow of its own, so depth reads the same across the app.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Elevation {
+    /// Tooltips and toasts: just off the surface.
+    Hint,
+    /// Menus and popovers (theme menu, project panel).
+    Floating,
+    /// Panels that hold a task (palette, assistant).
+    Dialog,
+}
+
+/// The shadows of `level`: a wide soft drop, a tight contact shadow and a
+/// faint lit top edge, so a floating surface reads as a raised sheet.
+pub fn elevation(theme: &Theme, level: Elevation) -> Vec<BoxShadow> {
+    let drop = Hsla::from(theme.colors.shadow_emphasis());
+    let (y, blur, contact) = match level {
+        Elevation::Hint => (4.0, 12.0, 0.18),
+        Elevation::Floating => (12.0, 32.0, 0.22),
+        Elevation::Dialog => (24.0, 56.0, 0.26),
+    };
+    vec![
+        BoxShadow::new(px(0.0), px(y), drop).blur_radius(px(blur)),
+        BoxShadow::new(px(0.0), px(1.0), black(contact)).blur_radius(px(2.0)),
+        shadow(white(0.05), 1.0, 0.0, true),
+    ]
+}

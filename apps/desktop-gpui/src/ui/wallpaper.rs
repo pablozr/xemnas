@@ -57,6 +57,21 @@ impl Builtin {
     }
 }
 
+/// A 256 px tile of soft white grain, laid over the background image only:
+/// a matte, printed feel instead of flat digital color.
+pub fn grain() -> Arc<Image> {
+    static GRAIN: std::sync::LazyLock<Arc<Image>> = std::sync::LazyLock::new(|| {
+        Arc::new(Image::from_bytes(
+            ImageFormat::Png,
+            include_bytes!("../../assets/texture/grain.png").to_vec(),
+        ))
+    });
+    GRAIN.clone()
+}
+
+/// Side of a grain tile.
+pub const GRAIN_TILE: f32 = 256.0;
+
 /// What a prepared background depends on.
 #[derive(Clone, Debug, PartialEq)]
 struct Key {
