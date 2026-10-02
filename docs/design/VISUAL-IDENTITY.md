@@ -431,6 +431,16 @@ em `docs/arquitetura/desempenho-e-escala.md`. No visual, isso vira:
   margem de 48 px) e, com mais de 140 links à vista, usa o modo barato:
   links retos de um traço, sem sinal correndo, nós sem halos e rótulos de
   componente só a partir de 0,9 de zoom.
+- **Panorama.** Em mapas com mais de 150 nós, abaixo de zoom 0,45 só ficam
+  componentes, tecnologias e grupos; decisões e regras individuais voltam ao
+  aproximar (histerese de 0,1), exceto as com conflito ou sugestão, que ficam
+  sempre. O cabeçalho avisa: "Panorama · N decisões e regras ocultas ·
+  aproxime para vê-las". A dica de interação e os filtros dividem uma linha
+  que quebra: em janela estreita a dica desce, nunca cobre os filtros.
+- **Blocos virtuais.** O layout em Blocos é uma lista virtual de linhas (dois
+  blocos por linha, quatro tecnologias por linha) na mesma coluna de 760 px;
+  um bloco lista até 6 partes e conta o resto ("+N partes"), e a página do
+  componente lista todas.
 - O que pesa vai para fora da thread da interface: o layout de forças do
   grafo roda em segundo plano, só é feito quando o Grafo é aberto (na visão
   em Blocos espera), é aplicado se ainda for o mais recente e, em mapas com

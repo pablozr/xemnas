@@ -513,3 +513,46 @@ em nó de grupo evita no produto.
   terminar um resultado que será descartado.
 - Agrupamento de multidões (nó de grupo), corte por viewport e modo barato de
   pintura (ver `docs/arquitetura/desempenho-e-escala.md`).
+
+## Benchmark de pintura dentro do aplicativo (release, 02/10/2026)
+
+Mede o tempo que `Scene::paint` leva para montar as operações de um quadro
+(`Probe` "graph-paint", `XEMNAS_PERF=1`), com o mapa semeado por
+`XEMNAS_DEMO_SCALE` e a janela fora da tela (`--demo --background --open
+map:graph`), na mesma máquina. `XEMNAS_GRAPH_RENDER` escolhe quanto trabalho se
+poupa: `full` (todos os nós e ligações, todos os efeitos), `cull` (corte pela
+viewport), `cheap` (mais o modo barato em vista cheia) e `lod` (o do app, mais
+o panorama). Ambos medem o quadro no zoom que ajusta o mapa inteiro à janela,
+~30 quadros por célula; é tempo de CPU para montar a pintura, **não** de GPU.
+
+| Escala | full | cull | cheap | lod (app) |
+| --- | ---: | ---: | ---: | ---: |
+| 1.000 (259 entidades) | 9,44 ms | 9,31 ms | 3,12 ms | **1,52 ms** |
+| 2.500 (626 componentes) | 10,35 ms | 7,16 ms | 5,11 ms | **2,46 ms** |
+
+Medianas; máximos de `lod`: 2,5 ms e 4,7 ms (contra 16,6 e 38,3 ms em `full`).
+Layout em fundo, mesma execução: 108 ms (1.000) e 321 ms (2.500), contra 566 ms
+em 2.500 antes do Barnes–Hut (grade, mesma semente).
+
+Leitura:
+
+- **Corte pela viewport não ajuda no zoom de ajuste**: tudo está na tela. Seu
+  valor aparece com o zoom aproximado, que este protocolo ainda não mede.
+- **O modo barato** (ligações retas de um traço, sem sinal, nós sem halos) vale
+  de 1,8× a 3×. **O panorama** (esconder decisões e regras individuais abaixo
+  de zoom 0,45, mantendo conflitos e sugestões) vale mais 1,7× a 2×.
+- Os dois juntos levam o quadro de ~10 ms a ~2 ms em ambas as escalas, dentro
+  do orçamento de 16,7 ms com folga mesmo contando GPU e composição.
+- Não medido: GPU, rolagem e zoom contínuos em uso real, 5.000 nós e mais
+  (semear 5.000 decisões leva mais de 100 s), hit-test. Uma `RTree` ou grade
+  para o hit-test continua só uma hipótese; a varredura linear de 2.500 nós por
+  movimento do mouse é pequena diante do que foi poupado.
+
+## Consequências para o app
+
+- **Solver:** laço exato até 300 nós; Barnes–Hut acima.
+- **Pintura:** modo barato com mais de 140 ligações à vista; panorama abaixo de
+  zoom 0,45 em mapas com mais de 150 nós, com histerese de 0,1 e o aviso
+  "Panorama · N decisões e regras ocultas" (nada some sem dizer).
+- **Em aberto:** layout incremental e multinível para 10.000+ nós, índice espacial
+  para o hit-test, read models paginados no backend (sessão de backend).

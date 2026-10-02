@@ -73,10 +73,42 @@ const MAX_LEAVES: usize = 10;
 const FOLD_SLACK: usize = 3;
 /// Above this many links in view, painting drops to the cheap mode.
 const CROWDED_LINKS: usize = 140;
+/// Below this zoom (and above [`PANORAMA_FROM`] nodes) the map is a
+/// panorama: components, technologies and groups only; single decisions and
+/// rules come back when the camera comes closer. It leaves again above
+/// `PANORAMA_BELOW + PANORAMA_BAND`, so a zoom resting at the edge does not
+/// make the picture flicker.
+const PANORAMA_BELOW: f32 = 0.45;
+const PANORAMA_BAND: f32 = 0.1;
+/// Smallest map that ever becomes a panorama.
+const PANORAMA_FROM: usize = 150;
 /// Beyond the viewport, how far a node may sit and still be painted.
 const CULL_MARGIN: f32 = 48.0;
 /// Width of the side card.
 const CARD_WIDTH: f32 = 300.0;
+
+/// How much of the painting work is spared; `lod` is the app's. The others
+/// exist to measure what each saving is worth (`XEMNAS_GRAPH_RENDER`):
+/// `full` visits every node and link with all effects, `cull` adds the
+/// viewport cut, `cheap` adds the cheap mode for crowded views, `lod` adds the
+/// panorama on top.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RenderMode {
+    Full,
+    Cull,
+    Cheap,
+    Lod,
+}
+
+fn render_mode() -> RenderMode {
+    static MODE: std::sync::OnceLock<RenderMode> = std::sync::OnceLock::new();
+    *MODE.get_or_init(|| match std::env::var("XEMNAS_GRAPH_RENDER").as_deref() {
+        Ok("full") => RenderMode::Full,
+        Ok("cull") => RenderMode::Cull,
+        Ok("cheap") => RenderMode::Cheap,
+        _ => RenderMode::Lod,
+    })
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
@@ -124,6 +156,8 @@ struct Node {
     /// Decisions and rules tied to it (components and technologies).
     weight: (usize, usize),
     conflict: bool,
+    /// Tied to a suggested link: kept visible at every scale.
+    suggested: bool,
     pos: (f32, f32),
     vel: (f32, f32),
     /// Displayed opacity, eased toward the focus target every frame.
@@ -246,6 +280,8 @@ pub struct GraphCanvas {
     latest: Arc<AtomicU64>,
     /// Whether a layout is still being computed.
     pending: bool,
+    /// Whether the map is drawn as a panorama (see [`PANORAMA_BELOW`]).
+    panorama: bool,
     /// A node to select once the layout in progress is installed (demo).
     select_later: Option<String>,
     focus: FocusHandle,
@@ -283,6 +319,7 @@ impl GraphCanvas {
             generation: 0,
             latest: Arc::new(AtomicU64::new(0)),
             pending: false,
+            panorama: false,
             select_later: None,
             focus: cx.focus_handle().tab_stop(true),
             buttons: BTreeMap::new(),
@@ -1242,6 +1279,21 @@ impl Render for GraphCanvas {
             }
         }
         let busy = self.step(reduce_motion);
+        let leave_above = if self.panorama {
+            PANORAMA_BELOW + PANORAMA_BAND
+        } else {
+            PANORAMA_BELOW
+        };
+        self.panorama = self.nodes.len() > PANORAMA_FROM && self.camera.scale < leave_above;
+        let omitted = if self.panorama && render_mode() == RenderMode::Lod {
+            self.nodes
+                .iter()
+                .enumerate()
+                .filter(|(index, node)| self.visible(*index) && leaf_hidden_in_panorama(node))
+                .count()
+        } else {
+            0
+        };
         let bloom = if reduce_motion {
             1.0
         } else {
@@ -1283,6 +1335,8 @@ impl Render for GraphCanvas {
             time: self.clock.elapsed().as_secs_f32(),
             motion,
             crowded: Cell::new(false),
+            panorama: self.panorama && render_mode() == RenderMode::Lod,
+            mode: render_mode(),
         };
         let bounds_cell = self.bounds.clone();
         let painter = canvas(
@@ -1302,7 +1356,11 @@ impl Render for GraphCanvas {
                 .flex_none()
                 .pt(px(5.0))
                 .text_color(colors.text_muted())
-                .child("Clique para focar · arraste para mover · role para aproximar")
+                .child(if omitted > 0 {
+                    format!("Panorama · {omitted} decisões e regras ocultas · aproxime para vê-las")
+                } else {
+                    "Clique para focar · arraste para mover · role para aproximar".to_owned()
+                })
         });
         let summary = format!(
             "Grafo do projeto: {} componentes, {} decisões, {} regras, {} tecnologias.",
@@ -1409,6 +1467,9 @@ struct Scene {
     motion: bool,
     /// Set at paint: many links in view, so the cheap mode is on.
     crowded: Cell<bool>,
+    /// Zoomed out on a big map: single decisions and rules stay out.
+    panorama: bool,
+    mode: RenderMode,
 }
 
 impl Scene {
@@ -1429,9 +1490,13 @@ impl Scene {
         window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
             // Only what is on screen is visited: at hundreds of nodes the
             // frame's cost follows the viewport, not the project.
+            let _probe = crate::ui::perf::Probe::start("graph-paint");
             let live = self.on_screen(bounds);
             let drawn = self.links_on_screen(bounds, &live);
-            self.crowded.set(drawn.len() > CROWDED_LINKS);
+            self.crowded.set(
+                matches!(self.mode, RenderMode::Cheap | RenderMode::Lod)
+                    && drawn.len() > CROWDED_LINKS,
+            );
             self.paint_grid(bounds, theme, window);
             self.paint_links(bounds, theme, window, &drawn);
             // Small first so components sit on top.
@@ -1455,8 +1520,11 @@ impl Scene {
         self.nodes
             .iter()
             .map(|(node, shown)| {
-                if !shown {
+                if !shown || (self.panorama && leaf_hidden_in_panorama(node)) {
                     return false;
+                }
+                if self.mode == RenderMode::Full {
+                    return true;
                 }
                 let (x, y) = self.screen(bounds, node.pos);
                 x >= ox - CULL_MARGIN
@@ -1475,7 +1543,13 @@ impl Scene {
             .iter()
             .enumerate()
             .filter(|(_, link)| {
-                if live[link.a] || live[link.b] {
+                if self.panorama
+                    && (leaf_hidden_in_panorama(&self.nodes[link.a].0)
+                        || leaf_hidden_in_panorama(&self.nodes[link.b].0))
+                {
+                    return false;
+                }
+                if self.mode == RenderMode::Full || live[link.a] || live[link.b] {
                     return true;
                 }
                 // Neither end is in view; a long link can still cross it.
@@ -1916,6 +1990,16 @@ impl Scene {
     }
 }
 
+/// Whether a node is left out of the panorama: a single decision or rule
+/// with nothing that must be seen (no conflict, no suggestion). Groups,
+/// components and technologies always stay.
+fn leaf_hidden_in_panorama(node: &Node) -> bool {
+    node.folded == 0
+        && matches!(node.kind, Kind::Decision | Kind::Rule)
+        && !node.conflict
+        && !node.suggested
+}
+
 fn circle(
     window: &mut Window,
     center: (f32, f32),
@@ -2064,6 +2148,7 @@ fn build(graph: &ProjectGraph) -> (Vec<Node>, Vec<Link>) {
                 degree: 0,
                 weight: (0, 0),
                 conflict: false,
+                suggested: false,
                 pos: (0.0, 0.0),
                 vel: (0.0, 0.0),
                 shade: 1.0,
@@ -2100,6 +2185,7 @@ fn build(graph: &ProjectGraph) -> (Vec<Node>, Vec<Link>) {
             degree: 0,
             weight: (0, 0),
             conflict: false,
+            suggested: false,
             pos: (0.0, 0.0),
             vel: (0.0, 0.0),
             shade: 1.0,
@@ -2163,6 +2249,8 @@ fn build(graph: &ProjectGraph) -> (Vec<Node>, Vec<Link>) {
         let (Some(&a), Some(&b)) = (index.get(&edge.from), index.get(&edge.to)) else {
             continue;
         };
+        nodes[a].suggested = true;
+        nodes[b].suggested = true;
         links.push(Link {
             a,
             b,
@@ -3157,6 +3245,7 @@ mod tests {
                 degree: 0,
                 weight: (0, 0),
                 conflict: false,
+                suggested: false,
                 pos: (0.0, 0.0),
                 vel: (0.0, 0.0),
                 shade: 1.0,

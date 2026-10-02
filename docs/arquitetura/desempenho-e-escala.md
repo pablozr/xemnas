@@ -35,6 +35,8 @@ pendente fica em `docs/pesquisas/listas-e-grafos-em-escala.md`.
 | "Mostrar todas" | até 200 itens | `MOST_AT_ONCE` |
 | Folhas do grafo | 260 no total, 2 a 10 por componente | `LEAF_BUDGET`, `MIN_LEAVES`, `MAX_LEAVES` |
 | Modo barato do grafo | mais de 140 links à vista | `CROWDED_LINKS` |
+| Panorama do grafo | zoom abaixo de 0,45 (volta acima de 0,55) em mapas com mais de 150 nós | `PANORAMA_BELOW`, `PANORAMA_BAND`, `PANORAMA_FROM` |
+| Solver do layout | laço exato até 300 nós; Barnes–Hut acima | `EXACT_UP_TO`, `solver_for` |
 | Margem de corte do grafo | 48 px além da viewport | `CULL_MARGIN` |
 | Layout completo do grafo | até 200 nós; acima disso, menos passos | `FULL_STEPS_UP_TO` |
 | Mascote | 32 quadros de 160 px, ~4 MB de textura, decodificados na primeira vez | `screens/mascot.rs` |
@@ -44,6 +46,7 @@ pendente fica em `docs/pesquisas/listas-e-grafos-em-escala.md`.
 - Lista virtual: `ListState` na view, `list(state, cx.processor(...))`, linhas
   como chaves baratas e `splice` quando o formato muda (`screens/map.rs`,
   `screens/decisions.rs`); barra e rodapé em `ui/list.rs`.
+- Medição: `layout_benchmark` (layout, ignorado por padrão) e `XEMNAS_GRAPH_RENDER=full|cull|cheap|lod` (pintura); números em `docs/pesquisas/escalabilidade-renderizacao-fontes.md`.
 - Grafo: `fold_crowds` agrupa multidões, `Scene::on_screen` e
   `links_on_screen` cortam o que está fora, `crowded` liga o modo barato.
 - Layout do grafo em segundo plano com geração para descartar resultado velho
