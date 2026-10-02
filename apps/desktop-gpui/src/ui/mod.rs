@@ -10,6 +10,7 @@ pub mod controls;
 pub mod feedback;
 pub mod glass;
 pub mod icons;
+pub mod list;
 pub mod material;
 pub mod motion;
 pub mod patterns;

@@ -8,6 +8,7 @@
 //! generation discards answers that arrive after the user switched projects.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use application::claim_suggestions::{ClaimSuggestionStore, ClaimSuggestionView, ClaimSuggestions};
 use application::claims::{ClaimStore, Claims};
@@ -26,8 +27,9 @@ use domain::entities::{EdgeKind, EntityKind, NodeKind};
 use domain::relations::RelationKind;
 use gpui::prelude::*;
 use gpui::{
-    canvas, div, point, px, AnyElement, Context, Div, Entity, EventEmitter, FocusHandle, Hsla,
-    PathBuilder, Pixels, Render, Role, SharedString, Stateful, Subscription, Toggled, Window,
+    canvas, div, list, point, px, AnyElement, Context, Div, Entity, EventEmitter, FocusHandle,
+    Hsla, ListAlignment, ListState, PathBuilder, Pixels, Render, Role, SharedString, Stateful,
+    Subscription, Toggled, Window,
 };
 
 use super::context::OpenDecision;
@@ -35,6 +37,7 @@ use super::format::{calendar_date, clipped, clock, day_heading, plural, short_da
 use super::graph::{GraphCanvas, GraphEvent};
 use crate::ui::controls::{action_button, icon_action, ButtonKind};
 use crate::ui::icons::{icon, IconName};
+use crate::ui::list::{reveal_footer, scroll_thumb, ScrollMemory};
 use crate::ui::patterns::{
     count_chip, empty_panel, error_banner, mark_selected, panel_title, reading_page,
     section_header, section_label, segment, segmented, skeleton_list, tag, toast, READING_WIDTH,
@@ -97,6 +100,8 @@ const RECENT_DAYS: i64 = 14;
 /// Rows a long list builds first, and how many more "Mostrar mais" adds
 /// (twice this).
 const LIST_PAGE: usize = 12;
+/// Most rows a "show all" builds at once; beyond it only pages are offered.
+const MOST_AT_ONCE: usize = 200;
 /// Timeline events built first.
 const TIMELINE_PAGE: usize = 30;
 /// Nodes per side of the neighborhood diagram.
@@ -143,13 +148,13 @@ struct MapData {
     map: ProjectMap,
     graph: ProjectGraph,
     /// Relations between decisions waiting for confirmation.
-    relations: Vec<RelationSuggestionView>,
+    relations: Arc<Vec<RelationSuggestionView>>,
     /// Context derived from decisions, waiting for confirmation.
-    derived: Vec<ClaimSuggestionView>,
+    derived: Arc<Vec<ClaimSuggestionView>>,
     /// Components created from the declared workspace on this load.
     assembled: usize,
-    suggestions: Vec<Suggestion>,
-    proposals: SuggestionReport,
+    suggestions: Arc<Vec<Suggestion>>,
+    proposals: Arc<SuggestionReport>,
     /// Files the latest decisions changed: quick picks for the file lens.
     recent_files: Vec<String>,
 }
@@ -177,9 +182,10 @@ pub struct MapScreen<S: MapStores> {
     busy: bool,
     data: Option<MapData>,
     view: View,
-    detail: Option<(EntityDetail, Vec<TimelineEvent>)>,
-    timeline: Option<Vec<TimelineEvent>>,
-    lens: Option<FileLens>,
+    /// Shared snapshots: a render takes a pointer, never a copy of the lists.
+    detail: Option<Arc<(EntityDetail, Vec<TimelineEvent>)>>,
+    timeline: Option<Arc<Vec<TimelineEvent>>>,
+    lens: Option<Arc<FileLens>>,
     picker: Option<Picker>,
     form_kind: EntityKind,
     name: Entity<SearchField>,
@@ -196,6 +202,12 @@ pub struct MapScreen<S: MapStores> {
     /// waits behind "Mostrar mais". Every scroll step rebuilds the view, so
     /// what is built is what scrolls: a long list is built a page at a time.
     shown: BTreeMap<String, usize>,
+    /// The index's rows (views, headings, entities) and the virtual list
+    /// that shows only those in view; the rows are rebuilt when their shape
+    /// changes.
+    index_rows: Vec<IndexRow>,
+    index_list: ListState,
+    index_scroll: ScrollMemory,
     /// Whether the graph holds older data than the map: its layout is made
     /// when the Grafo layout is first shown.
     graph_stale: bool,
@@ -236,6 +248,9 @@ impl<S: MapStores> MapScreen<S> {
         subscriptions.push(cx.subscribe(&graph, |this, _, event: &GraphEvent, cx| {
             this.on_graph(event, cx)
         }));
+        let index_scroll = ScrollMemory::default();
+        let index_list = ListState::new(0, ListAlignment::Top, px(480.0));
+        index_scroll.attach(&index_list);
         Self {
             backend: Some(services),
             project: None,
@@ -259,6 +274,9 @@ impl<S: MapStores> MapScreen<S> {
             notice: None,
             focus: BTreeMap::new(),
             shown: BTreeMap::new(),
+            index_rows: Vec::new(),
+            index_list,
+            index_scroll,
             graph_stale: true,
             route: None,
             layout: Layout::Blocks,
@@ -439,9 +457,9 @@ impl<S: MapStores> MapScreen<S> {
                     }
                 }
             }
-            Outcome::Detail(Ok(detail)) => self.detail = Some(*detail),
-            Outcome::Timeline(Ok(events)) => self.timeline = Some(events),
-            Outcome::Lens(Ok(lens)) => self.lens = Some(*lens),
+            Outcome::Detail(Ok(detail)) => self.detail = Some(Arc::new(*detail)),
+            Outcome::Timeline(Ok(events)) => self.timeline = Some(Arc::new(events)),
+            Outcome::Lens(Ok(lens)) => self.lens = Some(Arc::new(*lens)),
             Outcome::Picker(Ok(picker)) => {
                 self.filter.update(cx, |field, cx| field.set_value("", cx));
                 self.picker = Some(picker);
@@ -521,7 +539,7 @@ impl<S: MapStores> MapScreen<S> {
         if self
             .detail
             .as_ref()
-            .is_none_or(|(detail, _)| detail.entity.entity_id != id)
+            .is_none_or(|snapshot| snapshot.0.entity.entity_id != id)
         {
             self.detail = None;
         }
@@ -782,7 +800,8 @@ impl<S: MapStores> MapScreen<S> {
         let linked: Vec<String> = self
             .detail
             .as_ref()
-            .map(|(detail, _)| {
+            .map(|snapshot| {
+                let detail = &snapshot.0;
                 detail
                     .decisions
                     .iter()
@@ -963,8 +982,9 @@ impl<S: MapStores> MapScreen<S> {
         self.shown.get(key).copied().unwrap_or(first)
     }
 
-    /// The "Mostrar mais N" row under a list cut at `shown` of `total`:
-    /// opens two more pages of it.
+    /// The footer under a list cut after some rows: how far along it is, a
+    /// button for the next two pages and, while what is left is small
+    /// enough to build at once, one for all of it.
     fn more_row(
         &mut self,
         key: &'static str,
@@ -972,27 +992,36 @@ impl<S: MapStores> MapScreen<S> {
         remaining: usize,
         cx: &mut Context<Self>,
     ) -> Div {
-        let button = self.button(
+        let theme = Theme::current(cx);
+        let shown = self.limit(key, first);
+        let step = (2 * first).min(remaining);
+        let more = self.button(
             format!("map-more-{key}"),
             ButtonKind::Ghost,
             true,
-            if remaining == 1 {
-                "Mostrar mais 1".to_owned()
-            } else {
-                format!("Mostrar mais {remaining}")
-            },
+            format!("Mostrar mais {step}"),
             move |this, cx| {
                 let shown = this.limit(key, first);
-                this.shown.insert(key.to_owned(), shown + 2 * first);
+                this.shown
+                    .insert(key.to_owned(), shown.saturating_add(2 * first));
                 cx.notify();
             },
             cx,
         );
-        div()
-            .flex()
-            .px(px(SpacingScale::S2))
-            .pt(px(SpacingScale::S1))
-            .child(button)
+        let all = (remaining > step && remaining <= MOST_AT_ONCE).then(|| {
+            self.button(
+                format!("map-all-{key}"),
+                ButtonKind::Ghost,
+                true,
+                format!("Mostrar todas ({remaining})"),
+                move |this, cx| {
+                    this.shown.insert(key.to_owned(), usize::MAX);
+                    cx.notify();
+                },
+                cx,
+            )
+        });
+        reveal_footer(&theme, shown, shown + remaining, Some(more), all)
     }
 
     fn focus_for(&mut self, id: &str, cx: &mut Context<Self>) -> FocusHandle {
@@ -1081,6 +1110,9 @@ impl<S: MapStores> MapScreen<S> {
 
     // ---- index ----------------------------------------------------------
 
+    /// The index as a virtual list: only the rows in view are built, so a
+    /// project with thousands of components scrolls as lightly as one with
+    /// ten.
     fn render_index(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Div {
         let colors = theme.colors;
         let Some(data) = self.data.as_ref() else {
@@ -1090,14 +1122,14 @@ impl<S: MapStores> MapScreen<S> {
                 6,
             )));
         };
-        let pending = data.suggestions.len()
-            + data.relations.len()
-            + data.derived.len()
-            + data.proposals.components.len()
-            + data.proposals.technologies.len();
-        let entities: Vec<MapEntity> = data.map.entities.clone();
+        let count = data.map.entities.len();
         let as_of = data.map.as_of.clone();
-        let count = entities.len();
+        let rows = index_rows(&data.map.entities);
+        if rows != self.index_rows {
+            let old = self.index_rows.len();
+            self.index_list.splice(0..old, rows.len());
+            self.index_rows = rows;
+        }
         let new_focus = self.focus_for("map-new", cx);
         let new_button = icon_action(theme, "map-new", "Novo componente ou tecnologia")
             .track_focus(&new_focus)
@@ -1111,126 +1143,11 @@ impl<S: MapStores> MapScreen<S> {
             }))
             .child(icon(IconName::Plus, 14.0, colors.text_secondary()));
 
-        let fixed = [
-            (View::Overview, IconName::Graph, "Visão geral", None),
-            (
-                View::Suggestions,
-                IconName::Lightbulb,
-                "Sugestões",
-                (pending > 0).then(|| pending.to_string()),
-            ),
-            (View::File, IconName::File, "Lente de arquivo", None),
-            (View::Timeline, IconName::Clock, "Linha do tempo", None),
-        ];
-        let mut rows: Vec<AnyElement> = Vec::new();
-        for (view, glyph, label, badge) in fixed {
-            let selected = self.view == view;
-            let id = format!("map-view-{label}");
-            let target = view.clone();
-            let row = self
-                .row(
-                    id,
-                    selected,
-                    label,
-                    move |this, cx| this.open_view(target.clone(), cx),
-                    cx,
-                )
-                .child(icon(
-                    glyph,
-                    16.0,
-                    if selected {
-                        colors.text_primary()
-                    } else {
-                        colors.text_muted()
-                    },
-                ))
-                .child(
-                    text_style(div(), TypeScale::ROW_TITLE)
-                        .flex_1()
-                        .text_color(if selected {
-                            colors.text_primary()
-                        } else {
-                            colors.text_secondary()
-                        })
-                        .child(label),
-                )
-                .children(badge.map(|badge| count_chip(theme, badge)));
-            rows.push(row.into_any_element());
-        }
-
-        for kind in EntityKind::ALL {
-            let group: Vec<&MapEntity> = entities
-                .iter()
-                .filter(|row| row.entity.kind == kind)
-                .collect();
-            rows.push(
-                div()
-                    .px(px(SpacingScale::S3))
-                    .pt(px(SpacingScale::S4))
-                    .pb(px(SpacingScale::S1))
-                    .child(section_label(theme, kind_plural(kind)))
-                    .into_any_element(),
-            );
-            if group.is_empty() {
-                rows.push(
-                    text_style(div(), TypeScale::BODY_SMALL)
-                        .px(px(SpacingScale::S3))
-                        .text_color(colors.text_muted())
-                        .child(match kind {
-                            EntityKind::Component => "Nenhum ainda. Crie um ou veja as sugestões.",
-                            EntityKind::Technology => "Nenhuma ainda.",
-                        })
-                        .into_any_element(),
-                );
-            }
-            for row in group {
-                let id = row.entity.entity_id.clone();
-                let selected = self.view == View::Entity(id.clone());
-                let meta = weight(row);
-                let target = id.clone();
-                let element = self
-                    .row(
-                        format!("map-entity-{id}"),
-                        selected,
-                        &row.entity.name,
-                        move |this, cx| this.open_entity(target.clone(), cx),
-                        cx,
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .flex()
-                            .flex_col()
-                            .child(
-                                text_style(div(), TypeScale::ROW_TITLE)
-                                    .truncate()
-                                    .text_color(if selected {
-                                        colors.text_primary()
-                                    } else {
-                                        colors.text_secondary()
-                                    })
-                                    .child(row.entity.name.clone()),
-                            )
-                            .child(
-                                text_style(div(), TypeScale::META)
-                                    .truncate()
-                                    .text_color(colors.text_muted())
-                                    .child(meta),
-                            ),
-                    )
-                    .when(row.conflicts > 0, |element| {
-                        element.child(
-                            div()
-                                .size(px(6.0))
-                                .flex_none()
-                                .rounded_full()
-                                .bg(colors.status_warning()),
-                        )
-                    });
-                rows.push(element.into_any_element());
-            }
-        }
+        let rows = list(
+            self.index_list.clone(),
+            cx.processor(|this, ix: usize, _, cx| this.index_item(ix, cx)),
+        )
+        .size_full();
 
         index_frame(theme)
             .child(
@@ -1249,15 +1166,13 @@ impl<S: MapStores> MapScreen<S> {
             .child(
                 div()
                     .id("map-index")
+                    .relative()
                     .flex_1()
                     .min_h(px(0.0))
-                    .overflow_y_scroll()
                     .px(px(SpacingScale::S2))
                     .pb(px(SpacingScale::S3))
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.0))
-                    .children(rows),
+                    .child(rows)
+                    .child(scroll_thumb(theme, &self.index_list, &self.index_scroll)),
             )
             .child(
                 text_style(div(), TypeScale::META)
@@ -1275,6 +1190,152 @@ impl<S: MapStores> MapScreen<S> {
             )
     }
 
+    /// One row of the index, built when the list asks for it.
+    fn index_item(&mut self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::current(cx);
+        let Some(&row) = self.index_rows.get(ix) else {
+            return div().into_any_element();
+        };
+        let element = match row {
+            IndexRow::View(position) => self.view_row(&theme, position, cx).into_any_element(),
+            IndexRow::Heading(kind) => div()
+                .px(px(SpacingScale::S3))
+                .pt(px(SpacingScale::S4))
+                .pb(px(SpacingScale::S1))
+                .child(section_label(&theme, kind_plural(kind)))
+                .into_any_element(),
+            IndexRow::Nothing(kind) => text_style(div(), TypeScale::BODY_SMALL)
+                .px(px(SpacingScale::S3))
+                .text_color(theme.colors.text_muted())
+                .child(match kind {
+                    EntityKind::Component => "Nenhum ainda. Crie um ou veja as sugestões.",
+                    EntityKind::Technology => "Nenhuma ainda.",
+                })
+                .into_any_element(),
+            IndexRow::Entity(position) => {
+                let Some(entity) = self
+                    .data
+                    .as_ref()
+                    .and_then(|data| data.map.entities.get(position))
+                    .cloned()
+                else {
+                    return div().into_any_element();
+                };
+                self.entity_row(&theme, &entity, cx).into_any_element()
+            }
+        };
+        div().w_full().pb(px(2.0)).child(element).into_any_element()
+    }
+
+    /// One of the fixed views at the top of the index.
+    fn view_row(
+        &mut self,
+        theme: &Theme,
+        position: usize,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let colors = theme.colors;
+        let pending = self.data.as_ref().map_or(0, |data| {
+            data.suggestions.len()
+                + data.relations.len()
+                + data.derived.len()
+                + data.proposals.components.len()
+                + data.proposals.technologies.len()
+        });
+        let (view, glyph, label, badge) = match position {
+            0 => (View::Overview, IconName::Graph, "Visão geral", None),
+            1 => (
+                View::Suggestions,
+                IconName::Lightbulb,
+                "Sugestões",
+                (pending > 0).then(|| pending.to_string()),
+            ),
+            2 => (View::File, IconName::File, "Lente de arquivo", None),
+            _ => (View::Timeline, IconName::Clock, "Linha do tempo", None),
+        };
+        let selected = self.view == view;
+        self.row(
+            format!("map-view-{label}"),
+            selected,
+            label,
+            move |this, cx| this.open_view(view.clone(), cx),
+            cx,
+        )
+        .child(icon(
+            glyph,
+            16.0,
+            if selected {
+                colors.text_primary()
+            } else {
+                colors.text_muted()
+            },
+        ))
+        .child(
+            text_style(div(), TypeScale::ROW_TITLE)
+                .flex_1()
+                .text_color(if selected {
+                    colors.text_primary()
+                } else {
+                    colors.text_secondary()
+                })
+                .child(label),
+        )
+        .children(badge.map(|badge| count_chip(theme, badge)))
+    }
+
+    /// A component or technology of the index.
+    fn entity_row(
+        &mut self,
+        theme: &Theme,
+        row: &MapEntity,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let colors = theme.colors;
+        let id = row.entity.entity_id.clone();
+        let selected = self.view == View::Entity(id.clone());
+        let meta = weight(row);
+        let target = id.clone();
+        self.row(
+            format!("map-entity-{id}"),
+            selected,
+            &row.entity.name,
+            move |this, cx| this.open_entity(target.clone(), cx),
+            cx,
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .flex()
+                .flex_col()
+                .child(
+                    text_style(div(), TypeScale::ROW_TITLE)
+                        .truncate()
+                        .text_color(if selected {
+                            colors.text_primary()
+                        } else {
+                            colors.text_secondary()
+                        })
+                        .child(row.entity.name.clone()),
+                )
+                .child(
+                    text_style(div(), TypeScale::META)
+                        .truncate()
+                        .text_color(colors.text_muted())
+                        .child(meta),
+                ),
+        )
+        .when(row.conflicts > 0, |element| {
+            element.child(
+                div()
+                    .size(px(6.0))
+                    .flex_none()
+                    .rounded_full()
+                    .bg(colors.status_warning()),
+            )
+        })
+    }
+
     // ---- reading column -------------------------------------------------
 
     fn render_suggestions(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
@@ -1282,11 +1343,11 @@ impl<S: MapStores> MapScreen<S> {
         let Some(data) = self.data.as_ref() else {
             return div().into_any_element();
         };
-        let suggestions = data.suggestions.clone();
-        let relations = data.relations.clone();
-        let derived = data.derived.clone();
-        let components = data.proposals.components.clone();
-        let technologies = data.proposals.technologies.clone();
+        let suggestions = Arc::clone(&data.suggestions);
+        let relations = Arc::clone(&data.relations);
+        let derived = Arc::clone(&data.derived);
+        let proposals = Arc::clone(&data.proposals);
+        let (components, technologies) = (&proposals.components, &proposals.technologies);
         if suggestions.is_empty()
             && relations.is_empty()
             && derived.is_empty()
@@ -1787,10 +1848,10 @@ impl<S: MapStores> MapScreen<S> {
 
     fn render_entity(&mut self, id: &str, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let colors = theme.colors;
-        let Some((detail, events)) = self
+        let Some(snapshot) = self
             .detail
             .clone()
-            .filter(|(detail, _)| detail.entity.entity_id == id)
+            .filter(|snapshot| snapshot.0.entity.entity_id == id)
         else {
             return reading_page(
                 "map-entity-loading",
@@ -1798,6 +1859,7 @@ impl<S: MapStores> MapScreen<S> {
             )
             .into_any_element();
         };
+        let (detail, events) = (&snapshot.0, &snapshot.1);
         let entity = detail.entity.clone();
         let component = entity.kind == EntityKind::Component;
         let busy = self.busy;
@@ -1934,7 +1996,7 @@ impl<S: MapStores> MapScreen<S> {
                 .children(picker),
         );
 
-        let diagram = self.neighborhood_diagram(theme, &detail, cx);
+        let diagram = self.neighborhood_diagram(theme, detail, cx);
         column = column.child(section(theme, "Vizinhança", diagram));
         let decisions = self.node_list(
             theme,
@@ -2012,7 +2074,7 @@ impl<S: MapStores> MapScreen<S> {
         }
         let (timeline, hidden) = timeline_list(
             theme,
-            &events,
+            events,
             self.limit("map-entity-timeline", TIMELINE_PAGE),
         );
         let timeline = if hidden > 0 {
@@ -3229,11 +3291,11 @@ fn load<S: MapStores>(backend: &MapServices<S>, project: &str) -> Result<MapData
     Ok(MapData {
         map,
         graph,
-        relations,
-        derived,
+        relations: Arc::new(relations),
+        derived: Arc::new(derived),
         assembled,
-        suggestions,
-        proposals,
+        suggestions: Arc::new(suggestions),
+        proposals: Arc::new(proposals),
         recent_files,
     })
 }
@@ -3272,6 +3334,41 @@ fn change_failure(code: &str) -> String {
 
 fn today() -> String {
     chrono::Utc::now().format("%Y-%m-%d").to_string()
+}
+
+/// A row of the index, by what it points at; rows become elements only
+/// when they scroll into view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IndexRow {
+    /// One of the four fixed views.
+    View(usize),
+    /// The heading of a kind.
+    Heading(EntityKind),
+    /// What a kind with no entities says.
+    Nothing(EntityKind),
+    /// The entity at this position of the map.
+    Entity(usize),
+}
+
+/// The index's rows for these entities: the views, then each kind with its
+/// entities in order.
+fn index_rows(entities: &[MapEntity]) -> Vec<IndexRow> {
+    let mut rows: Vec<IndexRow> = (0..4).map(IndexRow::View).collect();
+    for kind in EntityKind::ALL {
+        rows.push(IndexRow::Heading(kind));
+        let before = rows.len();
+        rows.extend(
+            entities
+                .iter()
+                .enumerate()
+                .filter(|(_, row)| row.entity.kind == kind)
+                .map(|(position, _)| IndexRow::Entity(position)),
+        );
+        if rows.len() == before {
+            rows.push(IndexRow::Nothing(kind));
+        }
+    }
+    rows
 }
 
 fn index_frame(theme: &Theme) -> Div {
