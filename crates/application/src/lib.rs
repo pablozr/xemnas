@@ -5,6 +5,7 @@ pub mod adoption;
 pub mod agent_access;
 pub mod analysis;
 pub mod architecture;
+pub mod auto_approval;
 pub mod briefing;
 pub mod calibration;
 pub mod captures;

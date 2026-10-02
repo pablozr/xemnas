@@ -115,6 +115,7 @@ impl ProjectRepository for SqliteStore {
 /// Deletes a project's rows child-first; captures cascade to artifacts,
 /// checkpoints, assessments and candidates.
 const PURGE_STATEMENTS: &[&str] = &[
+    "DELETE FROM auto_approvals WHERE project_id = ?1",
     "DELETE FROM project_overviews WHERE project_id = ?1",
     "DELETE FROM project_documents WHERE project_id = ?1",
     "DELETE FROM relation_suggestions WHERE project_id = ?1",

@@ -2,6 +2,7 @@
 #![warn(missing_docs)]
 
 mod agent;
+mod approval;
 mod assessments;
 mod captures;
 mod claim_suggestions;

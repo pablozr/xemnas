@@ -170,7 +170,9 @@ fn upgrade_reapplies_the_missing_migrations() {
         let connection = Connection::open(&database).expect("open raw connection");
         connection
             .execute_batch(
-                "DROP TABLE claim_suggestions; \
+                "DROP TABLE auto_approvals; \
+                 DROP TABLE approval_settings; \
+                 DROP TABLE claim_suggestions; \
                  DROP TABLE relation_suggestions; \
                  DROP TABLE project_documents; \
                  DROP TABLE project_overviews; \
