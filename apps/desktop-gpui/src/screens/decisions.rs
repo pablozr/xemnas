@@ -874,7 +874,10 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
                     version: Some(row.version),
                     status: Some(row.status),
                 };
-                self.index_entry(entry, &t, cx)
+                div()
+                    .w_full()
+                    .child(self.index_entry(entry, &t, cx))
+                    .into_any_element()
             }
             IndexItem::Hit(position) => {
                 let Some(hit) = self.hits.get(position) else {
@@ -887,7 +890,10 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
                     version: None,
                     status: None,
                 };
-                self.index_entry(entry, &t, cx)
+                div()
+                    .w_full()
+                    .child(self.index_entry(entry, &t, cx))
+                    .into_any_element()
             }
             IndexItem::More => self
                 .button(
