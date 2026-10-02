@@ -20,6 +20,9 @@ planos de `docs/roadmap/`.
 | [listas-e-grafos-em-escala.md](listas-e-grafos-em-escala.md) | Listas virtuais, revelação sob demanda e grafo com milhares de nós | Em implementação. Índices virtuais, rodapé de revelação e grafo agrupado entregues; backend paginado e demais telas abertas |
 | [acabamento-visual-revisao.md](acabamento-visual-revisao.md) | Revisão de acabamento e referências (Raycast, design-engineering, Windows) | Aberta. Revisão feita em capturas; ajustes de lista entregues, fila de refinamentos aberta |
 | [inspiracao-gpui-e-mercado.md](inspiracao-gpui-e-mercado.md) | Apps em GPUI (Zeron e outros) e produtos do mercado: mudanças visuais e ideias de produto | Em implementação. Estudo feito; V1 (pausa com janela inativa), V4 (tempo relativo) e dicas da paleta entregues |
+| [plano-design-vitrine.md](plano-design-vitrine.md) | Plano por superfície, capturas reais, fases, critérios de qualidade e roteiro de demonstração | Aberta. Plano concluído; implementação e mudanças de padrão pendentes |
+| [design-vitrine-fontes.md](design-vitrine-fontes.md) | Apps GPUI verificados e inspirações de produtos de ponta, com aplicação e limites | Aberta. Catálogo consultivo concluído |
+| [escalabilidade-renderizacao-fontes.md](escalabilidade-renderizacao-fontes.md) | Diagnóstico de grafos/blocos, GPUI, layout, virtualização, LOD e microbenchmark reproduzível | Aberta. Pesquisa concluída; implementação e benchmark integrado pendentes |
 | [glass-na-janela-inteira.md](glass-na-janela-inteira.md) | Material do Windows (Mica, Acrylic) na janela e conteúdo em card | Base de decisão. O glass é opcional (`XEMNAS_BACKDROP`); a regra vigente está em `docs/design/VISUAL-IDENTITY.md` |
 
 ## Como usar esta pasta
