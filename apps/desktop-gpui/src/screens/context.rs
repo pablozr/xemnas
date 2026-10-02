@@ -8,7 +8,9 @@
 //! storage work runs off the UI thread; a project generation discards
 //! responses that arrive after the user switched projects.
 
+use application::knowledge_review::KnowledgeReviewApi;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use application::claim_suggestions::{ClaimSuggestionStore, ClaimSuggestions};
 use application::claims::{ClaimRecord, ClaimStore, Claims, NewClaim};
@@ -87,6 +89,8 @@ impl<T> ContextStores for T where
 
 /// The use cases behind the screen, built by the composition root.
 pub struct ContextServices<S> {
+    /// Read-only review, independent of the mutable Context loader.
+    pub reviewer: Option<Arc<dyn KnowledgeReviewApi>>,
     /// Decisions in force.
     pub decisions: Decisions<S>,
     /// Project rules.
@@ -114,6 +118,7 @@ const RECENT_SHOWN: usize = 3;
 /// The pages of the Contexto destination.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Section {
+    KnowledgeReview,
     Overview,
     Deliveries,
     Test,
@@ -126,6 +131,7 @@ enum Section {
 impl Section {
     fn label(self) -> &'static str {
         match self {
+            Self::KnowledgeReview => "Revisar conhecimento",
             Self::Overview => "Visão geral",
             Self::Deliveries => "Entregas",
             Self::Test => "Testar uma tarefa",
@@ -138,6 +144,7 @@ impl Section {
 
     fn glyph(self) -> IconName {
         match self {
+            Self::KnowledgeReview => IconName::Layers,
             Self::Overview => IconName::Gauge,
             Self::Deliveries => IconName::Clock,
             Self::Test => IconName::Flask,
@@ -150,6 +157,7 @@ impl Section {
 
     fn id(self) -> &'static str {
         match self {
+            Self::KnowledgeReview => "context-nav-knowledge-review",
             Self::Overview => "context-nav-overview",
             Self::Deliveries => "context-nav-deliveries",
             Self::Test => "context-nav-test",
@@ -188,6 +196,7 @@ enum Outcome {
 
 /// The Contexto destination of a selected project.
 pub struct ContextScreen<S: ContextStores> {
+    review: Entity<super::knowledge_review::KnowledgeReviewScreen>,
     backend: Option<ContextServices<S>>,
     project: Option<String>,
     generation: u64,
@@ -215,6 +224,10 @@ pub struct ContextScreen<S: ContextStores> {
 impl<S: ContextStores> EventEmitter<OpenDecision> for ContextScreen<S> {}
 
 impl<S: ContextStores> ContextScreen<S> {
+    /// Whether review is available for the command palette.
+    pub fn has_reviewer(&self, cx: &gpui::App) -> bool {
+        self.review.read(cx).available()
+    }
     /// Scrolls to the end of the page once it is loaded (demo captures).
     pub fn scroll_to_end(&mut self) {
         self.scroll_to_end = true;
@@ -224,6 +237,7 @@ impl<S: ContextStores> ContextScreen<S> {
     /// `documents`, `mode`); demo captures reach it without input.
     pub fn open_section(&mut self, name: &str) {
         self.section = match name {
+            "knowledge-review" | "knowledge-review-results" => Section::KnowledgeReview,
             "deliveries" => Section::Deliveries,
             "test" => Section::Test,
             "decisions" => Section::Decisions,
@@ -235,9 +249,25 @@ impl<S: ContextStores> ContextScreen<S> {
     }
 
     fn go(&mut self, section: Section, cx: &mut Context<Self>) {
+        if self.section == Section::KnowledgeReview && section != self.section {
+            self.leave_review(cx);
+        }
         self.section = section;
         self.scroll.set_offset(gpui::point(px(0.0), px(0.0)));
         cx.notify();
+    }
+    /// Shell lifecycle hook for a cached destination that is no longer visible.
+    pub fn leave_review(&mut self, cx: &mut Context<Self>) {
+        self.review.update(cx, |review, cx| review.leave(cx));
+    }
+    /// Demo composition root may preload a synthetic report without provider calls.
+    pub fn preload_review(
+        &mut self,
+        report: application::knowledge_review::ReviewReport,
+        cx: &mut Context<Self>,
+    ) {
+        self.review
+            .update(cx, |review, cx| review.preload(report, cx));
     }
 
     fn focus_for(&mut self, id: &'static str, cx: &mut Context<Self>) -> gpui::FocusHandle {
@@ -263,8 +293,16 @@ impl<S: ContextStores> ContextScreen<S> {
         let subscriptions = [&budget, &statement, &task]
             .into_iter()
             .map(|field| cx.subscribe(field, |_, _, _: &SearchChanged, cx| cx.notify()))
-            .collect();
+            .collect::<Vec<_>>();
+        let review = cx.new(|cx| {
+            super::knowledge_review::KnowledgeReviewScreen::new(services.reviewer.clone(), cx)
+        });
+        let mut subscriptions = subscriptions;
+        subscriptions.push(cx.subscribe(&review, |_, _, event: &OpenDecision, cx| {
+            cx.emit(OpenDecision(event.0.clone()))
+        }));
         Self {
+            review,
             backend: Some(services),
             project: None,
             generation: 0,
@@ -294,6 +332,9 @@ impl<S: ContextStores> ContextScreen<S> {
             return;
         }
         self.project = project;
+        self.review.update(cx, |review, cx| {
+            review.set_project(self.project.clone(), cx)
+        });
         self.generation += 1;
         self.snapshot = None;
         self.pack = None;
@@ -303,11 +344,14 @@ impl<S: ContextStores> ContextScreen<S> {
         self.task.update(cx, |field, cx| {
             field.set_context("Ex.: adicionar exportação em CSV das decisões", cx)
         });
-        self.refresh(cx);
+        cx.notify();
     }
 
     /// Reloads the snapshot of the current project.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        if self.section == Section::KnowledgeReview {
+            return;
+        }
         let Some(project) = self.project.clone() else {
             return;
         };
@@ -1324,7 +1368,7 @@ impl<S: ContextStores> ContextScreen<S> {
                 "Fontes",
                 &[Section::Decisions, Section::Rules, Section::Documents],
             ),
-            ("Ajustes", &[Section::Mode]),
+            ("Ajustes", &[Section::KnowledgeReview, Section::Mode]),
         ];
         let mut list = div()
             .flex()
@@ -1427,6 +1471,7 @@ impl<S: ContextStores> ContextScreen<S> {
         let settings = snapshot.settings.clone();
         let section = self.section;
         let (title, subtitle, body): (&str, &str, Div) = match section {
+            Section::KnowledgeReview => unreachable!("independent read-only view"),
             Section::Overview => (
                 "Contexto do agente",
                 "O que o agente de código recebe deste projeto, de onde vem e como chega a ele.",
@@ -2110,6 +2155,17 @@ impl<S: ContextStores> Render for ContextScreen<S> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::current(cx);
         let rail = self.render_rail(&theme, cx);
+        if self.section == Section::KnowledgeReview {
+            return div()
+                .size_full()
+                .relative()
+                .flex()
+                .child(rail)
+                .child(self.review.clone());
+        }
+        if self.snapshot.is_none() && !self.busy && self.error.is_none() && self.project.is_some() {
+            self.refresh(cx);
+        }
         let body: AnyElement = match self.snapshot.as_ref() {
             None if self.error.is_none() => div()
                 .p(px(SpacingScale::S8))

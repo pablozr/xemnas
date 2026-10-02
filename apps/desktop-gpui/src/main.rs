@@ -79,7 +79,14 @@ fn main() {
             environment,
             ai,
         );
-        run_shell_mode(store, services, overview, true, CaptureStatus::Demo);
+        run_shell_mode(
+            store,
+            services,
+            overview,
+            Box::new(|_| Arc::new(demo::SampleKnowledgeReview)),
+            true,
+            CaptureStatus::Demo,
+        );
         return;
     }
 
@@ -102,6 +109,7 @@ fn main() {
                 Err(error.to_string()),
                 services,
                 overview_api(ai_settings(&paths.ai_profile), Arc::default()),
+                review_api(ai_settings(&paths.ai_profile), Arc::default()),
                 false,
                 CaptureStatus::Unavailable,
             );
@@ -277,7 +285,8 @@ fn main() {
         settings,
     );
     let overview = overview_api(ai_settings(&paths.ai_profile), chatgpt.clone());
-    run_shell_mode(Ok(store), services, overview, false, capture);
+    let reviewer = review_api(ai_settings(&paths.ai_profile), chatgpt.clone());
+    run_shell_mode(Ok(store), services, overview, reviewer, false, capture);
 
     // Graceful shutdown mirrors startup: stop the API first so the discovery
     // and per-session token files are removed, then stop the jobs worker.
@@ -381,6 +390,25 @@ fn backdrop_from_env() -> WindowBackgroundAppearance {
 
 /// Builds the project overview over the opened store.
 type OverviewFactory = Box<dyn FnOnce(SqliteStore) -> Arc<dyn application::overview::OverviewApi>>;
+type ReviewFactory =
+    Box<dyn FnOnce(SqliteStore) -> Arc<dyn application::knowledge_review::KnowledgeReviewApi>>;
+
+fn review_api<P, K>(
+    settings: application::profile::AiSettings<P, K>,
+    chatgpt: Arc<ai_provider::ChatGptSession>,
+) -> ReviewFactory
+where
+    P: application::profile::ProfileStore + Send + Sync + 'static,
+    K: application::profile::SecretStore + Send + Sync + 'static,
+{
+    Box::new(move |store| {
+        Arc::new(application::knowledge_review::KnowledgeReviewer::new(
+            store,
+            settings,
+            ai_provider::ProviderFactory::new(chatgpt),
+        ))
+    })
+}
 
 /// The overview reloads the AI profile on every generation, like analysis.
 fn overview_api<P, K>(
@@ -404,6 +432,7 @@ fn run_shell_mode(
     store: Result<SqliteStore, String>,
     settings: SettingsServices,
     overview: OverviewFactory,
+    reviewer: ReviewFactory,
     demo: bool,
     capture: CaptureStatus,
 ) {
@@ -529,6 +558,7 @@ fn run_shell_mode(
                     application::relations::DecisionRelations::new(store.clone()),
                 )),
                 Some(xemnas_desktop::screens::context::ContextServices {
+                    reviewer: Some(reviewer(store.clone())),
                     decisions: application::decisions::Decisions::new(store.clone()),
                     claims: application::claims::Claims::new(store.clone()),
                     settings: application::context_settings::ContextSettings::new(store.clone()),
@@ -596,7 +626,11 @@ fn run_shell_mode(
                     ..Default::default()
                 }),
                 app_id: Some("com.xemnas.desktop".into()),
-                window_min_size: Some(size(px(1180.0), px(760.0))),
+                window_min_size: Some(if compact {
+                    size(px(960.0), px(640.0))
+                } else {
+                    size(px(1180.0), px(760.0))
+                }),
                 // Opaque unless `XEMNAS_BACKDROP` asks for a material.
                 window_background: backdrop,
                 focus: !background,
@@ -613,7 +647,9 @@ fn run_shell_mode(
             eprintln!("failed to open the xemnas window: {error}");
         }
 
-        cx.activate(true);
+        if !background {
+            cx.activate(true);
+        }
     });
 }
 

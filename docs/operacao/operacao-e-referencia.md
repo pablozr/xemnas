@@ -109,3 +109,19 @@ cargo audit
 ```
 
 CI (`.github/workflows/ci.yml`): `quality` (fmt, clippy, testes, audit, deny), `contract` (testes TS do adapter) e `package` (ZIP como artifact).
+# Revisão consultiva do conhecimento
+
+Em Contexto › Revisar conhecimento (também na paleta Ctrl K), **Verificar
+localmente** consulta apenas o conhecimento registrado. Não indexa documentos,
+não escreve dados e não chama IA. **Revisar com IA…** exige confirmação inline
+do envio de textos selecionados de decisões, regras, propostas e vínculos ao
+provedor configurado; código e pasta não são enviados. O consentimento vigente
+em Configurações continua obrigatório e é validado pelo caso de uso.
+
+Resultados são efêmeros e consultivos: tensão não comprova conflito, citações
+não comprovam a inferência e ausência de achados não garante consistência.
+Confira cobertura, omissões e achados descartados. Falha, indisponibilidade ou
+resposta inválida da IA preservam verificações locais. Cancelamento é
+cooperativo: uma chamada HTTP em curso pode terminar antes de liberar nova
+execução. Trocar projeto cancela e descarta respostas antigas. A demonstração
+usa um adaptador sintético em memória, sem rede ou cofre.

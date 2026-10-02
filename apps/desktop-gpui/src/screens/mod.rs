@@ -12,6 +12,7 @@ mod evidence;
 mod format;
 pub mod graph;
 pub mod inbox;
+pub mod knowledge_review;
 pub mod map;
 pub mod overview;
 pub mod projects;
