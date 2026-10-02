@@ -380,6 +380,10 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   reabrir no meio da saída vale. O gatilho anota no mouse-down se o popover
   estava montado, então o clique que o dispensou não o reabre (sem guard de
   tempo).
+- A seleção das abas do projeto é uma placa só atrás da fileira que desliza
+  até a aba escolhida (`motion::glide::SlideIndicator`, 180 ms): parte de
+  onde está, mesmo no meio de outro deslize; a primeira colocação, um resize
+  e o movimento reduzido chegam sem viagem.
 - Hover de linhas e abas segue a mola de `hover_tint`.
 
 ## Interação

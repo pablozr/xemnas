@@ -29,6 +29,7 @@ use crate::ui::controls::icon_action;
 use crate::ui::feedback::error_state;
 use crate::ui::glass::focus_ring;
 use crate::ui::icons::{icon, IconName};
+use crate::ui::motion::glide::SlideIndicator;
 use crate::ui::motion::{menu_in, menu_out};
 use crate::ui::patterns::{count_chip, fade_in, kbd, section_label, track_hover};
 use crate::ui::popup::{reap, Popup};
@@ -90,6 +91,14 @@ const TITLE_BAR_HEIGHT: f32 = 40.0;
 const PROJECT_BAR_HEIGHT: f32 = 44.0;
 /// Width of the projects sidebar (`ProjectsScreen::render_sidebar`).
 const SIDEBAR_WIDTH: f32 = 248.0;
+/// The project's destinations, in the order the tab row shows them.
+const TAB_ORDER: [Destination; 5] = [
+    Destination::Overview,
+    Destination::Review,
+    Destination::Decisions,
+    Destination::Context,
+    Destination::Map,
+];
 
 /// Whether captures from the OpenCode adapter can reach this app right now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -227,6 +236,8 @@ pub struct Shell<
     project_focus: FocusHandle,
     /// Whether the project panel under the breadcrumb is open.
     project_panel: Popup<()>,
+    /// The selected destination's background, gliding between tabs.
+    tab_indicator: SlideIndicator,
     demo: bool,
     palette: Popup<Palette>,
     capture: Option<CaptureStatus>,
@@ -403,6 +414,7 @@ impl<
             theme_focus: cx.focus_handle().tab_stop(true),
             project_focus: cx.focus_handle().tab_stop(true),
             project_panel: Popup::default(),
+            tab_indicator: SlideIndicator::default(),
             demo: false,
             palette: Popup::default(),
             capture: None,
@@ -1272,10 +1284,7 @@ impl<
             .track_focus(&self.destination_focus[destination.index()])
             .focus_visible(focus_ring(&theme))
             .cursor_pointer()
-            .when(selected, |tab| {
-                tab.bg(theme.colors.selection())
-                    .text_color(theme.colors.text_primary())
-            })
+            .when(selected, |tab| tab.text_color(theme.colors.text_primary()))
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                 if track_hover(&mut this.hovered_tab, destination, *hovered) {
                     cx.notify();
@@ -1537,6 +1546,17 @@ impl<
                 .into_any_element();
             let sidebar = projects.update(cx, |screen, cx| screen.render_sidebar(Some(footer), cx));
             let panel_exit = self.project_panel.exit_progress();
+            let tab_frame = self.tab_indicator.frame(
+                TAB_ORDER
+                    .iter()
+                    .position(|d| *d == self.destination)
+                    .unwrap_or(0),
+                cx.reduce_motion(),
+            );
+            if tab_frame.is_some_and(|frame| frame.moving) {
+                window.request_animation_frame();
+            }
+            let measure_tabs = self.tab_indicator.measure(cx.entity_id());
             let mut panel = if self.project_panel.get().is_some() {
                 projects.update(cx, |screen, cx| screen.render_project_panel(cx))
             } else {
@@ -1629,16 +1649,32 @@ impl<
                                         .child("/"),
                                 )
                                 .child(
+                                    // The selection is one plate behind the
+                                    // row, gliding to the chosen tab.
                                     div()
-                                        .id("project-destinations")
-                                        .flex()
-                                        .gap(px(SpacingScale::S1))
-                                        .role(Role::TabList)
-                                        .child(self.nav_tab(Destination::Overview, cx))
-                                        .child(self.nav_tab(Destination::Review, cx))
-                                        .child(self.nav_tab(Destination::Decisions, cx))
-                                        .child(self.nav_tab(Destination::Context, cx))
-                                        .child(self.nav_tab(Destination::Map, cx)),
+                                        .relative()
+                                        .flex_none()
+                                        .children(tab_frame.map(|frame| {
+                                            div()
+                                                .absolute()
+                                                .top_0()
+                                                .h(px(ControlSize::SM))
+                                                .left(px(frame.left))
+                                                .w(px(frame.width))
+                                                .rounded(theme.radius.control())
+                                                .bg(theme.colors.selection())
+                                        }))
+                                        .child(
+                                            div()
+                                                .on_children_prepainted(measure_tabs)
+                                                .id("project-destinations")
+                                                .flex()
+                                                .gap(px(SpacingScale::S1))
+                                                .role(Role::TabList)
+                                                .children(TAB_ORDER.iter().map(|destination| {
+                                                    self.nav_tab(*destination, cx)
+                                                })),
+                                        ),
                                 )
                                 .children(panel.take().map(|panel| {
                                     deferred(

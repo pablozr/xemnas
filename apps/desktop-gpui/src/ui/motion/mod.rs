@@ -8,6 +8,7 @@
 
 pub mod clock;
 pub mod curve;
+pub mod glide;
 pub mod spec;
 
 pub use spec::{content_in, menu_in, menu_out, panel_in, MotionSpec};
