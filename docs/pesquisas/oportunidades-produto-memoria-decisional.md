@@ -26,6 +26,11 @@ Não encontramos evidência suficiente para afirmar exclusividade mundial.
 
 ## Evidências usadas e método
 
+Continuação de 02/10/2026: [vinte ideias adicionais a partir de dores reais](20-ideias-dores-reais-devs.md)
+ampliam a pesquisa para estudos empíricos, com métodos, amostras e limites.
+As dez propostas desta nota continuam sendo hipóteses; a continuação não as
+reclassifica como entregues ou validadas.
+
 - [Memória e contexto para agentes](produtos-memoria-agentes-fontes.md): capacidades,
   alternativas e limites verificados em documentação dos fornecedores/projetos.
 - [Inteligência de engenharia](produtos-inteligencia-engenharia-fontes.md): revisão,

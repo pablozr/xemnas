@@ -25,6 +25,10 @@ Expansão do produto: [oportunidades para a memória decisional](pesquisas/oport
 com dez propostas, fontes de mercado, prioridades e experimentos; pesquisa
 exploratória, sem alteração do escopo aprovado.
 
+Pesquisa empírica: [vinte ideias adicionais para dores de desenvolvedores](pesquisas/20-ideias-dores-reais-devs.md),
+com quatro catálogos de fontes científicas, limites dos estudos e experimentos
+propostos de investigação, compreensão, coordenação e verificação de mudanças.
+
 ## Precedência
 
 Revisão backend sob demanda: [ADR-0009 — revisão consultiva de conhecimento](arquitetura/adr/0009-revisao-consultiva-de-conhecimento.md).
