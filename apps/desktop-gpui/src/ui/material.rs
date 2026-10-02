@@ -11,8 +11,9 @@
 //! `glass.rs` plates (MIT, © 2026 Wing, github.com/zeronsh/zeron at
 //! 27480d99); see `NOTICE`.
 
+use super::tokens::{black, white};
 use gpui::prelude::*;
-use gpui::{hsla, linear_color_stop, linear_gradient, px, Background, BoxShadow, Hsla, Rgba};
+use gpui::{linear_color_stop, linear_gradient, px, Background, BoxShadow, Hsla, Rgba};
 
 use crate::ui::theme::Theme;
 
@@ -42,14 +43,6 @@ impl Plate {
     pub fn shadows(&self) -> Vec<BoxShadow> {
         self.shadows.clone()
     }
-}
-
-fn white(alpha: f32) -> Hsla {
-    hsla(0.0, 0.0, 1.0, alpha)
-}
-
-fn black(alpha: f32) -> Hsla {
-    hsla(0.0, 0.0, 0.0, alpha)
 }
 
 fn vertical(top: Hsla, bottom: Hsla) -> Background {
