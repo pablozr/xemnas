@@ -5,9 +5,10 @@
 //! never re-declare height, radius, colour or the focus ring.
 
 use gpui::prelude::*;
-use gpui::{div, px, BoxShadow, Div, ElementId, Rgba, Role, Stateful};
+use gpui::{div, px, Div, ElementId, Rgba, Role, Stateful};
 
 pub use crate::ui::glass::focus_ring;
+use crate::ui::material::{accent_plate, accent_pressed, neutral_plate};
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{ControlSize, SpacingScale, TypeScale};
 
@@ -64,36 +65,33 @@ pub fn action_button(
     // hover lifts the fill and the edge, press settles one step deeper, and a
     // disabled control ignores both so it never looks clickable.
     match (kind, enabled) {
-        (ButtonKind::Primary, true) => button
-            .bg(colors.accent_emphasis())
-            .border_1()
-            .border_color(colors.emphasis_highlight())
-            .shadow(vec![BoxShadow::new(
-                px(0.0),
-                px(1.0),
-                colors.shadow_low().into(),
-            )])
-            .hover(move |style| {
-                style.bg(colors.accent_hover()).shadow(vec![BoxShadow::new(
-                    px(0.0),
-                    px(0.0),
-                    colors.glow_lavender_strong().into(),
-                )
-                .blur_radius(px(14.0))])
-            })
-            .active(move |style| style.bg(colors.accent_default()).shadow(vec![])),
+        (ButtonKind::Primary, true) => {
+            // The material: lit gradient, rim, top highlight and a lavender
+            // halo that spreads on hover (`ui::material`).
+            let hover = accent_plate(theme, 1.0);
+            let (hover_bg, hover_shadows) = (hover.background(), hover.shadows());
+            let pressed = accent_pressed(theme);
+            let (pressed_bg, pressed_shadows) = (pressed.background(), pressed.shadows());
+            accent_plate(theme, 0.0)
+                .apply(button)
+                .hover(move |style| style.bg(hover_bg).shadow(hover_shadows))
+                .active(move |style| style.bg(pressed_bg).shadow(pressed_shadows))
+        }
         (ButtonKind::Primary, false) => button.bg(colors.surface()),
-        (ButtonKind::Secondary, true) => button
-            .bg(colors.glass_fill_card())
-            .border_1()
-            .border_color(colors.glass_border_control())
-            .hover(move |style| {
-                style
-                    .bg(colors.glass_fill_medium())
-                    .border_color(colors.glass_border_card_hover())
-                    .text_color(colors.text_primary())
-            })
-            .active(move |style| style.bg(colors.glass_fill_strong())),
+        (ButtonKind::Secondary, true) => {
+            let hover = neutral_plate(theme, 1.0);
+            let (hover_bg, hover_shadows) = (hover.background(), hover.shadows());
+            neutral_plate(theme, 0.0)
+                .apply(button)
+                .hover(move |style| {
+                    style
+                        .bg(hover_bg)
+                        .shadow(hover_shadows)
+                        .border_color(colors.glass_border_card_hover())
+                        .text_color(colors.text_primary())
+                })
+                .active(move |style| style.bg(colors.glass_fill_strong()).shadow(vec![]))
+        }
         (ButtonKind::Secondary, false) => button.border_1().border_color(colors.hairline_divider()),
         (ButtonKind::Ghost, true) => button
             .hover(move |style| {

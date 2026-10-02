@@ -6,8 +6,9 @@ This product includes code adapted from third-party projects:
 ------------------------------------------------------------------------------
 Zeron — https://github.com/zeronsh/zeron (commit 27480d99b9b75d31d01832248bec3f898bd64dcc)
 Used in: apps/desktop-gpui/src/ui/motion/ (cubic-bezier evaluation, motion
-catalog, shared animation clock) and apps/desktop-gpui/src/ui/popup.rs
-(popup exit lifecycle).
+catalog, shared animation clock), apps/desktop-gpui/src/ui/popup.rs
+(popup exit lifecycle) and apps/desktop-gpui/src/ui/material.rs (control
+plate recipe).
 
 MIT License
 

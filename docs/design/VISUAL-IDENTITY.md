@@ -384,6 +384,10 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
 
 ## Interação
 
+- Botões são **placas** (`ui::material`): gradiente vertical iluminado de
+  cima, borda fina, realce de 1 px na borda de cima e sombra curta embaixo.
+  O secundário é a placa neutra (branco translúcido); o primário é a placa
+  lavanda com halo que se abre no hover. Sem blur: o vidro é só luz e borda.
 - Botões respondem em três tempos: repouso, hover (preenchimento e borda sobem;
   o primário ganha halo lavanda) e clique (um passo mais fundo). Desabilitado
   não reage. Linhas de lista e abas usam a mola de `hover_tint`.
