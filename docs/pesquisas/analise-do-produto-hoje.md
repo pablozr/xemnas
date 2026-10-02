@@ -6,9 +6,11 @@ Data: 2026-10-02.
 melhorar primeiro, e como a Visão pode mostrar os fluxos de um jeito que se entenda
 de relance (C4)?
 
-**Status:** Aberta. Análise feita sobre capturas da release desta data (dados de
-demonstração), o código e os documentos do repositório. Não houve uso real nem
-teste com pessoas; o diário de dogfood (`docs/operacao/dogfood-log.md`) está vazio.
+**Status:** Em implementação. O passo 2 (Visão com contêineres e fluxo dinâmico,
+derivados sem IA nova) foi entregue; os demais seguem abertos. Análise feita sobre
+capturas da release de 02/10/2026 (dados de demonstração), o código e os documentos
+do repositório. Não houve uso real nem teste com pessoas; o diário de dogfood
+(`docs/operacao/dogfood-log.md`) está vazio.
 
 ## Leitura geral
 
@@ -182,12 +184,47 @@ agente fala com o quê?", "quais componentes um fluxo atravessa?", "o que muda s
 trocar o provedor?". Meta inicial (a validar): responder cada uma em menos de 30
 segundos sem sair da Visão. Registrar em `docs/operacao/dogfood-log.md`.
 
+## Menos texto, mais forma
+
+O padrão que se repete: o produto **mostra valor em frases e números soltos**. A
+regra proposta, para toda tela nova e para revisar as atuais:
+
+1. **Todo número ganha uma forma:** barra (orçamento, confiança), anel (fila,
+   cobertura), linha pequena (tendência), tira de calor (atividade por semana).
+2. **Toda relação ganha uma linha:** quem decide o quê, o que afeta o quê, quem chama
+   quem (a Visão em C4 é o primeiro caso; o Mapa e a página do componente já têm).
+3. **Todo estado ganha cor e ícone, não uma frase** (em vigor, substituída, em
+   conflito, aguardando, enviada).
+4. **O texto fica para o porquê:** a justificativa, a evidência, a pergunta. Se uma
+   frase só repete o que um número ou uma forma já diz, a frase sai.
+
+Primitivas pequenas a acrescentar em `ui::patterns` (todas desenhadas em canvas,
+baratas, com equivalente textual no `aria_label`): `meter` (barra com limite),
+`ring` (anel de progresso), `sparkline` (linha de tendência), `heat_strip` (tira
+de atividade), `delta_bar` (adições e remoções de um diff) e `mini_graph` (a
+vizinhança de uma decisão ou componente, já existente na página do componente).
+
+Onde aplicar, por impacto:
+
+| Tela | Hoje | Forma proposta |
+| --- | --- | --- |
+| Contexto | "5 entregas, 162 tokens por bloco" em números | Linha de entregas por dia; barra de orçamento por bloco (já há); funil entregue → absorvido → arquivo tocado (Eficácia) |
+| Revisão | Lista de títulos e datas | Ícone e cor por tipo e risco do candidato; mini-mapa dos componentes que ele toca; barra de adições e remoções da evidência; confiança como medidor (já há) |
+| Decisões | Lista por mês | Trilho de versões com marcos; vizinhança da decisão (relações) em mini-grafo; idade e "reconsiderar quando" como marca |
+| Mapa em Blocos | Cartões com texto e contagens | Linha de atividade por bloco; selo de conflito; barra de cobertura (decisões por componente) |
+| Visão | Resumo em parágrafos | Pulso do projeto: tira de calor de decisões por semana; arquitetura em C4 (feito) |
+| Projetos | Lista com caminho | Anel de fila por projeto; última atividade |
+| Sugestões | Cartões com frase (feito) | Mini-diagrama do que seria ligado (duas caixas e uma seta) em cada cartão |
+
+Cada primitiva entra por tela, com os dados que a tela já tem; só as que pedem dado
+novo (absorção, atividade por semana) dependem de backend.
+
 ## O que fazer primeiro
 
 | # | Passo | Por quê | Esforço |
 | --- | --- | --- | --- |
 | 1 | **Uma semana de dogfood de verdade** com IA configurada, registrando o diário | Sem isso o resto é hipótese; mede ruído e tempo de revisão | Baixo (uso) |
-| 2 | Visão: nível Contêineres + fluxo dinâmico **derivados dos fluxos e do Mapa** (sem IA nova) | Resolve a queixa agora, sem custo de tokens; já é útil com o que existe | Médio (UI) |
+| 2 | ~~Visão: nível Contêineres + fluxo dinâmico derivados dos fluxos e do Mapa (sem IA nova)~~ **Feito** (`application::architecture`, `screens/overview/diagram.rs`) | Resolve a queixa agora, sem custo de tokens; já é útil com o que existe | Médio (UI) |
 | 3 | Interações e tipos de elemento propostos pela IA, entrando em Sugestões | Dá rótulos e protocolos às setas; precisa do contrato do backend | Médio/alto |
 | 4 | Revisão: agrupar por sessão, conflito no candidato, desfazer | Ataca a fadiga de fila | Médio |
 | 5 | Eficácia do contexto: linha de base histórica e `check` por regra | Prova o valor da peça central | Médio |

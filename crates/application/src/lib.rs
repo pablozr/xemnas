@@ -4,6 +4,7 @@
 pub mod adoption;
 pub mod agent_access;
 pub mod analysis;
+pub mod architecture;
 pub mod captures;
 pub mod claim_suggestions;
 pub mod claims;

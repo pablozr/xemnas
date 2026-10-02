@@ -9,12 +9,15 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use application::architecture::Architecture;
 use application::overview::{Citation, OverviewApi, OverviewError, OverviewFlow, OverviewView};
 use gpui::prelude::*;
 use gpui::{
     div, px, AnyElement, Context, Div, EventEmitter, FocusHandle, Render, Role, SharedString,
     Stateful, Window,
 };
+
+mod diagram;
 
 use super::context::OpenDecision;
 use super::format::{clipped, plural, roman, short_date};
@@ -53,6 +56,8 @@ pub struct OverviewScreen {
     loaded: bool,
     view: Option<OverviewView>,
     flow: Option<usize>,
+    /// The step of the open flow under the pointer, lit on the diagram.
+    hover_step: Option<usize>,
     error: Option<String>,
     notice: Option<String>,
     focus: BTreeMap<String, FocusHandle>,
@@ -75,6 +80,7 @@ impl OverviewScreen {
             loaded: false,
             view: None,
             flow: None,
+            hover_step: None,
             error: None,
             notice: None,
             focus: BTreeMap::new(),
@@ -428,7 +434,14 @@ impl OverviewScreen {
         list
     }
 
-    fn render_flow(&mut self, theme: &Theme, flow: &OverviewFlow, cx: &mut Context<Self>) -> Div {
+    fn render_flow(
+        &mut self,
+        theme: &Theme,
+        flow: &OverviewFlow,
+        flow_at: usize,
+        architecture: &Architecture,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let colors = theme.colors;
         let back = action_button(theme, "overview-back", ButtonKind::Ghost, true)
             .aria_label("Todos os fluxos")
@@ -521,36 +534,57 @@ impl OverviewScreen {
                 cx,
             );
             steps = steps.child(
-                div().flex().gap(px(SpacingScale::S3)).child(node).child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .pb(px(if last { 0.0 } else { SpacingScale::S5 }))
-                        .flex()
-                        .flex_col()
-                        .gap(px(SpacingScale::S2))
-                        .child(
-                            text_style(div(), TypeScale::ROW_TITLE)
-                                .pt(px(3.0))
-                                .child(step.title.clone()),
-                        )
-                        .child(
-                            text_style(div(), TypeScale::BODY_SMALL)
-                                .text_color(colors.text_secondary())
-                                .child(step.text.clone()),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_wrap()
-                                .items_center()
-                                .gap(px(SpacingScale::S2))
-                                .children(component)
-                                .child(citations),
-                        ),
-                ),
+                div()
+                    .id(SharedString::from(format!("overview-step-row-{index}")))
+                    .flex()
+                    .gap(px(SpacingScale::S3))
+                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                        let next = if *hovered {
+                            Some(index)
+                        } else if this.hover_step == Some(index) {
+                            None
+                        } else {
+                            this.hover_step
+                        };
+                        if this.hover_step != next {
+                            this.hover_step = next;
+                            cx.notify();
+                        }
+                    }))
+                    .child(node)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .pb(px(if last { 0.0 } else { SpacingScale::S5 }))
+                            .flex()
+                            .flex_col()
+                            .gap(px(SpacingScale::S2))
+                            .child(
+                                text_style(div(), TypeScale::ROW_TITLE)
+                                    .pt(px(3.0))
+                                    .child(step.title.clone()),
+                            )
+                            .child(
+                                text_style(div(), TypeScale::BODY_SMALL)
+                                    .text_color(colors.text_secondary())
+                                    .child(step.text.clone()),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_wrap()
+                                    .items_center()
+                                    .gap(px(SpacingScale::S2))
+                                    .children(component)
+                                    .child(citations),
+                            ),
+                    ),
             );
         }
+        let diagram = (!architecture.is_empty()).then(|| {
+            self.architecture_diagram(theme, architecture, Some(flow_at), self.hover_step, cx)
+        });
         div()
             .flex()
             .flex_col()
@@ -568,6 +602,21 @@ impl OverviewScreen {
                             .child(flow.description.clone()),
                     ),
             )
+            .children(diagram.map(|diagram| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S3))
+                    .child(section_label(theme, "O caminho no sistema"))
+                    .child(
+                        text_style(div(), TypeScale::BODY_SMALL)
+                            .text_color(colors.text_muted())
+                            .child(
+                                "Os números são os passos abaixo. Passe o mouse num passo para acender a seta; clique numa caixa para abri-la no Mapa.",
+                            ),
+                    )
+                    .child(diagram)
+            }))
             .child(steps)
     }
     fn render_summary(
@@ -645,6 +694,9 @@ impl OverviewScreen {
         }
         let flows = overview.flows.clone();
         let flows_grid = self.render_flows(theme, &flows, cx);
+        let architecture = overview.architecture.clone();
+        let diagram = (!architecture.is_empty())
+            .then(|| self.architecture_diagram(theme, &architecture, None, None, cx));
         div()
             .flex()
             .flex_col()
@@ -665,6 +717,32 @@ impl OverviewScreen {
                     .child(section_label(theme, "Resumo"))
                     .child(summary),
             )
+            .children(diagram.map(|diagram| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S3))
+                    .child(section_label(theme, "Arquitetura"))
+                    .child(
+                        text_style(div(), TypeScale::BODY_SMALL)
+                            .text_color(colors.text_muted())
+                            .child(
+                                "As partes do projeto e por onde os fluxos passam entre elas. Clique numa caixa para abri-la no Mapa; abra um fluxo para ver o caminho numerado.",
+                            ),
+                    )
+                    .child(diagram)
+                    .when(architecture.hidden > 0, |column| {
+                        column.child(
+                            text_style(div(), TypeScale::META)
+                                .text_color(colors.text_muted())
+                                .child(format!(
+                                    "Mostra as {} partes mais ligadas aos fluxos; {} ficam no Mapa.",
+                                    architecture.containers.len(),
+                                    architecture.hidden
+                                )),
+                        )
+                    })
+            }))
             .when(!flows.is_empty(), |column| {
                 column.child(
                     div()
@@ -697,7 +775,9 @@ impl Render for OverviewScreen {
                 .flow
                 .and_then(|index| view.overview.flows.get(index).cloned())
             {
-                let page = self.render_flow(&theme, &flow, cx);
+                let flow_at = self.flow.unwrap_or_default();
+                let page =
+                    self.render_flow(&theme, &flow, flow_at, &view.overview.architecture, cx);
                 reading_page("overview-flow-page", page).into_any_element()
             } else {
                 let column = self.render_summary(&theme, &view, cx);

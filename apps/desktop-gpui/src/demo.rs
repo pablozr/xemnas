@@ -704,6 +704,7 @@ fn seed_map(store: &SqliteStore) -> Result<(), Box<dyn std::error::Error>> {
         decisions: decisions.len(),
         rules: rules.len(),
         documents: documents.len(),
+        architecture: Default::default(),
         summary: vec![
             OverviewParagraph {
                 text: "O xemnas guarda localmente as decisões de engenharia tiradas das \

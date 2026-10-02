@@ -295,6 +295,33 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   primário; gerando: "Gerando…" desabilitado; erro em `error_banner`; nota de
   procedência no rodapé. Nunca texto sem fonte.
 
+## Visão — arquitetura em diagrama
+
+A Visão mostra a arquitetura como figura, não só como texto (C4, nível 2 e a sua
+vista dinâmica). O modelo vem de `application::architecture::derive`, a partir do
+Mapa e dos fluxos da Visão, sem IA nova: as caixas são os componentes de topo, a
+tecnologia de cada uma vem das decisões que a tocam e usam, e uma seta existe só
+porque um fluxo passa de um componente a outro.
+
+- **Na página da Visão**, entre o Resumo e os fluxos: seção "Arquitetura" com uma
+  frase do que é e o diagrama na coluna de 760 px. Até 12 caixas (as que os
+  fluxos mais atravessam primeiro); o resto é contado ("N ficam no Mapa").
+- **No fluxo aberto**: "O caminho no sistema". As setas do fluxo ficam lavanda e
+  numeradas com os mesmos algarismos romanos dos passos; as caixas que ele não
+  toca esmaecem; passar o mouse num passo acende a seta. A ordem das colunas
+  segue só esse fluxo, então o caminho se lê da esquerda para a direita.
+- **Desenho:** colunas da esquerda para a direita (até 4), caixas de 150 a 224 px
+  por 92 px, seta com cabeça e curva que contorna caixas no caminho; a que pula
+  uma coluna passa por cima, no espaço reservado acima das caixas. Componentes
+  que nenhum fluxo toca ficam numa grade abaixo. Layout determinístico, sem
+  simulação de forças.
+- **Caixa:** nome, papel (a descrição do componente, 1 linha), tecnologias em mono
+  na cor de tecnologia do grafo e "N decisões · M partes". É um elemento real:
+  foco visível, `aria_label`, tooltip, clique abre o componente no Mapa. A lista
+  de fluxos continua como equivalente textual.
+- Setas sem fluxo selecionado ficam em hairline de 1,2 px a 70% (`text_muted`);
+  com fluxo, as outras caem a 18%.
+
 ## Mapa — o grafo do projeto
 
 - Quarto destino do projeto (Ctrl 4, paleta), ADR-0005. Índice à esquerda

@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::analysis::ExtractorFactory;
+use crate::architecture::Architecture;
 use crate::captures::CaptureRepository;
 use crate::claims::ClaimStore;
 use crate::clock::now_rfc3339;
@@ -182,6 +183,10 @@ pub struct ProjectOverview {
     pub summary: Vec<OverviewParagraph>,
     /// Main flows.
     pub flows: Vec<OverviewFlow>,
+    /// The containers and interactions the flows draw (C4 level 2), made when
+    /// the overview was generated.
+    #[serde(default)]
+    pub architecture: Architecture,
 }
 
 impl ProjectOverview {
@@ -459,9 +464,14 @@ where
     ///
     /// `storage` on failure.
     pub fn current(&self, project_id: &str) -> Result<Option<OverviewView>, OverviewError> {
-        let Some(overview) = self.store.overview(project_id)? else {
+        let Some(mut overview) = self.store.overview(project_id)? else {
             return Ok(None);
         };
+        // An overview stored before the architecture existed gets it from
+        // the current map, without being rewritten.
+        if overview.architecture.is_empty() && !overview.flows.is_empty() {
+            overview.architecture = self.architecture(project_id, &overview.flows);
+        }
         let new_decisions = self
             .store
             .project_decisions(project_id)
@@ -526,6 +536,7 @@ where
             decisions: input.decisions,
             rules: input.rules,
             documents: input.documents,
+            architecture: self.architecture(project_id, &flows),
             summary,
             flows,
         };
@@ -543,6 +554,19 @@ where
             new_decisions: 0,
             queued_documents,
         })
+    }
+
+    /// The containers and interactions of the project's flows; empty (never
+    /// an error) when the map cannot be read, so the rest of the page stays.
+    fn architecture(&self, project_id: &str, flows: &[OverviewFlow]) -> Architecture {
+        let graph = KnowledgeGraph::new(self.store.clone());
+        match (
+            graph.project_map(project_id, None),
+            graph.project_graph(project_id, None),
+        ) {
+            (Ok(map), Ok(full)) => crate::architecture::derive(&map, &full, flows),
+            _ => Architecture::default(),
+        }
     }
 
     /// Builds the prompt content from the records of the project.
