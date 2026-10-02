@@ -8,6 +8,17 @@ planos de `docs/roadmap/`.
 
 | Documento | Assunto | Status |
 | --- | --- | --- |
+| [20-ideias-dores-reais-devs.md](20-ideias-dores-reais-devs.md) | Vinte ideias adicionais com dores, evidência empírica, diferenças, prioridades e pilotos | Aberta. Síntese concluída; demanda e eficácia não validadas |
+| [dores-dev-cognicao-fontes.md](dores-dev-cognicao-fontes.md) | Oito estudos de cognição, interrupções, compreensão e investigação | Aberta. Fontes consultadas; propostas sem experimento próprio |
+| [dores-dev-conhecimento-equipe-fontes.md](dores-dev-conhecimento-equipe-fontes.md) | Oito estudos de onboarding, revisão, coordenação e dívida técnica | Aberta. Pesquisa exploratória; parte das fontes teve acesso parcial |
+| [dores-dev-ia-verificacao-fontes.md](dores-dev-ia-verificacao-fontes.md) | Oito fontes de IA, produtividade, compreensão, segurança e autonomia | Aberta. Evidência contextual; sem validação no Xemnas |
+| [dores-dev-contratos-reproducao-fontes.md](dores-dev-contratos-reproducao-fontes.md) | Oito estudos de linguagem, contratos, requisitos, alertas e reprodução | Aberta. Pesquisa exploratória; hipóteses não executadas |
+| [oportunidades-produto-memoria-decisional.md](oportunidades-produto-memoria-decisional.md) | Dez propostas de expansão, comparação com capacidades atuais, prioridades e experimentos | Aberta. Síntese concluída; propostas não implementadas nem demanda validada |
+| [produtos-memoria-agentes-fontes.md](produtos-memoria-agentes-fontes.md) | Oito famílias de memória/contexto para agentes, versões, fontes primárias e oportunidades | Aberta. Comparação documental concluída; experimentos pendentes |
+| [produtos-inteligencia-engenharia-fontes.md](produtos-inteligencia-engenharia-fontes.md) | Dez produtos de engenharia, colisões competitivas e hipóteses para o Xemnas | Aberta. Comparação documental concluída; demanda não validada |
+| [plano-design-vitrine.md](plano-design-vitrine.md) | Plano por superfície, capturas reais, fases, critérios de qualidade e roteiro de demonstração | Aberta. Plano concluído; implementação e mudanças de padrão pendentes |
+| [design-vitrine-fontes.md](design-vitrine-fontes.md) | Apps GPUI verificados e inspirações de produtos de ponta, com aplicação e limites | Aberta. Catálogo consultivo concluído |
+| [escalabilidade-renderizacao-fontes.md](escalabilidade-renderizacao-fontes.md) | Diagnóstico de grafos/blocos, GPUI, layout, virtualização, LOD e microbenchmark reproduzível | Aberta. Pesquisa concluída; implementação e benchmark integrado pendentes |
 | [metodologia-benchmark-semantico.md](metodologia-benchmark-semantico.md) | Protocolo de qualidade, latência e memória para E5/Gemma e SQLite/LanceDB | Aberta. Experimento Rust CPU em execução; Windows bloqueou o build nativo |
 | [memoria-semantica-local-first.md](memoria-semantica-local-first.md) | Síntese da recuperação local, direção acordada, custos, latência e experimento mínimo | Aberta. Windows 8 GB/CPU; stack final depende de benchmark |
 | [embeddings-e-reranking-local.md](embeddings-e-reranking-local.md) | Runtimes Rust/Python, modelos locais, licenças e empacotamento | Aberta. Shortlist E5-small/EmbeddingGemma; sem execução de modelos |

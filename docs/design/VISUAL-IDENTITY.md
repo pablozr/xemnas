@@ -262,6 +262,15 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
 - **Modo de entrega**: Desligado, Medir e Ativo em `radio_list` +
   `radio_row` (nunca cartões lado a lado) e tokens por bloco; salvar só aparece quando algo muda.
 - Rota de captura: `context:<deliveries|test|decisions|rules|documents|mode>`.
+- **Revisar conhecimento** fica em Ajustes do Contexto e na paleta, sem nova
+  aba. Usa coluna de leitura e rodapé fixo: Verificar localmente, Revisar com
+  IA (confirmação inline) e Cancelar. Achados locais, hipóteses consultivas e
+  cobertura ficam separados. Fontes mostram campo, versão e trecho; decisões
+  citadas abrem em Decisões. Não há ação de aplicar achados. Rota:
+  `context:knowledge-review`.
+  A rota demo `context:knowledge-review-results` pré-carrega resultados
+  sintéticos sem executar IA. Sair da seção ou destino cancela a execução;
+  outra só é liberada quando a chamada em curso retorna.
 
 ## Visão — o projeto resumido
 

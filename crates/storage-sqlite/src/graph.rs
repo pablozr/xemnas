@@ -8,10 +8,11 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 
 use crate::store::SqliteStore;
 
-const ENTITY_COLUMNS: &str =
+pub(crate) const ENTITY_COLUMNS: &str =
     "entity_id, project_id, kind, name, key, description, created_at, retired_at";
 
-const EDGE_COLUMNS: &str = "edge_id, project_id, kind, source_kind, source_id, entity_id, origin, \
+pub(crate) const EDGE_COLUMNS: &str =
+    "edge_id, project_id, kind, source_kind, source_id, entity_id, origin, \
      reason, created_at, confirmed_at, invalidated_at";
 
 impl GraphStore for SqliteStore {
@@ -300,7 +301,10 @@ impl SqliteStore {
     }
 }
 
-fn load_lists(connection: &Connection, entity: &mut EntityRecord) -> Result<(), GraphError> {
+pub(crate) fn load_lists(
+    connection: &Connection,
+    entity: &mut EntityRecord,
+) -> Result<(), GraphError> {
     let list = |table: &str, column: &str| -> Result<Vec<String>, GraphError> {
         let mut statement = connection
             .prepare(&format!(
@@ -347,7 +351,7 @@ fn invalid_column(index: usize, what: &str, value: &str) -> rusqlite::Error {
     )
 }
 
-fn map_entity(row: &Row<'_>) -> rusqlite::Result<EntityRecord> {
+pub(crate) fn map_entity(row: &Row<'_>) -> rusqlite::Result<EntityRecord> {
     let kind: String = row.get(2)?;
     Ok(EntityRecord {
         entity_id: row.get(0)?,
@@ -363,7 +367,7 @@ fn map_entity(row: &Row<'_>) -> rusqlite::Result<EntityRecord> {
     })
 }
 
-fn map_edge(row: &Row<'_>) -> rusqlite::Result<EdgeRecord> {
+pub(crate) fn map_edge(row: &Row<'_>) -> rusqlite::Result<EdgeRecord> {
     let kind: String = row.get(2)?;
     let source_kind: String = row.get(3)?;
     let origin: String = row.get(6)?;

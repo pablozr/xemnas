@@ -6,7 +6,8 @@ use rusqlite::{params, OptionalExtension, Row};
 
 use crate::store::SqliteStore;
 
-const CLAIM_COLUMNS: &str = "claim_id, project_id, kind, statement, valid_from, valid_until, \
+pub(crate) const CLAIM_COLUMNS: &str =
+    "claim_id, project_id, kind, statement, valid_from, valid_until, \
      source_decision_id, created_at, updated_at";
 
 impl ClaimStore for SqliteStore {
@@ -86,7 +87,7 @@ impl ClaimStore for SqliteStore {
     }
 }
 
-fn map_row(row: &Row<'_>) -> rusqlite::Result<ClaimRecord> {
+pub(crate) fn map_row(row: &Row<'_>) -> rusqlite::Result<ClaimRecord> {
     let kind_text: String = row.get(2)?;
     let kind = ClaimKind::parse(&kind_text).ok_or_else(|| {
         rusqlite::Error::FromSqlConversionFailure(

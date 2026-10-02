@@ -126,6 +126,7 @@ const ACTIVITY_POLL: std::time::Duration = std::time::Duration::from_secs(5);
 /// What a palette item does.
 #[derive(Clone, Debug)]
 enum Command {
+    KnowledgeReview,
     Go(Destination),
     Project(String),
     Candidate(String),
@@ -137,6 +138,10 @@ enum Command {
     SettingsAt(SettingsSection),
     Assistant,
     FocusMode,
+}
+
+fn context_surface_visible(destination: Destination, settings_open: bool) -> bool {
+    destination == Destination::Context && !settings_open
 }
 
 /// The open palette: its query field and highlighted row.
@@ -622,6 +627,16 @@ impl<
         };
         projects.update(cx, |screen, cx| screen.select_project(project, window, cx));
         self.go_route(&route, window, cx);
+        if self.demo && route == "context:knowledge-review-results" {
+            if let Some(screen) = &self.context {
+                screen.update(cx, |screen, cx| {
+                    screen.preload_review(
+                        crate::screens::knowledge_review::demo_report("demo-xemnas"),
+                        cx,
+                    )
+                });
+            }
+        }
     }
 
     /// Opens `destination[:view]` in the selected project (the demo routes
@@ -677,7 +692,10 @@ impl<
                 Destination::Context => {
                     if let Some(screen) = &self.context {
                         let view = view.clone();
-                        screen.update(cx, |screen, _| {
+                        screen.update(cx, |screen, cx| {
+                            if view != "knowledge-review" {
+                                screen.leave_review(cx);
+                            }
                             if view == "end" {
                                 screen.scroll_to_end();
                             } else {
@@ -799,6 +817,20 @@ impl<
             .as_ref()
             .and_then(|screen| screen.read(cx).selected_project());
         if selected.is_some() {
+            if self
+                .context
+                .as_ref()
+                .is_some_and(|screen| screen.read(cx).has_reviewer(cx))
+            {
+                items.push(PaletteItem {
+                    group: "Ir para",
+                    label: "Revisar conhecimento".into(),
+                    detail: Some("Contexto · consultivo".into()),
+                    glyph: IconName::Layers,
+                    shortcut: None,
+                    command: Command::KnowledgeReview,
+                });
+            }
             for destination in [
                 Destination::Overview,
                 Destination::Review,
@@ -977,6 +1009,7 @@ impl<
         };
         self.close_palette(window, cx);
         match item.command {
+            Command::KnowledgeReview => self.go_route("context:knowledge-review", window, cx),
             Command::Go(destination) => self.switch_to(destination, window, cx),
             Command::Project(id) => {
                 if let Some(projects) = &self.projects {
@@ -1210,8 +1243,18 @@ impl<
         }
     }
 
+    /// Cancels review work before replacing the visible Contexto surface.
+    fn retire_context_surface(&mut self, cx: &mut Context<Self>) {
+        if context_surface_visible(self.destination, self.settings_open) {
+            if let Some(screen) = &self.context {
+                screen.update(cx, |screen, cx| screen.leave_review(cx));
+            }
+        }
+    }
+
     /// Opens a decision in Decisões from another destination (Contexto).
     fn show_decision(&mut self, id: String, cx: &mut Context<Self>) {
+        self.retire_context_surface(cx);
         self.destination = Destination::Decisions;
         if let Some(decisions) = &self.decisions {
             decisions.update(cx, |screen, cx| screen.open_decision(id, cx));
@@ -1221,6 +1264,7 @@ impl<
 
     /// Opens an entity in the Mapa from another destination (Visão).
     fn show_entity(&mut self, id: String, cx: &mut Context<Self>) {
+        self.retire_context_surface(cx);
         self.destination = Destination::Map;
         if let Some(map) = &self.map {
             map.update(cx, |screen, cx| screen.show_entity(id, cx));
@@ -1229,6 +1273,9 @@ impl<
     }
 
     fn switch_to(&mut self, destination: Destination, window: &mut Window, cx: &mut Context<Self>) {
+        if destination != Destination::Context {
+            self.retire_context_surface(cx);
+        }
         self.destination = destination;
         window.focus(&self.destination_focus[destination.index()], cx);
         match destination {
@@ -1662,6 +1709,9 @@ impl<
     /// Opens the settings page on `section` (the sidebar status line leads to
     /// the integration or to the failures behind its counts).
     fn open_settings_at(&mut self, section: SettingsSection, cx: &mut Context<Self>) {
+        if self.settings.is_some() {
+            self.retire_context_surface(cx);
+        }
         let Some(screen) = &self.settings else {
             return;
         };
@@ -1671,6 +1721,9 @@ impl<
     }
 
     fn toggle_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings.is_some() && !self.settings_open {
+            self.retire_context_surface(cx);
+        }
         let Some(screen) = &self.settings else {
             return;
         };
@@ -2275,4 +2328,16 @@ fn caption_button(
         .role(Role::Button)
         .aria_label(label)
         .child(glyph)
+}
+
+#[cfg(test)]
+mod navigation_lifecycle_tests {
+    use super::*;
+    #[test]
+    fn replacing_context_with_settings_retires_only_the_visible_surface() {
+        assert!(context_surface_visible(Destination::Context, false));
+        assert!(!context_surface_visible(Destination::Context, true));
+        assert!(!context_surface_visible(Destination::Decisions, false));
+        assert!(!context_surface_visible(Destination::Map, false));
+    }
 }

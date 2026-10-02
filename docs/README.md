@@ -16,7 +16,22 @@ alterações pertinentes. O `README.md` da raiz é a apresentação do projeto e
 | [pesquisas/](pesquisas/) | Pesquisas e ideias para o futuro, com status | [README.md](pesquisas/README.md) (índice), [memoria-semantica-local-first.md](pesquisas/memoria-semantica-local-first.md) (recuperação local, automação e custos) |
 | [assets/](assets/) | Imagens usadas pelo README da raiz | — |
 
+Pesquisas recentes: [escalar grafos e blocos](pesquisas/escalabilidade-renderizacao-fontes.md),
+com diagnóstico local, alternativas e benchmark reproduzível; e
+[plano de design para a vitrine](pesquisas/plano-design-vitrine.md), com capturas
+atuais e [catálogo de referências](pesquisas/design-vitrine-fontes.md).
+
+Expansão do produto: [oportunidades para a memória decisional](pesquisas/oportunidades-produto-memoria-decisional.md),
+com dez propostas, fontes de mercado, prioridades e experimentos; pesquisa
+exploratória, sem alteração do escopo aprovado.
+
+Pesquisa empírica: [vinte ideias adicionais para dores de desenvolvedores](pesquisas/20-ideias-dores-reais-devs.md),
+com quatro catálogos de fontes científicas, limites dos estudos e experimentos
+propostos de investigação, compreensão, coordenação e verificação de mudanças.
+
 ## Precedência
+
+Revisão backend sob demanda: [ADR-0009 — revisão consultiva de conhecimento](arquitetura/adr/0009-revisao-consultiva-de-conhecimento.md).
 
 Quando dois documentos divergirem, vale nesta ordem:
 

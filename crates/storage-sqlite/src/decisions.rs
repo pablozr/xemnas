@@ -10,7 +10,8 @@ use rusqlite::{params, params_from_iter, OptionalExtension, Row};
 use crate::store::SqliteStore;
 
 /// Column list shared by `list` and `get`, in [`StoredDecision`] order.
-const DECISION_COLUMNS: &str = "d.decision_id, d.candidate_id, d.project_id, p.location, \
+pub(crate) const DECISION_COLUMNS: &str =
+    "d.decision_id, d.candidate_id, d.project_id, p.location, \
      d.capture_id, d.status, d.question, d.choice, d.rationale, d.assumptions, d.reconsider_when, \
      d.scope, d.consequences, d.version, d.created_at, d.confirmed_at, d.updated_at";
 
@@ -23,7 +24,7 @@ fn storage_error(error: rusqlite::Error) -> DecisionsError {
 }
 
 /// Maps a joined decision row into a [`StoredDecision`].
-fn map_row(row: &Row<'_>) -> rusqlite::Result<StoredDecision> {
+pub(crate) fn map_row(row: &Row<'_>) -> rusqlite::Result<StoredDecision> {
     let status_text: String = row.get(5)?;
     let status = DecisionStatus::parse(&status_text).ok_or_else(|| {
         rusqlite::Error::FromSqlConversionFailure(

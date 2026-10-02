@@ -17,6 +17,7 @@ mod inbox;
 mod injections;
 mod integration;
 mod jobs;
+mod knowledge_review;
 mod overview;
 mod projects;
 mod relation_suggestions;

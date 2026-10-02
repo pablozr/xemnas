@@ -873,6 +873,92 @@ fn poisoned<T>(_: std::sync::PoisonError<T>) -> ProfileError {
     ProfileError::Io("demo settings lock poisoned".into())
 }
 
+/// Deterministic in-memory review adapter; no provider, vault or database access.
+pub struct SampleKnowledgeReview;
+impl application::knowledge_review::KnowledgeReviewApi for SampleKnowledgeReview {
+    fn inspect(
+        &self,
+        project: &str,
+    ) -> Result<
+        application::knowledge_review::ReviewReport,
+        application::knowledge_review::ReviewError,
+    > {
+        use application::knowledge_review::*;
+        Ok(ReviewReport {
+            project_id: project.into(),
+            started_at: "2026-10-02T12:00:00Z".into(),
+            finished_at: "2026-10-02T12:00:00Z".into(),
+            input_hash: "demo".into(),
+            semantic_status: SemanticStatus::NotRequested,
+            coverage: ReviewCoverage {
+                deterministic_complete: true,
+                inventory: ReviewInventory {
+                    current_decisions: 3,
+                    superseded_decisions: 1,
+                    valid_rules: 2,
+                    relations: 1,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            findings: vec![ReviewFinding {
+                kind: FindingKind::RuleFromSuperseded,
+                origin: FindingOrigin::Deterministic,
+                explanation: "Uma regra fictícia deriva de uma decisão substituída.".into(),
+                question: "Essa regra ainda deve valer?".into(),
+                evidence: vec![],
+            }],
+            provenance: None,
+        })
+    }
+    fn review(
+        &self,
+        project: &str,
+        cancel: application::knowledge_review::ReviewCancellation,
+    ) -> Result<
+        application::knowledge_review::ReviewReport,
+        application::knowledge_review::ReviewError,
+    > {
+        use application::knowledge_review::*;
+        let mut report = self.inspect(project)?;
+        report.semantic_status = if cancel.is_cancelled() {
+            SemanticStatus::Cancelled
+        } else {
+            SemanticStatus::Partial
+        };
+        report.findings.push(ReviewFinding {
+            kind: FindingKind::PossibleTension,
+            origin: FindingOrigin::Semantic,
+            explanation: "Hipótese sintética: limites de entrega podem estar em tensão.".into(),
+            question: "Os limites descrevem o mesmo cenário?".into(),
+            evidence: vec![ReviewEvidence {
+                source: ReviewSource {
+                    kind: ReviewSourceKind::Claim,
+                    id: "demo-rule".into(),
+                    title: "Limite fictício".into(),
+                    version: None,
+                    updated_at: None,
+                },
+                field: "statement".into(),
+                text: "Até 300 tokens".into(),
+                start_byte: 0,
+                end_byte: 14,
+                quote: "Até 300 tokens".into(),
+            }],
+        });
+        report.coverage.semantic_units.push(ReviewUnitCoverage {
+            subject_ids: vec!["demo-rule".into()],
+            selection: "Par sintético para demonstração".into(),
+            outcome: ReviewUnitOutcome::Reviewed,
+        });
+        report.coverage.omissions.push(ReviewOmission {
+            subject_ids: vec![],
+            reason: "Demonstração sintética; não valida conhecimento real.".into(),
+        });
+        Ok(report)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -916,6 +1002,27 @@ mod tests {
             ProjectRepository::list(&SqliteStore::open(":memory:").expect("fresh store"))
                 .expect("projects")
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn review_fixture_preserves_local_findings_and_reports_coverage() {
+        use application::knowledge_review::*;
+        let api = SampleKnowledgeReview;
+        let local = api.inspect("demo-xemnas").unwrap();
+        assert_eq!(local.semantic_status, SemanticStatus::NotRequested);
+        let report = api
+            .review("demo-kpi", ReviewCancellation::default())
+            .unwrap();
+        assert_eq!(report.project_id, "demo-kpi");
+        assert_eq!(report.findings[0], local.findings[0]);
+        assert_eq!(report.semantic_status, SemanticStatus::Partial);
+        assert!(!report.coverage.omissions.is_empty());
+        let token = ReviewCancellation::default();
+        token.cancel();
+        assert_eq!(
+            api.review("demo-kpi", token).unwrap().semantic_status,
+            SemanticStatus::Cancelled
         );
     }
 }
