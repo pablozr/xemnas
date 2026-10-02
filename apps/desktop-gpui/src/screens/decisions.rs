@@ -1665,6 +1665,7 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
 }
 impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> Render for DecisionsScreen<S> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _probe = crate::ui::perf::Probe::start("decisions");
         if self.restore_focus {
             self.restore_focus = false;
             window.focus(&self.reader_focus, cx);

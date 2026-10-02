@@ -1139,6 +1139,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
 
 impl<S: InboxStore + Send + 'static> Render for InboxScreen<S> {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _probe = crate::ui::perf::Probe::start("inbox");
         let theme = Theme::current(cx);
         let visible: Vec<_> = self
             .rows

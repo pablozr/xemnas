@@ -1720,6 +1720,7 @@ impl<
     > Render for Shell<R>
 {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _probe = crate::ui::perf::Probe::start("shell");
         if self.route.is_some() {
             self.follow_route(window, cx);
         }

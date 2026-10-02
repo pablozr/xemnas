@@ -685,6 +685,7 @@ impl OverviewScreen {
 
 impl Render for OverviewScreen {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _probe = crate::ui::perf::Probe::start("overview");
         let theme = Theme::current(cx);
         let body: AnyElement = if !self.loaded {
             div()

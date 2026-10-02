@@ -13,6 +13,7 @@ pub mod icons;
 pub mod material;
 pub mod motion;
 pub mod patterns;
+pub mod perf;
 pub mod popup;
 pub mod search_edit;
 pub mod search_field;

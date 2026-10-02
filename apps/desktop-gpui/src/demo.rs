@@ -179,7 +179,139 @@ pub(crate) fn store() -> Result<SqliteStore, Box<dyn std::error::Error>> {
         }
     }
     seed_map(&store)?;
+    if let Some(scale) = std::env::var("XEMNAS_DEMO_SCALE")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+    {
+        seed_scale(&store, scale)?;
+    }
     Ok(store)
+}
+
+/// Measurement only (`XEMNAS_DEMO_SCALE=N`): `n` more decisions, `n / 4`
+/// components and `n / 3` rules on the demo project, most of them tied to
+/// one component named "docs", so the screens can be timed on a project the
+/// size of a real, long-lived one.
+fn seed_scale(store: &SqliteStore, n: usize) -> Result<(), Box<dyn std::error::Error>> {
+    use application::claims::{Claims, NewClaim};
+    use application::graph::{KnowledgeGraph, LinkRequest, NewEntity};
+    use domain::claims::ClaimKind;
+    use domain::entities::{EdgeKind, EntityKind, NodeKind};
+
+    const PROJECT: &str = "demo-xemnas";
+    let graph = KnowledgeGraph::new(store.clone());
+    let mut components = Vec::new();
+    let names = std::iter::once("docs".to_owned()).chain((0..n / 4).map(|i| format!("modulo-{i}")));
+    for name in names {
+        let entity = graph.create_entity(NewEntity {
+            project_id: PROJECT.into(),
+            kind: Some(EntityKind::Component),
+            patterns: vec![format!("crates/{name}/**")],
+            description: format!("Componente {name}, para medir o mapa em escala."),
+            name,
+            ..NewEntity::default()
+        })?;
+        components.push(entity.entity_id);
+    }
+    for index in 0..n {
+        let capture = format!("scale-capture-{index}");
+        let stamp = format!("2026-09-{:02}T{:02}:00:00Z", 1 + index % 28, index % 24);
+        store.insert_capture(&CaptureWrite {
+            receipt: CaptureReceiptRecord {
+                capture_id: capture.clone(),
+                idempotency_key: capture.clone(),
+                canonical_path: "C:/Projects/xemnas".into(),
+                received_at: stamp.clone(),
+                artifact_count: 1,
+            },
+            artifacts: vec![CaptureArtifactRecord {
+                capture_id: capture.clone(),
+                artifact_id: "source".into(),
+                kind: "diff_hunk".into(),
+                content: format!("fn item_{index}() {{}}"),
+                metadata: r#"{"file":"src/lib.rs","language":"rust","start_line":1}"#.into(),
+                fingerprint: format!("{:064x}", 10_000 + index),
+            }],
+            job: JobRecord {
+                id: format!("job-{capture}"),
+                kind: ANALYZE_CAPTURE_KIND.into(),
+                payload: capture.clone(),
+                state: JobState::Completed,
+                idempotent: true,
+                attempts: 1,
+                last_error: None,
+                created_at: stamp.clone(),
+                updated_at: stamp.clone(),
+            },
+            checkpoint: CaptureCheckpointRecord {
+                adapter: "demo".into(),
+                adapter_version: "0.1.0".into(),
+                session_id: format!("session-{capture}"),
+                message_id: capture.clone(),
+                capture_id: capture.clone(),
+                observed_at: stamp.clone(),
+                updated_at: stamp.clone(),
+            },
+        })?;
+        let candidate = DecisionCandidateRecord {
+            id: format!("scale-candidate-{index}"),
+            project_id: PROJECT.into(),
+            capture_id: capture,
+            status: "pending".into(),
+            question: format!("Decisão {index}: como tratar o caso {index} do módulo?"),
+            choice: format!("Tratar o caso {index} de forma explícita e testada."),
+            rationale: format!("Motivo da decisão {index}, com contexto para ocupar espaço."),
+            signals: "[\"public_contract\"]".into(),
+            confidence: 0.8,
+            confidence_reason: "Medição.".into(),
+            evidence_refs: "[\"source\"]".into(),
+            diff_summary: "{\"files\":[\"src/lib.rs\"],\"artifacts\":1}".into(),
+            dedup_hash: format!("scale-{index}"),
+            created_at: stamp.clone(),
+            updated_at: stamp,
+            kind: "decision".into(),
+            significance: 1.0,
+            criteria: "[]".into(),
+        };
+        store.insert_candidates(std::slice::from_ref(&candidate))?;
+        let promoted =
+            application::inbox::Inbox::new(store.clone()).confirm(&candidate.id, None)?;
+        // Most decisions land on "docs", the rest spread over the others.
+        let target = if index % 5 < 3 {
+            &components[0]
+        } else {
+            &components[index % components.len()]
+        };
+        graph.link(LinkRequest {
+            kind: EdgeKind::Affects,
+            source_kind: NodeKind::Decision,
+            source_id: promoted.decision_id,
+            entity_id: target.clone(),
+        })?;
+    }
+    let claims = Claims::new(store.clone());
+    for index in 0..n / 3 {
+        let claim = claims.create(NewClaim {
+            project_id: PROJECT.into(),
+            kind: ClaimKind::Convention,
+            statement: format!("Regra {index}: toda mudança do caso {index} tem teste."),
+            valid_from: Some("2026-09-01".into()),
+            valid_until: None,
+            source_decision_id: None,
+        })?;
+        let target = if index % 5 < 3 {
+            &components[0]
+        } else {
+            &components[index % components.len()]
+        };
+        graph.link(LinkRequest {
+            kind: EdgeKind::AppliesTo,
+            source_kind: NodeKind::Claim,
+            source_id: claim.claim_id,
+            entity_id: target.clone(),
+        })?;
+    }
+    Ok(())
 }
 
 /// A project map for the demo: components with parts, technologies, rules,
