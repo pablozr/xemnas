@@ -20,6 +20,8 @@
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 use application::graph::{NodeRef, ProjectGraph};
@@ -239,6 +241,9 @@ pub struct GraphCanvas {
     fitted: bool,
     /// Layouts started; a result is installed only if it is the latest.
     generation: u64,
+    /// The newest generation, readable from the layout thread: a layout
+    /// whose number is behind it stops between steps.
+    latest: Arc<AtomicU64>,
     /// Whether a layout is still being computed.
     pending: bool,
     /// A node to select once the layout in progress is installed (demo).
@@ -276,6 +281,7 @@ impl GraphCanvas {
             heat: 0.0,
             fitted: false,
             generation: 0,
+            latest: Arc::new(AtomicU64::new(0)),
             pending: false,
             select_later: None,
             focus: cx.focus_handle().tab_stop(true),
@@ -292,8 +298,10 @@ impl GraphCanvas {
     /// call supersedes an older one still running.
     pub fn set_graph(&mut self, graph: &ProjectGraph, fresh: bool, cx: &mut Context<Self>) {
         self.generation += 1;
+        self.latest.store(self.generation, Ordering::Relaxed);
         self.pending = true;
         let generation = self.generation;
+        let latest = Arc::clone(&self.latest);
         let previous: BTreeMap<NodeRef, (f32, f32)> = if fresh {
             BTreeMap::new()
         } else {
@@ -308,13 +316,14 @@ impl GraphCanvas {
             .map(|node| node.node.clone());
         let graph = graph.clone();
         cx.spawn(async move |this, cx| {
-            let (nodes, links) = cx
+            let Some((nodes, links)) = cx
                 .background_executor()
                 .spawn(async move {
                     let _probe = crate::ui::perf::Probe::start("graph-layout");
                     let (mut nodes, links) = build(&graph);
                     let known = place(&mut nodes, &links, &previous);
-                    settle(
+                    let finished = settle_with(
+                        solver_for(nodes.len()),
                         &mut nodes,
                         &links,
                         if known {
@@ -323,11 +332,16 @@ impl GraphCanvas {
                             SETTLE_STEPS
                         },
                         known,
+                        &|| latest.load(Ordering::Relaxed) != generation,
                     );
                     stagger(&mut nodes);
-                    (nodes, links)
+                    finished.then_some((nodes, links))
                 })
-                .await;
+                .await
+            else {
+                // A newer layout (or another project) took over mid-way.
+                return;
+            };
             let _ = this.update(cx, |canvas, cx| {
                 if canvas.generation != generation {
                     return;
@@ -1281,11 +1295,12 @@ impl Render for GraphCanvas {
         let zoom = self.zoom_controls(&theme, cx);
         let legend = self.legend(&theme);
         let card = self.side_card(&theme, cx);
+        // The hint sits in the header's own row and wraps under the filters
+        // when the canvas is narrow, instead of lying over them.
         let hint = (self.selected.is_none()).then(|| {
             text_style(div(), TypeScale::META)
-                .absolute()
-                .top(px(SpacingScale::S4 + 5.0))
-                .right(px(SpacingScale::S4))
+                .flex_none()
+                .pt(px(5.0))
                 .text_color(colors.text_muted())
                 .child("Clique para focar · arraste para mover · role para aproximar")
         });
@@ -1341,9 +1356,20 @@ impl Render for GraphCanvas {
                     .absolute()
                     .top(px(SpacingScale::S4))
                     .left(px(SpacingScale::S4))
-                    .child(chips),
+                    .right(px(if self.selected.is_some() {
+                        CARD_WIDTH + SpacingScale::S4 * 2.0
+                    } else {
+                        SpacingScale::S4
+                    }))
+                    .flex()
+                    .flex_wrap()
+                    .items_start()
+                    .justify_between()
+                    .gap_x(px(SpacingScale::S4))
+                    .gap_y(px(SpacingScale::S2))
+                    .child(chips)
+                    .children(hint),
             )
-            .children(hint)
             .child(
                 div()
                     .absolute()
@@ -2314,7 +2340,59 @@ fn place(nodes: &mut [Node], links: &[Link], previous: &BTreeMap<NodeRef, (f32, 
 }
 
 /// Runs the simulation to rest.
+/// How repulsion and collision between nodes are found. They differ only in
+/// cost: the benchmark in the tests (`layout_benchmark`) compares them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+enum Solver {
+    /// Every pair, every step. The reference: exact and quadratic.
+    AllPairs,
+    /// Bucketed in a grid; only neighbouring cells meet. Exact within reach.
+    Grid,
+    /// A quadtree gathers far groups into one force (Barnes-Hut); collision
+    /// still looks only at close neighbours.
+    BarnesHut,
+}
+
+/// Up to this many nodes the exact all-pairs solver is used: it is the
+/// fastest there (the tree's bookkeeping costs more than it saves) and exact.
+const EXACT_UP_TO: usize = 300;
+
+/// The solver the app lays out with, by size. The release benchmark
+/// (`layout_benchmark`, results in `docs/pesquisas/escalabilidade-renderizacao-fontes.md`)
+/// had Barnes-Hut 3 to 6 times faster than the grid from 1 000 nodes up,
+/// with the same quality; the grid was never the fastest.
+fn solver_for(count: usize) -> Solver {
+    if count <= EXACT_UP_TO {
+        Solver::AllPairs
+    } else {
+        Solver::BarnesHut
+    }
+}
+
+#[cfg(test)]
 fn settle(nodes: &mut [Node], links: &[Link], steps: usize, gentle: bool) {
+    settle_with(
+        solver_for(nodes.len()),
+        nodes,
+        links,
+        steps,
+        gentle,
+        &|| false,
+    );
+}
+
+/// Settles with `solver`, giving up early when `cancelled` says so (checked
+/// between steps: a newer layout, another project or a closed screen makes
+/// the result worthless). Returns whether it ran to the end.
+fn settle_with(
+    solver: Solver,
+    nodes: &mut [Node],
+    links: &[Link],
+    steps: usize,
+    gentle: bool,
+    cancelled: &dyn Fn() -> bool,
+) -> bool {
     let mut heat: f32 = if gentle { 0.3 } else { 1.0 };
     // A big map gets fewer, proportionally cooler steps: the cost of a step
     // grows with the pairs of nodes, and the picture settles all the same.
@@ -2326,67 +2404,32 @@ fn settle(nodes: &mut [Node], links: &[Link], steps: usize, gentle: bool) {
     };
     let cooling = 0.988_f32.powf(planned as f32 / steps.max(1) as f32);
     for _ in 0..steps {
-        tick(nodes, links, heat);
+        if cancelled() {
+            return false;
+        }
+        tick_with(solver, nodes, links, heat);
         heat = (heat * cooling).max(0.02);
     }
     for node in nodes.iter_mut() {
         node.vel = (0.0, 0.0);
     }
+    true
 }
 
 /// One step: repulsion, springs, island cohesion, gentle centering and
 /// collision.
 fn tick(nodes: &mut [Node], links: &[Link], heat: f32) {
+    tick_with(solver_for(nodes.len()), nodes, links, heat);
+}
+
+fn tick_with(solver: Solver, nodes: &mut [Node], links: &[Link], heat: f32) {
     let count = nodes.len();
-    // Repulsion fades with the square of the distance and nothing collides
-    // beyond a few dozen pixels, so pairs farther apart than REACH are not
-    // looked at: nodes are bucketed in a grid of that size and each one
-    // meets only its own and the eight surrounding cells, in index order,
-    // exactly the pairs (and the order) the all-pairs loop would have used
-    // within reach. This is what keeps a thousand nodes from taking seconds.
-    let mut grid: std::collections::HashMap<(i32, i32), Vec<usize>> =
-        std::collections::HashMap::with_capacity(count);
-    for (index, node) in nodes.iter().enumerate() {
-        grid.entry(cell_of(node.pos)).or_default().push(index);
-    }
-    let mut near: Vec<usize> = Vec::new();
-    for i in 0..count {
-        near.clear();
-        let (cx, cy) = cell_of(nodes[i].pos);
-        for gx in cx - 1..=cx + 1 {
-            for gy in cy - 1..=cy + 1 {
-                if let Some(cell) = grid.get(&(gx, gy)) {
-                    near.extend(cell.iter().copied().filter(|j| *j > i));
-                }
-            }
-        }
-        near.sort_unstable();
-        for &j in &near {
-            let (dx, dy) = (
-                nodes[j].pos.0 - nodes[i].pos.0,
-                nodes[j].pos.1 - nodes[i].pos.1,
-            );
-            let mut d2 = dx * dx + dy * dy;
-            if d2 < 0.01 {
-                d2 = 0.01;
-            }
-            let distance = d2.sqrt();
-            let strength =
-                ((nodes[i].charge() + nodes[j].charge()) * 0.5 / d2 * heat).min(MAX_PUSH);
-            let (ux, uy) = (dx / distance, dy / distance);
-            nodes[i].vel.0 -= ux * strength;
-            nodes[i].vel.1 -= uy * strength;
-            nodes[j].vel.0 += ux * strength;
-            nodes[j].vel.1 += uy * strength;
-            // Collision keeps shapes and labels from piling up.
-            let room = nodes[i].radius() + nodes[j].radius() + 14.0;
-            if distance < room {
-                let push = (room - distance) * 0.25;
-                nodes[i].pos.0 -= ux * push;
-                nodes[i].pos.1 -= uy * push;
-                nodes[j].pos.0 += ux * push;
-                nodes[j].pos.1 += uy * push;
-            }
+    match solver {
+        Solver::AllPairs => repel_all_pairs(nodes, heat),
+        Solver::Grid => repel_grid(nodes, heat),
+        Solver::BarnesHut => {
+            repel_barnes_hut(nodes, heat);
+            collide_grid(nodes);
         }
     }
     for link in links {
@@ -2407,21 +2450,53 @@ fn tick(nodes: &mut [Node], links: &[Link], heat: f32) {
     let tops: Vec<usize> = (0..count)
         .filter(|index| nodes[*index].cluster == Some(*index))
         .collect();
-    for (order, &i) in tops.iter().enumerate() {
-        for &j in tops.iter().skip(order + 1) {
-            let (dx, dy) = (
-                nodes[j].pos.0 - nodes[i].pos.0,
-                nodes[j].pos.1 - nodes[i].pos.1,
-            );
-            let distance = (dx * dx + dy * dy).sqrt().max(0.1);
-            let reach = 230.0;
-            if distance < reach {
-                let push = (reach - distance) * 0.05 * heat.max(0.2);
-                let (ux, uy) = (dx / distance, dy / distance);
-                nodes[i].vel.0 -= ux * push;
-                nodes[i].vel.1 -= uy * push;
-                nodes[j].vel.0 += ux * push;
-                nodes[j].vel.1 += uy * push;
+    let separate = |nodes: &mut [Node], i: usize, j: usize| {
+        let (dx, dy) = (
+            nodes[j].pos.0 - nodes[i].pos.0,
+            nodes[j].pos.1 - nodes[i].pos.1,
+        );
+        let distance = (dx * dx + dy * dy).sqrt().max(0.1);
+        let reach = ISLAND_REACH;
+        if distance < reach {
+            let push = (reach - distance) * 0.05 * heat.max(0.2);
+            let (ux, uy) = (dx / distance, dy / distance);
+            nodes[i].vel.0 -= ux * push;
+            nodes[i].vel.1 -= uy * push;
+            nodes[j].vel.0 += ux * push;
+            nodes[j].vel.1 += uy * push;
+        }
+    };
+    if solver == Solver::AllPairs {
+        for (order, &i) in tops.iter().enumerate() {
+            for &j in tops.iter().skip(order + 1) {
+                separate(nodes, i, j);
+            }
+        }
+    } else {
+        // Same pairs (within reach), found through a grid of the reach's size.
+        let cell = |pos: (f32, f32)| {
+            let c = |v: f32| (v / ISLAND_REACH).floor().clamp(-100_000.0, 100_000.0) as i32;
+            (c(pos.0), c(pos.1))
+        };
+        let mut grid: std::collections::HashMap<(i32, i32), Vec<usize>> =
+            std::collections::HashMap::with_capacity(tops.len());
+        for &top in &tops {
+            grid.entry(cell(nodes[top].pos)).or_default().push(top);
+        }
+        let mut near: Vec<usize> = Vec::new();
+        for &i in &tops {
+            near.clear();
+            let (cx, cy) = cell(nodes[i].pos);
+            for gx in cx - 1..=cx + 1 {
+                for gy in cy - 1..=cy + 1 {
+                    if let Some(members) = grid.get(&(gx, gy)) {
+                        near.extend(members.iter().copied().filter(|j| *j > i));
+                    }
+                }
+            }
+            near.sort_unstable();
+            for &j in &near {
+                separate(nodes, i, j);
             }
         }
     }
@@ -2448,6 +2523,313 @@ fn tick(nodes: &mut [Node], links: &[Link], heat: f32) {
         node.pos.1 += node.vel.1;
         node.vel.0 *= 0.55;
         node.vel.1 *= 0.55;
+    }
+}
+
+/// How far apart two islands' tops are kept.
+const ISLAND_REACH: f32 = 230.0;
+
+/// The push between one pair, and the collision that keeps shapes and
+/// labels from piling up. Shared by the all-pairs and grid solvers.
+fn pair_interaction(nodes: &mut [Node], i: usize, j: usize, heat: f32) {
+    let (dx, dy) = (
+        nodes[j].pos.0 - nodes[i].pos.0,
+        nodes[j].pos.1 - nodes[i].pos.1,
+    );
+    let mut d2 = dx * dx + dy * dy;
+    if d2 < 0.01 {
+        d2 = 0.01;
+    }
+    let distance = d2.sqrt();
+    let strength = ((nodes[i].charge() + nodes[j].charge()) * 0.5 / d2 * heat).min(MAX_PUSH);
+    let (ux, uy) = (dx / distance, dy / distance);
+    nodes[i].vel.0 -= ux * strength;
+    nodes[i].vel.1 -= uy * strength;
+    nodes[j].vel.0 += ux * strength;
+    nodes[j].vel.1 += uy * strength;
+    let room = nodes[i].radius() + nodes[j].radius() + 14.0;
+    if distance < room {
+        let push = (room - distance) * 0.25;
+        nodes[i].pos.0 -= ux * push;
+        nodes[i].pos.1 -= uy * push;
+        nodes[j].pos.0 += ux * push;
+        nodes[j].pos.1 += uy * push;
+    }
+}
+
+fn repel_all_pairs(nodes: &mut [Node], heat: f32) {
+    for i in 0..nodes.len() {
+        for j in i + 1..nodes.len() {
+            pair_interaction(nodes, i, j, heat);
+        }
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+/// Repulsion fades with the square of the distance and nothing collides
+/// beyond a few dozen pixels, so pairs farther apart than REACH are not
+/// looked at: nodes are bucketed in a grid of that size and each one meets
+/// only its own and the eight surrounding cells, in index order.
+fn repel_grid(nodes: &mut [Node], heat: f32) {
+    let count = nodes.len();
+    let mut grid: std::collections::HashMap<(i32, i32), Vec<usize>> =
+        std::collections::HashMap::with_capacity(count);
+    for (index, node) in nodes.iter().enumerate() {
+        grid.entry(cell_of(node.pos)).or_default().push(index);
+    }
+    let mut near: Vec<usize> = Vec::new();
+    for i in 0..count {
+        near.clear();
+        let (cx, cy) = cell_of(nodes[i].pos);
+        for gx in cx - 1..=cx + 1 {
+            for gy in cy - 1..=cy + 1 {
+                if let Some(cell) = grid.get(&(gx, gy)) {
+                    near.extend(cell.iter().copied().filter(|j| *j > i));
+                }
+            }
+        }
+        near.sort_unstable();
+        for &j in &near {
+            pair_interaction(nodes, i, j, heat);
+        }
+    }
+}
+
+/// Side of the grid cell collision uses: the widest room two nodes can need
+/// (two big components and the margin) fits in a neighbouring cell.
+const COLLIDE_CELL: f32 = 80.0;
+
+/// Collision only, through a fine grid (the repulsion of the Barnes-Hut
+/// solver comes from the tree).
+fn collide_grid(nodes: &mut [Node]) {
+    let count = nodes.len();
+    let cell = |pos: (f32, f32)| {
+        let c = |v: f32| (v / COLLIDE_CELL).floor().clamp(-100_000.0, 100_000.0) as i32;
+        (c(pos.0), c(pos.1))
+    };
+    let mut grid: std::collections::HashMap<(i32, i32), Vec<usize>> =
+        std::collections::HashMap::with_capacity(count);
+    for (index, node) in nodes.iter().enumerate() {
+        grid.entry(cell(node.pos)).or_default().push(index);
+    }
+    let mut near: Vec<usize> = Vec::new();
+    for i in 0..count {
+        near.clear();
+        let (cx, cy) = cell(nodes[i].pos);
+        for gx in cx - 1..=cx + 1 {
+            for gy in cy - 1..=cy + 1 {
+                if let Some(members) = grid.get(&(gx, gy)) {
+                    near.extend(members.iter().copied().filter(|j| *j > i));
+                }
+            }
+        }
+        near.sort_unstable();
+        for &j in &near {
+            let (dx, dy) = (
+                nodes[j].pos.0 - nodes[i].pos.0,
+                nodes[j].pos.1 - nodes[i].pos.1,
+            );
+            let distance = (dx * dx + dy * dy).sqrt().max(0.1);
+            let room = nodes[i].radius() + nodes[j].radius() + 14.0;
+            if distance < room {
+                let (ux, uy) = (dx / distance, dy / distance);
+                let push = (room - distance) * 0.25;
+                nodes[i].pos.0 -= ux * push;
+                nodes[i].pos.1 -= uy * push;
+                nodes[j].pos.0 += ux * push;
+                nodes[j].pos.1 += uy * push;
+            }
+        }
+    }
+}
+
+/// Barnes-Hut opening angle: a group is one force when its size over its
+/// distance is under this. Higher is faster and rougher.
+const THETA: f32 = 0.9;
+
+/// One square of the quadtree.
+struct Quad {
+    /// Centre and half side.
+    cx: f32,
+    cy: f32,
+    half: f32,
+    /// Summed charge, charge-weighted centre and how many nodes it holds.
+    charge: f32,
+    com: (f32, f32),
+    count: usize,
+    /// Children (north-west, north-east, south-west, south-east), or none.
+    children: Option<[usize; 4]>,
+    /// The nodes held while it is a leaf.
+    members: Vec<usize>,
+}
+
+/// A leaf splits past this many nodes, unless it is too small to split.
+const LEAF_CAPACITY: usize = 6;
+
+fn build_quadtree(nodes: &[Node]) -> Vec<Quad> {
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for node in nodes {
+        min_x = min_x.min(node.pos.0);
+        min_y = min_y.min(node.pos.1);
+        max_x = max_x.max(node.pos.0);
+        max_y = max_y.max(node.pos.1);
+    }
+    let half = ((max_x - min_x).max(max_y - min_y) / 2.0).max(1.0) + 1.0;
+    let mut arena = vec![Quad {
+        cx: (min_x + max_x) / 2.0,
+        cy: (min_y + max_y) / 2.0,
+        half,
+        charge: 0.0,
+        com: (0.0, 0.0),
+        count: 0,
+        children: None,
+        members: Vec::new(),
+    }];
+    for (index, node) in nodes.iter().enumerate() {
+        quad_insert(&mut arena, nodes, 0, index, node.pos, 0);
+    }
+    quad_summarise(&mut arena, nodes, 0);
+    arena
+}
+
+fn quad_insert(
+    arena: &mut Vec<Quad>,
+    nodes: &[Node],
+    at: usize,
+    index: usize,
+    pos: (f32, f32),
+    depth: usize,
+) {
+    if let Some(children) = arena[at].children {
+        let child = children[quadrant(&arena[at], pos)];
+        quad_insert(arena, nodes, child, index, pos, depth + 1);
+        return;
+    }
+    arena[at].members.push(index);
+    if arena[at].members.len() <= LEAF_CAPACITY || depth >= 24 {
+        return;
+    }
+    // Split: four children, and the members move down into them.
+    let (cx, cy, half) = (arena[at].cx, arena[at].cy, arena[at].half / 2.0);
+    let first = arena.len();
+    for (dx, dy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+        arena.push(Quad {
+            cx: cx + dx * half,
+            cy: cy + dy * half,
+            half,
+            charge: 0.0,
+            com: (0.0, 0.0),
+            count: 0,
+            children: None,
+            members: Vec::new(),
+        });
+    }
+    arena[at].children = Some([first, first + 1, first + 2, first + 3]);
+    let moved = std::mem::take(&mut arena[at].members);
+    for member in moved {
+        let pos = nodes[member].pos;
+        let child = first + quadrant(&arena[at], pos);
+        quad_insert(arena, nodes, child, member, pos, depth + 1);
+    }
+}
+
+fn quadrant(quad: &Quad, pos: (f32, f32)) -> usize {
+    usize::from(pos.0 >= quad.cx) + 2 * usize::from(pos.1 >= quad.cy)
+}
+
+fn quad_summarise(arena: &mut [Quad], nodes: &[Node], at: usize) {
+    if let Some(children) = arena[at].children {
+        let (mut charge, mut x, mut y, mut count) = (0.0_f32, 0.0_f32, 0.0_f32, 0);
+        for child in children {
+            quad_summarise(arena, nodes, child);
+            let quad = &arena[child];
+            charge += quad.charge;
+            x += quad.com.0 * quad.charge;
+            y += quad.com.1 * quad.charge;
+            count += quad.count;
+        }
+        arena[at].charge = charge;
+        arena[at].count = count;
+        arena[at].com = if charge > 0.0 {
+            (x / charge, y / charge)
+        } else {
+            (arena[at].cx, arena[at].cy)
+        };
+    } else {
+        let (mut charge, mut x, mut y) = (0.0_f32, 0.0_f32, 0.0_f32);
+        for &member in &arena[at].members {
+            let node = &nodes[member];
+            let q = node.charge();
+            charge += q;
+            x += node.pos.0 * q;
+            y += node.pos.1 * q;
+        }
+        arena[at].charge = charge;
+        arena[at].count = arena[at].members.len();
+        arena[at].com = if charge > 0.0 {
+            (x / charge, y / charge)
+        } else {
+            (arena[at].cx, arena[at].cy)
+        };
+    }
+}
+
+/// Repulsion by the tree: the same law and reach as the grid solver, with
+/// groups far enough away (by [`THETA`]) counted as one body.
+fn repel_barnes_hut(nodes: &mut [Node], heat: f32) {
+    let arena = build_quadtree(nodes);
+    let mut stack: Vec<usize> = Vec::new();
+    for i in 0..nodes.len() {
+        let (px, py) = nodes[i].pos;
+        let charge = nodes[i].charge();
+        let (mut fx, mut fy) = (0.0_f32, 0.0_f32);
+        stack.clear();
+        stack.push(0);
+        while let Some(at) = stack.pop() {
+            let quad = &arena[at];
+            if quad.count == 0 {
+                continue;
+            }
+            // Out of reach altogether: the box is farther than REACH.
+            let gap_x = ((quad.cx - px).abs() - quad.half).max(0.0);
+            let gap_y = ((quad.cy - py).abs() - quad.half).max(0.0);
+            if gap_x * gap_x + gap_y * gap_y > REACH * REACH {
+                continue;
+            }
+            let leaf = quad.children.is_none();
+            if !leaf {
+                let (dx, dy) = (quad.com.0 - px, quad.com.1 - py);
+                let d2 = (dx * dx + dy * dy).max(0.01);
+                let size = quad.half * 2.0;
+                // A group is one body only when it is small for its
+                // distance and well clear of anything that could collide.
+                if size * size < THETA * THETA * d2 && d2.sqrt() > size + COLLIDE_CELL {
+                    let distance = d2.sqrt();
+                    let n = quad.count as f32;
+                    let strength = ((n * charge + quad.charge) * 0.5 / d2 * heat).min(MAX_PUSH * n);
+                    fx -= dx / distance * strength;
+                    fy -= dy / distance * strength;
+                    continue;
+                }
+                if let Some(children) = quad.children {
+                    stack.extend(children);
+                }
+                continue;
+            }
+            for &j in &quad.members {
+                if j == i {
+                    continue;
+                }
+                let (dx, dy) = (nodes[j].pos.0 - px, nodes[j].pos.1 - py);
+                let d2 = (dx * dx + dy * dy).max(0.01);
+                let distance = d2.sqrt();
+                let strength = ((charge + nodes[j].charge()) * 0.5 / d2 * heat).min(MAX_PUSH);
+                fx -= dx / distance * strength;
+                fy -= dy / distance * strength;
+            }
+        }
+        nodes[i].vel.0 += fx;
+        nodes[i].vel.1 += fy;
     }
 }
 
@@ -2738,5 +3120,221 @@ mod tests {
             let moved = ((node.pos.0 - old.0).powi(2) + (node.pos.1 - old.1).powi(2)).sqrt();
             assert!(moved < 40.0, "{} moved {moved}", node.label);
         }
+    }
+
+    // ---- layout benchmark ------------------------------------------------
+
+    /// A synthetic map straight at the layout level (no `build`): islands of
+    /// `size` nodes, a component and its decisions.
+    fn islands(total: usize, size: usize) -> (Vec<Node>, Vec<Link>) {
+        let mut nodes: Vec<Node> = Vec::with_capacity(total);
+        let mut links = Vec::new();
+        let mut head = 0;
+        for n in 0..total {
+            let first = n % size == 0;
+            if first {
+                head = n;
+            }
+            nodes.push(Node {
+                node: NodeRef {
+                    kind: if first {
+                        NodeKind::Entity
+                    } else {
+                        NodeKind::Decision
+                    },
+                    id: format!("n{n}"),
+                },
+                kind: if first {
+                    Kind::Component
+                } else {
+                    Kind::Decision
+                },
+                label: format!("n{n}").into(),
+                detail: SharedString::default(),
+                folded: 0,
+                home: None,
+                cluster: Some(head),
+                degree: 0,
+                weight: (0, 0),
+                conflict: false,
+                pos: (0.0, 0.0),
+                vel: (0.0, 0.0),
+                shade: 1.0,
+                stagger: 0.0,
+            });
+            if !first {
+                links.push(Link {
+                    a: n,
+                    b: head,
+                    kind: LinkKind::Affects,
+                });
+            }
+        }
+        for link in &links {
+            nodes[link.a].degree += 1;
+            nodes[link.b].degree += 1;
+        }
+        (nodes, links)
+    }
+
+    /// One component with every other node hanging from it: the worst case
+    /// for a grid, since everything sits within reach of everything.
+    fn hub(total: usize) -> (Vec<Node>, Vec<Link>) {
+        islands(total, total)
+    }
+
+    /// Quality numbers of a finished layout: pairs of shapes overlapping,
+    /// how far links are from their rest length (mean of length / rest),
+    /// and the radius that holds the picture.
+    fn quality(nodes: &[Node], links: &[Link]) -> (usize, f32, f32) {
+        let mut grid: std::collections::HashMap<(i32, i32), Vec<usize>> =
+            std::collections::HashMap::new();
+        let cell = |pos: (f32, f32)| ((pos.0 / 80.0).floor() as i32, (pos.1 / 80.0).floor() as i32);
+        for (index, node) in nodes.iter().enumerate() {
+            grid.entry(cell(node.pos)).or_default().push(index);
+        }
+        let mut overlaps = 0;
+        for (i, a) in nodes.iter().enumerate() {
+            let (cx, cy) = cell(a.pos);
+            for gx in cx - 1..=cx + 1 {
+                for gy in cy - 1..=cy + 1 {
+                    for &j in grid
+                        .get(&(gx, gy))
+                        .into_iter()
+                        .flatten()
+                        .filter(|j| **j > i)
+                    {
+                        let b = &nodes[j];
+                        let gap =
+                            ((a.pos.0 - b.pos.0).powi(2) + (a.pos.1 - b.pos.1).powi(2)).sqrt();
+                        if gap < a.radius() + b.radius() {
+                            overlaps += 1;
+                        }
+                    }
+                }
+            }
+        }
+        let ratio = links
+            .iter()
+            .map(|link| {
+                let (a, b) = (&nodes[link.a], &nodes[link.b]);
+                ((a.pos.0 - b.pos.0).powi(2) + (a.pos.1 - b.pos.1).powi(2)).sqrt() / link.rest()
+            })
+            .sum::<f32>()
+            / links.len().max(1) as f32;
+        let extent = nodes
+            .iter()
+            .map(|node| node.pos.0.hypot(node.pos.1))
+            .fold(0.0_f32, f32::max);
+        (overlaps, ratio, extent)
+    }
+
+    /// Compares the solvers on the same maps. Slow and meant for a release
+    /// build, so it is ignored by default:
+    ///
+    /// `cargo test --release -p desktop-gpui --lib layout_benchmark -- --ignored --nocapture`
+    #[test]
+    #[ignore = "benchmark: run in release with --ignored --nocapture"]
+    fn layout_benchmark() {
+        let sizes = [250_usize, 1_000, 2_500, 5_000, 10_000];
+        println!("solver,map,nodes,links,ms,overlaps,link_ratio,extent");
+        for (map, make) in [
+            (
+                "ilhas",
+                (|n| islands(n, 25)) as fn(usize) -> (Vec<Node>, Vec<Link>),
+            ),
+            ("hub", hub as fn(usize) -> (Vec<Node>, Vec<Link>)),
+        ] {
+            for &total in &sizes {
+                for solver in [Solver::AllPairs, Solver::Grid, Solver::BarnesHut] {
+                    // The reference is quadratic: past a point it only costs time.
+                    let limit = match (solver, map) {
+                        (Solver::AllPairs, "hub") => 2_500,
+                        (Solver::AllPairs, _) => 5_000,
+                        (Solver::Grid, "hub") => 5_000,
+                        _ => usize::MAX,
+                    };
+                    if total > limit {
+                        continue;
+                    }
+                    let mut times = Vec::new();
+                    let mut last = None;
+                    for _ in 0..2 {
+                        let (mut nodes, links) = make(total);
+                        place(&mut nodes, &links, &BTreeMap::new());
+                        let started = std::time::Instant::now();
+                        settle_with(solver, &mut nodes, &links, SETTLE_STEPS, false, &|| false);
+                        times.push(started.elapsed().as_secs_f64() * 1000.0);
+                        last = Some((nodes, links));
+                    }
+                    times.sort_by(f64::total_cmp);
+                    let (nodes, links) = last.expect("ran");
+                    let (overlaps, ratio, extent) = quality(&nodes, &links);
+                    println!(
+                        "{solver:?},{map},{total},{},{:.1},{overlaps},{ratio:.2},{extent:.0}",
+                        links.len(),
+                        times[0]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn barnes_hut_keeps_the_layout_finite_and_comparable_to_the_grid() {
+        let (mut grid, links) = islands(1_000, 25);
+        let mut tree = grid.clone();
+        place(&mut grid, &links, &BTreeMap::new());
+        place(&mut tree, &links, &BTreeMap::new());
+        settle_with(
+            Solver::Grid,
+            &mut grid,
+            &links,
+            SETTLE_STEPS,
+            false,
+            &|| false,
+        );
+        settle_with(
+            Solver::BarnesHut,
+            &mut tree,
+            &links,
+            SETTLE_STEPS,
+            false,
+            &|| false,
+        );
+        for node in &tree {
+            assert!(node.pos.0.is_finite() && node.pos.1.is_finite());
+            assert!(node.pos.0.abs() < 50_000.0 && node.pos.1.abs() < 50_000.0);
+        }
+        let (grid_overlaps, grid_ratio, _) = quality(&grid, &links);
+        let (tree_overlaps, tree_ratio, _) = quality(&tree, &links);
+        assert!(
+            tree_ratio < grid_ratio * 1.5 + 0.5,
+            "links stretched: tree {tree_ratio}, grid {grid_ratio}"
+        );
+        assert!(
+            tree_overlaps <= grid_overlaps + 50,
+            "overlaps: tree {tree_overlaps}, grid {grid_overlaps}"
+        );
+    }
+
+    #[test]
+    fn a_cancelled_layout_stops_between_steps() {
+        let (mut nodes, links) = islands(500, 25);
+        place(&mut nodes, &links, &BTreeMap::new());
+        let steps = std::cell::Cell::new(0);
+        let finished = settle_with(
+            Solver::Grid,
+            &mut nodes,
+            &links,
+            SETTLE_STEPS,
+            false,
+            &|| {
+                steps.set(steps.get() + 1);
+                steps.get() > 3
+            },
+        );
+        assert!(!finished);
+        assert_eq!(steps.get(), 4);
     }
 }

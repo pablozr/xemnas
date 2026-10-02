@@ -3,8 +3,10 @@
 **Data:** 2026-10-02. Fontes consultadas nesta data.
 **Pergunta:** como tornar o mapa em grafo e em blocos utilizável acima dos cerca de
 2.500 itens relatados pelo usuário, preservando GPUI, dados reais e interação?
-**Status:** Aberta. Fontes, diagnóstico e plano técnico concluídos; microbenchmark
-isolado executado. Otimizações e benchmark integrado do aplicativo pendentes.
+**Status:** Em implementação. Fontes, diagnóstico e plano técnico concluídos;
+benchmark de layout em release executado e solver escolhido (Barnes–Hut acima de
+300 nós); agrupamento, corte por viewport, modo barato e cancelamento entregues.
+Benchmark de pintura no aplicativo, índice espacial e read models paginados abertos.
 
 ## Resultado e grau de certeza
 
@@ -436,3 +438,78 @@ Para localizar o gargalo na aplicação real, complementar os spans propostos co
 [WPR/WPA e CPU por thread e stack](https://learn.microsoft.com/en-us/troubleshoot/windows-server/support-tools/support-tools-xperf-wpa-wpr).
 Uma trace ETW completa não foi coletada nesta pesquisa. Não assumir que o
 renderer DirectX do Windows reproduz resultados publicados para Metal no macOS.
+
+## Benchmark de layout dentro do repositório (release, 02/10/2026)
+
+`layout_benchmark` (teste ignorado em `screens/graph.rs`) compara três solvers
+sobre o mesmo mapa sintético, com as 420 iterações planejadas de `settle`
+(reduzidas acima de 200 nós, como no app). Reproduzir:
+
+```powershell
+cargo test --release -p desktop-gpui --lib layout_benchmark -- --ignored --nocapture
+```
+
+- **Solvers:** `AllPairs` (o laço de pares original, referência exata),
+  `Grid` (grade de 420 px; o que o app usava) e `BarnesHut` (quadtree com
+  `theta` 0,9, alcance de 420 px como a grade e colisão por grade fina de 80 px).
+- **Mapas:** `ilhas` (ilhas de 25 nós: um componente e 24 decisões, E ≈ N) e
+  `hub` (um componente com todos os outros nós ligados: pior caso para a grade).
+- **Máquina:** AMD Ryzen 5 5600G, Windows, `rustc 1.98.1`, perfil release; duas
+  execuções por célula, menor tempo registrado; nenhuma compilação ou captura
+  concorrente durante a rodada. Dados em
+  [layout-resultados.csv](assets/escalabilidade/layout-resultados.csv).
+- **Qualidade:** `overlaps` = pares de formas que se sobrepõem; `link_ratio` =
+  comprimento médio das ligações sobre o repouso (1 seria o ideal); `extent` =
+  raio que contém o desenho.
+
+### Mapa em ilhas (ms)
+
+| Nós | AllPairs | Grid | Barnes–Hut | BH contra Grid |
+| ---: | ---: | ---: | ---: | ---: |
+| 250 | 74 | 156 | 96 | 1,6× mais rápido |
+| 1.000 | 360 | 576 | 172 | 3,3× |
+| 2.500 | 2.473 | 2.265 | 578 | 3,9× |
+| 5.000 | 9.589 | 5.870 | 1.269 | 4,6× |
+| 10.000 | (não rodado) | 16.820 | 2.850 | 5,9× |
+
+Qualidade equivalente: 0 sobreposições até 5.000 nós em todos; em 10.000, 4 na
+grade e 2 em Barnes–Hut; `link_ratio` 1,44 a 1,92 nos três, com Barnes–Hut
+ligeiramente menor.
+
+### Mapa em hub (ms)
+
+| Nós | AllPairs | Grid | Barnes–Hut |
+| ---: | ---: | ---: | ---: |
+| 250 | 67 | 167 | 141 |
+| 1.000 | 321 | 778 | 370 |
+| 2.500 | 1.979 | 5.018 | 1.418 |
+| 5.000 | (não rodado) | 20.327 | 4.601 |
+| 10.000 | (não rodado) | (não rodado) | 13.527 |
+
+Aqui as sobreposições existem nos três (183 a 221 em 2.500 nós): milhares de
+nós ao redor de um só ponto não cabem sem se tocar; é o caso que o agrupamento
+em nó de grupo evita no produto.
+
+### O que isto decide
+
+- **A grade nunca foi a mais rápida.** Pagava o custo de tabela de espalhamento
+  e ordenação sem poupar pares quando as ilhas são densas. Foi retirada do app
+  (fica no benchmark como referência).
+- **Barnes–Hut vence a partir de ~1.000 nós, de 3× a 6×, sem perder qualidade.**
+  Em 250 nós o laço exato é o mais rápido e é exato; o app usa `AllPairs` até
+  300 nós e `BarnesHut` acima (`solver_for`).
+- **10.000 nós ainda levam ~2,9 s** (ilhas) em fundo: não congelam a interface,
+  mas o resultado só aparece depois. É o orçamento a atacar com layout
+  incremental e multinível (ver abaixo), não com mais constante.
+- Tempos são do layout isolado; não incluem `build`, SQLite, pintura nem GPU.
+- Limite: duas execuções por célula, uma máquina; não é p95. O experimento
+  anterior (`tick-resultados.csv`, 6,07 s a 2.500 nós em `opt-level=1`) e este
+  (2,27 s para a mesma grade em release) não são comparáveis: perfis diferentes.
+
+### Entregue a partir destes dados
+
+- Solver escolhido por tamanho e **cancelamento entre passos**: a geração mais
+  nova avisa por um contador atômico e o layout em fundo desiste, em vez de
+  terminar um resultado que será descartado.
+- Agrupamento de multidões (nó de grupo), corte por viewport e modo barato de
+  pintura (ver `docs/arquitetura/desempenho-e-escala.md`).

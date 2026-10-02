@@ -100,8 +100,8 @@ const RECENT_DAYS: i64 = 14;
 /// Rows a long list builds first, and how many more "Mostrar mais" adds
 /// (twice this).
 const LIST_PAGE: usize = 12;
-/// Component blocks built at first in the Blocos layout (two per row).
-const BLOCKS_PAGE: usize = 24;
+/// Parts a component block lists before counting the rest.
+const PART_CHIPS: usize = 6;
 /// Most rows a "show all" builds at once; beyond it only pages are offered.
 const MOST_AT_ONCE: usize = 200;
 /// Timeline events built first.
@@ -210,6 +210,12 @@ pub struct MapScreen<S: MapStores> {
     index_rows: Vec<IndexRow>,
     index_list: ListState,
     index_scroll: ScrollMemory,
+    /// The Blocos layout: what it reads from the map, its rows and the
+    /// virtual list that builds only those in view.
+    overview_index: Option<Arc<OverviewIndex>>,
+    overview_rows: Vec<OverviewRow>,
+    overview_list: ListState,
+    overview_scroll: ScrollMemory,
     /// Whether the graph holds older data than the map: its layout is made
     /// when the Grafo layout is first shown.
     graph_stale: bool,
@@ -253,6 +259,9 @@ impl<S: MapStores> MapScreen<S> {
         let index_scroll = ScrollMemory::default();
         let index_list = ListState::new(0, ListAlignment::Top, px(480.0));
         index_scroll.attach(&index_list);
+        let overview_scroll = ScrollMemory::default();
+        let overview_list = ListState::new(0, ListAlignment::Top, px(640.0));
+        overview_scroll.attach(&overview_list);
         Self {
             backend: Some(services),
             project: None,
@@ -279,6 +288,10 @@ impl<S: MapStores> MapScreen<S> {
             index_rows: Vec::new(),
             index_list,
             index_scroll,
+            overview_index: None,
+            overview_rows: Vec::new(),
+            overview_list,
+            overview_scroll,
             graph_stale: true,
             route: None,
             layout: Layout::Blocks,
@@ -2651,7 +2664,6 @@ impl<S: MapStores> MapScreen<S> {
     }
 
     fn render_overview(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let colors = theme.colors;
         let Some(data) = self.data.as_ref() else {
             return div().into_any_element();
         };
@@ -2684,111 +2696,155 @@ impl<S: MapStores> MapScreen<S> {
         if self.layout == Layout::Graph {
             return self.render_graph(theme, cx);
         }
-        let recent_since = (chrono::Utc::now() - chrono::Duration::days(RECENT_DAYS))
-            .format("%Y-%m-%dT%H:%M:%SZ")
-            .to_string();
-        let parent_of: BTreeMap<&str, &str> = map
-            .part_of
-            .iter()
-            .map(|(part, parent)| (part.as_str(), parent.as_str()))
-            .collect();
-        let tops: Vec<&MapEntity> = entities
-            .iter()
-            .filter(|row| {
-                row.entity.kind == EntityKind::Component
-                    && !parent_of.contains_key(row.entity.entity_id.as_str())
-            })
-            .collect();
-        let technologies: Vec<&MapEntity> = entities
-            .iter()
-            .filter(|row| row.entity.kind == EntityKind::Technology)
-            .collect();
-        // Parts by parent, found once instead of a scan per block.
-        let mut parts_of: BTreeMap<&str, Vec<&MapEntity>> = BTreeMap::new();
-        for part in entities {
-            if let Some(parent) = parent_of.get(part.entity.entity_id.as_str()) {
-                parts_of.entry(parent).or_default().push(part);
-            }
+        // What the Blocos layout needs from the map, found once per map (not
+        // per row, per frame): which entities are roots, technologies, and
+        // each block's parts.
+        if self
+            .overview_index
+            .as_ref()
+            .is_none_or(|index| !Arc::ptr_eq(&index.map, &map))
+        {
+            self.overview_index = Some(Arc::new(OverviewIndex::new(Arc::clone(&map))));
         }
-
-        // Blocks are built a page at a time: a project with hundreds of
-        // components keeps the first screens light.
-        let shown = tops.len().min(self.limit("map-blocks", BLOCKS_PAGE));
-        let mut grid = div().flex().flex_col().gap(px(SpacingScale::S3));
-        for pair in tops[..shown].chunks(2) {
-            // Blocks on one line share a height; weight is in the text.
-            let mut line = div().flex().gap(px(SpacingScale::S3)).items_stretch();
-            for row in pair {
-                let parts = parts_of
-                    .get(row.entity.entity_id.as_str())
-                    .map_or(&[][..], Vec::as_slice);
-                let block = self.component_block(theme, row, parts, &recent_since, cx);
-                line = line.child(div().flex_1().min_w(px(0.0)).flex().child(block.flex_1()));
-            }
-            if pair.len() == 1 {
-                line = line.child(div().flex_1());
-            }
-            grid = grid.child(line);
+        let rows = overview_rows(self.overview_index.as_deref().expect("index just built"));
+        if rows != self.overview_rows {
+            let old = self.overview_rows.len();
+            self.overview_list.splice(0..old, rows.len());
+            self.overview_rows = rows;
         }
-        if shown < tops.len() {
-            grid = grid.child(self.more_row("map-blocks", BLOCKS_PAGE, tops.len() - shown, cx));
-        }
+        let list = list(
+            self.overview_list.clone(),
+            cx.processor(|this, ix: usize, _, cx| this.overview_item(ix, cx)),
+        )
+        .size_full();
+        div()
+            .id("map-overview")
+            .relative()
+            .flex_1()
+            .min_h(px(0.0))
+            .child(list)
+            .child(scroll_thumb(
+                theme,
+                &self.overview_list,
+                &self.overview_scroll,
+            ))
+            .into_any_element()
+    }
 
-        let mut chips = div().flex().flex_wrap().gap(px(SpacingScale::S2));
-        for row in &technologies {
-            let id = row.entity.entity_id.clone();
-            let chip = self
-                .row(
-                    format!("map-tech-{id}"),
-                    false,
-                    &row.entity.name,
-                    move |this, cx| this.open_entity(id.clone(), cx),
-                    cx,
-                )
-                .border_1()
-                .border_color(colors.glass_border_card())
-                .bg(colors.glass_fill_card())
-                .child(icon(IconName::Cpu, 14.0, colors.text_muted()))
-                .child(text_style(div(), TypeScale::ROW_TITLE).child(row.entity.name.clone()))
-                .child(
-                    text_style(div(), TypeScale::META)
-                        .text_color(colors.text_muted())
-                        .child(row.decisions.to_string()),
-                );
-            chips = chips.child(chip);
-        }
-
-        let conflicted = tops.iter().any(|row| row.conflicts > 0);
-
-        let switch = self.layout_switch(theme, cx);
-        let mut column = div()
-            .flex()
-            .flex_col()
-            .gap(px(SpacingScale::S8))
-            .child(
+    /// One row of the Blocos layout, built when the virtual list asks.
+    fn overview_item(&mut self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::current(cx);
+        let colors = theme.colors;
+        let (Some(&row), Some(index)) = (self.overview_rows.get(ix), self.overview_index.clone())
+        else {
+            return div().into_any_element();
+        };
+        let map = Arc::clone(&index.map);
+        let last = ix + 1 == self.overview_rows.len();
+        let element = match row {
+            OverviewRow::Header => {
+                let switch = self.layout_switch(&theme, cx);
                 div()
                     .flex()
                     .items_start()
                     .gap(px(SpacingScale::S4))
                     .child(div().flex_1().min_w(px(0.0)).child(page_header(
-                        theme,
+                        &theme,
                         "Mapa do projeto",
                         "A arquitetura desenhada pelas decisões confirmadas. Abra um bloco para ver o que vale ali.",
                     )))
-                    .child(switch),
+                    .child(switch)
+                    .into_any_element()
+            }
+            OverviewRow::Label(label) => div()
+                .pt(px(SpacingScale::S8))
+                .pb(px(SpacingScale::S3))
+                .child(section_label(&theme, label))
+                .into_any_element(),
+            OverviewRow::Blocks(first) => {
+                let recent_since = (chrono::Utc::now() - chrono::Duration::days(RECENT_DAYS))
+                    .format("%Y-%m-%dT%H:%M:%SZ")
+                    .to_string();
+                let pair = &index.tops[first..(first + 2).min(index.tops.len())];
+                // Blocks on one line share a height; weight is in the text.
+                let mut line = div()
+                    .flex()
+                    .gap(px(SpacingScale::S3))
+                    .items_stretch()
+                    .pb(px(SpacingScale::S3));
+                for &top in pair {
+                    let entity = &map.entities[top];
+                    let parts: Vec<&MapEntity> = index
+                        .parts
+                        .get(entity.entity.entity_id.as_str())
+                        .map(|parts| parts.iter().map(|&at| &map.entities[at]).collect())
+                        .unwrap_or_default();
+                    let block = self.component_block(&theme, entity, &parts, &recent_since, cx);
+                    line = line.child(div().flex_1().min_w(px(0.0)).flex().child(block.flex_1()));
+                }
+                if pair.len() == 1 {
+                    line = line.child(div().flex_1());
+                }
+                line.into_any_element()
+            }
+            OverviewRow::Technologies(first) => {
+                let mut chips = div()
+                    .flex()
+                    .flex_wrap()
+                    .gap(px(SpacingScale::S2))
+                    .pb(px(SpacingScale::S2));
+                for &at in
+                    &index.technologies[first..(first + TECH_ROW).min(index.technologies.len())]
+                {
+                    let row = &map.entities[at];
+                    let id = row.entity.entity_id.clone();
+                    chips = chips.child(
+                        self.row(
+                            format!("map-tech-{id}"),
+                            false,
+                            &row.entity.name,
+                            move |this, cx| this.open_entity(id.clone(), cx),
+                            cx,
+                        )
+                        .border_1()
+                        .border_color(colors.glass_border_card())
+                        .bg(colors.glass_fill_card())
+                        .child(icon(IconName::Cpu, 14.0, colors.text_muted()))
+                        .child(
+                            text_style(div(), TypeScale::ROW_TITLE).child(row.entity.name.clone()),
+                        )
+                        .child(
+                            text_style(div(), TypeScale::META)
+                                .text_color(colors.text_muted())
+                                .child(row.decisions.to_string()),
+                        ),
+                    );
+                }
+                chips.into_any_element()
+            }
+            OverviewRow::Conflict => div()
+                .pt(px(SpacingScale::S6))
+                .child(legend_item(
+                    &theme,
+                    status_dot(colors.status_warning()),
+                    "decisões em conflito",
+                ))
+                .into_any_element(),
+        };
+        // The reading column, centred; the page's own padding at the ends.
+        div()
+            .w_full()
+            .px(px(SpacingScale::S8))
+            .when(ix == 0, |row| row.pt(px(SpacingScale::S8)))
+            .when(last, |row| row.pb(px(SpacingScale::S8)))
+            .child(
+                div()
+                    .w_full()
+                    .max_w(px(READING_WIDTH))
+                    .mx_auto()
+                    .child(element),
             )
-            .child(section(theme, "Componentes", grid));
-        if !technologies.is_empty() {
-            column = column.child(section(theme, "Tecnologias", chips));
-        }
-        if conflicted {
-            column = column.child(legend_item(
-                theme,
-                status_dot(colors.status_warning()),
-                "decisões em conflito",
-            ));
-        }
-        reading_page("map-overview", column).into_any_element()
+            .into_any_element()
     }
 
     fn component_block(
@@ -2814,7 +2870,7 @@ impl<S: MapStores> MapScreen<S> {
             .filter(|_| recent)
             .map(|at| format!("mudou em {}", short_date(at)));
         let mut parts_row = div().flex().flex_wrap().gap(px(SpacingScale::S2));
-        for part in parts {
+        for part in parts.iter().take(PART_CHIPS) {
             let part_id = part.entity.entity_id.clone();
             parts_row = parts_row.child(
                 self.row(
@@ -2832,6 +2888,17 @@ impl<S: MapStores> MapScreen<S> {
                         .text_color(colors.text_muted())
                         .child(part.decisions.to_string()),
                 ),
+            );
+        }
+        // A block shows a handful of parts and counts the rest: the list of
+        // all of them lives on the component's page.
+        if parts.len() > PART_CHIPS {
+            parts_row = parts_row.child(
+                text_style(div(), TypeScale::META)
+                    .px(px(SpacingScale::S2))
+                    .py(px(SpacingScale::S2))
+                    .text_color(colors.text_muted())
+                    .child(format!("+{} partes", parts.len() - PART_CHIPS)),
             );
         }
         div()
@@ -3380,6 +3447,88 @@ fn index_rows(entities: &[MapEntity]) -> Vec<IndexRow> {
         if rows.len() == before {
             rows.push(IndexRow::Nothing(kind));
         }
+    }
+    rows
+}
+
+/// Technology chips per row of the Blocos layout.
+const TECH_ROW: usize = 4;
+
+/// A row of the Blocos layout, by key; rows become elements only when they
+/// scroll into view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OverviewRow {
+    /// Title, subtitle and the layout switch.
+    Header,
+    /// A section heading.
+    Label(&'static str),
+    /// Two component blocks, starting at this position in the roots.
+    Blocks(usize),
+    /// A row of technology chips, starting at this position.
+    Technologies(usize),
+    /// The legend for conflicts, when there are any.
+    Conflict,
+}
+
+/// What the Blocos layout reads from a map, indexed once per map.
+struct OverviewIndex {
+    map: Arc<ProjectMap>,
+    /// Positions (in the map's entities) of the top-level components.
+    tops: Vec<usize>,
+    /// Positions of the technologies.
+    technologies: Vec<usize>,
+    /// Positions of each component's parts, by the component's id.
+    parts: BTreeMap<String, Vec<usize>>,
+    /// Whether any top-level component has a conflict.
+    conflicted: bool,
+}
+
+impl OverviewIndex {
+    fn new(map: Arc<ProjectMap>) -> Self {
+        let parent_of: BTreeMap<&str, &str> = map
+            .part_of
+            .iter()
+            .map(|(part, parent)| (part.as_str(), parent.as_str()))
+            .collect();
+        let mut tops = Vec::new();
+        let mut technologies = Vec::new();
+        let mut parts: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (at, row) in map.entities.iter().enumerate() {
+            let id = row.entity.entity_id.as_str();
+            if let Some(parent) = parent_of.get(id) {
+                parts.entry((*parent).to_owned()).or_default().push(at);
+            }
+            match row.entity.kind {
+                EntityKind::Technology => technologies.push(at),
+                EntityKind::Component if !parent_of.contains_key(id) => tops.push(at),
+                EntityKind::Component => {}
+            }
+        }
+        let conflicted = tops.iter().any(|&at| map.entities[at].conflicts > 0);
+        Self {
+            map,
+            tops,
+            technologies,
+            parts,
+            conflicted,
+        }
+    }
+}
+
+/// The rows of the Blocos layout for an index.
+fn overview_rows(index: &OverviewIndex) -> Vec<OverviewRow> {
+    let mut rows = vec![OverviewRow::Header, OverviewRow::Label("Componentes")];
+    rows.extend((0..index.tops.len()).step_by(2).map(OverviewRow::Blocks));
+    if !index.technologies.is_empty() {
+        rows.push(OverviewRow::Label("Tecnologias"));
+        rows.extend(
+            (0..index.technologies.len())
+                .step_by(TECH_ROW)
+                .map(OverviewRow::Technologies),
+        );
+    }
+    if index.conflicted {
+        rows.push(OverviewRow::Conflict);
     }
     rows
 }
