@@ -853,11 +853,19 @@ impl GraphCanvas {
                         .child(label),
                 )
         };
+        // A quiet plate behind it: on a crowded map the nodes would show
+        // through the words.
         div()
             .flex()
             .flex_wrap()
             .gap_x(px(SpacingScale::S3))
             .gap_y(px(SpacingScale::S1))
+            .px(px(SpacingScale::S3))
+            .py(px(SpacingScale::S2))
+            .rounded(theme.radius.control())
+            .border_1()
+            .border_color(colors.hairline_divider())
+            .bg(colors.canvas_deep().alpha(0.82))
             .child(item(
                 div()
                     .size(px(12.0))
@@ -882,6 +890,21 @@ impl GraphCanvas {
                     .rounded_full()
                     .bg(colors.graph_decision()),
                 "Decisão",
+            ))
+            .child(item(
+                div()
+                    .size(px(10.0))
+                    .rounded_full()
+                    .border_1()
+                    .border_color(colors.graph_decision())
+                    .child(
+                        div()
+                            .m(px(2.5))
+                            .size(px(3.0))
+                            .rounded_full()
+                            .bg(colors.graph_decision()),
+                    ),
+                "Agrupadas",
             ))
             .child(item(
                 div()
