@@ -1,5 +1,5 @@
 //! Versioned decision documents with an independent chronological index.
-use super::format::short_date;
+use super::format::{relative, short_date};
 use super::{
     decision_editor::{DecisionEditor, RevisionEvent},
     evidence::{self, SourceLines},
@@ -870,7 +870,7 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
                 let entry = IndexEntry {
                     id: row.decision_id.clone(),
                     question: row.question.clone(),
-                    meta: short_date(&row.confirmed_at),
+                    meta: relative(&row.confirmed_at),
                     version: Some(row.version),
                     status: Some(row.status),
                 };

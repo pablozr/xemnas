@@ -31,6 +31,27 @@ pub(super) fn short_date(value: &str) -> String {
         .unwrap_or_else(|| value.to_owned())
 }
 
+/// How long ago, in the shortest honest form: `agora`, `17 min`, `2 h`,
+/// `3 d`; a week or more (or a future time) is the date, `29 set 2026`.
+pub(super) fn relative(value: &str) -> String {
+    relative_at(value, Local::now())
+}
+
+fn relative_at(value: &str, now: DateTime<Local>) -> String {
+    let Some(date) = local(value) else {
+        return value.to_owned();
+    };
+    let seconds = (now - date).num_seconds();
+    match seconds {
+        s if s < 0 => day(&date),
+        s if s < 60 => "agora".to_owned(),
+        s if s < 3600 => format!("{} min", s / 60),
+        s if s < 86_400 => format!("{} h", s / 3600),
+        s if s < 7 * 86_400 => format!("{} d", s / 86_400),
+        _ => day(&date),
+    }
+}
+
 /// `29 set 2026, 10:00`; an unparsable value is shown as recorded.
 pub(super) fn date_time(value: &str) -> String {
     local(value)
@@ -153,6 +174,27 @@ mod tests {
         assert_eq!(calendar_date("2026-09-01T00:00:00Z"), "1 set 2026");
         assert_eq!(calendar_date("2026-09-01"), "1 set 2026");
         assert_eq!(clock("short"), None);
+    }
+
+    #[test]
+    fn says_how_long_ago_for_the_last_week() {
+        let now = DateTime::parse_from_rfc3339("2026-10-02T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Local);
+        let ago = |value: &str| relative_at(value, now);
+        assert_eq!(ago("2026-10-02T11:59:50Z"), "agora");
+        assert_eq!(ago("2026-10-02T11:43:00Z"), "17 min");
+        assert_eq!(ago("2026-10-02T10:00:00Z"), "2 h");
+        assert_eq!(ago("2026-09-29T12:00:00Z"), "3 d");
+        assert_eq!(
+            ago("2026-09-01T12:00:00Z"),
+            short_date("2026-09-01T12:00:00Z")
+        );
+        assert_eq!(
+            ago("2026-10-05T12:00:00Z"),
+            short_date("2026-10-05T12:00:00Z")
+        );
+        assert_eq!(ago("short"), "short");
     }
 
     #[test]

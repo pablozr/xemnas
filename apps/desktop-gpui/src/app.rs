@@ -235,6 +235,8 @@ pub struct Shell<
     _context_subscription: Option<Subscription>,
     map: Option<Entity<MapScreen<R>>>,
     _map_subscription: Option<Subscription>,
+    /// Parks the motion loops while the window is not focused.
+    _activation: Option<Subscription>,
     overview: Option<Entity<OverviewScreen>>,
     _overview_subscriptions: Vec<Subscription>,
     /// Destination tab under the pointer, driving the hover spring.
@@ -406,6 +408,7 @@ impl<
             theme: Theme::quiet_glass(),
             focus: cx.focus_handle(),
             search: search.clone(),
+            _activation: None,
             _search_subscription: search_subscription,
             _project_subscription: project_subscription,
             _inbox_subscription: inbox_subscription,
@@ -1720,6 +1723,11 @@ impl<
     > Render for Shell<R>
 {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self._activation.is_none() {
+            self._activation = Some(cx.observe_window_activation(window, |_, window, cx| {
+                crate::ui::motion::clock::set_window_active(window.is_window_active(), cx);
+            }));
+        }
         let _probe = crate::ui::perf::Probe::start("shell");
         if self.route.is_some() {
             self.follow_route(window, cx);

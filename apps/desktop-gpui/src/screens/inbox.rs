@@ -17,7 +17,7 @@ use gpui::{
 };
 
 use super::evidence;
-use super::format::short_date;
+use super::format::{relative, short_date};
 use super::review_editor::{EditorEvent, ReviewEditor};
 use crate::ui::controls::{action_button, button_foreground, ButtonKind};
 use crate::ui::glass::focus_ring;
@@ -692,7 +692,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                     .child(
                         text_style(div(), TypeScale::META)
                             .text_color(theme.colors.text_muted())
-                            .child(short_date(&row.received_at)),
+                            .child(relative(&row.received_at)),
                     )
                     .when(row.status != CandidateStatus::Pending, |line| {
                         line.child(status_badge(row.status, theme))

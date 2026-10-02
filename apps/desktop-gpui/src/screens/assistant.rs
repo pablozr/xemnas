@@ -185,10 +185,19 @@ impl AssistantScreen {
             let mut round = 0_usize;
             loop {
                 cx.background_executor().timer(REST).await;
-                let still = match this.update(cx, |_, cx| cx.reduce_motion()) {
-                    Ok(still) => still,
+                let (still, idle) = match this.update(cx, |_, cx| {
+                    (
+                        cx.reduce_motion(),
+                        !crate::ui::motion::clock::window_active(cx),
+                    )
+                }) {
+                    Ok(state) => state,
                     Err(_) => break,
                 };
+                // Nothing moves in a window nobody is looking at.
+                if idle {
+                    continue;
+                }
                 let gesture = match round % 6 {
                     0 | 3 => Some(Gesture::Blink),
                     2 if !still => Some(Gesture::Look(mascot::LOOK_LEFT)),
