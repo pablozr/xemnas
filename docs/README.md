@@ -17,7 +17,9 @@ alterações pertinentes. O `README.md` da raiz é a apresentação do projeto e
 | [assets/](assets/) | Imagens usadas pelo README da raiz | — |
 
 Pesquisas recentes: [escalar grafos e blocos](pesquisas/escalabilidade-renderizacao-fontes.md),
-com diagnóstico local, alternativas e benchmark reproduzível.
+com diagnóstico local, alternativas e benchmark reproduzível; e
+[plano de design para a vitrine](pesquisas/plano-design-vitrine.md), com capturas
+atuais e [catálogo de referências](pesquisas/design-vitrine-fontes.md).
 
 ## Precedência
 
