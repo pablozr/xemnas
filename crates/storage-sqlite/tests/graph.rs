@@ -5,7 +5,8 @@ mod support;
 
 use application::claims::{Claims, NewClaim};
 use application::graph::{
-    EntityEdit, GraphError, KnowledgeGraph, LinkRequest, NewEntity, NodeRef, TimelineKind,
+    mention_quote, EntityEdit, GraphError, KnowledgeGraph, LinkRequest, NewEntity, NodeRef,
+    TimelineKind,
 };
 use application::projects::Projects;
 use application::relations::DecisionRelations;
@@ -140,6 +141,77 @@ fn suggestions_come_from_captured_files_and_dependencies() {
         .expect("row");
     assert_eq!(row.decisions, 1);
     assert_eq!(map.pending, 0);
+}
+
+#[test]
+fn a_decision_from_a_document_is_tied_to_what_its_text_names_not_to_docs() {
+    let test = support::open("graph-mentions", &["p1"]);
+    let graph = KnowledgeGraph::new(test.store.clone());
+    let docs = component(&graph, "docs", "docs/**");
+    let core = component(&graph, "core", "crates/core/**");
+    let storage = component(&graph, "storage-sqlite", "crates/storage-sqlite/**");
+    let api = component(&graph, "api", "apps/api/**");
+    let sqlite = graph
+        .create_entity(NewEntity {
+            project_id: "p1".into(),
+            kind: Some(EntityKind::Technology),
+            name: "SQLite".into(),
+            ..NewEntity::default()
+        })
+        .expect("create technology")
+        .entity_id;
+    // Taken from an ADR: the only file is the document itself.
+    let decision = support::decision_with_diff(
+        &test.store,
+        "p1",
+        "adr",
+        "Como o core grava os eventos vindos da api sem perder nenhum no SQLite?",
+        &["docs/adr/0003-outbox.md"],
+        "",
+    );
+
+    let report = graph.refresh_suggestions("p1").expect("refresh");
+    assert_eq!(report.new_edges, 2, "core + SQLite, by mention");
+    assert!(
+        report.components.is_empty(),
+        "docs are not proposed as a part"
+    );
+    let pending = graph.suggestions("p1").expect("suggestions");
+    let tied = |entity: &str| pending.iter().find(|row| row.entity.node.id == entity);
+    let affects = tied(&core).expect("core is named");
+    assert_eq!(affects.kind, EdgeKind::Affects);
+    assert_eq!(affects.source.node.id, decision);
+    let quote = mention_quote(&affects.reason).expect("a mention");
+    assert!(quote.contains("o core grava"), "{quote}");
+    assert_eq!(tied(&sqlite).expect("SQLite is named").kind, EdgeKind::Uses);
+    assert!(
+        tied(&docs).is_none(),
+        "the document is evidence, not the part"
+    );
+    assert!(tied(&storage).is_none());
+    assert!(
+        tied(&api).is_none(),
+        "a short name in plain prose is not a mention"
+    );
+
+    // A decision that touched the part keeps the file as the reason.
+    support::decision_with_diff(
+        &test.store,
+        "p1",
+        "code",
+        "Como o core valida a entrada?",
+        &["crates/core/src/lib.rs"],
+        "",
+    );
+    graph.refresh_suggestions("p1").expect("refresh again");
+    let reasons: Vec<String> = graph
+        .suggestions("p1")
+        .expect("suggestions")
+        .into_iter()
+        .filter(|row| row.entity.node.id == core && row.source.node.id != decision)
+        .map(|row| row.reason)
+        .collect();
+    assert_eq!(reasons, vec!["crates/core/src/lib.rs".to_string()]);
 }
 
 #[test]

@@ -1,6 +1,12 @@
 //! Deterministic suggestions from captured work (ADR-0005): which components
-//! the decisions touched, which dependencies they added, and the `affects` /
-//! `uses` edges those imply. No AI, no reading of the repository.
+//! the decisions touched, which dependencies they added, which map entities
+//! their text names, and the `affects` / `uses` edges those imply. No AI, no
+//! reading of the repository.
+//!
+//! Documentation files a decision touched are evidence, not the part it
+//! affects: they never yield `affects` nor a component proposal. A decision
+//! taken from an ADR reaches the parts it is about through the mentions in
+//! its text ([`super::mention`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -9,9 +15,11 @@ use domain::entities::{
 };
 use domain::time::Timestamp;
 
+use super::mention::{entity_terms, mention_reason, Folded, Term};
 use super::{DecisionNode, EdgeRecord, EntityRecord, GraphError, GraphStore, KnowledgeGraph};
 use crate::claims::ClaimStore;
 use crate::clock::now_rfc3339;
+use crate::documents::is_documentation_path;
 use crate::projects::ProjectRepository;
 use crate::relations::RelationStore;
 
@@ -311,8 +319,9 @@ where
     S: GraphStore + RelationStore + ClaimStore + ProjectRepository,
 {
     /// Derives suggestions from the decisions in force: writes the new
-    /// `affects`/`uses` suggestions and lists components and technologies
-    /// worth creating. Rejected suggestions are never proposed again.
+    /// `affects`/`uses` suggestions (from touched files, added dependencies
+    /// and mentions in the text) and lists components and technologies worth
+    /// creating. Rejected suggestions are never proposed again.
     ///
     /// # Errors
     ///
@@ -339,9 +348,25 @@ where
         let mut report = SuggestionReport::default();
         let mut prefixes: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         let mut technologies: BTreeMap<String, (String, BTreeSet<String>)> = BTreeMap::new();
+        // How the text may name each live entity, worked out once.
+        let named: Vec<(&EntityRecord, EdgeKind, Vec<Term>)> = live
+            .iter()
+            .filter_map(|entity| {
+                let kind = match entity.kind {
+                    EntityKind::Component => EdgeKind::Affects,
+                    EntityKind::Technology => EdgeKind::Uses,
+                };
+                let terms = entity_terms(entity);
+                (!terms.is_empty()).then_some((*entity, kind, terms))
+            })
+            .collect();
 
         for decision in &decisions {
-            for file in &decision.files {
+            for file in decision
+                .files
+                .iter()
+                .filter(|file| !is_documentation_path(file))
+            {
                 let components: Vec<&&EntityRecord> = live
                     .iter()
                     .filter(|entity| entity.kind == EntityKind::Component)
@@ -402,6 +427,8 @@ where
                     }
                 }
             }
+            report.new_edges +=
+                self.suggest_mentions(&mut edges, project_id, decision, &named, &now)?;
         }
 
         // Rules adopted from Revisão apply to the components their evidence
@@ -418,7 +445,11 @@ where
             if !valid_claims.contains(&rule.claim_id) {
                 continue;
             }
-            for file in &rule.files {
+            for file in rule
+                .files
+                .iter()
+                .filter(|file| !is_documentation_path(file))
+            {
                 for component in live.iter().filter(|entity| {
                     entity.kind == EntityKind::Component
                         && entity
@@ -526,6 +557,49 @@ where
         Ok(report)
     }
 
+    /// Suggests the entities the decision's text names (question, choice,
+    /// rationale, assumptions, scope, consequences), with the quote as the
+    /// reason. An entity already tied to the decision is not searched for.
+    fn suggest_mentions(
+        &self,
+        edges: &mut Vec<EdgeRecord>,
+        project_id: &str,
+        decision: &DecisionNode,
+        named: &[(&EntityRecord, EdgeKind, Vec<Term>)],
+        now: &str,
+    ) -> Result<usize, GraphError> {
+        if named.is_empty() {
+            return Ok(0);
+        }
+        let texts: Vec<Folded> = [&decision.question, &decision.choice, &decision.rationale]
+            .into_iter()
+            .chain(&decision.context)
+            .map(|text| Folded::new(text))
+            .collect();
+        let source = (NodeKind::Decision, decision.decision_id.as_str());
+        let mut written = 0;
+        for (entity, kind, terms) in named {
+            if edge_exists(edges, *kind, source, &entity.entity_id) {
+                continue;
+            }
+            let quote = terms
+                .iter()
+                .find_map(|term| texts.iter().find_map(|text| text.mention(term)));
+            if let Some(quote) = quote {
+                written += self.suggest(
+                    edges,
+                    project_id,
+                    *kind,
+                    source,
+                    &entity.entity_id,
+                    &mention_reason(&quote),
+                    now,
+                )?;
+            }
+        }
+        Ok(written)
+    }
+
     /// Writes one derived suggestion unless any row for the same edge exists
     /// (pending, confirmed or rejected, or written earlier in this run).
     /// Returns 1 when written.
@@ -541,13 +615,7 @@ where
         now: &str,
     ) -> Result<usize, GraphError> {
         let (source_kind, source_id) = source;
-        let exists = edges.iter().any(|edge| {
-            edge.kind == kind
-                && edge.source_kind == source_kind
-                && edge.source_id == source_id
-                && edge.entity_id == entity_id
-        });
-        if exists {
+        if edge_exists(edges, kind, source, entity_id) {
             return Ok(0);
         }
         let record = EdgeRecord {
@@ -568,6 +636,22 @@ where
         edges.push(record);
         Ok(1)
     }
+}
+
+/// Whether any row (pending, confirmed or rejected) ties `source` to the
+/// entity with `kind`.
+fn edge_exists(
+    edges: &[EdgeRecord],
+    kind: EdgeKind,
+    source: (NodeKind, &str),
+    entity_id: &str,
+) -> bool {
+    edges.iter().any(|edge| {
+        edge.kind == kind
+            && edge.source_kind == source.0
+            && edge.source_id == source.1
+            && edge.entity_id == entity_id
+    })
 }
 
 #[cfg(test)]

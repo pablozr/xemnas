@@ -7,10 +7,12 @@
 
 mod derive;
 mod discover;
+mod mention;
 mod query;
 
 pub use derive::{added_dependencies, ComponentProposal, SuggestionReport, TechnologyProposal};
 pub use discover::{declared_components, DeclaredComponent, WorkspaceKind};
+pub use mention::{mention_quote, mention_reason, MENTION_REASON};
 pub use query::{
     EntityDetail, FileLens, GraphEdge, GraphNode, MapEntity, Neighborhood, NodeRef, NodeSummary,
     ProjectGraph, ProjectMap, Suggestion, TimelineEvent, TimelineKind, DEFAULT_NEIGHBORHOOD_LIMIT,
@@ -222,6 +224,10 @@ pub struct DecisionNode {
     pub question: String,
     /// Choice made.
     pub choice: String,
+    /// Why it was made.
+    pub rationale: String,
+    /// Assumptions, scope and consequences, one text per item.
+    pub context: Vec<String>,
     /// RFC 3339 confirmation time.
     pub confirmed_at: String,
     /// Files the decision's capture changed (`diff_summary.files`).
@@ -629,6 +635,12 @@ pub fn summary_files(summary: &str) -> Vec<String> {
             })
         })
         .unwrap_or_default()
+}
+
+/// A JSON list of strings (`assumptions`, `scope`…); malformed lists have
+/// none.
+pub fn json_strings(list: &str) -> Vec<String> {
+    serde_json::from_str(list).unwrap_or_default()
 }
 
 /// Whether `when` is at or before `at`; unparseable dates never are.

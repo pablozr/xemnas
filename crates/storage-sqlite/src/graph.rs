@@ -1,7 +1,8 @@
 //! SQLite implementation of the knowledge graph port (ADR-0005).
 
 use application::graph::{
-    summary_files, DecisionNode, EdgeRecord, EntityRecord, GraphError, GraphStore, RuleSource,
+    json_strings, summary_files, DecisionNode, EdgeRecord, EntityRecord, GraphError, GraphStore,
+    RuleSource,
 };
 use domain::entities::{EdgeKind, EdgeOrigin, EntityKind, NodeKind};
 use rusqlite::{params, Connection, OptionalExtension, Row};
@@ -212,7 +213,8 @@ impl GraphStore for SqliteStore {
         let mut statement = connection
             .prepare(
                 "SELECT d.decision_id, d.question, d.choice, d.confirmed_at, \
-                        COALESCE(c.diff_summary, '{}'), d.capture_id \
+                        COALESCE(c.diff_summary, '{}'), d.capture_id, d.rationale, \
+                        d.assumptions, d.scope, d.consequences \
                  FROM engineering_decisions d \
                  LEFT JOIN decision_candidates c ON c.id = d.candidate_id \
                  WHERE d.project_id = ?1 \
@@ -221,14 +223,23 @@ impl GraphStore for SqliteStore {
             .map_err(storage_error)?;
         let rows = statement
             .query_map([project_id], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, Option<String>>(5)?,
-                ))
+                // Malformed lists read as empty: they only feed mentions.
+                let mut context = Vec::new();
+                for column in 7..=9 {
+                    let list = row.get::<_, String>(column)?;
+                    context.extend(json_strings(&list));
+                }
+                let decision = DecisionNode {
+                    decision_id: row.get(0)?,
+                    question: row.get(1)?,
+                    choice: row.get(2)?,
+                    rationale: row.get(6)?,
+                    context,
+                    confirmed_at: row.get(3)?,
+                    files: summary_files(&row.get::<_, String>(4)?),
+                    diffs: Vec::new(),
+                };
+                Ok((decision, row.get::<_, Option<String>>(5)?))
             })
             .map_err(storage_error)?
             .collect::<Result<Vec<_>, _>>()
@@ -245,25 +256,17 @@ impl GraphStore for SqliteStore {
             )
             .map_err(storage_error)?;
         let mut decisions = Vec::with_capacity(rows.len());
-        for (decision_id, question, choice, confirmed_at, summary, capture_id) in rows {
-            let diffs = match &capture_id {
-                Some(capture_id) => hunks
-                    .query_map(params![decision_id, capture_id], |row| {
+        for (mut decision, capture_id) in rows {
+            if let Some(capture_id) = &capture_id {
+                decision.diffs = hunks
+                    .query_map(params![decision.decision_id, capture_id], |row| {
                         row.get::<_, String>(0)
                     })
                     .map_err(storage_error)?
                     .collect::<Result<Vec<_>, _>>()
-                    .map_err(storage_error)?,
-                None => Vec::new(),
-            };
-            decisions.push(DecisionNode {
-                decision_id,
-                question,
-                choice,
-                confirmed_at,
-                files: summary_files(&summary),
-                diffs,
-            });
+                    .map_err(storage_error)?;
+            }
+            decisions.push(decision);
         }
         Ok(decisions)
     }
