@@ -190,6 +190,25 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
 - Em Decisões o índice fica à esquerda, como em todo destino. Não há segunda fileira de abas: estado, versão, o acesso ao
   histórico ("Versões") e as ações Exportar/Revisar ficam na linha de metadados
   do documento. Linhas de lista e abas têm hover com mola criticamente amortecida.
+- **Decisões por parte.** Sob "Confirmadas", um segundo filtro do índice
+  (botão fantasma com o glifo de componente e seta) abre um menu: "Todas as
+  partes" e cada parte do projeto (os componentes de topo do Mapa, os mesmos
+  "containers" da arquitetura) com a contagem de decisões em vigor nela ou num
+  componente dentro dela (`KnowledgeGraph::decision_parts`). Escolher uma
+  estreita a lista (paginada por `Decisions::list_ids`) e a busca; o botão
+  passa a "storage-sqlite · 2" com fundo de seleção, "Confirmadas" vira "Em
+  vigor · parte" e o rodapé diz "2 de 2 em vigor · storage-sqlite". Limpar: o
+  X ao lado (tooltip com Esc) ou Esc fora da busca. Parte sem decisões:
+  `empty_panel` "Nada decidido sobre X ainda", dizendo que a decisão aparece
+  quando ligada a X no Mapa, e "Mostrar todas as partes". Menu: setas, Enter e
+  Esc; o foco vai à opção escolhida ao abrir e volta ao botão ao fechar.
+  Paleta: "Decisões por parte" e "Decisões sobre <parte>". Rotas de captura:
+  `decisions:parts` (menu aberto) e `decisions:part:<nome>`.
+- **Menu suspenso** (`ui::patterns::menu_panel` + `menu_item`): a superfície
+  do menu de tema (`floating`, borda de cartão, elevação flutuante, até 320 px
+  e depois rola), sob o gatilho, com `menu_in`/`menu_out` e `Popup`. Opção:
+  glifo, rótulo truncado, contagem opcional (`count_chip`) e o check lavanda
+  na escolhida; hover tinge, sem segundo fundo de seleção.
 - Trocar de projeto limpa lista, evidência e filtro; respostas antigas não podem
   aparecer no novo workspace. O filtro de projeto é aplicado no caso de uso.
 - Lista de candidatos de 320 px, com data, estado, pergunta e escolha proposta.

@@ -2,6 +2,7 @@
 
 use application::decisions::{DecisionStore, Decisions};
 use application::export::Export;
+use application::graph::KnowledgeGraph;
 use application::inbox::{Inbox, InboxStore};
 use application::jobs::JobSummary;
 use application::overview::OverviewApi;
@@ -124,10 +125,20 @@ pub type ActivitySource = Arc<dyn Fn() -> Option<JobSummary> + Send + Sync>;
 /// How often the status line re-reads the jobs table.
 const ACTIVITY_POLL: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// The use cases the Decisões screen is mounted with.
+pub type DecisionsServices<R> = (
+    Decisions<R>,
+    Export<R>,
+    DecisionRelations<R>,
+    KnowledgeGraph<R>,
+);
+
 /// What a palette item does.
 #[derive(Clone, Debug)]
 enum Command {
     KnowledgeReview,
+    /// Decisões narrowed to a part, or (`None`) with the menu of parts open.
+    DecisionsByPart(Option<String>),
     Go(Destination),
     Project(String),
     Candidate(String),
@@ -301,7 +312,7 @@ impl<
         cx: &mut Context<Self>,
         projects: Result<Projects<R>, String>,
         inbox: Option<Inbox<R>>,
-        decisions: Option<(Decisions<R>, Export<R>, DecisionRelations<R>)>,
+        decisions: Option<DecisionsServices<R>>,
         context: Option<ContextServices<R>>,
         map: Option<MapServices<R>>,
         settings: Option<SettingsServices>,
@@ -413,8 +424,8 @@ impl<
                 shell.show_decision(event.0.clone(), cx)
             })
         });
-        let decisions = decisions.map(|(decisions, export, relations)| {
-            cx.new(|cx| DecisionsScreen::new(cx, decisions, export, relations))
+        let decisions = decisions.map(|(decisions, export, relations, graph)| {
+            cx.new(|cx| DecisionsScreen::new(cx, decisions, export, relations, graph))
         });
         let context = context.map(|services| cx.new(|cx| ContextScreen::new(cx, services)));
         let context_subscription = context.as_ref().map(|screen| {
@@ -735,6 +746,11 @@ impl<
                         map.update(cx, |screen, _| screen.open_route(view));
                     }
                 }
+                Destination::Decisions => {
+                    if let Some(screen) = &self.decisions {
+                        screen.update(cx, |screen, cx| screen.open_route(view, cx));
+                    }
+                }
                 Destination::Context => {
                     if let Some(screen) = &self.context {
                         let view = view.clone();
@@ -1003,6 +1019,32 @@ impl<
                 });
             }
         }
+        if let (true, Some(decisions)) = (selected.is_some(), &self.decisions) {
+            let parts = decisions.read(cx).palette_parts();
+            if !parts.is_empty() {
+                items.push(PaletteItem {
+                    group: "Ir para",
+                    label: "Decisões por parte".into(),
+                    detail: Some("Decisões · filtro".into()),
+                    glyph: IconName::Component,
+                    shortcut: None,
+                    command: Command::DecisionsByPart(None),
+                });
+            }
+            for (id, name, count) in parts {
+                items.push(PaletteItem {
+                    group: "Decisões por parte",
+                    label: format!("Decisões sobre {name}"),
+                    detail: Some(match count {
+                        1 => "1 em vigor".to_owned(),
+                        n => format!("{n} em vigor"),
+                    }),
+                    glyph: IconName::Component,
+                    shortcut: None,
+                    command: Command::DecisionsByPart(Some(id)),
+                });
+            }
+        }
         if let Some(decisions) = &self.decisions {
             for (id, question) in decisions.read(cx).palette_rows() {
                 items.push(PaletteItem {
@@ -1153,6 +1195,15 @@ impl<
         self.close_palette(window, cx);
         match item.command {
             Command::KnowledgeReview => self.go_route("context:knowledge-review", window, cx),
+            Command::DecisionsByPart(part) => {
+                self.switch_to(Destination::Decisions, window, cx);
+                if let Some(screen) = &self.decisions {
+                    screen.update(cx, |screen, cx| match part {
+                        Some(part) => screen.choose_part(Some(part), cx),
+                        None => screen.open_part_menu(cx),
+                    });
+                }
+            }
             Command::Go(destination) => self.switch_to(destination, window, cx),
             Command::Project(id) => {
                 if let Some(projects) = &self.projects {
