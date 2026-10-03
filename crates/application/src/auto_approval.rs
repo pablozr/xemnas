@@ -424,7 +424,8 @@ struct Item {
 }
 
 /// System prompt of the judge.
-pub const REVIEW_PROMPT: &str = "You help a developer keep the memory of the engineering \
+pub const REVIEW_PROMPT: &str = concat!(
+    "You help a developer keep the memory of the engineering \
 decisions of a software project. Items wait for the developer to approve them; you decide \
 which can go ahead without them. For each item answer accept (it is clearly right, useful \
 and safe for coding agents to rely on), discard (it is wrong, trivial or repeats something) \
@@ -433,7 +434,9 @@ doubt answer human: a wrong accept becomes context given to agents. A rule or re
 conflicts with or replaces another decision is accept only when its quote clearly supports it.\n\
 Give in reason one short sentence in the language of the item. Reply with one JSON object \
 only, matching exactly: {\"verdicts\":[{\"id\":string,\"verdict\":\"accept|discard|human\",\
-\"reason\":string}]}, one entry per item, using its id exactly as given.";
+\"reason\":string}]}, one entry per item, using its id exactly as given.",
+    crate::plain_rules!()
+);
 
 /// Strict schema of the judge's answer.
 pub fn review_schema() -> serde_json::Value {

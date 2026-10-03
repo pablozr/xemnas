@@ -312,7 +312,8 @@ where
 }
 
 /// System prompt of the context extractor.
-pub const CLAIM_PROMPT: &str = "You read one engineering decision a software team adopted and \
+pub const CLAIM_PROMPT: &str = concat!(
+    "You read one engineering decision a software team adopted and \
 list the lasting context an agent must respect when working on the parts it affects. kind \
 is assumption (believed true but not proven), constraint (a limit the work must respect), \
 convention (an agreed way of working) or goal (an outcome the project pursues). Only what \
@@ -320,7 +321,9 @@ the decision states or directly implies, never general advice; at most 3; an emp
 a correct answer. statement: the rule in one short sentence, in the decision's language. \
 quote: one sentence copied verbatim from the decision text that supports it.\n\
 Reply with one JSON object only, matching exactly: {\"claims\":[{\"kind\":\
-\"assumption|constraint|convention|goal\",\"statement\":string,\"quote\":string}]}.";
+\"assumption|constraint|convention|goal\",\"statement\":string,\"quote\":string}]}.",
+    crate::plain_rules!()
+);
 
 /// Strict schema of the extractor's answer.
 pub fn claim_schema() -> serde_json::Value {

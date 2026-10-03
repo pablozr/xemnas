@@ -45,7 +45,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(90);
 pub const KEYRING_SERVICE: &str = "xemnas.ai-profile";
 
 /// System prompt describing the strict JSON contract expected back.
-pub(crate) const SYSTEM_PROMPT: &str = "You read one turn of a coding session (the user's \
+pub(crate) const SYSTEM_PROMPT: &str = concat!(
+    "You read one turn of a coding session (the user's \
 message, the assistant's answer, tool summaries and code diffs) and propose what is worth \
 remembering about the project, for a human to confirm later. Most turns contain nothing: an \
 empty list is the common, correct answer.\n\
@@ -83,7 +84,9 @@ Reply with a single JSON object only, no prose, matching exactly: \
 {\"proposals\":[{\"kind\":\"decision|rule|detail\",\"question\":string,\"choice\":string,\
 \"rationale\":string,\"confidence\":number,\"confidence_reason\":string,\
 \"significance\":number,\"criteria\":[string],\"evidence_refs\":[string],\
-\"diff_summary\":{\"files\":[string],\"artifacts\":number}}]}. No extra fields.";
+\"diff_summary\":{\"files\":[string],\"artifacts\":number}}]}. No extra fields.",
+    application::plain_rules!()
+);
 
 /// Bounded retry policy for transient provider failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

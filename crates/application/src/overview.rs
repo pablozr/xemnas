@@ -238,7 +238,8 @@ pub trait OverviewApi: Send + Sync {
 }
 
 /// Instructions for the overview call.
-pub const OVERVIEW_PROMPT: &str = "You write the overview of one software project for its own \
+pub const OVERVIEW_PROMPT: &str = concat!(
+    "You write the overview of one software project for its own \
 team, using only the recorded knowledge given: decisions in force (D:...), rules (R:...) and \
 the project map (components and technologies) and the project's own documentation (F:..., title, sections and opening paragraph; documents describe intent and may be outdated: when they disagree with a decision, the decision wins). You never see the code; do not invent \
 components, libraries or behaviour that the records do not state.\n\
@@ -254,7 +255,9 @@ exactly as given (D:xxxxxxxx, R:xxxxxxxx or F:xxxxxxxx). Anything you cannot cit
 fewer, well-cited flows over many vague ones.\n\
 Reply with one JSON object only, matching exactly: {\"summary\":[{\"text\":string,\
 \"refs\":[string]}],\"flows\":[{\"title\":string,\"description\":string,\"steps\":[{\
-\"title\":string,\"text\":string,\"component\":string|null,\"via\":string|null,\"refs\":[string]}]}]}.";
+\"title\":string,\"text\":string,\"component\":string|null,\"via\":string|null,\"refs\":[string]}]}]}.",
+    crate::plain_rules!()
+);
 
 /// Strict JSON Schema of the overview answer.
 pub fn overview_schema() -> serde_json::Value {

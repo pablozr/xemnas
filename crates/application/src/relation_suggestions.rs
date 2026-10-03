@@ -196,7 +196,8 @@ impl std::fmt::Display for RelationFindError {
 impl std::error::Error for RelationFindError {}
 
 /// System prompt of the relation judge.
-pub const RELATION_PROMPT: &str = "You compare one new engineering decision of a software \
+pub const RELATION_PROMPT: &str = concat!(
+    "You compare one new engineering decision of a software \
 project with a few earlier decisions of the same project, and say for each whether a real \
 relation exists. depends_on: one decision only makes sense because of the other (it builds \
 on it, assumes it). conflicts_with: both cannot hold at the same time. supersedes: the new \
@@ -211,7 +212,9 @@ supersedes is always new_to_earlier.\n\
 Reply with one JSON object only, matching exactly: {\"relations\":[{\"earlier\":string,\
 \"relation\":\"depends_on|conflicts_with|supersedes|none\",\"direction\":\
 \"new_to_earlier|earlier_to_new\",\"quote\":string,\"reason\":string}]}, one entry per \
-earlier decision, using its id exactly as given (D:xxxxxxxx).";
+earlier decision, using its id exactly as given (D:xxxxxxxx).",
+    crate::plain_rules!()
+);
 
 /// Strict schema of the judge's answer.
 pub fn relation_schema() -> serde_json::Value {
