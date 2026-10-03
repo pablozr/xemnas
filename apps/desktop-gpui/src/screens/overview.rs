@@ -9,21 +9,15 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use application::architecture::Architecture;
-use application::overview::{Citation, OverviewApi, OverviewError, OverviewFlow, OverviewView};
+use application::overview::{Citation, OverviewApi, OverviewError, OverviewView};
 use gpui::prelude::*;
 use gpui::{
     div, px, AnyElement, Context, Div, EventEmitter, FocusHandle, Render, Role, SharedString,
     Stateful, Window,
 };
 
-mod diagram;
-mod parts;
-
-use parts::{Explorer, Modal};
-
 use super::context::OpenDecision;
-use super::format::{clipped, plural, roman, short_date};
+use super::format::{clipped, plural, short_date};
 use crate::ui::controls::{action_button, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
@@ -33,14 +27,11 @@ use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{RadiusScale, SpacingScale, TypeScale};
 use crate::ui::tooltip::tooltip;
 
-/// Asks the shell to open an entity in the Mapa.
-pub struct OpenEntity(pub String);
-
 const SENDS: &str = "Gera um resumo e os principais fluxos com o provedor de IA configurado. \
                      Envia as decisões em vigor, as regras, os nomes do mapa e títulos, seções \
                      e o primeiro parágrafo da documentação; nada do código.";
 
-const PAGE_HINT: &str = "Abre no navegador uma página só com o resumo, a arquitetura e os                          fluxos, para ler ou enviar a alguém. Nada sai do computador.";
+const PAGE_HINT: &str = "Gera um arquivo HTML com a arquitetura e os fluxos e o abre no navegador. Funciona offline e pode ser enviado a alguém.";
 
 const PROVENANCE: &str = "Escrita pela IA a partir das decisões e regras confirmadas e da \
                           documentação do projeto. Cada trecho mostra as fontes; o que não \
@@ -62,32 +53,12 @@ pub struct OverviewScreen {
     generating: bool,
     loaded: bool,
     view: Option<OverviewView>,
-    flow: Option<usize>,
-    /// The step of the open flow under the pointer, lit on the diagram.
-    hover_step: Option<usize>,
-    /// Box of the architecture diagram under the pointer.
-    hover_box: Option<usize>,
-    /// The modal over the page, if one is open.
-    modal: Option<Modal>,
-    /// Where "Voltar" in a part's modal goes.
-    back: Option<Modal>,
-    /// The explorer's view, flow and picked cell.
-    explorer: Explorer,
-    /// Whether the grid of parts shows all of them.
-    parts_expanded: bool,
-    /// The modal asked for focus (done on the next frame, once it exists).
-    focus_modal: bool,
     error: Option<String>,
     notice: Option<String>,
     focus: BTreeMap<String, FocusHandle>,
-    /// Demo-only flow to open once the overview is read.
-    route_flow: Option<usize>,
-    /// Demo-only modal to open once the overview is read.
-    route_modal: Option<String>,
 }
 
 impl EventEmitter<OpenDecision> for OverviewScreen {}
-impl EventEmitter<OpenEntity> for OverviewScreen {}
 
 impl OverviewScreen {
     /// Mounts the screen; nothing is read until a project is set.
@@ -101,19 +72,9 @@ impl OverviewScreen {
             generating: false,
             loaded: false,
             view: None,
-            flow: None,
-            hover_step: None,
-            hover_box: None,
-            modal: None,
-            back: None,
-            explorer: Explorer::default(),
-            parts_expanded: false,
-            focus_modal: false,
             error: None,
             notice: None,
             focus: BTreeMap::new(),
-            route_flow: None,
-            route_modal: None,
         }
     }
 
@@ -125,11 +86,6 @@ impl OverviewScreen {
         self.project = project;
         self.generation += 1;
         self.view = None;
-        self.flow = None;
-        self.modal = None;
-        self.back = None;
-        self.explorer = Explorer::default();
-        self.parts_expanded = false;
         self.loaded = false;
         self.error = None;
         self.refresh(cx);
@@ -175,17 +131,6 @@ impl OverviewScreen {
             });
         })
         .detach();
-    }
-
-    /// Opens a flow by position once the overview is read (demo captures).
-    pub fn open_flow(&mut self, index: usize) {
-        self.route_flow = Some(index);
-    }
-
-    /// Opens a modal once the overview is read (demo captures): `part3`,
-    /// `explorer`, `explorer1` (a flow) or `matrix`.
-    pub fn open_demo_modal(&mut self, name: &str) {
-        self.route_modal = Some(name.to_owned());
     }
 
     /// Reads the stored overview again (cheap; never calls the provider).
@@ -243,20 +188,11 @@ impl OverviewScreen {
                     Outcome::Loaded(Ok(view)) => {
                         this.loaded = true;
                         this.view = view;
-                        if let Some(flow) = this.route_flow.take() {
-                            this.flow = Some(flow);
-                        }
-                        if let Some(name) = this.route_modal.take() {
-                            this.open_by_name(&name);
-                        }
                     }
                     Outcome::Generated(Ok(view)) => {
                         this.loaded = true;
                         let queued = view.queued_documents;
                         this.view = Some(view);
-                        this.flow = None;
-                        this.modal = None;
-                        this.back = None;
                         this.show_notice(
                             match queued {
                                 0 => "Visão atualizada.".into(),
@@ -326,12 +262,59 @@ impl OverviewScreen {
             }))
     }
 
-    fn page_button(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Stateful<Div> {
-        let button = action_button(theme, "overview-page", ButtonKind::Secondary, true)
-            .aria_label("Ver como página")
-            .tooltip(tooltip(PAGE_HINT, None))
-            .child("Ver como página");
-        self.pressable(button, "overview-page", |this, cx| this.open_page(cx), cx)
+    /// The way to the page of architecture and flows: what it holds, and
+    /// the button that writes and opens it.
+    fn page_card(
+        &mut self,
+        theme: &Theme,
+        overview: &application::overview::ProjectOverview,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let colors = theme.colors;
+        let parts = overview.architecture.containers.len();
+        let flows = overview.flows.len();
+        let what = match (parts, flows) {
+            (0, 0) => "Ainda não há partes nem fluxos. Gere a visão de novo quando o mapa e as decisões cobrirem mais do projeto."
+                .to_owned(),
+            _ => format!(
+                "{} e {} em uma página para ler com calma: um diagrama que se explora e cada fluxo passo a passo. Abre no navegador; nada sai do computador.",
+                plural(parts, "parte", "partes"),
+                plural(flows, "fluxo", "fluxos"),
+            ),
+        };
+        let button = action_button(
+            theme,
+            "overview-page",
+            ButtonKind::Primary,
+            parts + flows > 0,
+        )
+        .aria_label("Ver arquitetura e fluxos")
+        .tooltip(tooltip(PAGE_HINT, None))
+        .child("Ver arquitetura e fluxos");
+        let button = self.pressable(button, "overview-page", |this, cx| this.open_page(cx), cx);
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(SpacingScale::S3))
+            .child(section_label(theme, "Arquitetura e fluxos"))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(SpacingScale::S4))
+                    .p(px(SpacingScale::S4))
+                    .rounded(RadiusScale.surface())
+                    .border_1()
+                    .border_color(colors.glass_border_card())
+                    .child(
+                        text_style(div(), TypeScale::BODY_SMALL)
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .text_color(colors.text_secondary())
+                            .child(what),
+                    )
+                    .child(button),
+            )
     }
 
     fn generate_button(
@@ -431,295 +414,6 @@ impl OverviewScreen {
         row
     }
 
-    fn render_flows(
-        &mut self,
-        theme: &Theme,
-        flows: &[OverviewFlow],
-        cx: &mut Context<Self>,
-    ) -> Div {
-        let colors = theme.colors;
-        // A numbered list read top to bottom: flows are not a grid of cards.
-        let mut list = div()
-            .flex()
-            .flex_col()
-            .rounded(RadiusScale.surface())
-            .border_1()
-            .border_color(colors.glass_border_card())
-            .overflow_hidden();
-        for (index, flow) in flows.iter().enumerate() {
-            let components: Vec<String> = flow
-                .steps
-                .iter()
-                .filter_map(|step| step.entity_name.clone())
-                .fold(Vec::new(), |mut names, name| {
-                    if !names.contains(&name) {
-                        names.push(name);
-                    }
-                    names
-                });
-            let row = div()
-                .id(SharedString::from(format!("overview-flow-{index}")))
-                .flex()
-                .items_start()
-                .gap(px(SpacingScale::S4))
-                .px(px(SpacingScale::S4))
-                .py(px(SpacingScale::S4))
-                .when(index > 0, |row| {
-                    row.border_t_1().border_color(colors.hairline_divider())
-                })
-                .cursor_pointer()
-                .hover(move |style| style.bg(colors.glass_fill_medium()))
-                .active(move |style| style.bg(colors.glass_fill_strong()))
-                .role(Role::Button)
-                .aria_label(format!("Fluxo: {}", flow.title))
-                .focus_visible(crate::ui::controls::focus_ring(theme))
-                .child(
-                    text_style(div(), TypeScale::META)
-                        .w(px(28.0))
-                        .flex_none()
-                        .pt(px(2.0))
-                        .font_family(Theme::font_mono())
-                        .text_color(colors.text_muted())
-                        .child(roman(index + 1)),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.0))
-                        .child(text_style(div(), TypeScale::ROW_TITLE).child(flow.title.clone()))
-                        .child(
-                            text_style(div(), TypeScale::BODY_SMALL)
-                                .text_color(colors.text_secondary())
-                                .child(flow.description.clone()),
-                        )
-                        .child(
-                            text_style(div(), TypeScale::META)
-                                .mt(px(2.0))
-                                .text_color(colors.text_muted())
-                                .child(if components.is_empty() {
-                                    plural(flow.steps.len(), "passo", "passos")
-                                } else {
-                                    format!(
-                                        "{} · {}",
-                                        plural(flow.steps.len(), "passo", "passos"),
-                                        components.join(", ")
-                                    )
-                                }),
-                        ),
-                )
-                .child(div().pt(px(2.0)).child(icon(
-                    IconName::ChevronRight,
-                    14.0,
-                    colors.text_muted(),
-                )));
-            list = list.child(self.pressable(
-                row,
-                &format!("overview-flow-{index}"),
-                move |this, cx| {
-                    this.flow = Some(index);
-                    cx.notify();
-                },
-                cx,
-            ));
-        }
-        list
-    }
-
-    fn render_flow(
-        &mut self,
-        theme: &Theme,
-        flow: &OverviewFlow,
-        flow_at: usize,
-        architecture: &Architecture,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        let colors = theme.colors;
-        let back = action_button(theme, "overview-back", ButtonKind::Ghost, true)
-            .aria_label("Todos os fluxos")
-            .child(icon(IconName::ArrowLeft, 14.0, colors.text_secondary()))
-            .child("Todos os fluxos");
-        let back = self.pressable(
-            back,
-            "overview-back",
-            |this, cx| {
-                this.flow = None;
-                cx.notify();
-            },
-            cx,
-        );
-        let count = flow.steps.len();
-        let mut steps = div().flex().flex_col();
-        for (index, step) in flow.steps.iter().enumerate() {
-            let last = index + 1 == count;
-            let node = div()
-                .w(px(28.0))
-                .flex_none()
-                .flex()
-                .flex_col()
-                .items_center()
-                .child(
-                    div()
-                        .min_w(px(24.0))
-                        .h(px(24.0))
-                        .px(px(SpacingScale::S1))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded_full()
-                        .border_1()
-                        .border_color(colors.glass_border_card_hover())
-                        .bg(colors.glass_fill_card())
-                        .child(
-                            text_style(div(), TypeScale::META)
-                                .font_family(Theme::font_mono())
-                                .text_color(colors.text_secondary())
-                                .child(roman(index + 1)),
-                        ),
-                )
-                .when(!last, |node| {
-                    node.child(
-                        div()
-                            .w(px(1.0))
-                            .flex_1()
-                            .min_h(px(24.0))
-                            .bg(colors.hairline_divider()),
-                    )
-                });
-            let component =
-                step.entity_id
-                    .clone()
-                    .zip(step.entity_name.clone())
-                    .map(|(id, name)| {
-                        let chip = div()
-                            .id(SharedString::from(format!("overview-step-{index}-entity")))
-                            .flex()
-                            .items_center()
-                            .gap(px(SpacingScale::S1))
-                            .px(px(6.0))
-                            .rounded(theme.radius.control())
-                            .border_1()
-                            .border_color(colors.hairline_divider())
-                            .cursor_pointer()
-                            .hover(move |style| style.bg(colors.glass_fill_medium()))
-                            .role(Role::Link)
-                            .aria_label(format!("Abrir {name} no Mapa"))
-                            .tooltip(tooltip("Abrir no Mapa", None))
-                            .focus_visible(crate::ui::controls::focus_ring(theme))
-                            .child(icon(IconName::Component, 12.0, colors.text_muted()))
-                            .child(
-                                text_style(div(), TypeScale::META)
-                                    .text_color(colors.text_secondary())
-                                    .child(name),
-                            );
-                        self.pressable(
-                            chip,
-                            &format!("overview-step-{index}-entity"),
-                            move |_, cx| cx.emit(OpenEntity(id.clone())),
-                            cx,
-                        )
-                    });
-            let citations = self.citations(
-                theme,
-                &format!("overview-step-{index}"),
-                &step.citations,
-                cx,
-            );
-            steps = steps.child(
-                div()
-                    .id(SharedString::from(format!("overview-step-row-{index}")))
-                    .flex()
-                    .gap(px(SpacingScale::S3))
-                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                        let next = if *hovered {
-                            Some(index)
-                        } else if this.hover_step == Some(index) {
-                            None
-                        } else {
-                            this.hover_step
-                        };
-                        if this.hover_step != next {
-                            this.hover_step = next;
-                            cx.notify();
-                        }
-                    }))
-                    .child(node)
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .pb(px(if last { 0.0 } else { SpacingScale::S5 }))
-                            .flex()
-                            .flex_col()
-                            .gap(px(SpacingScale::S2))
-                            .child(
-                                text_style(div(), TypeScale::ROW_TITLE)
-                                    .pt(px(3.0))
-                                    .child(step.title.clone()),
-                            )
-                            .child(
-                                text_style(div(), TypeScale::BODY_SMALL)
-                                    .text_color(colors.text_secondary())
-                                    .child(step.text.clone()),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_wrap()
-                                    .items_center()
-                                    .gap(px(SpacingScale::S2))
-                                    .children(component)
-                                    .children(step.via.clone().map(|via| {
-                                        text_style(div(), TypeScale::META)
-                                            .font_family(Theme::font_mono())
-                                            .text_color(colors.graph_technology())
-                                            .child(format!("via {via}"))
-                                    }))
-                                    .child(citations),
-                            ),
-                    ),
-            );
-        }
-        let narrowed = architecture.narrowed_to(flow_at);
-        let diagram = (!narrowed.is_empty()).then(|| {
-            self.architecture_diagram(theme, &narrowed, Some(flow_at), self.hover_step, cx)
-        });
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(SpacingScale::S6))
-            .child(div().flex().child(back))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(SpacingScale::S1))
-                    .child(text_style(div(), TypeScale::HEADING_1).child(flow.title.clone()))
-                    .child(
-                        text_style(div(), TypeScale::BODY_SMALL)
-                            .text_color(colors.text_muted())
-                            .child(flow.description.clone()),
-                    ),
-            )
-            .children(diagram.map(|diagram| {
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(SpacingScale::S3))
-                    .child(section_label(theme, "O caminho no sistema"))
-                    .child(
-                        text_style(div(), TypeScale::BODY_SMALL)
-                            .text_color(colors.text_muted())
-                            .child(
-                                "Os números são os passos abaixo. Passe o mouse num passo para acender a seta; clique numa caixa para ver o que ela chama e quem a chama.",
-                            ),
-                    )
-                    .child(diagram)
-            }))
-            .child(steps)
-    }
     fn render_summary(
         &mut self,
         theme: &Theme,
@@ -729,7 +423,7 @@ impl OverviewScreen {
         let colors = theme.colors;
         let overview = &view.overview;
         let update = self.generate_button(theme, ButtonKind::Secondary, cx);
-        let page = self.page_button(theme, cx);
+        let page = self.page_card(theme, overview, cx);
         let mut sources = vec![
             plural(overview.decisions, "decisão", "decisões"),
             plural(overview.rules, "regra", "regras"),
@@ -794,11 +488,6 @@ impl OverviewScreen {
                     .child(citations),
             );
         }
-        let flows = overview.flows.clone();
-        let flows_grid = self.render_flows(theme, &flows, cx);
-        let architecture = overview.architecture.clone();
-        let parts =
-            (!architecture.is_empty()).then(|| self.parts_section(theme, &architecture, cx));
         div()
             .flex()
             .flex_col()
@@ -809,14 +498,7 @@ impl OverviewScreen {
                     .items_start()
                     .gap(px(SpacingScale::S4))
                     .child(title)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(SpacingScale::S2))
-                            .child(page)
-                            .child(update),
-                    ),
+                    .child(update),
             )
             .child(
                 div()
@@ -826,17 +508,7 @@ impl OverviewScreen {
                     .child(section_label(theme, "Resumo"))
                     .child(summary),
             )
-            .children(parts)
-            .when(!flows.is_empty(), |column| {
-                column.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(SpacingScale::S3))
-                        .child(section_label(theme, "Principais fluxos"))
-                        .child(flows_grid),
-                )
-            })
+            .child(page)
             .child(
                 text_style(div(), TypeScale::META)
                     .text_color(colors.text_muted())
@@ -846,42 +518,17 @@ impl OverviewScreen {
 }
 
 impl Render for OverviewScreen {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _probe = crate::ui::perf::Probe::start("overview");
         let theme = Theme::current(cx);
-        let mut modal: Option<AnyElement> = None;
         let body: AnyElement = if !self.loaded {
             div()
                 .p(px(SpacingScale::S8))
                 .child(skeleton_list(&theme, "overview-skeleton", 5))
                 .into_any_element()
         } else if let Some(view) = self.view.clone() {
-            if let Some(flow) = self
-                .flow
-                .and_then(|index| view.overview.flows.get(index).cloned())
-            {
-                let flow_at = self.flow.unwrap_or_default();
-                let page =
-                    self.render_flow(&theme, &flow, flow_at, &view.overview.architecture, cx);
-                modal = self.render_modal(
-                    &theme,
-                    &view.overview.flows,
-                    &view.overview.architecture,
-                    window.viewport_size(),
-                    cx,
-                );
-                reading_page("overview-flow-page", page).into_any_element()
-            } else {
-                let column = self.render_summary(&theme, &view, cx);
-                modal = self.render_modal(
-                    &theme,
-                    &view.overview.flows,
-                    &view.overview.architecture,
-                    window.viewport_size(),
-                    cx,
-                );
-                reading_page("overview-page", column).into_any_element()
-            }
+            let column = self.render_summary(&theme, &view, cx);
+            reading_page("overview-page", column).into_any_element()
         } else {
             let generate = self.generate_button(&theme, ButtonKind::Primary, cx);
             div()
@@ -893,7 +540,7 @@ impl Render for OverviewScreen {
                         &theme,
                         IconName::Compass,
                         "Visão",
-                        "Um resumo do projeto e seus fluxos",
+                        "Um resumo do projeto, com arquitetura e fluxos",
                         SENDS,
                     )
                     .flex_1(),
@@ -907,11 +554,6 @@ impl Render for OverviewScreen {
                 )
                 .into_any_element()
         };
-        if self.focus_modal && modal.is_some() {
-            self.focus_modal = false;
-            let handle = self.focus_for("overview-modal", cx);
-            cx.defer_in(window, move |_, window, cx| window.focus(&handle, cx));
-        }
         div()
             .size_full()
             .relative()
@@ -928,7 +570,6 @@ impl Render for OverviewScreen {
                     .clone()
                     .map(|notice| toast(&theme, &notice, 24.0)),
             )
-            .children(modal)
     }
 }
 

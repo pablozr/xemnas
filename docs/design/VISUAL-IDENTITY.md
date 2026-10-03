@@ -278,12 +278,14 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   título "Visão do projeto", linha de meta (data, quantas decisões e regras,
   e em âmbar "N decisões novas desde então") e "Atualizar visão" secundário;
   seção Resumo com parágrafos e, abaixo de cada um, chips mono das fontes
-  (decisão abre em Decisões; regra é só rótulo); seção Principais fluxos como
-  lista numerada numa borda só (numeral romano em mono, título, descrição, passos e
-  componentes, chevron), nunca grade de cartões.
-- O cartão abre o fluxo na mesma coluna: "Todos os fluxos" (ghost) volta;
-  passos numerados em romanos em pílulas de 24 px ligados por filete vertical, com
-  título, texto, chip do componente (ícone de grafo, abre no Mapa) e fontes.
+  (decisão abre em Decisões; regra é só rótulo); depois a seção "Arquitetura e
+  fluxos": uma frase com o que a página guarda ("8 partes e 3 fluxos") e o botão
+  primário "Ver arquitetura e fluxos".
+- **Arquitetura e fluxos não se desenham no app.** Um diagrama de arquitetura e a
+  leitura de um fluxo passo a passo pedem espaço, zoom e câmera, e a janela do app é
+  uma coluna de leitura de 760 px. Eles vivem numa página HTML (próxima seção); o app
+  só carrega o resumo e o caminho até ela. O modelo `application::architecture`
+  continua sendo derivado do Mapa e dos fluxos, sem IA nova, e alimenta a página.
 - Fontes são chips com ícone (documento = decisão, escudo = regra) e o
   título encurtado em palavra inteira; o texto completo fica no tooltip.
   Defasagem é uma linha própria com ponto âmbar, nunca a meta inteira em cor.
@@ -294,57 +296,6 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
 - Vazio: `empty_panel` com o que será enviado ao provedor e "Gerar visão"
   primário; gerando: "Gerando…" desabilitado; erro em `error_banner`; nota de
   procedência no rodapé. Nunca texto sem fonte.
-
-## Visão — arquitetura em partes, modal e explorador
-
-A Visão não desenha o sistema inteiro na página: um desenho com todos os fluxos
-junto vira emaranhado (a literatura de legibilidade de grafos mostra que, acima de
-~20 vértices ou em grafos densos, a matriz vence o nó-e-seta; o nó-e-seta só ganha
-para seguir um caminho). Por isso a arquitetura se mostra aos poucos, no padrão de
-Structurizr (clicar num elemento abre um modal) e IcePanel (um fluxo por vez). O
-modelo vem de `application::architecture`, a partir do Mapa e dos fluxos da Visão,
-sem IA nova: as partes são os componentes de topo, a tecnologia vem das decisões
-que as tocam e uma ligação existe só porque um fluxo passa de uma parte a outra.
-
-- **Na página** (entre o Resumo e os fluxos): seção "Arquitetura" com o total, o
-  botão "Ver diagrama" e uma grade de cartões, três por linha, **seis no início**
-  ("Mostrar as outras N" expande; "Mostrar menos" recolhe). Cartão de 112 px, todos
-  iguais: nome, papel (1 linha), tecnologias em mono, barra de decisões contra a
-  parte mais pesada e "→ chama · ← chamada por". Ponto âmbar = conflito. É um
-  botão real (foco, `aria_label`).
-- **Modal da parte** (620 px): cabeçalho com nome e papel; tecnologias; "Quem chama"
-  e "Quem ela chama" lado a lado (cada linha abre aquela parte, com o `via` em mono e
-  a contagem de passos); "Fluxos que passam por ela" (chips que abrem o explorador
-  naquele fluxo); "Em números" (decisões, partes dentro, conflitos como barras).
-  Rodapé: "Voltar" (quando veio de outro modal), "Ver no diagrama" e a única
-  primária, "Abrir no Mapa".
-- **Explorador** (840 px), alternador "Diagrama | Matriz":
-  - *Diagrama*: um fluxo por vez, escolhido em chips numerados; só as partes do
-    fluxo, setas ortogonais numeradas com os algarismos romanos dos passos e, abaixo,
-    os passos como linhas (título, `via`, "de → para"); passar o mouse numa linha
-    acende a seta. Fluxo sem seta entre partes diz isso em vez de desenhar vazio.
-  - *Matriz*: linhas são quem chama, colunas quem é chamado (numeradas, os nomes
-    ficam nas linhas), cada célula cheia traz a quantidade de passos; passar o mouse
-    ou pressionar uma célula mostra quais passos são, de quais fluxos e por qual
-    meio. Sem linhas, sem cruzamentos: segue legível com as 12 partes.
-- **Modal:** `deferred` sobre a área da página, com `scrim`, `panel_in`, painel
-  `floating` de `radius.dialog`, sombra `Dialog`, cabeçalho fixo, corpo que rola e
-  rodapé fixo. Esc, o botão de fechar ou clicar no scrim fecham; ele recebe o foco
-  ao abrir. Altura máxima: a janela menos 150 px. Um modal de cada vez: abrir uma
-  parte por cima do explorador guarda o explorador para o "Voltar".
-- **Desenho do diagrama:** colunas da esquerda para a direita (até 4, 14 px de
-  margem livre), caixas de 150 a 224 px por 92 px. Setas ortogonais com cantos de
-  9 px e cabeça: saem do lado da caixa, descem pelo canal livre entre as colunas
-  (cada seta num trilho próprio) e entram no lado oposto, então nenhuma atravessa
-  uma caixa (teste com 12 partes, ciclos e retornos). A que pula coluna ou volta
-  corre por cima, em faixa própria (9 px entre faixas, reservadas só para as que as
-  usam). Entre caixas da mesma coluna a seta corre na margem. Layout determinístico
-  (fases de Sugiyama: ciclos, camadas, ordem por baricentro, posição, roteamento).
-  A página de um fluxo aberto usa o mesmo desenho do fluxo, com as caixas dele só.
-- **Caixa do diagrama:** nome, papel, tecnologias em mono e "N decisões · M partes";
-  ponto âmbar de conflito; clicar abre o modal da parte. Passar o mouse numa caixa
-  acende as setas que a tocam. Cada passo pode trazer o meio ("via HTTP/JSON", mono
-  na cor de tecnologia), informado pelo modelo ao gerar a Visão (`OverviewStep.via`).
 
 ## Texto da IA e página da Visão
 
@@ -358,24 +309,37 @@ citações, que seguem literais. Texto mais claro convence mais; por isso a evid
 continua vindo antes do motivo. Todo prompt novo que gera texto para pessoas termina
 com `crate::plain_rules!()`.
 
-**Ver como página.** Na Visão, o botão secundário "Ver como página" (ao lado de
-"Atualizar visão") grava `visao-<projeto>.html` em `%TEMP%\xemnas` e abre no navegador.
-É um arquivo único, sem rede (fontes, estilos e scripts embutidos), que abre offline e
-pode ser enviado a alguém. `application::page::render` coloca o JSON da Visão num
-modelo fixo (`page/template.html`); a IA não escreve HTML, e o JSON é escapado para não
-fechar o `<script>`. O modelo desenha tudo com os mesmos tokens do app (lavanda para
-seleção e ação, tema escuro e claro, alternável):
+**Página de arquitetura e fluxos.** Na Visão, o botão "Ver arquitetura e fluxos" grava
+`arquitetura-<projeto>.html` em `%TEMP%\xemnas` e abre no navegador. É um arquivo único,
+sem rede, que abre offline e pode ser enviado a alguém. Só tem arquitetura e fluxos: o
+resumo fica no app. `application::page::render` coloca o JSON da Visão (sem o resumo)
+num modelo fixo (`page/template.html`); a IA não escreve HTML, e o JSON é escapado para
+não fechar o `<script>` nem o `<title>`.
 
-- **Resumo:** parágrafos com chips de fonte, números, cartões de arquitetura e fluxos.
-- **Arquitetura:** diagrama em colunas com curvas, pan e zoom, filtro por fluxo (setas
-  numeradas), clique numa parte para ver o que chama e quem a chama, clique numa seta
-  para ver os passos. Botões "Copiar Mermaid" e "Baixar SVG".
-- **Fluxos:** diagrama de sequência por fluxo (participantes, setas numeradas, meio de
-  cada passo), passos em cartões, setas do teclado e "Reproduzir". "Copiar Mermaid".
-- **Fontes:** as decisões e regras citadas, com quantos usos cada uma tem.
+- **Marca e fontes do app, embutidas.** O símbolo é o `xemnas-mark.svg` exato (ids com
+  prefixo `xm-`, também como ícone da aba); o nome em Bricolage Grotesque, o texto em
+  Inter e os rótulos mono em JetBrains Mono, subconjuntos (`tools/page-fonts.py` gera
+  `page/fonts/*.b64`; licenças OFL ao lado das fontes do app).
+- **Calma premium.** Fundo de tinta com duas auroras muito suaves e grade de pontos;
+  vidro (`--glass`) só nas camadas que flutuam; lavanda só para seleção, foco e a ação
+  primária; Bricolage nos títulos, números tabulares, movimento curto com
+  `prefers-reduced-motion` respeitado; tema escuro e claro com a mesma paleta do app.
+- **Arquitetura.** Mapa em colunas com curvas, um glifo por tipo de parte (banco, IA,
+  fila, janela, agente...) deduzido do nome e das tecnologias, só decoração. Clicar
+  numa parte abre o inspetor flutuante (o que chama, quem a chama, onde aparece);
+  clicar numa seta mostra os passos que a formam. Pan, zoom, "Copiar Mermaid" e "Baixar
+  SVG". **Passo a passo** (a referência é o fluxo guiado do IcePanel): escolher um
+  fluxo nas pílulas acima liga uma barra no pé com "Passo n de m", título e texto; a
+  câmera voa até as duas partes do passo, o resto apaga, a seta ativa corre tracejada
+  com uma luz que a percorre. Setas do teclado, "Reproduzir" e Esc.
+- **Fluxos.** Diagrama de sequência por fluxo (participantes com glifo, setas
+  numeradas, meio em mono) e a linha do tempo dos passos, cada um com o componente, o
+  texto e as fontes (decisão em lavanda, regra em azul). Passo ativo sincronizado entre
+  o diagrama, a linha do tempo e a barra de progresso; "Ver no mapa" abre o mesmo passo
+  no passo a passo da arquitetura.
 
-Para uma tela nova na página: acrescentar a função de montagem em `BUILD` no modelo e a
-aba em `TABS`; os dados novos entram no JSON sem mudar a Rust além do tipo.
+Para acrescentar uma tela: uma função de montagem em `BUILD` e uma entrada em `TABS` no
+modelo; os dados novos entram no JSON sem mudar a Rust além do tipo.
 
 ## Revisão — uma fila, evidência primeiro
 

@@ -107,35 +107,6 @@ pub(super) fn plural(count: usize, one: &str, many: &str) -> String {
     format!("{count} {}", if count == 1 { one } else { many })
 }
 
-/// `4` → `IV`: the Organization counts its members in Roman numerals, and
-/// the app numbers ordered things (stages, flows, steps) the same way.
-pub(super) fn roman(value: usize) -> String {
-    const TABLE: [(usize, &str); 13] = [
-        (1000, "M"),
-        (900, "CM"),
-        (500, "D"),
-        (400, "CD"),
-        (100, "C"),
-        (90, "XC"),
-        (50, "L"),
-        (40, "XL"),
-        (10, "X"),
-        (9, "IX"),
-        (5, "V"),
-        (4, "IV"),
-        (1, "I"),
-    ];
-    let mut rest = value;
-    let mut out = String::new();
-    for (step, glyph) in TABLE {
-        while rest >= step {
-            out.push_str(glyph);
-            rest -= step;
-        }
-    }
-    out
-}
-
 /// `8192` → `8.192`.
 pub(super) fn thousands(value: usize) -> String {
     let digits = value.to_string();
@@ -195,15 +166,6 @@ mod tests {
             short_date("2026-10-05T12:00:00Z")
         );
         assert_eq!(ago("short"), "short");
-    }
-
-    #[test]
-    fn counts_in_roman_numerals() {
-        assert_eq!(roman(1), "I");
-        assert_eq!(roman(4), "IV");
-        assert_eq!(roman(9), "IX");
-        assert_eq!(roman(13), "XIII");
-        assert_eq!(roman(0), "");
     }
 
     #[test]

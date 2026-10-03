@@ -23,7 +23,7 @@ use crate::screens::decisions::DecisionsScreen;
 use crate::screens::inbox::InboxScreen;
 use crate::screens::map::OpenSuggestions;
 use crate::screens::map::{MapScreen, MapServices};
-use crate::screens::overview::{OpenEntity, OverviewScreen};
+use crate::screens::overview::OverviewScreen;
 use crate::screens::projects::{ProjectChanged, ProjectsScreen};
 use crate::screens::settings::{CloseSettings, SettingsScreen, SettingsSection, SettingsServices};
 use crate::ui::controls::icon_action;
@@ -631,14 +631,10 @@ impl<
     /// empty, like the others when the database fails.
     pub fn set_overview(&mut self, api: Arc<dyn OverviewApi>, cx: &mut Context<Self>) {
         let screen = cx.new(|_| OverviewScreen::new(api));
-        self._overview_subscriptions = vec![
-            cx.subscribe(&screen, |shell, _, event: &OpenDecision, cx| {
+        self._overview_subscriptions = vec![cx
+            .subscribe(&screen, |shell, _, event: &OpenDecision, cx| {
                 shell.show_decision(event.0.clone(), cx)
-            }),
-            cx.subscribe(&screen, |shell, _, event: &OpenEntity, cx| {
-                shell.show_entity(event.0.clone(), cx)
-            }),
-        ];
+            })];
         let project = self
             .projects
             .as_ref()
@@ -752,17 +748,6 @@ impl<
                                 screen.open_section(&view);
                             }
                         });
-                    }
-                }
-                Destination::Overview => {
-                    if let (Some(screen), Some(flow)) = (
-                        &self.overview,
-                        view.strip_prefix("flow")
-                            .and_then(|index| index.parse().ok()),
-                    ) {
-                        screen.update(cx, |screen, _| screen.open_flow(flow));
-                    } else if let Some(screen) = &self.overview {
-                        screen.update(cx, |screen, _| screen.open_demo_modal(&view));
                     }
                 }
                 _ => {}
@@ -1416,16 +1401,6 @@ impl<
         self.destination = Destination::Decisions;
         if let Some(decisions) = &self.decisions {
             decisions.update(cx, |screen, cx| screen.open_decision(id, cx));
-        }
-        cx.notify();
-    }
-
-    /// Opens an entity in the Mapa from another destination (Visão).
-    fn show_entity(&mut self, id: String, cx: &mut Context<Self>) {
-        self.retire_context_surface(cx);
-        self.destination = Destination::Map;
-        if let Some(map) = &self.map {
-            map.update(cx, |screen, cx| screen.show_entity(id, cx));
         }
         cx.notify();
     }
