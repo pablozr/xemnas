@@ -87,6 +87,33 @@ impl JobRepository for SqliteStore {
         Ok(records)
     }
 
+    fn counts(&self) -> Result<Vec<(String, JobState, usize)>, JobError> {
+        let connection = self.lock();
+        let mut statement = connection
+            .prepare("SELECT kind, state, COUNT(*) FROM jobs GROUP BY kind, state")
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(storage_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage_error)?;
+        rows.into_iter()
+            .map(|(kind, state, count)| {
+                Ok((
+                    kind,
+                    JobState::from_str(&state)?,
+                    usize::try_from(count).unwrap_or(0),
+                ))
+            })
+            .collect()
+    }
+
     fn claim_next(&self, registered_kinds: &[String]) -> Result<Option<JobRecord>, JobError> {
         if registered_kinds.is_empty() {
             return Ok(None);

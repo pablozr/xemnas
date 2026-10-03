@@ -155,7 +155,7 @@ fn documents_go_to_review_once_per_version_tied_to_the_code_they_cite() {
             "SELECT COUNT(*) FROM jobs WHERE state = ?1 AND kind = ?2",
             [
                 application::jobs::JobState::Queued.as_str(),
-                application::jobs::ANALYZE_CAPTURE_KIND,
+                application::jobs::ANALYZE_DOCUMENT_KIND,
             ],
             |row| row.get(0),
         )

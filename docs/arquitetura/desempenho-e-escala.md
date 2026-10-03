@@ -27,6 +27,28 @@ pendente fica em `docs/pesquisas/listas-e-grafos-em-escala.md`.
    `%TEMP%\xemnas-perf.log`) e `XEMNAS_DEMO_SCALE=N` (semeia N decisões, N/4
    componentes, N/3 regras). Dizer o número e dizer o que não foi medido.
 
+## Fila de jobs
+
+Os jobs ficam em filas por assunto (`Lane` em `application::jobs`), cada uma
+com seus próprios workers, para que importar uma documentação grande nunca
+atrase a análise da sessão que o desenvolvedor acabou de encerrar.
+
+| Fila | Tipos | Workers |
+| --- | --- | --- |
+| `now` | `analyze_capture` (capturas de sessões de agentes) | até 2 |
+| `documents` | `analyze_document` (documentação importada) | até 2 |
+| `suggestions` | `suggest_relations`, `derive_claims` | 1 |
+
+- O tipo diz a fila: `JobKind::lane` é um `match` exaustivo, então um tipo
+  novo não compila sem fila. Cada worker só reivindica tipos da sua fila.
+- A reivindicação é um único `UPDATE … RETURNING` (atômico com WAL e várias
+  conexões; `concurrent_claims_never_hand_out_a_job_twice`).
+- A recuperação de jobs interrompidos roda antes de qualquer worker; ao sair,
+  `WorkerHandle::stop` + `join` param todos e quem estava no meio de um job
+  termina-o antes.
+- Contagens por fila (na fila, executando, falhou) vêm de uma consulta
+  agrupada (`Jobs::lane_summaries`), nunca de carregar as linhas.
+
 ## Orçamentos
 
 | Coisa | Valor | Onde |

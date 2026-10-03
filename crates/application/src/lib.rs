@@ -89,9 +89,10 @@ pub use integration_contracts::capture::{
     artifact_fingerprint, ArtifactKind, CaptureEnvelope, CaptureSource, ProjectRef, SourceArtifact,
 };
 pub use jobs::{
-    install_panic_sanitizer, job_panic_is_sanitized, write_sanitized_panic_report, JobError,
-    JobEvent, JobFailure, JobOutcome, JobRecord, JobRepository, JobState, Jobs, RecoveryReport,
-    WorkerHandle, ANALYZE_CAPTURE_KIND, INTERRUPTED_NON_IDEMPOTENT,
+    install_panic_sanitizer, job_panic_is_sanitized, lane_of, write_sanitized_panic_report,
+    JobError, JobEvent, JobFailure, JobKind, JobOutcome, JobRecord, JobRepository, JobState,
+    JobSummary, Jobs, Lane, RecoveryReport, WorkerHandle, ANALYZE_CAPTURE_KIND,
+    ANALYZE_DOCUMENT_KIND, INTERRUPTED_NON_IDEMPOTENT,
 };
 pub use outbox::{
     drain, drain_with, retry_stalled, DrainPolicy, DrainReport, OutboxError,

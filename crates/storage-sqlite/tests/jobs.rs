@@ -367,7 +367,7 @@ fn worker_processes_enqueued_job_and_stops_cleanly() {
         }),
     );
 
-    let handle = jobs.spawn_worker();
+    let handle = jobs.spawn_workers(1);
     let job = jobs.enqueue("analysis", "{}", true).expect("enqueue");
 
     let deadline = Instant::now() + Duration::from_secs(5);

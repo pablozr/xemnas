@@ -15,7 +15,7 @@ use crate::captures::{
     CaptureArtifactRecord, CaptureCheckpointRecord, CaptureError, CaptureReceiptRecord,
     CaptureRepository, CaptureWrite,
 };
-use crate::jobs::{JobRecord, JobState, ANALYZE_CAPTURE_KIND};
+use crate::jobs::{JobRecord, JobState, ANALYZE_DOCUMENT_KIND};
 use crate::projects::ProjectRepository;
 use crate::redact::redact_secrets;
 
@@ -363,7 +363,7 @@ fn document_capture(
         }],
         job: JobRecord {
             id: uuid::Uuid::now_v7().to_string(),
-            kind: ANALYZE_CAPTURE_KIND.to_string(),
+            kind: ANALYZE_DOCUMENT_KIND.to_string(),
             payload: capture_id.clone(),
             state: JobState::Queued,
             idempotent: true,

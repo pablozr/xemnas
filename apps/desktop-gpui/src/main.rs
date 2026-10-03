@@ -147,17 +147,21 @@ fn main() {
     // Capture analysis reloads the profile on every run, so a Settings change
     // takes effect without a restart. The offline fake stays the default; the
     // external provider is only reachable with consent and a stored key.
-    jobs.register(
-        application::jobs::ANALYZE_CAPTURE_KIND,
-        std::sync::Arc::new({
-            let analysis = application::analysis::AnalyzeCapture::new(
-                store.clone(),
-                settings.clone(),
-                ai_provider::ProviderFactory::new(chatgpt.clone()),
-            );
-            move |record: &application::jobs::JobRecord| analyze_capture(&analysis, record)
-        }),
-    );
+    let analyze: std::sync::Arc<
+        dyn Fn(&application::jobs::JobRecord) -> Result<(), application::jobs::JobFailure>
+            + Send
+            + Sync,
+    > = std::sync::Arc::new({
+        let analysis = application::analysis::AnalyzeCapture::new(
+            store.clone(),
+            settings.clone(),
+            ai_provider::ProviderFactory::new(chatgpt.clone()),
+        );
+        move |record: &application::jobs::JobRecord| analyze_capture(&analysis, record)
+    });
+    // Sessions and documentation share the handler but not the lane.
+    jobs.register(application::jobs::ANALYZE_CAPTURE_KIND, analyze.clone());
+    jobs.register(application::jobs::ANALYZE_DOCUMENT_KIND, analyze);
     // After an adoption, earlier decisions related to the new one are judged
     // by the configured provider and stored as suggestions.
     jobs.register(
@@ -230,7 +234,7 @@ fn main() {
                 operation = "recover_jobs",
                 "recovered interrupted jobs"
             );
-            Some(jobs.spawn_worker())
+            Some(jobs.spawn_workers(2))
         }
         Err(error) => {
             tracing::error!(

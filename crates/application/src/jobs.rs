@@ -186,7 +186,101 @@ impl std::error::Error for JobError {}
 pub const INTERRUPTED_NON_IDEMPOTENT: &str = "O job foi interrompido por um reinício do aplicativo e não pode ser retomado automaticamente porque não é idempotente.";
 
 /// Job kind scheduled by ingest to analyze a persisted capture.
-pub const ANALYZE_CAPTURE_KIND: &str = "analyze_capture";
+pub const ANALYZE_CAPTURE_KIND: &str = JobKind::AnalyzeCapture.as_str();
+
+/// Job kind scheduled by a documentation import to analyze one document.
+/// Same handler as [`ANALYZE_CAPTURE_KIND`]; a kind of its own so a large
+/// import waits in its own lane.
+pub const ANALYZE_DOCUMENT_KIND: &str = JobKind::AnalyzeDocument.as_str();
+
+/// A group of job kinds served by its own workers, so a long documentation
+/// import never delays the analysis of the session that just ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Lane {
+    /// Analysis of captures from agent sessions: what the person waits for.
+    Now,
+    /// Analysis of imported documentation.
+    Documents,
+    /// Relation and rule suggestions after an adoption.
+    Suggestions,
+}
+
+impl Lane {
+    /// Every lane, in priority order.
+    pub const ALL: [Self; 3] = [Self::Now, Self::Documents, Self::Suggestions];
+
+    /// Stable literal for logs and diagnostics.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Now => "now",
+            Self::Documents => "documents",
+            Self::Suggestions => "suggestions",
+        }
+    }
+
+    /// Workers of this lane for a provider limit of `parallel` calls: the two
+    /// analysis lanes get up to two each, suggestions always one.
+    pub fn workers(&self, parallel: usize) -> usize {
+        match self {
+            Self::Now | Self::Documents => parallel.clamp(1, 2),
+            Self::Suggestions => 1,
+        }
+    }
+}
+
+/// The product's job kinds. The match in [`JobKind::lane`] is exhaustive, so
+/// a new kind cannot compile without a lane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobKind {
+    /// Analysis of a capture from an agent session.
+    AnalyzeCapture,
+    /// Analysis of an imported document.
+    AnalyzeDocument,
+    /// Relation suggestions for an adopted decision.
+    SuggestRelations,
+    /// Rule suggestions derived from an adopted decision.
+    DeriveClaims,
+}
+
+impl JobKind {
+    /// Every product kind.
+    pub const ALL: [Self; 4] = [
+        Self::AnalyzeCapture,
+        Self::AnalyzeDocument,
+        Self::SuggestRelations,
+        Self::DeriveClaims,
+    ];
+
+    /// Literal persisted in the `kind` column.
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::AnalyzeCapture => "analyze_capture",
+            Self::AnalyzeDocument => "analyze_document",
+            Self::SuggestRelations => "suggest_relations",
+            Self::DeriveClaims => "derive_claims",
+        }
+    }
+
+    /// Parses a persisted kind literal.
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.as_str() == value)
+    }
+
+    /// The lane whose workers run this kind.
+    pub fn lane(&self) -> Lane {
+        match self {
+            Self::AnalyzeCapture => Lane::Now,
+            Self::AnalyzeDocument => Lane::Documents,
+            Self::SuggestRelations | Self::DeriveClaims => Lane::Suggestions,
+        }
+    }
+}
+
+/// Lane of a persisted kind. Kinds outside [`JobKind`] exist only in tests
+/// and run in [`Lane::Now`].
+pub fn lane_of(kind: &str) -> Lane {
+    JobKind::parse(kind).map_or(Lane::Now, |kind| kind.lane())
+}
 
 /// Fixed diagnostic for a handler panic. The panic content is never used.
 const PANIC_MESSAGE: &str = "o job falhou com pânico";
@@ -240,6 +334,22 @@ pub trait JobRepository {
     /// Returns every record, most recently created first.
     fn list(&self) -> Result<Vec<JobRecord>, JobError>;
 
+    /// Number of jobs per kind and state. The default reads every row; a
+    /// store should answer it with one grouped query.
+    fn counts(&self) -> Result<Vec<(String, JobState, usize)>, JobError> {
+        let mut counts: Vec<(String, JobState, usize)> = Vec::new();
+        for record in self.list()? {
+            match counts
+                .iter_mut()
+                .find(|(kind, state, _)| *kind == record.kind && *state == record.state)
+            {
+                Some((_, _, count)) => *count += 1,
+                None => counts.push((record.kind, record.state, 1)),
+            }
+        }
+        Ok(counts)
+    }
+
     /// Atomically claims the oldest queued job whose kind is in `registered_kinds`.
     fn claim_next(&self, registered_kinds: &[String]) -> Result<Option<JobRecord>, JobError>;
 
@@ -263,6 +373,7 @@ pub struct Jobs<R> {
     repository: R,
     handlers: HashMap<String, JobHandler>,
     kinds: Vec<String>,
+    lanes: HashMap<Lane, Vec<String>>,
     observer: Observer,
     signal: Arc<Signal>,
     stop: Arc<AtomicBool>,
@@ -281,6 +392,7 @@ impl<R> Jobs<R> {
             repository,
             handlers: HashMap::new(),
             kinds: Vec::new(),
+            lanes: HashMap::new(),
             observer: Arc::new(|_event: JobEvent| {}),
             signal: Arc::new(Signal {
                 generation: Mutex::new(0),
@@ -290,13 +402,22 @@ impl<R> Jobs<R> {
         }
     }
 
-    /// Registers the handler for a job kind.
+    /// Registers the handler for a job kind, in the lane [`lane_of`] gives it.
     pub fn register(&mut self, kind: impl Into<String>, handler: JobHandler) {
         let kind = kind.into();
         if !self.handlers.contains_key(&kind) {
             self.kinds.push(kind.clone());
+            self.lanes
+                .entry(lane_of(&kind))
+                .or_default()
+                .push(kind.clone());
         }
         self.handlers.insert(kind, handler);
+    }
+
+    /// Registered kinds served by `lane`.
+    pub fn kinds_in(&self, lane: Lane) -> &[String] {
+        self.lanes.get(&lane).map_or(&[], Vec::as_slice)
     }
 
     /// Installs the callback the worker uses to report events.
@@ -400,9 +521,33 @@ impl<R: JobRepository> Jobs<R> {
         self.repository.recover_interrupted()
     }
 
-    /// Claims and runs the next eligible job.
+    /// Claims and runs the next eligible job of any lane.
     pub fn run_next(&self) -> Result<Option<JobOutcome>, JobError> {
-        let Some(record) = self.repository.claim_next(&self.kinds)? else {
+        self.run_next_of(&self.kinds)
+    }
+
+    /// Claims and runs the next eligible job of one lane.
+    pub fn run_next_in(&self, lane: Lane) -> Result<Option<JobOutcome>, JobError> {
+        self.run_next_of(self.kinds_in(lane))
+    }
+
+    /// Queued, running and failed jobs per lane, every lane present.
+    pub fn lane_summaries(&self) -> Result<Vec<(Lane, JobSummary)>, JobError> {
+        let mut summaries: Vec<(Lane, JobSummary)> = Lane::ALL
+            .into_iter()
+            .map(|lane| (lane, JobSummary::default()))
+            .collect();
+        for (kind, state, count) in self.repository.counts()? {
+            let lane = lane_of(&kind);
+            if let Some((_, summary)) = summaries.iter_mut().find(|(each, _)| *each == lane) {
+                summary.add(state, count);
+            }
+        }
+        Ok(summaries)
+    }
+
+    fn run_next_of(&self, kinds: &[String]) -> Result<Option<JobOutcome>, JobError> {
+        let Some(record) = self.repository.claim_next(kinds)? else {
             return Ok(None);
         };
         let Some(handler) = self.handlers.get(&record.kind) else {
@@ -472,31 +617,33 @@ impl<R> Jobs<R>
 where
     R: JobRepository + Clone + Send + 'static,
 {
-    /// Starts the dedicated worker thread.
-    pub fn spawn_worker(&self) -> WorkerHandle {
-        let stop = self.stop.clone();
-        let signal = self.signal.clone();
-        let jobs = self.clone();
+    /// Starts the workers of every lane that has a registered kind, sized
+    /// for a provider limit of `parallel` calls ([`Lane::workers`]). Each
+    /// worker claims only kinds of its own lane.
+    pub fn spawn_workers(&self, parallel: usize) -> WorkerHandle {
         let failure: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-        let failure_thread = failure.clone();
-
-        let thread = match std::thread::Builder::new()
-            .name("xemnas-jobs".to_string())
-            .spawn(move || worker_loop(jobs, stop, signal, failure_thread))
-        {
-            Ok(handle) => Some(handle),
-            Err(error) => {
-                *failure
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(error.to_string());
-                None
+        let mut threads = Vec::new();
+        for lane in Lane::ALL {
+            if self.kinds_in(lane).is_empty() {
+                continue;
             }
-        };
+            for index in 0..lane.workers(parallel) {
+                let jobs = self.clone();
+                let failure_thread = failure.clone();
+                let spawned = std::thread::Builder::new()
+                    .name(format!("xemnas-jobs-{}-{index}", lane.as_str()))
+                    .spawn(move || worker_loop(jobs, lane, failure_thread));
+                match spawned {
+                    Ok(handle) => threads.push(handle),
+                    Err(error) => record_failure(&failure, error.to_string()),
+                }
+            }
+        }
 
         WorkerHandle {
             signal: self.signal.clone(),
             stop: self.stop.clone(),
-            thread,
+            threads,
             failure,
         }
     }
@@ -505,20 +652,26 @@ where
 /// Poll interval for the worker when no wakeup arrives.
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
-/// Body of the worker thread.
-fn worker_loop<R>(
-    jobs: Jobs<R>,
-    stop: Arc<AtomicBool>,
-    signal: Arc<Signal>,
-    failure: Arc<Mutex<Option<String>>>,
-) where
+/// Keeps the first failure a worker reports.
+fn record_failure(failure: &Mutex<Option<String>>, message: String) {
+    failure
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get_or_insert(message);
+}
+
+/// Body of one worker thread of `lane`.
+fn worker_loop<R>(jobs: Jobs<R>, lane: Lane, failure: Arc<Mutex<Option<String>>>)
+where
     R: JobRepository,
 {
+    let stop = jobs.stop.clone();
+    let signal = jobs.signal.clone();
     loop {
         if stop.load(Ordering::SeqCst) {
             return;
         }
-        match jobs.run_next() {
+        match jobs.run_next_in(lane) {
             Ok(Some(outcome)) => {
                 (jobs.observer)(JobEvent::Finished(outcome));
                 continue;
@@ -526,9 +679,7 @@ fn worker_loop<R>(
             Ok(None) => {}
             Err(error) => {
                 let message = error.to_string();
-                *failure
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(message.clone());
+                record_failure(&failure, message.clone());
                 (jobs.observer)(JobEvent::StorageError(message));
                 return;
             }
@@ -548,16 +699,27 @@ fn worker_loop<R>(
     }
 }
 
-/// Handle to the worker thread.
+/// Handle to the worker threads of every lane.
 pub struct WorkerHandle {
     signal: Arc<Signal>,
     stop: Arc<AtomicBool>,
-    thread: Option<std::thread::JoinHandle<()>>,
+    threads: Vec<std::thread::JoinHandle<()>>,
     failure: Arc<Mutex<Option<String>>>,
 }
 
 impl WorkerHandle {
-    /// Signals the worker to stop and wakes it immediately.
+    /// Number of worker threads running.
+    pub fn len(&self) -> usize {
+        self.threads.len()
+    }
+
+    /// Whether no worker thread started.
+    pub fn is_empty(&self) -> bool {
+        self.threads.is_empty()
+    }
+
+    /// Signals every worker to stop and wakes them immediately. A worker in
+    /// the middle of a job finishes it first.
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
         let mut generation = self
@@ -569,12 +731,16 @@ impl WorkerHandle {
         self.signal.condvar.notify_all();
     }
 
-    /// Waits for the worker thread to finish.
+    /// Waits for every worker thread to finish.
     pub fn join(mut self) -> Result<(), JobError> {
-        if let Some(thread) = self.thread.take() {
-            thread.join().map_err(|_| {
-                JobError::Storage("a thread de jobs terminou inesperadamente".to_string())
-            })?;
+        let mut crashed = false;
+        for thread in self.threads.drain(..) {
+            crashed |= thread.join().is_err();
+        }
+        if crashed {
+            return Err(JobError::Storage(
+                "a thread de jobs terminou inesperadamente".to_string(),
+            ));
         }
         let failure = self
             .failure
@@ -603,14 +769,19 @@ impl JobSummary {
     /// Counts records by state. Completed and cancelled jobs are history.
     pub fn from_records(records: &[JobRecord]) -> Self {
         records.iter().fold(Self::default(), |mut summary, record| {
-            match record.state {
-                JobState::Queued => summary.queued += 1,
-                JobState::Running => summary.running += 1,
-                JobState::Failed => summary.failed += 1,
-                JobState::Completed | JobState::Cancelled => {}
-            }
+            summary.add(record.state, 1);
             summary
         })
+    }
+
+    /// Adds `count` jobs in `state`.
+    pub fn add(&mut self, state: JobState, count: usize) {
+        match state {
+            JobState::Queued => self.queued += count,
+            JobState::Running => self.running += count,
+            JobState::Failed => self.failed += count,
+            JobState::Completed | JobState::Cancelled => {}
+        }
     }
 }
 
@@ -1133,6 +1304,134 @@ mod tests {
                 running: 2,
                 failed: 1
             }
+        );
+    }
+
+    #[test]
+    fn every_product_kind_has_a_lane_and_round_trips() {
+        use super::{lane_of, JobKind, Lane, ANALYZE_CAPTURE_KIND, ANALYZE_DOCUMENT_KIND};
+        for kind in JobKind::ALL {
+            assert_eq!(JobKind::parse(kind.as_str()), Some(kind));
+            assert_eq!(lane_of(kind.as_str()), kind.lane());
+        }
+        assert_eq!(lane_of(ANALYZE_CAPTURE_KIND), Lane::Now);
+        assert_eq!(lane_of(ANALYZE_DOCUMENT_KIND), Lane::Documents);
+        assert_eq!(
+            lane_of(crate::relation_suggestions::RELATION_JOB_KIND),
+            Lane::Suggestions
+        );
+        assert_eq!(
+            lane_of(crate::claim_suggestions::CLAIM_JOB_KIND),
+            Lane::Suggestions
+        );
+        for lane in Lane::ALL {
+            assert!(
+                JobKind::ALL.iter().any(|kind| kind.lane() == lane),
+                "lane {lane:?} serves no kind"
+            );
+        }
+    }
+
+    #[test]
+    fn registered_kinds_land_in_exactly_one_lane() {
+        use super::{JobKind, Lane};
+        let mut jobs = Jobs::new(StateRepository::default());
+        for kind in JobKind::ALL {
+            jobs.register(kind.as_str(), Arc::new(|_: &JobRecord| Ok(())));
+            jobs.register(kind.as_str(), Arc::new(|_: &JobRecord| Ok(())));
+        }
+        let mut seen: Vec<&String> = Lane::ALL
+            .into_iter()
+            .flat_map(|lane| jobs.kinds_in(lane))
+            .collect();
+        assert_eq!(
+            seen.len(),
+            JobKind::ALL.len(),
+            "re-registering never duplicates"
+        );
+        seen.sort();
+        seen.dedup();
+        assert_eq!(seen.len(), JobKind::ALL.len());
+    }
+
+    #[test]
+    fn a_lane_worker_claims_only_its_kinds() {
+        use super::{Lane, ANALYZE_CAPTURE_KIND, ANALYZE_DOCUMENT_KIND};
+        let mut jobs = Jobs::new(StateRepository::default());
+        jobs.register(ANALYZE_CAPTURE_KIND, Arc::new(|_: &JobRecord| Ok(())));
+        jobs.register(ANALYZE_DOCUMENT_KIND, Arc::new(|_: &JobRecord| Ok(())));
+        jobs.enqueue(ANALYZE_DOCUMENT_KIND, "doc", true)
+            .expect("enqueue");
+        assert_eq!(jobs.run_next_in(Lane::Now).expect("run"), None);
+        let outcome = jobs
+            .run_next_in(Lane::Documents)
+            .expect("run")
+            .expect("ran");
+        assert_eq!(outcome.kind, ANALYZE_DOCUMENT_KIND);
+        let summaries = jobs.lane_summaries().expect("summaries");
+        assert_eq!(summaries.len(), Lane::ALL.len());
+    }
+
+    #[test]
+    fn a_session_job_runs_while_the_documents_lane_is_saturated() {
+        use super::{ANALYZE_CAPTURE_KIND, ANALYZE_DOCUMENT_KIND};
+        use std::time::{Duration, Instant};
+        let repository = StateRepository::default();
+        let mut jobs = Jobs::new(repository.clone());
+        let release = Arc::new(AtomicBool::new(false));
+        let release_handler = release.clone();
+        jobs.register(
+            ANALYZE_DOCUMENT_KIND,
+            Arc::new(move |_: &JobRecord| {
+                while !release_handler.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Ok(())
+            }),
+        );
+        jobs.register(ANALYZE_CAPTURE_KIND, Arc::new(|_: &JobRecord| Ok(())));
+        for _ in 0..6 {
+            jobs.enqueue(ANALYZE_DOCUMENT_KIND, "doc", true)
+                .expect("enqueue");
+        }
+        let handle = jobs.spawn_workers(2);
+        let session = jobs
+            .enqueue(ANALYZE_CAPTURE_KIND, "s", true)
+            .expect("enqueue");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let state = repository
+                .get(&session.id)
+                .expect("get")
+                .expect("row")
+                .state;
+            if state == JobState::Completed {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the session job waited: {state:?}"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let documents = repository.list().expect("list");
+        let running = documents
+            .iter()
+            .filter(|job| job.state == JobState::Running)
+            .count();
+        assert_eq!(running, 2, "both document workers are still busy");
+
+        release.store(true, Ordering::SeqCst);
+        handle.stop();
+        handle.join().expect("clean shutdown");
+        assert!(
+            repository
+                .list()
+                .expect("list")
+                .iter()
+                .all(|job| job.state != JobState::Running),
+            "stopping lets running jobs finish; none is left half done"
         );
     }
 }

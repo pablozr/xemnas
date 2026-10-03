@@ -25,7 +25,7 @@ use crate::profile::{choose_extractor, AiSettings, ExtractorChoice, ProfileStore
 use crate::relations::{DecisionRelations, RelationStore};
 
 /// Job kind that looks for relations of one adopted decision.
-pub const RELATION_JOB_KIND: &str = "suggest_relations";
+pub const RELATION_JOB_KIND: &str = crate::jobs::JobKind::SuggestRelations.as_str();
 /// Earlier decisions compared with a new one, at most.
 pub const MAX_CANDIDATES: usize = 6;
 /// Shortest quote accepted as evidence.

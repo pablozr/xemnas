@@ -27,7 +27,7 @@ use crate::projects::ProjectRepository;
 use crate::relations::RelationStore;
 
 /// Job kind that derives context from one adopted decision.
-pub const CLAIM_JOB_KIND: &str = "derive_claims";
+pub const CLAIM_JOB_KIND: &str = crate::jobs::JobKind::DeriveClaims.as_str();
 /// Items proposed per decision, at most.
 pub const MAX_DERIVED: usize = 3;
 /// Longest statement accepted.

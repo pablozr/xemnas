@@ -721,6 +721,9 @@ fn job_state(theme: &Theme, state: &str) -> (gpui::Rgba, &'static str) {
 fn job_kind(kind: &str) -> String {
     match kind {
         application::jobs::ANALYZE_CAPTURE_KIND => "Análise de captura".into(),
+        application::jobs::ANALYZE_DOCUMENT_KIND => "Análise de documento".into(),
+        application::relation_suggestions::RELATION_JOB_KIND => "Relações sugeridas".into(),
+        application::claim_suggestions::CLAIM_JOB_KIND => "Regras sugeridas".into(),
         other => other.replace('_', " "),
     }
 }
