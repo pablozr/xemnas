@@ -29,6 +29,9 @@ Pesquisa empírica: [vinte ideias adicionais para dores de desenvolvedores](pesq
 com quatro catálogos de fontes científicas, limites dos estudos e experimentos
 propostos de investigação, compreensão, coordenação e verificação de mudanças.
 
+Síntese para evolução: [melhorias após a avaliação real](pesquisas/melhorias-apos-avaliacao-real.md),
+com prioridades, critérios de conclusão e sequência de confiança, contexto e valor.
+
 ## Precedência
 
 Avaliação operacional: [ciclo supervisionado com agentes](operacao/avaliacao-agentes.md),

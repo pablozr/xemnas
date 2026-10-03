@@ -8,6 +8,7 @@ planos de `docs/roadmap/`.
 
 | Documento | Assunto | Status |
 | --- | --- | --- |
+| [melhorias-apos-avaliacao-real.md](melhorias-apos-avaliacao-real.md) | Dezessete melhorias priorizadas, evidências, critérios e sequência após pesquisas e retestes no ripgrep | Aberta. Proposta consolidada; implementação e hipóteses de valor pendentes |
 | [20-ideias-dores-reais-devs.md](20-ideias-dores-reais-devs.md) | Vinte ideias adicionais com dores, evidência empírica, diferenças, prioridades e pilotos | Aberta. Síntese concluída; demanda e eficácia não validadas |
 | [dores-dev-cognicao-fontes.md](dores-dev-cognicao-fontes.md) | Oito estudos de cognição, interrupções, compreensão e investigação | Aberta. Fontes consultadas; propostas sem experimento próprio |
 | [dores-dev-conhecimento-equipe-fontes.md](dores-dev-conhecimento-equipe-fontes.md) | Oito estudos de onboarding, revisão, coordenação e dívida técnica | Aberta. Pesquisa exploratória; parte das fontes teve acesso parcial |
