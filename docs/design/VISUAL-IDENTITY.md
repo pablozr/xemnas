@@ -331,15 +331,22 @@ HTML, o modelo põe todo texto com `textContent`, e o JSON é escapado para não
   `prefers-reduced-motion` respeitado; tema escuro e claro com a mesma paleta do app.
 - **Arquitetura.** Mapa em colunas com curvas, um glifo por tipo de parte (banco, IA,
   fila, janela, agente...) deduzido do nome e das tecnologias, só decoração. Clicar
-  numa parte abre o inspetor flutuante (o que chama, quem a chama, onde aparece);
-  clicar numa seta mostra os passos que a formam. Pan, zoom, "Copiar Mermaid" e "Baixar
+  numa parte abre o inspetor flutuante (o que chama, quem a chama, onde aparece) com
+  **Por que é assim**: as decisões em vigor da parte e das partes dentro dela,
+  agrupadas pelo primeiro critério de relevância gravado (sem critério, lista simples;
+  nenhum tema inventado), pergunta como título e escolha embaixo; clicar abre o motivo,
+  premissas, consequências, quando reconsiderar, escopo, o que toca e as relações
+  ("substitui", "depende de", conflito na cor de perigo); abaixo, as regras que valem
+  ali. Clicar numa seta mostra os passos que a formam. Pan, zoom, "Copiar Mermaid" e "Baixar
   SVG". **Passo a passo** (a referência é o fluxo guiado do IcePanel): escolher um
   fluxo nas pílulas acima liga uma barra no pé com "Passo n de m", título e texto; a
   câmera voa até as duas partes do passo, o resto apaga, a seta ativa corre tracejada
-  com uma luz que a percorre. Setas do teclado, "Reproduzir" e Esc.
+  com uma luz que a percorre; cada decisão citada no passo aparece com a escolha e a
+  primeira frase do motivo ("— porque …"). Setas do teclado, "Reproduzir" e Esc.
 - **Fluxos.** Diagrama de sequência por fluxo (participantes com glifo, setas
   numeradas, meio em mono) e a linha do tempo dos passos, cada um com o componente, o
-  texto e as fontes (decisão em lavanda, regra em azul). Passo ativo sincronizado entre
+  texto e as fontes (decisão em lavanda com a escolha e "porque" e a primeira frase do
+  motivo, regra em azul). Passo ativo sincronizado entre
   o diagrama, a linha do tempo e a barra de progresso; "Ver no mapa" abre o mesmo passo
   no passo a passo da arquitetura.
 

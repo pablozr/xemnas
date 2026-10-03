@@ -89,7 +89,7 @@ svg{display:block}
 .hint{position:absolute;left:18px;bottom:18px;z-index:2;display:flex;gap:14px;align-items:center;color:var(--muted);font-size:12.5px;background:var(--glass);backdrop-filter:blur(14px);border:1px solid var(--line);border-radius:999px;padding:6px 14px;transition:opacity .4s}
 kbd{font:500 11px var(--mono);background:var(--raised);border:1px solid var(--line-strong);border-bottom-width:2px;border-radius:5px;padding:1px 6px;color:var(--text2)}
 
-.inspector{position:absolute;right:18px;top:68px;bottom:64px;width:340px;z-index:3;display:flex;flex-direction:column;background:var(--glass);backdrop-filter:blur(22px) saturate(1.2);border:1px solid var(--line-strong);border-radius:18px;box-shadow:var(--shadow);transform:translateX(24px);opacity:0;pointer-events:none;transition:transform .4s var(--ease),opacity .3s}
+.inspector{position:absolute;right:18px;top:68px;bottom:64px;width:368px;z-index:3;display:flex;flex-direction:column;background:var(--glass);backdrop-filter:blur(22px) saturate(1.2);border:1px solid var(--line-strong);border-radius:18px;box-shadow:var(--shadow);transform:translateX(24px);opacity:0;pointer-events:none;transition:transform .4s var(--ease),opacity .3s}
 .inspector.on{transform:none;opacity:1;pointer-events:auto}
 .inspector .head{display:flex;gap:12px;align-items:flex-start;padding:18px 18px 12px}
 .ico{display:grid;place-items:center;flex:none;width:38px;height:38px;border-radius:11px;background:var(--accent-soft);color:var(--accent-strong);border:1px solid var(--line)}
@@ -215,6 +215,36 @@ marker path{fill:var(--edge)}
 .src.rule code{color:var(--info);background:color-mix(in srgb,var(--info) 14%,transparent)}
 .foot{margin-top:46px;padding-top:16px;border-top:1px solid var(--line);color:var(--muted);font-size:12.5px;max-width:760px}
 
+/* ---------- why: the decisions behind a part ---------- */
+.gl{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--text2);font-weight:600;margin:14px 0 4px}
+.gl:after{content:"";flex:1;height:1px;background:var(--line)}
+.drow{display:block;width:calc(100% + 18px);margin:0 -9px 2px;text-align:left;background:none;border:1px solid transparent;border-radius:11px;padding:8px 9px;transition:background .15s,border-color .15s}
+.drow:hover{background:var(--hover);border-color:var(--line)}
+.drow[aria-expanded="true"]{background:var(--selection);border-color:var(--edge)}
+.drow b{display:block;font-weight:600;font-size:13.5px;line-height:1.35}
+.drow small{display:block;color:var(--text2);font-size:12.5px;line-height:1.45;margin-top:2px}
+.drow .bad{color:var(--danger);font-size:11.5px;font-weight:600}
+.ddet{padding:2px 0 12px 12px;margin:2px 0 8px 3px;border-left:2px solid var(--line-strong);font-size:13px;color:var(--text2)}
+.ddet .sec{margin:14px 0 6px}
+.ddet p{margin:0;line-height:1.55}
+.ddet ul{margin:0;padding-left:18px;display:grid;gap:4px;line-height:1.5}
+.ddet .tags{display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin:2px 0 0}
+.code{font:500 11px var(--mono);color:var(--accent-strong);background:var(--accent-soft);border-radius:6px;padding:1px 6px;flex:none}
+.crit{font-size:11.5px;border-radius:999px;padding:1px 9px;border:1px solid var(--line);color:var(--text2)}
+.rel{display:flex;gap:8px;align-items:baseline;width:100%;text-align:left;background:none;border:1px solid transparent;border-radius:9px;padding:5px 7px;margin:0 -7px 1px;color:var(--text2);font-size:12.5px;line-height:1.4}
+button.rel:hover{background:var(--hover);border-color:var(--line)}
+.rel .verb{flex:none;color:var(--muted);min-width:88px}
+.rel.bad .verb,.rel.bad .t{color:var(--danger)}
+.rel.bad .code{color:var(--danger);background:color-mix(in srgb,var(--danger) 13%,transparent)}
+.link{background:none;border:0;padding:0;margin-top:12px;color:var(--accent-strong);font-size:12.5px;font-weight:500}
+.link:hover{text-decoration:underline}
+.src.why{background:none;border:0;padding:2px 0;text-align:left;font:inherit;font-size:13px;color:var(--text2);width:100%}
+.src.why b{font-weight:600;color:var(--text)}
+.src.why .r{color:var(--muted)}
+button.src.why:hover b{text-decoration:underline;text-decoration-color:var(--line-strong)}
+.tour .tw{display:grid;gap:3px;margin-top:8px}
+.tour .tw .src{margin:0;font-size:12.5px}
+
 .void{max-width:560px;margin:14vh auto;padding:0 24px;text-align:center}
 .void h1{font:600 28px var(--display);letter-spacing:-.02em;margin:14px 0 8px}
 .void p{color:var(--text2)}
@@ -256,6 +286,9 @@ marker path{fill:var(--edge)}
   var D = JSON.parse(document.getElementById("xemnas-data").textContent);
   var A = D.architecture || { containers: [], interactions: [], hidden: 0 };
   var FLOWS = D.flows || [];
+  var K = D.knowledge || { decisions: [], rules: [] };
+  var DECS = K.decisions || [], RULES_ = K.rules || [], DEC = {};
+  DECS.forEach(function (d) { DEC[d.id] = d; });
   var NS = "http://www.w3.org/2000/svg";
   var REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -563,6 +596,94 @@ marker path{fill:var(--edge)}
     dot.append(anim); gFx.append(dot);
   }
 
+  /* ---------- why: decisions and their reasons ---------- */
+  var CRIT = [["cross_cutting", "Transversal"], ["data_or_contract", "Dados e contratos"], ["security_or_privacy", "Segurança e privacidade"],
+    ["external_dependency", "Dependência externa"], ["hard_to_reverse", "Difícil de reverter"], ["first_of_a_kind", "Primeira do tipo"],
+    ["past_problem", "Problema já vivido"], ["constrains_future_work", "Limita o futuro"]];
+  function critName(k) { for (var i = 0; i < CRIT.length; i++) if (CRIT[i][0] === k) return CRIT[i][1]; return k; }
+  var RULE_KIND = { assumption: "Premissa", constraint: "Restrição", goal: "Objetivo", convention: "Convenção" };
+  function because(d) {
+    if (!d.reason) return "";
+    return /^(porque|pois|para|because|since|so)\b/i.test(d.reason) ? d.reason : "porque " + d.reason;
+  }
+  function conflicts(d) { return d.relations.filter(function (r) { return r.kind === "conflicts_with"; }).length; }
+  function decisionsOf(cid) { return DECS.filter(function (d) { return d.containers.indexOf(cid) >= 0; }); }
+  function rulesOf(cid) { return RULES_.filter(function (r) { return r.containers.indexOf(cid) >= 0; }); }
+  function relVerb(r) {
+    if (r.kind === "supersedes") return r.outgoing ? "substitui" : "substituída por";
+    if (r.kind === "depends_on") return r.outgoing ? "depende de" : "é base de";
+    return "conflita com";
+  }
+  function list(title, items) {
+    if (!items || !items.length) return null;
+    return h("div", {}, [h("div", { class: "sec", text: title }), h("ul", {}, items.map(function (t) { return h("li", { text: t }); }))]);
+  }
+  /* the full reading of one decision: why, what it takes for granted, what follows, how it meets the others */
+  function decisionDetail(d, inTab) {
+    var box = h("div", { class: "ddet" });
+    var tags = h("div", { class: "tags" }, [h("span", { class: "code", text: d.label })]);
+    d.criteria.forEach(function (k) { tags.append(h("span", { class: "crit", text: critName(k) })); });
+    box.append(tags);
+    box.append(h("div", { class: "sec", text: "Motivo" }), h("p", { text: d.rationale || "Sem motivo registrado." }));
+    [list("Premissas", d.assumptions), list("Consequências", d.consequences), list("Reconsiderar quando", d.reconsider_when), list("Escopo", d.scope)]
+      .forEach(function (el) { if (el) box.append(el); });
+    if (d.entities.length) {
+      box.append(h("div", { class: "sec", text: "Toca em" }), h("div", { class: "tags" }, d.entities.map(function (e) {
+        return h("span", { class: e.kind === "technology" ? "tech" : "badge", style: "margin:0", text: e.name });
+      })));
+    }
+    if (d.relations.length) {
+      box.append(h("div", { class: "sec", text: "Relações" }));
+      d.relations.forEach(function (r) {
+        var kids = [h("span", { class: "verb", text: relVerb(r) }), h("span", { class: "code", text: r.other_label }), h("span", { class: "t", text: r.other_title || "" })];
+        var cls = "rel" + (r.kind === "conflicts_with" ? " bad" : "");
+        box.append(r.in_force ? h("button", { class: cls, type: "button", title: "Abrir " + r.other_label, onclick: function () { openDecision(r.other_id); } }, kids) : h("div", { class: cls }, kids));
+      });
+    }
+    if (!inTab && BUILD.decisoes) box.append(h("button", { class: "link", type: "button", text: "Ver em Decisões →", onclick: function () { openDecision(d.id); } }));
+    return box;
+  }
+  function decisionRow(d) {
+    var n = conflicts(d), det = null;
+    var row = h("button", { class: "drow", type: "button", "aria-expanded": "false" }, [
+      h("b", { text: d.question }),
+      h("small", {}, [d.choice, n ? h("span", { class: "bad", text: " · " + plural(n, "conflito", "conflitos") }) : null])]);
+    row.addEventListener("click", function () {
+      var open = row.getAttribute("aria-expanded") === "true";
+      row.setAttribute("aria-expanded", String(!open));
+      if (open) { if (det) det.remove(); det = null; } else { det = decisionDetail(d, false); row.after(det); }
+    });
+    return row;
+  }
+  /* grouped by the first significance criterion when the extraction stored one; a flat list otherwise */
+  function whySection(cid) {
+    var ds = decisionsOf(cid), rs = rulesOf(cid), out = [h("div", { class: "sec", text: "Por que é assim" })];
+    if (!ds.length) out.push(h("div", { class: "empty", text: "Nenhuma decisão em vigor ligada a esta parte." }));
+    else if (!ds.some(function (d) { return d.criteria.length; })) ds.forEach(function (d) { out.push(decisionRow(d)); });
+    else {
+      CRIT.concat([["", "Sem critério registrado"]]).forEach(function (c) {
+        var group = ds.filter(function (d) { return (d.criteria[0] || "") === c[0]; });
+        if (!group.length) return;
+        out.push(h("div", { class: "gl", text: c[1] }));
+        group.forEach(function (d) { out.push(decisionRow(d)); });
+      });
+    }
+    if (rs.length) {
+      out.push(h("div", { class: "sec", text: "Regras que valem aqui" }));
+      rs.forEach(function (r) { out.push(h("div", { class: "src rule", style: "margin:0 0 6px" }, [h("code", { text: r.label }), h("span", { text: (RULE_KIND[r.kind] ? RULE_KIND[r.kind] + ": " : "") + r.statement })])); });
+    }
+    return out;
+  }
+  /* one cited record of a step: for a decision, its choice and the first sentence of its reason */
+  function citeRow(ct) {
+    var d = ct.kind === "decision" ? DEC[ct.id] : null;
+    if (!d) return h("div", { class: "src" + (ct.kind === "claim" ? " rule" : "") }, [h("code", { text: ct.label }), h("span", { text: ct.title || "" })]);
+    var why = because(d);
+    return h("button", { class: "src why", type: "button", title: d.question, onclick: function (ev) { ev.stopPropagation(); openDecision(d.id); } },
+      [h("code", { text: d.label }), h("span", {}, [h("b", { text: d.choice }), why ? h("span", { class: "r", text: " — " + why }) : null])]);
+  }
+  function openDecision(id) { if (DEC[id] && BUILD.decisoes) go("decisoes", id); }
+
   /* ---------- inspector ---------- */
   function ins() { return $("inspector"); }
   function openInspector(head, body) { var el = ins(); el.replaceChildren(head, body); el.classList.add("on"); }
@@ -585,6 +706,7 @@ marker path{fill:var(--edge)}
     if (c.conflicts) badges.append(h("span", { class: "badge bad", text: plural(c.conflicts, "conflito", "conflitos") }));
     if (badges.childNodes.length) body.append(badges);
     if (c.technologies.length) body.append(h("div", { class: "sec", text: "Tecnologias" }), h("div", {}, techs(c)));
+    whySection(c.entity_id).forEach(function (el) { body.append(el); });
     var calls = [], by = [];
     L.edges.forEach(function (e) { if (e.a === i) calls.push(neighbour(e.b, e.it.steps, true)); if (e.b === i) by.push(neighbour(e.a, e.it.steps, false)); });
     body.append(h("div", { class: "sec", text: "Chama" }), calls.length ? h("div", {}, calls) : h("div", { class: "empty", text: "Não chama outra parte." }));
@@ -652,7 +774,7 @@ marker path{fill:var(--edge)}
     var where = st && st.entity_name ? "em " + st.entity_name + (st.via ? " · chega por " + st.via : "") : "";
     box.replaceChildren.apply(box, [
       h("div", { class: "meta" }, [h("b", { text: tour.step < 0 ? "Fluxo " + (tour.flow + 1) : "Passo " + (tour.step + 1) + " de " + n }), dots, h("span", { text: clip(f.title, 40) })]),
-      h("h4", { text: st ? st.title : f.title }), h("p", { text: st ? st.text : f.description }), h("div", { class: "where", text: where, hidden: where ? null : "" }),
+      h("h4", { text: st ? st.title : f.title }), h("p", { text: st ? st.text : f.description }), tourWhy(st), h("div", { class: "where", text: where, hidden: where ? null : "" }),
       h("div", { class: "ctl" }, [
         h("button", { class: "btn icon", type: "button", "aria-label": "Passo anterior", title: "Anterior (←)", text: "←", onclick: function () { stopPlayer(); tourStep(tour.step - 1); } }),
         h("button", { class: "btn primary", type: "button", id: "tplay", title: "Reproduzir", text: player ? "❚❚" : "▶", onclick: togglePlay }),
@@ -661,6 +783,13 @@ marker path{fill:var(--edge)}
         h("button", { class: "btn", type: "button", text: "Ver na sequência", onclick: function () { var f2 = tour.flow, s2 = Math.max(0, tour.step); go("fluxos", f2); setStep(s2, true); } }),
         h("button", { class: "btn icon", type: "button", "aria-label": "Sair do passo a passo", title: "Sair (Esc)", text: "✕", onclick: clearAll })])]);
     box.classList.add("on"); $("hint").style.opacity = 0;
+  }
+  function tourWhy(st) {
+    var cites = st ? st.citations.filter(function (ct) { return ct.kind === "decision" && DEC[ct.id]; }) : [];
+    if (!cites.length) return null;
+    var box = h("div", { class: "tw" }, cites.slice(0, 2).map(citeRow));
+    if (cites.length > 2) box.append(h("div", { class: "where", text: "+" + plural(cites.length - 2, "decisão", "decisões") + " neste passo" }));
+    return box;
   }
   function camera() {
     if (!tour) return fit();
@@ -858,7 +987,7 @@ marker path{fill:var(--edge)}
       var c = container(st.entity_id), kids = [h("b", { text: st.title })];
       if (st.entity_name) kids.push(h("div", { class: "where" }, [h("span", { html: glyphHtml(c ? glyphFor(c) : "box") }), "em " + st.entity_name + (st.via ? " · chega por " : ""), st.via ? h("span", { class: "via", text: st.via }) : null]));
       kids.push(h("p", { text: st.text }));
-      st.citations.forEach(function (ct) { kids.push(h("div", { class: "src" + (ct.kind === "claim" ? " rule" : "") }, [h("code", { text: ct.label }), h("span", { text: ct.title || "" })])); });
+      st.citations.forEach(function (ct) { kids.push(citeRow(ct)); });
       var li = h("li", { class: "step", "data-step": i, tabindex: 0, onclick: function () { stopSeq(); setStep(i, false); } }, [h("div", { class: "no", text: i + 1 }), h("div", {}, kids)]);
       li.addEventListener("keydown", function (ev) { if (ev.key === "Enter") setStep(i, false); });
       line.append(li);
