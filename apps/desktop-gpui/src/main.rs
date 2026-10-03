@@ -123,6 +123,9 @@ fn main() {
     };
 
     let mut jobs = application::jobs::Jobs::new(store.clone());
+    // Every job lane shares one cap on concurrent provider calls.
+    let parallel = application::limiter::DEFAULT_PARALLEL;
+    let limiter = application::limiter::ProviderLimiter::new(usize::from(parallel));
 
     // AI settings: the profile file is seeded with the offline default so the
     // inbox keeps working without any provider (MVP-SPEC §7 line 404).
@@ -147,15 +150,11 @@ fn main() {
     // Capture analysis reloads the profile on every run, so a Settings change
     // takes effect without a restart. The offline fake stays the default; the
     // external provider is only reachable with consent and a stored key.
-    let analyze: std::sync::Arc<
-        dyn Fn(&application::jobs::JobRecord) -> Result<(), application::jobs::JobFailure>
-            + Send
-            + Sync,
-    > = std::sync::Arc::new({
+    let analyze = std::sync::Arc::new({
         let analysis = application::analysis::AnalyzeCapture::new(
             store.clone(),
             settings.clone(),
-            ai_provider::ProviderFactory::new(chatgpt.clone()),
+            ai_provider::ProviderFactory::new(chatgpt.clone()).with_limiter(limiter.clone()),
         );
         move |record: &application::jobs::JobRecord| analyze_capture(&analysis, record)
     });
@@ -170,13 +169,16 @@ fn main() {
             let finder = application::relation_suggestions::RelationFinder::new(
                 store.clone(),
                 settings.clone(),
-                ai_provider::ProviderFactory::new(chatgpt.clone()),
+                ai_provider::ProviderFactory::new(chatgpt.clone()).with_limiter(limiter.clone()),
             );
             move |record: &application::jobs::JobRecord| match finder.run(&record.payload) {
                 Ok(stored) => {
                     tracing::info!(stored, operation = "suggest_relations", "relations judged");
                     Ok(())
                 }
+                Err(application::relation_suggestions::RelationFindError::Deferred(
+                    retry_after,
+                )) => Err(application::jobs::JobFailure::Deferred { retry_after }),
                 Err(error) => {
                     tracing::warn!(error = %error, operation = "suggest_relations", "failed");
                     Ok(())
@@ -191,13 +193,16 @@ fn main() {
             let finder = application::claim_suggestions::ClaimFinder::new(
                 store.clone(),
                 settings.clone(),
-                ai_provider::ProviderFactory::new(chatgpt.clone()),
+                ai_provider::ProviderFactory::new(chatgpt.clone()).with_limiter(limiter.clone()),
             );
             move |record: &application::jobs::JobRecord| match finder.run(&record.payload) {
                 Ok(stored) => {
                     tracing::info!(stored, operation = "derive_claims", "context derived");
                     Ok(())
                 }
+                Err(application::claim_suggestions::ClaimSuggestionError::Deferred(
+                    retry_after,
+                )) => Err(application::jobs::JobFailure::Deferred { retry_after }),
                 Err(error) => {
                     tracing::warn!(error = %error, operation = "derive_claims", "failed");
                     Ok(())
@@ -234,7 +239,7 @@ fn main() {
                 operation = "recover_jobs",
                 "recovered interrupted jobs"
             );
-            Some(jobs.spawn_workers(2))
+            Some(jobs.spawn_workers(usize::from(parallel)))
         }
         Err(error) => {
             tracing::error!(
@@ -311,6 +316,8 @@ fn main() {
     if let Some(api) = api {
         api.shutdown();
     }
+    // Nobody waits on the provider limiter once the app is closing.
+    limiter.close();
     if let Some(worker) = worker {
         worker.stop();
         if let Err(error) = worker.join() {
@@ -762,7 +769,7 @@ fn analyze_capture(
                 operation = "analyze_capture",
                 "capture analysis failed"
             );
-            Err(application::jobs::JobFailure::Failed)
+            Err(error.job_failure())
         }
     }
 }

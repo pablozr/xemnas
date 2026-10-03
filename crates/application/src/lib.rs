@@ -25,6 +25,7 @@ pub mod injection;
 pub mod integration;
 pub mod jobs;
 pub mod knowledge_review;
+pub mod limiter;
 pub mod outbox;
 pub mod overview;
 pub mod page;

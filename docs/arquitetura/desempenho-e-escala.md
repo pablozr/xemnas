@@ -49,6 +49,28 @@ atrase a análise da sessão que o desenvolvedor acabou de encerrar.
 - Contagens por fila (na fila, executando, falhou) vêm de uma consulta
   agrupada (`Jobs::lane_summaries`), nunca de carregar as linhas.
 
+### Limite de chamadas ao provedor
+
+- Um `ProviderLimiter` (`application::limiter`) é compartilhado por todas as
+  filas: no máximo N chamadas ao provedor de IA ao mesmo tempo (padrão 2).
+  Chamadas de um worker da fila `now` passam à frente das que esperam nas
+  outras filas. Só os handlers de jobs usam o limitador
+  (`ProviderFactory::with_limiter`); Visão geral, revisão e aprovação
+  automática, disparadas pela pessoa, não esperam por ele.
+- HTTP 429 vira `ExtractError::RateLimited` com o `Retry-After` (em segundos,
+  até 15 min), sem nova tentativa dentro da chamada. O limitador pausa todo
+  mundo por esse tempo (20 s sem `Retry-After`); quem chega na pausa recebe o
+  tempo restante e devolve o job à fila em vez de segurar um worker.
+- Tempo esgotado, falha de conexão e 5xx seguem com três tentativas dentro da
+  chamada; esgotadas, viram `ExtractError::Unavailable`. Nos dois casos o job
+  volta para `queued` com `run_after` (`Retry-After`, ou 15 s · 2^(tentativas-1)
+  com ±25 % de variação, até 10 min) e não registra análise falha. Depois de 8
+  tentativas ele fica `failed` com mensagem própria e pode ser reprocessado:
+  nenhum job se perde. O limite de uso esgotado do plano ChatGPT continua sendo
+  erro com a mensagem do plano, porque esperar não resolve.
+- Ao fechar o app, `limiter.close()` libera quem espera vaga (o job volta à
+  fila) antes de `stop`/`join` dos workers.
+
 ## Orçamentos
 
 | Coisa | Valor | Onde |

@@ -194,6 +194,7 @@ fn upgrade_reapplies_the_missing_migrations() {
                  DROP TABLE decision_candidates; \
                  DROP TABLE assessments; \
                  DROP TABLE adapter_checkpoints; \
+                 ALTER TABLE jobs DROP COLUMN run_after; \
                  DELETE FROM schema_migrations WHERE version >= 4;",
             )
             .expect("simulate an older version");
@@ -216,10 +217,10 @@ fn upgrade_reapplies_the_missing_migrations() {
         )
         .expect("count distinct migrations");
     assert_eq!(
-        versions, 21,
-        "0004, 0005, 0006 and 0008 to 0022 must be re-applied on upgrade"
+        versions, 22,
+        "0004, 0005, 0006 and 0008 to 0023 must be re-applied on upgrade"
     );
-    assert_eq!(distinct, 21);
+    assert_eq!(distinct, 22);
 
     let _ = std::fs::remove_dir_all(&root);
 }

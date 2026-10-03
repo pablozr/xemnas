@@ -13,6 +13,14 @@ use crate::clock::now_rfc3339;
 thread_local! {
     /// Set only while a job handler runs on this thread.
     static JOB_PANIC_SANITIZED: Cell<bool> = const { Cell::new(false) };
+    /// Lane of the job a handler runs on this thread, if any.
+    static CURRENT_LANE: Cell<Option<Lane>> = const { Cell::new(None) };
+}
+
+/// Lane of the job running on this thread, so a shared resource (the
+/// provider limiter) can favour the `now` lane.
+pub fn current_lane() -> Option<Lane> {
+    CURRENT_LANE.with(Cell::get)
 }
 
 /// Returns whether the current thread is inside a job-handler call.
@@ -124,11 +132,18 @@ pub struct JobRecord {
     pub updated_at: String,
 }
 
-/// Typed reason a handler reports a job as failed.
+/// Typed reason a handler reports a job as not completed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobFailure {
     /// The handler could not complete the job for a reason it owns.
     Failed,
+    /// The provider asked to slow down or did not answer in time: the job
+    /// goes back to the queue after `retry_after` (or an exponential backoff
+    /// with jitter when the provider gave no time).
+    Deferred {
+        /// Wait the provider asked for, if it said.
+        retry_after: Option<Duration>,
+    },
 }
 
 impl JobFailure {
@@ -136,8 +151,47 @@ impl JobFailure {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Failed => "o job falhou durante a execução",
+            Self::Deferred { .. } => {
+                "o provedor de IA pediu uma pausa; a tarefa voltou para a fila"
+            }
         }
     }
+}
+
+/// Claims after which a job the provider keeps deferring is marked failed
+/// (it can still be reprocessed by hand, so nothing is lost).
+pub const MAX_DEFERRED_ATTEMPTS: i64 = 8;
+
+/// Message of a job that gave up after [`MAX_DEFERRED_ATTEMPTS`].
+pub const DEFERRED_TOO_OFTEN: &str =
+    "o provedor de IA seguiu indisponível; reprocesse a tarefa quando ele voltar";
+
+/// First wait of the job-level backoff.
+const BACKOFF_BASE: Duration = Duration::from_secs(15);
+
+/// Longest wait before a deferred job is claimable again.
+pub const MAX_BACKOFF: Duration = Duration::from_secs(10 * 60);
+
+/// Wait before a deferred job is claimable again: the provider's
+/// `Retry-After` when it gave one, otherwise `15 s · 2^(attempts-1)` with
+/// ±25 % jitter, both capped at [`MAX_BACKOFF`].
+pub fn deferral_delay(attempts: i64, retry_after: Option<Duration>) -> Duration {
+    if let Some(after) = retry_after {
+        return after.clamp(Duration::from_secs(1), MAX_BACKOFF);
+    }
+    let exponent = u32::try_from(attempts.saturating_sub(1).clamp(0, 16)).unwrap_or(16);
+    let base = BACKOFF_BASE
+        .saturating_mul(1u32 << exponent)
+        .min(MAX_BACKOFF);
+    // Jitter in [0.75, 1.25) from the std random hasher; no new dependency.
+    let noise = {
+        use std::hash::{BuildHasher, Hasher};
+        let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+        hasher.write_i64(attempts);
+        hasher.finish() % 500
+    };
+    let factor = 0.75 + noise as f64 / 1000.0;
+    base.mul_f64(factor).min(MAX_BACKOFF)
 }
 
 impl std::fmt::Display for JobFailure {
@@ -362,6 +416,13 @@ pub trait JobRepository {
         last_error: Option<&str>,
     ) -> Result<bool, JobError>;
 
+    /// Returns a `running` job to `queued`, claimable only after `delay`.
+    /// The default ignores the delay; a store should persist it.
+    fn defer(&self, id: &str, delay: Duration, last_error: &str) -> Result<bool, JobError> {
+        let _ = delay;
+        self.transition(id, JobState::Running, JobState::Queued, Some(last_error))
+    }
+
     /// Requeues interrupted idempotent jobs and fails interrupted
     /// non-idempotent ones.
     fn recover_interrupted(&self) -> Result<RecoveryReport, JobError>;
@@ -561,13 +622,37 @@ impl<R: JobRepository> Jobs<R> {
         };
 
         let previous = replace_job_panic_sanitized(true);
+        let previous_lane = CURRENT_LANE.with(|lane| lane.replace(Some(lane_of(&record.kind))));
         let result = catch_unwind(AssertUnwindSafe(|| handler(&record)));
+        CURRENT_LANE.with(|lane| lane.set(previous_lane));
         replace_job_panic_sanitized(previous);
 
         let state = match result {
             Ok(Ok(())) => {
                 self.transition_checked(&record.id, JobState::Running, JobState::Completed, None)?;
                 JobState::Completed
+            }
+            Ok(Err(JobFailure::Deferred { retry_after }))
+                if record.attempts < MAX_DEFERRED_ATTEMPTS =>
+            {
+                let delay = deferral_delay(record.attempts, retry_after);
+                let message = JobFailure::Deferred { retry_after }.as_str();
+                if !self.repository.defer(&record.id, delay, message)? {
+                    return Err(JobError::InvalidTransition {
+                        from: JobState::Running,
+                        to: JobState::Queued,
+                    });
+                }
+                JobState::Queued
+            }
+            Ok(Err(JobFailure::Deferred { .. })) => {
+                self.transition_checked(
+                    &record.id,
+                    JobState::Running,
+                    JobState::Failed,
+                    Some(DEFERRED_TOO_OFTEN),
+                )?;
+                JobState::Failed
             }
             Ok(Err(failure)) => {
                 self.transition_checked(
@@ -1433,5 +1518,81 @@ mod tests {
                 .all(|job| job.state != JobState::Running),
             "stopping lets running jobs finish; none is left half done"
         );
+    }
+
+    #[test]
+    fn a_deferred_job_goes_back_to_the_queue_until_it_gives_up() {
+        use super::{DEFERRED_TOO_OFTEN, MAX_DEFERRED_ATTEMPTS};
+        use std::time::Duration;
+        let repository = StateRepository::default();
+        let mut jobs = Jobs::new(repository.clone());
+        jobs.register(
+            "analysis",
+            Arc::new(|_: &JobRecord| {
+                Err(JobFailure::Deferred {
+                    retry_after: Some(Duration::from_secs(7)),
+                })
+            }),
+        );
+        let record = jobs.enqueue("analysis", "{}", true).expect("enqueue");
+        for attempt in 1..MAX_DEFERRED_ATTEMPTS {
+            let outcome = jobs.run_next().expect("run").expect("ran");
+            assert_eq!(
+                outcome.state,
+                JobState::Queued,
+                "attempt {attempt} requeues"
+            );
+            let row = repository.get(&record.id).expect("get").expect("row");
+            assert_eq!(row.state, JobState::Queued);
+            assert_eq!(
+                row.last_error.as_deref(),
+                Some(JobFailure::Deferred { retry_after: None }.as_str())
+            );
+        }
+        let outcome = jobs.run_next().expect("run").expect("ran");
+        assert_eq!(outcome.state, JobState::Failed);
+        let row = repository.get(&record.id).expect("get").expect("row");
+        assert_eq!(row.last_error.as_deref(), Some(DEFERRED_TOO_OFTEN));
+        jobs.reprocess(&record.id)
+            .expect("a given-up job can be reprocessed");
+    }
+
+    #[test]
+    fn deferral_delay_honours_retry_after_and_caps_the_backoff() {
+        use super::{deferral_delay, MAX_BACKOFF};
+        use std::time::Duration;
+        assert_eq!(
+            deferral_delay(1, Some(Duration::from_secs(7))),
+            Duration::from_secs(7)
+        );
+        assert_eq!(
+            deferral_delay(1, Some(Duration::from_secs(9_999))),
+            MAX_BACKOFF
+        );
+        let first = deferral_delay(1, None);
+        assert!(first >= Duration::from_millis(11_250) && first < Duration::from_millis(18_750));
+        let third = deferral_delay(3, None);
+        assert!(third >= Duration::from_secs(45) && third < Duration::from_secs(75));
+        assert!(deferral_delay(40, None) <= MAX_BACKOFF);
+    }
+
+    #[test]
+    fn the_handler_knows_its_lane() {
+        use super::{current_lane, Lane, ANALYZE_DOCUMENT_KIND};
+        let seen = Arc::new(Mutex::new(None));
+        let seen_handler = seen.clone();
+        let mut jobs = Jobs::new(StateRepository::default());
+        jobs.register(
+            ANALYZE_DOCUMENT_KIND,
+            Arc::new(move |_: &JobRecord| {
+                *seen_handler.lock().expect("lock") = current_lane();
+                Ok(())
+            }),
+        );
+        jobs.enqueue(ANALYZE_DOCUMENT_KIND, "d", true)
+            .expect("enqueue");
+        jobs.run_next().expect("run").expect("ran");
+        assert_eq!(*seen.lock().expect("lock"), Some(Lane::Documents));
+        assert_eq!(current_lane(), None, "restored after the handler");
     }
 }

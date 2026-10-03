@@ -22,6 +22,7 @@ use application::extract::{
     ConnectionTestReport, DecisionEvidence, ExtractError, ExtractionBackground, RelevanceSignal,
     MAX_DIFF_SUMMARY_FILES, SIGNIFICANCE_CRITERIA,
 };
+use application::limiter::{ProviderLimiter, Refusal};
 use application::profile::{consent_status, AiProfile, ProfileError, ProfileKind, SecretStore};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -124,6 +125,9 @@ pub(crate) enum Attempt<T> {
     Success(T),
     /// A transient failure worth retrying.
     Transient,
+    /// The provider asked to slow down (HTTP 429), with its `Retry-After`.
+    /// Not retried in the call: the job is requeued and the limiter paused.
+    RateLimited(Option<Duration>),
     /// A failure that must not be retried.
     Fatal(ExtractError),
 }
@@ -142,24 +146,71 @@ pub fn test_connection(
 #[derive(Debug, Clone)]
 pub struct ProviderFactory {
     chatgpt: Arc<ChatGptSession>,
+    limiter: Option<ProviderLimiter>,
 }
 
 impl ProviderFactory {
     /// Wraps the shared ChatGPT session.
     pub fn new(chatgpt: Arc<ChatGptSession>) -> Self {
-        Self { chatgpt }
+        Self {
+            chatgpt,
+            limiter: None,
+        }
+    }
+
+    /// Routes every call of the extractors this factory builds through the
+    /// shared limiter (builder style). Used by the job handlers.
+    pub fn with_limiter(mut self, limiter: ProviderLimiter) -> Self {
+        self.limiter = Some(limiter);
+        self
     }
 }
 
-/// One of the external extractors.
+/// Pause of every call after a 429 that gave no `Retry-After`.
+const DEFAULT_PAUSE: Duration = Duration::from_secs(20);
+
+/// One of the external extractors, optionally behind the shared limiter.
 #[derive(Debug)]
-pub enum ProviderExtractor {
+pub struct ProviderExtractor {
+    backend: Backend,
+    limiter: Option<ProviderLimiter>,
+}
+
+/// The concrete external extractor.
+#[derive(Debug)]
+enum Backend {
     /// API key or local model.
     OpenAiCompatible(OpenAiCompatibleExtractor),
     /// The user's ChatGPT plan.
     ChatGpt(ChatGptExtractor),
     /// OpenCode Zen or Go with the user's key.
     OpenCode(OpenCodeExtractor),
+}
+
+impl ProviderExtractor {
+    /// Runs one provider call under the limiter: waits for a slot, refuses
+    /// during a provider pause, and starts a pause after a 429.
+    fn limited<T>(
+        &self,
+        call: impl FnOnce(&Backend) -> Result<T, ExtractError>,
+    ) -> Result<T, ExtractError> {
+        let Some(limiter) = &self.limiter else {
+            return call(&self.backend);
+        };
+        let _permit = limiter
+            .acquire()
+            .map_err(|refusal| ExtractError::RateLimited {
+                retry_after: Some(match refusal {
+                    Refusal::Paused(left) => left,
+                    Refusal::Closed => Duration::from_secs(1),
+                }),
+            })?;
+        let result = call(&self.backend);
+        if let Err(ExtractError::RateLimited { retry_after }) = &result {
+            limiter.pause_for(retry_after.unwrap_or(DEFAULT_PAUSE));
+        }
+        result
+    }
 }
 
 impl CandidateExtractor for ProviderExtractor {
@@ -177,11 +228,13 @@ impl CandidateExtractor for ProviderExtractor {
         signals: &[RelevanceSignal],
         background: &ExtractionBackground,
     ) -> Result<Vec<CandidateProposal>, ExtractError> {
-        match self {
-            Self::OpenAiCompatible(extractor) => extractor.extract_with(input, signals, background),
-            Self::ChatGpt(extractor) => extractor.extract_with(input, signals, background),
-            Self::OpenCode(extractor) => extractor.extract_with(input, signals, background),
-        }
+        self.limited(|backend| match backend {
+            Backend::OpenAiCompatible(extractor) => {
+                extractor.extract_with(input, signals, background)
+            }
+            Backend::ChatGpt(extractor) => extractor.extract_with(input, signals, background),
+            Backend::OpenCode(extractor) => extractor.extract_with(input, signals, background),
+        })
     }
 }
 
@@ -193,11 +246,11 @@ impl application::overview::StructuredModel for ProviderExtractor {
         schema_name: &str,
         schema: &serde_json::Value,
     ) -> Result<String, ExtractError> {
-        match self {
-            Self::OpenAiCompatible(model) => model.complete(system, user, schema_name, schema),
-            Self::ChatGpt(model) => model.complete(system, user, schema_name, schema),
-            Self::OpenCode(model) => model.complete(system, user, schema_name, schema),
-        }
+        self.limited(|backend| match backend {
+            Backend::OpenAiCompatible(model) => model.complete(system, user, schema_name, schema),
+            Backend::ChatGpt(model) => model.complete(system, user, schema_name, schema),
+            Backend::OpenCode(model) => model.complete(system, user, schema_name, schema),
+        })
     }
 }
 
@@ -209,19 +262,22 @@ impl ExtractorFactory for ProviderFactory {
         profile: &AiProfile,
         secret: String,
     ) -> Result<ProviderExtractor, ExtractError> {
-        match profile.kind {
-            ProfileKind::OpenAiCompatible => OpenAiCompatibleExtractor::new(profile, secret)
-                .map(ProviderExtractor::OpenAiCompatible),
+        let backend = match profile.kind {
+            ProfileKind::OpenAiCompatible => {
+                OpenAiCompatibleExtractor::new(profile, secret).map(Backend::OpenAiCompatible)
+            }
             ProfileKind::ChatGptPlan => {
-                ChatGptExtractor::new(self.chatgpt.clone(), profile).map(ProviderExtractor::ChatGpt)
+                ChatGptExtractor::new(self.chatgpt.clone(), profile).map(Backend::ChatGpt)
             }
-            ProfileKind::OpenCode => {
-                OpenCodeExtractor::new(profile, secret).map(ProviderExtractor::OpenCode)
-            }
+            ProfileKind::OpenCode => OpenCodeExtractor::new(profile, secret).map(Backend::OpenCode),
             ProfileKind::Fake => Err(ExtractError::Extractor(
                 "a heurística local não usa provedor externo".to_string(),
             )),
-        }
+        }?;
+        Ok(ProviderExtractor {
+            backend,
+            limiter: self.limiter.clone(),
+        })
     }
 }
 
@@ -353,11 +409,12 @@ impl OpenAiCompatibleExtractor {
             match self.attempt(&url, &body) {
                 Attempt::Success(text) => return Ok(text),
                 Attempt::Fatal(error) => return Err(error),
+                Attempt::RateLimited(retry_after) => {
+                    return Err(ExtractError::RateLimited { retry_after })
+                }
                 Attempt::Transient => {
                     if attempt >= self.retry.max_attempts {
-                        return Err(ExtractError::Extractor(format!(
-                            "o provedor falhou após {attempt} tentativa(s)"
-                        )));
+                        return Err(ExtractError::Unavailable { attempts: attempt });
                     }
                     (self.sleep)(self.retry.delay_for(attempt));
                     attempt += 1;
@@ -384,7 +441,10 @@ impl OpenAiCompatibleExtractor {
 
         let status = response.status();
         if !status.is_success() {
-            if status.as_u16() == 429 || status.is_server_error() {
+            if status.as_u16() == 429 {
+                return Attempt::RateLimited(retry_after(response.headers()));
+            }
+            if status.is_server_error() {
                 return Attempt::Transient;
             }
             return Attempt::Fatal(ExtractError::Extractor(format!(
@@ -489,6 +549,22 @@ pub(crate) fn output_schema() -> serde_json::Value {
             }
         }
     })
+}
+
+/// Longest `Retry-After` honoured; a longer one is capped.
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(15 * 60);
+
+/// The `Retry-After` header in seconds, capped. An HTTP-date form is not
+/// read and falls back to the job backoff.
+pub(crate) fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    let seconds: u64 = headers
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    Some(Duration::from_secs(seconds).min(MAX_RETRY_AFTER))
 }
 
 /// Maps a transport failure to a fixed, sanitized category.

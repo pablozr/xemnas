@@ -121,10 +121,12 @@ impl JobRepository for SqliteStore {
         let placeholders = vec!["?"; registered_kinds.len()].join(", ");
         let sql = format!(
             "UPDATE jobs \
-             SET state = 'running', attempts = attempts + 1, updated_at = {TOUCH_UPDATED_AT} \
+             SET state = 'running', attempts = attempts + 1, run_after = NULL, \
+                 updated_at = {TOUCH_UPDATED_AT} \
              WHERE id = ( \
                  SELECT id FROM jobs \
                  WHERE state = 'queued' AND kind IN ({placeholders}) \
+                   AND (run_after IS NULL OR run_after <= {TOUCH_UPDATED_AT}) \
                  ORDER BY created_at ASC, id ASC LIMIT 1 \
              ) \
              RETURNING {JOB_COLUMNS}"
@@ -150,6 +152,28 @@ impl JobRepository for SqliteStore {
                      WHERE id = ?3 AND state = ?4"
                 ),
                 params![to.as_str(), last_error, id, from.as_str()],
+            )
+            .map_err(storage_error)?;
+        Ok(changed > 0)
+    }
+
+    fn defer(
+        &self,
+        id: &str,
+        delay: std::time::Duration,
+        last_error: &str,
+    ) -> Result<bool, JobError> {
+        let seconds = delay.as_secs().max(1);
+        let changed = self
+            .lock()
+            .execute(
+                &format!(
+                    "UPDATE jobs SET state = 'queued', last_error = ?1, \
+                     run_after = strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?2), \
+                     updated_at = {TOUCH_UPDATED_AT} \
+                     WHERE id = ?3 AND state = 'running'"
+                ),
+                params![last_error, format!("+{seconds} seconds"), id],
             )
             .map_err(storage_error)?;
         Ok(changed > 0)

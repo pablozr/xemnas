@@ -490,3 +490,47 @@ fn concurrent_claims_never_hand_out_a_job_twice() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn a_deferred_job_is_not_claimable_until_its_time() {
+    let (store, root) = store_in("defer");
+    store
+        .insert(&record(
+            "later",
+            "analysis",
+            JobState::Queued,
+            true,
+            "2026-01-01T00:00:00Z",
+        ))
+        .expect("insert");
+    let kinds = vec!["analysis".to_string()];
+    store.claim_next(&kinds).expect("claim").expect("claimable");
+    assert!(store
+        .defer("later", Duration::from_secs(600), "pausa")
+        .expect("defer"));
+    let row = store.get("later").expect("get").expect("row");
+    assert_eq!(row.state, JobState::Queued);
+    assert_eq!(row.last_error.as_deref(), Some("pausa"));
+    assert!(
+        store.claim_next(&kinds).expect("claim").is_none(),
+        "a deferred job waits for its time"
+    );
+    assert!(
+        !store
+            .defer("later", Duration::from_secs(1), "pausa")
+            .expect("defer"),
+        "only a running job can be deferred"
+    );
+
+    let connection = rusqlite::Connection::open(root.join("app.db")).expect("raw");
+    connection
+        .execute(
+            "UPDATE jobs SET run_after = '2000-01-01T00:00:00Z' WHERE id = 'later'",
+            [],
+        )
+        .expect("move the time back");
+    let claimed = store.claim_next(&kinds).expect("claim").expect("due again");
+    assert_eq!(claimed.attempts, 2, "the deferral kept the attempt count");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
