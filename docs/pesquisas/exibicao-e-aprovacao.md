@@ -109,6 +109,10 @@ propostas de documento, com o tipo como filtro.
 
 ## Aprovação: do manual ao automático por faixas
 
+> **Superado em parte:** o que foi implementado é um interruptor Manual | Automático
+> com juiz de IA em lote e ledger (ver o passo 6 e `docs/design/VISUAL-IDENTITY.md`,
+> "Aprovação automática"). As faixas abaixo ficam como fundamento da triagem local.
+
 ### Por que não uma chave "modo automático"
 
 - Aprovar muito não é fiscalizar bem: a aprovação sobe e o esforço cai com a
@@ -163,7 +167,7 @@ quanto as revisadas.
 | 3 | Evidência antes do motivo na Revisão; ação padrão com desfazer | Baixo | Menos cliques por decisão sem queda na qualidade. **Feito:** a evidência vem antes e o motivo escrito pela IA fica recolhido; Rejeitar e Adiar mostram "Desfazer" no aviso (`Inbox::reopen`). Confirmar não tem desfazer: cria a decisão, que se edita ou aposenta em Decisões |
 | 4 | Fila única de aprovação (candidatos, sugestões do Mapa e documentos) | Médio | Um lugar para agir; menos destinos para aprender. **Feito:** a Revisão ganha a aba "Ligações sugeridas" (as sugestões do Mapa, que saíram do índice do Mapa) quando há alguma; propostas de documentos já chegam como candidatos |
 | 5 | Contexto de oito seções para quatro | Médio | Menos navegação para chegar ao mesmo dado. **Feito:** o índice tem Visão geral, Fontes, Entregas e Ajustes; as páginas de um grupo se alternam numa chave no topo (Fontes: Decisões, Regras, Documentação, Revisar com IA; Entregas: Histórico, Testar uma tarefa) |
-| 6 | Faixa A com provisória, livro de aceitas sozinhas e amostragem às cegas | Alto; exige backend | Concordância na amostragem acima do limite, taxa de desfazer baixa. **Feito**, com três diferenças do desenho: (a) em vez de "provisória" o candidato fica **retido** na fila, marcado com o momento em que será aceito (24 h), e nada chega aos agentes antes disso; (b) o sistema **observa antes de agir**: em modo manual, cada candidato elegível vira uma conferência (o que ele aprovaria contra o que você decide) e o modo automático só liga com 10 conferências recentes concordando em 90% ou mais; (c) o disjuntor e a chave olham as 20 últimas conferências. Confirmar continua sem desfazer. Rodada: a política roda quando a Revisão carrega (não em segundo plano com o app fechado) |
+| 6 | Modo automático | Alto; exige backend | A fila some sem a pessoa perder o controle. **Feito, e o desenho mudou depois de uma correção do usuário:** em vez de faixas medidas, o modo é um interruptor Manual \| Automático como o de permissões de agentes; ligado, a IA cuida de todo o ciclo (decisões, ligações, regras, vínculos). Triagem local gratuita e, para o resto, um juiz de IA em lote com limites (12 por chamada, 3 no mínimo ou 2 h de espera, 20 min entre chamadas, 6 por dia), sem pausa e com o registro "Feito sozinho" e desfazer dos descartados. O que a IA não resolve fica na fila marcado "a IA deixou para você". A calibração do passo 1 segue só como informação no Diagnóstico; as travas de amostragem às cegas e de janela foram trocadas pelo ledger visível. A rodada roda quando a Revisão carrega, não com o app fechado |
 
 Os passos 2 e 3 são só de interface; 1, 4 e 6 pedem mudança em `crates/` e a sua
 confirmação antes.

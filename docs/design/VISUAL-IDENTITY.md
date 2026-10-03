@@ -366,23 +366,27 @@ que as tocam e uma ligação existe só porque um fluxo passa de uma parte a out
 
 ## Aprovação automática
 
-Desligada por padrão. A chave fica em Ajustes, Diagnóstico, no cartão "Aprovação
-automática", logo abaixo de "A confiança da extração presta?" (que mostra a calibração
-com as quatro faixas em medidor). O cartão diz em uma frase onde está: **bloqueada**
-(a confiança ainda não prevê o que você aceita; a faixa de 85% a 100% ainda não tem 10
-decisões com 90% mantidas), **em observação** (N de 10 conferências: o sistema registra o
-que aprovaria e compara com o que você decide, sem aceitar nada), **fechada** (as
-conferências recentes discordaram), **pronta para ligar** ou **ligada**. O botão
-Ligar fica inativo enquanto algo bloqueia. Uma linha fixa lembra o que nunca é
-automático: regras, decisões parecidas com o já registrado, pouca evidência, muitos
-arquivos.
+É um interruptor como o modo de permissão de um agente: **Manual | Automático**, uma
+chave segmentada no topo da lista da Revisão, com uma linha dizendo o que o modo faz
+("A IA revisa em lote; o que ela decide fica em Feito sozinho" ou, sem provedor,
+"Sem provedor de IA ativo: só as regras locais agem"). Manual é o padrão e não faz nada
+sozinho. Ligado, a IA cuida de todo o ciclo: decisões propostas, ligações sugeridas,
+regras e vínculos.
 
-Na Revisão, o candidato retido leva "aceita sozinha em 19 h" no alto da linha, em azul
-de informação; ele continua na fila e pode ser aceito ou rejeitado antes (rejeitar
-conta como discordância). Sob a lista, "Aceitas sozinhas · N" abre as últimas aceitas
-pela política; cada linha abre a decisão. Uma sequência de oito confirmações com
-poucos segundos entre elas mostra "Ritmo alto: abra a evidência de um dos próximos
-antes de confirmar", uma vez, sem bloquear.
+Cada item passa primeiro por uma triagem local e gratuita (repete uma decisão já
+registrada: descarta; alta confiança, com fonte e sem parecido: aceita; o resto
+pergunta). Só o que sobra vai ao juiz de IA, **em lote** e com limites para não gerar
+chamadas: no mínimo 3 itens (ou o mais antigo esperando 2 h), no máximo 12 por chamada,
+20 minutos entre chamadas e 6 chamadas por dia. A falha do provedor não perde nada: o
+item espera a próxima rodada. O que a IA não resolve fica na fila com o marcador
+**"a IA deixou para você"** na linha e a frase do motivo no alto do detalhe.
+
+Aceitar passa pelo mesmo caminho da confirmação manual (prévia e adoção), sem pausa: o
+resultado vale na hora. O registro é o ledger **"Feito sozinho · N"**, recolhido sob a
+lista; cada linha mostra o veredito, quem decidiu (regras ou IA) e o motivo, abre a
+decisão quando foi aceita e oferece **Desfazer** quando foi descartada (volta à fila).
+Uma sequência de oito confirmações com poucos segundos entre elas mostra "Ritmo alto:
+abra a evidência de um dos próximos antes de confirmar", uma vez, sem bloquear.
 
 ## Contexto — quatro entradas
 
