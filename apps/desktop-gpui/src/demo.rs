@@ -994,94 +994,129 @@ fn seed_decided(
     Ok(())
 }
 
-/// The automatic approval in a given state, to see its page and its marks:
-/// `XEMNAS_DEMO_APPROVAL=watching|ready|on`. Sixty decided candidates whose
-/// confidence predicts what was kept, then the checks the policy collected
-/// while watching (5, or 12 for `ready` and `on`); `on` also turns the mode on
-/// and leaves two candidates held and three accepted on their own.
+/// The automatic review switched on, with what it did, to see its switch,
+/// its ledger and its marks: `XEMNAS_DEMO_APPROVAL=on`. Two candidates wait
+/// for the person with the reason the AI gave, two things were accepted (one
+/// by the rules, one by the AI) and one candidate was discarded.
 fn seed_approval(
     store: &SqliteStore,
     template: &DecisionCandidateRecord,
     state: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use application::auto_approval::{ApprovalStore, Entry, Lane, Mode};
-    let record = |id: String, status: &str, confidence: f64| {
+    use application::auto_approval::{ApprovalStore, By, Entry, ItemKind, Mode, Verdict};
+    if state != "on" {
+        return Ok(());
+    }
+    let record = |id: &str, status: &str, confidence: f64, question: &str| {
         let mut candidate = template.clone();
-        candidate.dedup_hash = id.clone();
-        candidate.id = id;
+        candidate.dedup_hash = id.to_owned();
+        candidate.id = id.to_owned();
         candidate.status = status.into();
         candidate.confidence = confidence;
+        candidate.question = question.into();
         candidate
     };
-    for at in 0..60_usize {
-        let confidence = 0.3 + at as f64 * 0.0115;
-        let kept = if confidence < 0.5 {
-            at % 7 == 0
-        } else if confidence < 0.7 {
-            at % 2 == 0
-        } else {
-            at % 15 != 0
+    store.set_approval_mode(Mode::Automatic, "2026-09-29T09:00:00Z")?;
+    let entry =
+        |id: &str, verdict: Verdict, by: By, title: &str, reason: &str, result: Option<&str>| {
+            Entry {
+                kind: ItemKind::Candidate,
+                item_id: id.to_owned(),
+                project_id: template.project_id.clone(),
+                verdict,
+                by,
+                reason: reason.to_owned(),
+                title: title.to_owned(),
+                result_id: result.map(str::to_owned),
+                created_at: "2026-09-29T14:00:00Z".to_owned(),
+                undone_at: None,
+            }
         };
-        store.insert_candidates(&[record(
-            format!("decided-{at}"),
-            if kept { "accepted" } else { "dismissed" },
-            confidence,
-        )])?;
-    }
-    let checks = if state == "watching" { 5 } else { 12 };
-    for at in 0..checks {
-        let id = format!("watched-{at}");
-        store.insert_candidates(&[record(id.clone(), "accepted", 0.95)])?;
-        store.insert_auto_entry(&Entry {
-            candidate_id: id,
-            project_id: template.project_id.clone(),
-            lane: Lane::Audit,
-            created_at: "2026-09-29T08:00:00Z".into(),
-            due_at: None,
-            resolved_at: None,
-            decision_id: None,
-        })?;
-    }
-    if state == "on" {
-        store.set_approval_mode(Mode::Automatic, "2026-09-29T09:00:00Z")?;
-        let soon = [
-            ("held-0", 9, "Como limitar o tamanho de cada captura?"),
-            ("held-1", 20, "Onde registrar o motivo de uma rejeição?"),
-        ];
-        let now = chrono::Utc::now();
-        for (id, hours, question) in soon {
-            let mut held = record(id.to_owned(), "pending", 0.93);
-            held.question = question.into();
-            store.insert_candidates(&[held])?;
-            store.insert_auto_entry(&Entry {
-                candidate_id: id.to_owned(),
-                project_id: template.project_id.clone(),
-                lane: Lane::Held,
-                created_at: "2026-09-29T09:00:00Z".into(),
-                due_at: Some(
-                    (now + chrono::Duration::hours(hours))
-                        .format("%Y-%m-%dT%H:%M:%SZ")
-                        .to_string(),
-                ),
-                resolved_at: None,
-                decision_id: None,
-            })?;
-        }
-        for at in 0..3 {
-            let id = format!("auto-accepted-{at}");
-            let mut done = record(id.clone(), "accepted", 0.93);
-            done.question = format!("Como tratar o caso {at} de arquivos temporários?");
-            store.insert_candidates(&[done])?;
-            store.insert_auto_entry(&Entry {
-                candidate_id: id,
-                project_id: template.project_id.clone(),
-                lane: Lane::Held,
-                created_at: "2026-09-28T09:00:00Z".into(),
-                due_at: Some("2026-09-29T09:00:00Z".into()),
-                resolved_at: Some("2026-09-29T09:00:01Z".into()),
-                decision_id: Some(format!("decision-auto-{at}")),
-            })?;
-        }
+    let rows = [
+        (
+            record(
+                "left-0",
+                "pending",
+                0.7,
+                "Como limitar o tamanho de cada captura?",
+            ),
+            entry(
+                "left-0",
+                Verdict::NeedsHuman,
+                By::Ai,
+                "Como limitar o tamanho de cada captura?",
+                "muda o que os agentes recebem e não há fonte clara do limite",
+                None,
+            ),
+        ),
+        (
+            record(
+                "left-1",
+                "pending",
+                0.65,
+                "Onde registrar o motivo de uma rejeição?",
+            ),
+            entry(
+                "left-1",
+                Verdict::NeedsHuman,
+                By::Ai,
+                "Onde registrar o motivo de uma rejeição?",
+                "pode conflitar com a decisão sobre histórico de revisões",
+                None,
+            ),
+        ),
+        (
+            record(
+                "done-rules",
+                "accepted",
+                0.95,
+                "Como nomear os arquivos de exportação?",
+            ),
+            entry(
+                "done-rules",
+                Verdict::Accepted,
+                By::Rules,
+                "Como nomear os arquivos de exportação?",
+                "alta confiança, com fonte e sem parecido registrado",
+                Some("decision-auto-0"),
+            ),
+        ),
+        (
+            record(
+                "done-ai",
+                "accepted",
+                0.72,
+                "Quando reenviar uma captura recusada?",
+            ),
+            entry(
+                "done-ai",
+                Verdict::Accepted,
+                By::Ai,
+                "Quando reenviar uma captura recusada?",
+                "correta e útil, apoiada pela fonte citada",
+                Some("decision-auto-1"),
+            ),
+        ),
+        (
+            record(
+                "gone",
+                "dismissed",
+                0.9,
+                "Como garantir uma única decisão por captura (de novo)?",
+            ),
+            entry(
+                "gone",
+                Verdict::Discarded,
+                By::Rules,
+                "Como garantir uma única decisão por captura (de novo)?",
+                "repete uma decisão já registrada",
+                None,
+            ),
+        ),
+    ];
+    for (candidate, ledger) in rows {
+        store.insert_candidates(&[candidate])?;
+        store.record_review(&ledger)?;
     }
     Ok(())
 }

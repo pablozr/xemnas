@@ -604,7 +604,7 @@ impl<
         cx: &mut Context<Self>,
     ) {
         if let Some(inbox) = &self.inbox {
-            inbox.update(cx, |screen, _| screen.set_approvals(approvals));
+            inbox.update(cx, |screen, cx| screen.set_approvals(approvals, cx));
         }
     }
 

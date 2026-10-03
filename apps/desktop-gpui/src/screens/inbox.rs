@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use application::adoption::{AdoptionApi, AdoptionError, AdoptionPreview, ProposedLink};
-use application::auto_approval::{ApprovalsApi, LedgerRow};
+use application::auto_approval::{ApprovalsApi, By, Entry, ItemKind, Mode, Status, Verdict};
 use application::briefing::Briefing;
 use application::extract::{CandidateKind, MIN_SIGNIFICANCE};
 use application::inbox::{
@@ -51,7 +51,7 @@ type PageLoad = (
     usize,
     usize,
     Option<Briefing>,
-    Option<Vec<LedgerRow>>,
+    Option<Vec<Entry>>,
 );
 
 enum Outcome {
@@ -120,10 +120,14 @@ pub struct InboxScreen<S: InboxStore + Send + 'static> {
     /// Whether the written reason is open (it starts closed: the evidence
     /// comes first and the explanation can nudge a decision).
     reason_open: bool,
-    /// The automatic approval, when the store has it.
+    /// The automatic review, when the store has it.
     approvals: Option<Arc<dyn ApprovalsApi>>,
+    /// Where the mode stands (read once and after each change).
+    status: Option<Status>,
+    /// Whether a pass of the review is running.
+    reviewing: bool,
     /// What the automatic approval holds or accepted in this project.
-    ledger: Vec<LedgerRow>,
+    ledger: Vec<Entry>,
     /// Whether the list of what was accepted on its own is open.
     ledger_open: bool,
     /// When the last confirmations happened, to notice a reflex.
@@ -133,6 +137,8 @@ pub struct InboxScreen<S: InboxStore + Send + 'static> {
 /// Confirmations in a row, each within `STREAK_GAP`, that read as a reflex.
 const STREAK_LEN: usize = 8;
 const STREAK_GAP: std::time::Duration = std::time::Duration::from_secs(4);
+/// Lines of the ledger shown when it is open.
+const LEDGER_SHOWN: usize = 8;
 
 impl<S: InboxStore + Send + 'static> EventEmitter<OpenDecision> for InboxScreen<S> {}
 
@@ -147,8 +153,93 @@ struct MapLinks {
 impl<S: InboxStore + Send + 'static> InboxScreen<S> {
     /// Confirms through the adoption use case, so a decision lands on the
     /// map with the ties the person kept.
-    pub fn set_approvals(&mut self, approvals: Arc<dyn ApprovalsApi>) {
-        self.approvals = Some(approvals);
+    pub fn set_approvals(&mut self, approvals: Arc<dyn ApprovalsApi>, cx: &mut Context<Self>) {
+        self.approvals = Some(approvals.clone());
+        cx.spawn(async move |this, cx| {
+            let status = cx
+                .background_executor()
+                .spawn(async move { approvals.status().ok() })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.status = status;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Turns the automatic review on or off; on, a pass runs at once.
+    fn set_mode(&mut self, mode: Mode, cx: &mut Context<Self>) {
+        let Some(api) = self.approvals.clone() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let status = cx
+                .background_executor()
+                .spawn(async move { api.set_mode(mode).ok().and_then(|_| api.status().ok()) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if status.is_some() {
+                    this.status = status;
+                    this.review_pass(cx);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// One pass of the automatic review, off the interface thread (it may
+    /// ask the AI), refreshing the queue when it changed anything.
+    fn review_pass(&mut self, cx: &mut Context<Self>) {
+        let (Some(api), Some(project)) = (self.approvals.clone(), self.project_id.clone()) else {
+            return;
+        };
+        if self.reviewing || !self.status.is_some_and(|status| status.automatic) {
+            return;
+        }
+        self.reviewing = true;
+        let generation = self.generation;
+        cx.spawn(async move |this, cx| {
+            let report = cx
+                .background_executor()
+                .spawn(async move { api.run(&project) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.reviewing = false;
+                if generation != this.generation {
+                    return;
+                }
+                match report {
+                    Ok(report) if report.changed() => this.page(false, cx),
+                    Ok(_) => {}
+                    Err(error) => tracing::warn!(error = %error, "automatic review failed"),
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Puts back what the review discarded.
+    fn put_back(&mut self, kind: ItemKind, item_id: String, cx: &mut Context<Self>) {
+        let Some(api) = self.approvals.clone() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let done = cx
+                .background_executor()
+                .spawn(async move { api.undo(kind, &item_id).is_ok() })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.notice = Some(if done {
+                    "Candidato de volta à fila."
+                } else {
+                    "Não foi possível desfazer."
+                });
+                this.page(false, cx);
+            });
+        })
+        .detach();
     }
 
     /// Confirms through the adoption use case, so a decision lands on the
@@ -261,6 +352,8 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             undo: None,
             reason_open: false,
             approvals: None,
+            status: None,
+            reviewing: false,
             ledger: Vec::new(),
             ledger_open: false,
             streak: Vec::new(),
@@ -367,14 +460,9 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             self.approvals.clone().zip(self.project_id.clone())
         };
         self.run(cx, move |inbox| {
-            // The automatic approval looks at the queue before it is listed:
-            // it holds what is in its band and accepts what has waited a day.
-            let ledger = approvals.as_ref().map(|(api, project)| {
-                if let Err(error) = api.run(project) {
-                    tracing::warn!(error = %error, "automatic approval pass failed");
-                }
-                api.ledger(project).unwrap_or_default()
-            });
+            let ledger = approvals
+                .as_ref()
+                .map(|(api, project)| api.ledger(project).unwrap_or_default());
             Outcome::Page(
                 inbox.list(&filter).and_then(|page| {
                     let count = inbox.count(&filter)?;
@@ -447,6 +535,9 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                         this.hidden_low = hidden;
                         if let Some(ledger) = ledger {
                             this.ledger = ledger;
+                        }
+                        if !append {
+                            this.review_pass(cx);
                         }
                         if briefing.is_some() {
                             this.briefing = briefing;
@@ -939,10 +1030,10 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                                     .when(row.status != CandidateStatus::Pending, |line| {
                                         line.child(status_badge(row.status, theme))
                                     })
-                                    .children(self.held_label(&row.id).map(|label| {
+                                    .children(self.left_for_you(&row.id).map(|_| {
                                         text_style(div(), TypeScale::META)
                                             .text_color(theme.colors.status_info())
-                                            .child(label)
+                                            .child("a IA deixou para você")
                                     })),
                             ),
                     )
@@ -995,31 +1086,69 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             .child(label)
     }
 
-    /// Shows or hides the low-significance candidates kept out of the queue.
-    /// "aceita sozinha em 21 h" for a candidate the automatic approval holds.
-    fn held_label(&self, candidate_id: &str) -> Option<String> {
-        let due = self
-            .ledger
-            .iter()
-            .find(|row| row.candidate_id == candidate_id && row.accepted_at.is_none())?
-            .due_at
-            .as_deref()?;
-        let due = chrono::DateTime::parse_from_rfc3339(due).ok()?;
-        let hours = (due.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_hours();
-        Some(if hours < 1 {
-            "aceita sozinha em breve".to_owned()
-        } else {
-            format!("aceita sozinha em {hours} h")
+    /// What the review decided to leave for the person about a candidate.
+    fn left_for_you(&self, candidate_id: &str) -> Option<&Entry> {
+        self.ledger.iter().find(|entry| {
+            entry.kind == ItemKind::Candidate
+                && entry.item_id == candidate_id
+                && entry.verdict == Verdict::NeedsHuman
+                && entry.undone_at.is_none()
         })
     }
 
-    /// What the automatic approval accepted on its own, a short list under
-    /// the queue that opens on request; each line opens the decision.
+    /// The switch between deciding everything and letting the AI handle the
+    /// cycle, with one line of what that means right now.
+    fn mode_switch(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<Div> {
+        let status = self.status?;
+        let colors = theme.colors;
+        let mut track = crate::ui::patterns::segmented(theme)
+            .id("inbox-mode")
+            .role(Role::RadioGroup);
+        for (mode, id, label) in [
+            (Mode::Manual, "inbox-mode-manual", "Manual"),
+            (Mode::Automatic, "inbox-mode-auto", "Automático"),
+        ] {
+            track = track.child(
+                crate::ui::patterns::segment_label(
+                    theme,
+                    id,
+                    label,
+                    (mode == Mode::Automatic) == status.automatic,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| this.set_mode(mode, cx))),
+            );
+        }
+        Some(
+            div()
+                .flex_none()
+                .flex()
+                .flex_col()
+                .gap(px(SpacingScale::S1))
+                .px(px(SpacingScale::S4))
+                .pb(px(SpacingScale::S2))
+                .child(div().flex().child(track))
+                .when(status.automatic, |column| {
+                    column.child(
+                        text_style(div(), TypeScale::META)
+                            .text_color(colors.text_muted())
+                            .child(if status.judge {
+                                "A IA aceita o que é seguro e deixa o resto para você."
+                            } else {
+                                "Sem provedor de IA ativo: só as regras locais agem."
+                            }),
+                    )
+                }),
+        )
+    }
+
+    /// What the review did on its own, a short list under the queue that
+    /// opens on request: an accepted candidate opens its decision, a
+    /// discarded one can be put back.
     fn ledger_section(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<Div> {
-        let accepted: Vec<&LedgerRow> = self
+        let accepted: Vec<&Entry> = self
             .ledger
             .iter()
-            .filter(|row| row.accepted_at.is_some())
+            .filter(|entry| entry.verdict != Verdict::NeedsHuman && entry.undone_at.is_none())
             .collect();
         if accepted.is_empty() {
             return None;
@@ -1035,7 +1164,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             .py(px(SpacingScale::S2))
             .cursor_pointer()
             .role(Role::Button)
-            .aria_label("Mostrar o que foi aceito sozinho")
+            .aria_label("Mostrar o que foi feito sozinho")
             .focus_visible(focus_ring(theme))
             .on_click(cx.listener(|this, _, _, cx| {
                 this.ledger_open = !this.ledger_open;
@@ -1053,44 +1182,83 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             .child(
                 text_style(div(), TypeScale::META)
                     .text_color(colors.text_secondary())
-                    .child(format!("Aceitas sozinhas · {}", accepted.len())),
+                    .child(format!("Feito sozinho · {}", accepted.len())),
             );
         let mut list = div().flex().flex_col();
         if open {
-            for (index, row) in accepted.iter().enumerate() {
-                let Some(decision) = row.decision_id.clone() else {
-                    continue;
+            for (index, entry) in accepted.iter().enumerate().take(LEDGER_SHOWN) {
+                let opens = (entry.kind == ItemKind::Candidate
+                    && entry.verdict == Verdict::Accepted)
+                    .then(|| entry.result_id.clone())
+                    .flatten();
+                let put_back = (entry.kind == ItemKind::Candidate
+                    && entry.verdict == Verdict::Discarded)
+                    .then(|| entry.item_id.clone());
+                let word = match entry.verdict {
+                    Verdict::Accepted => "aceita",
+                    _ => "descartada",
                 };
-                list = list.child(
-                    div()
-                        .id(("inbox-ledger-row", index))
-                        .px(px(SpacingScale::S4))
-                        .py(px(SpacingScale::S2))
+                let kind = match entry.kind {
+                    ItemKind::Candidate => "candidato",
+                    ItemKind::Relation => "relação",
+                    ItemKind::Claim => "contexto",
+                    ItemKind::Link => "ligação",
+                };
+                let by = match entry.by {
+                    By::Rules => "pelas regras",
+                    By::Ai => "pela IA",
+                };
+                let mut line = div()
+                    .id(("inbox-ledger-row", index))
+                    .flex()
+                    .items_start()
+                    .gap(px(SpacingScale::S2))
+                    .px(px(SpacingScale::S4))
+                    .py(px(SpacingScale::S2))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .flex()
+                            .flex_col()
+                            .child(
+                                text_style(div(), TypeScale::BODY_SMALL)
+                                    .line_clamp(2)
+                                    .text_color(colors.text_primary())
+                                    .child(entry.title.clone()),
+                            )
+                            .child(
+                                text_style(div(), TypeScale::META)
+                                    .text_color(colors.text_muted())
+                                    .child(format!(
+                                        "{kind} {word} {by}, há {} · {}",
+                                        relative(&entry.created_at),
+                                        entry.reason
+                                    )),
+                            ),
+                    );
+                if let Some(decision) = opens {
+                    line = line
                         .cursor_pointer()
                         .role(Role::Link)
-                        .aria_label(format!("Abrir a decisão: {}", row.question))
+                        .aria_label(format!("Abrir a decisão: {}", entry.title))
                         .hover(move |style| style.bg(colors.glass_fill_low()))
                         .focus_visible(focus_ring(theme))
                         .on_click(
                             cx.listener(move |_, _, _, cx| cx.emit(OpenDecision(decision.clone()))),
-                        )
-                        .child(
-                            text_style(div(), TypeScale::BODY_SMALL)
-                                .line_clamp(2)
-                                .text_color(colors.text_primary())
-                                .child(row.question.clone()),
-                        )
-                        .child(
-                            text_style(div(), TypeScale::META)
-                                .text_color(colors.text_muted())
-                                .child(
-                                    row.accepted_at
-                                        .as_deref()
-                                        .map(|at| format!("aceita sozinha {}", relative(at)))
-                                        .unwrap_or_default(),
-                                ),
-                        ),
-                );
+                        );
+                }
+                if let Some(item_id) = put_back {
+                    line = line.child(
+                        action_button(theme, ("inbox-put-back", index), ButtonKind::Ghost, true)
+                            .aria_label("Desfazer")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.put_back(ItemKind::Candidate, item_id.clone(), cx)
+                            }))
+                            .child("Desfazer"),
+                    );
+                }
+                list = list.child(line);
             }
         }
         Some(
@@ -1169,6 +1337,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
         )
     }
 
+    /// Shows or hides the low-significance candidates kept out of the queue.
     fn low_toggle(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let theme = Theme::current(cx);
         let label = if self.show_low {
@@ -1478,6 +1647,27 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                         )),
                 )
             })
+            .children(self.left_for_you(&detail.summary.id).map(|entry| {
+                div()
+                    .flex()
+                    .items_start()
+                    .gap(px(SpacingScale::S2))
+                    .child(
+                        div()
+                            .mt(px(6.0))
+                            .size(px(6.0))
+                            .flex_none()
+                            .rounded_full()
+                            .bg(theme.colors.status_info()),
+                    )
+                    .child(
+                        text_style(div(), TypeScale::BODY_SMALL)
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .text_color(theme.colors.text_secondary())
+                            .child(format!("A IA deixou este para você: {}", entry.reason)),
+                    )
+            }))
             .child(reading_title(&detail.summary.question).text_color(theme.colors.text_primary()))
             .child(
                 div()
@@ -1616,6 +1806,7 @@ impl<S: InboxStore + Send + 'static> Render for InboxScreen<S> {
                         }))
                         .child(div().flex_1())
                         .child(self.button("inbox-refresh", "Atualizar", false, cx)))
+                    .children(self.mode_switch(&theme, cx))
                     .child(div().px(px(SpacingScale::S4)).pb(px(SpacingScale::S3)).children(self.search.clone()))
                     .children(self.briefing_strip(&theme, cx))
                     .when(self.hidden_low > 0 || self.show_low, |rail| rail.child(self.low_toggle(cx)))

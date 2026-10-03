@@ -84,6 +84,10 @@ fn main() {
             services,
             overview,
             Box::new(|_| Arc::new(demo::SampleKnowledgeReview)),
+            approvals_api(
+                demo::ai_settings(),
+                Arc::new(ai_provider::ChatGptSession::default()),
+            ),
             true,
             CaptureStatus::Demo,
         );
@@ -110,6 +114,7 @@ fn main() {
                 services,
                 overview_api(ai_settings(&paths.ai_profile), Arc::default()),
                 review_api(ai_settings(&paths.ai_profile), Arc::default()),
+                approvals_api(ai_settings(&paths.ai_profile), Arc::default()),
                 false,
                 CaptureStatus::Unavailable,
             );
@@ -286,7 +291,16 @@ fn main() {
     );
     let overview = overview_api(ai_settings(&paths.ai_profile), chatgpt.clone());
     let reviewer = review_api(ai_settings(&paths.ai_profile), chatgpt.clone());
-    run_shell_mode(Ok(store), services, overview, reviewer, false, capture);
+    let approvals = approvals_api(ai_settings(&paths.ai_profile), chatgpt.clone());
+    run_shell_mode(
+        Ok(store),
+        services,
+        overview,
+        reviewer,
+        approvals,
+        false,
+        capture,
+    );
 
     // Graceful shutdown mirrors startup: stop the API first so the discovery
     // and per-session token files are removed, then stop the jobs worker.
@@ -355,10 +369,6 @@ where
                     outbox_dir,
                 ),
                 application::jobs::Jobs::new(store.clone()),
-                Arc::new(application::auto_approval::Approvals::new(
-                    store.clone(),
-                    Arc::new(application::adoption::Adoption::new(store.clone())),
-                )),
             )) as Box<dyn xemnas_desktop::screens::settings::DiagnosticsBackend>
         }),
     }
@@ -396,6 +406,31 @@ fn backdrop_from_env() -> WindowBackgroundAppearance {
 type OverviewFactory = Box<dyn FnOnce(SqliteStore) -> Arc<dyn application::overview::OverviewApi>>;
 type ReviewFactory =
     Box<dyn FnOnce(SqliteStore) -> Arc<dyn application::knowledge_review::KnowledgeReviewApi>>;
+/// Builds the automatic review over the opened store.
+type ApprovalsFactory =
+    Box<dyn FnOnce(SqliteStore) -> Arc<dyn application::auto_approval::ApprovalsApi>>;
+
+/// The automatic review accepts through the adoption path and asks the AI
+/// profile's provider, loaded on every pass like the other jobs.
+fn approvals_api<P, K>(
+    settings: application::profile::AiSettings<P, K>,
+    chatgpt: Arc<ai_provider::ChatGptSession>,
+) -> ApprovalsFactory
+where
+    P: application::profile::ProfileStore + Send + Sync + 'static,
+    K: application::profile::SecretStore + Send + Sync + 'static,
+{
+    Box::new(move |store| {
+        let adoption: Arc<dyn application::adoption::AdoptionApi> =
+            Arc::new(application::adoption::Adoption::new(store.clone()));
+        Arc::new(application::auto_approval::Approvals::new(
+            store,
+            adoption,
+            settings,
+            ai_provider::ProviderFactory::new(chatgpt),
+        ))
+    })
+}
 
 fn review_api<P, K>(
     settings: application::profile::AiSettings<P, K>,
@@ -437,6 +472,7 @@ fn run_shell_mode(
     settings: SettingsServices,
     overview: OverviewFactory,
     reviewer: ReviewFactory,
+    approvals: ApprovalsFactory,
     demo: bool,
     capture: CaptureStatus,
 ) {
@@ -567,14 +603,7 @@ fn run_shell_mode(
                 Arc::new(application::adoption::Adoption::new(store.clone()))
             });
         let approvals: Option<Arc<dyn application::auto_approval::ApprovalsApi>> =
-            store.as_ref().ok().map(
-                |store| -> Arc<dyn application::auto_approval::ApprovalsApi> {
-                    Arc::new(application::auto_approval::Approvals::new(
-                        store.clone(),
-                        Arc::new(application::adoption::Adoption::new(store.clone())),
-                    ))
-                },
-            );
+            store.as_ref().ok().map(|store| approvals(store.clone()));
         let (projects, inbox, decisions, context, map, overview) = match store {
             Ok(store) => (
                 Ok(application::projects::Projects::new(store.clone())),
