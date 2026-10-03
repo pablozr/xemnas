@@ -433,3 +433,60 @@ fn reprocess_requeues_a_failed_job_and_clears_the_diagnostic() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn concurrent_claims_never_hand_out_a_job_twice() {
+    let (store, root) = store_in("concurrent-claims");
+    const JOBS: usize = 200;
+    for index in 0..JOBS {
+        store
+            .insert(&record(
+                &format!("job-{index:03}"),
+                "analysis",
+                JobState::Queued,
+                true,
+                &format!("2026-01-01T00:00:{:02}Z", index % 60),
+            ))
+            .expect("insert queued job");
+    }
+
+    // Half of the workers share the store handle, the other half open their
+    // own connection to the same file, as a second process would.
+    let kinds = vec!["analysis".to_string()];
+    let workers: Vec<_> = (0..8)
+        .map(|worker| {
+            let store = if worker % 2 == 0 {
+                store.clone()
+            } else {
+                SqliteStore::open(root.join("app.db")).expect("open a second connection")
+            };
+            let kinds = kinds.clone();
+            std::thread::spawn(move || {
+                let mut claimed = Vec::new();
+                while let Some(job) = store.claim_next(&kinds).expect("claim") {
+                    assert!(store
+                        .transition(&job.id, JobState::Running, JobState::Completed, None)
+                        .expect("complete"));
+                    claimed.push(job.id);
+                }
+                claimed
+            })
+        })
+        .collect();
+
+    let mut claimed: Vec<String> = workers
+        .into_iter()
+        .flat_map(|worker| worker.join().expect("worker thread"))
+        .collect();
+    assert_eq!(claimed.len(), JOBS, "every job is claimed exactly once");
+    claimed.sort();
+    claimed.dedup();
+    assert_eq!(claimed.len(), JOBS, "no job was claimed twice");
+    assert!(store
+        .list()
+        .expect("list")
+        .iter()
+        .all(|job| job.state == JobState::Completed && job.attempts == 1));
+
+    let _ = std::fs::remove_dir_all(&root);
+}
