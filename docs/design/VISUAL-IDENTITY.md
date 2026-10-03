@@ -312,9 +312,14 @@ com `crate::plain_rules!()`.
 **Página de arquitetura e fluxos.** Na Visão, o botão "Ver arquitetura e fluxos" grava
 `arquitetura-<projeto>.html` em `%TEMP%\xemnas` e abre no navegador. É um arquivo único,
 sem rede, que abre offline e pode ser enviado a alguém. Só tem arquitetura e fluxos: o
-resumo fica no app. `application::page::render` coloca o JSON da Visão (sem o resumo)
-num modelo fixo (`page/template.html`); a IA não escreve HTML, e o JSON é escapado para
-não fechar o `<script>` nem o `<title>`.
+resumo fica no app. O caso de uso `OverviewApi::page` lê a Visão gravada e as decisões
+em vigor e regras válidas (`page::assemble`: pergunta, escolha, motivo e sua primeira
+frase, premissas, consequências, quando reconsiderar, escopo, critérios de relevância do
+candidato, entidades por vínculo confirmado, a parte do mapa de cada uma e as relações
+entre decisões); sugestões de vínculo pendentes ficam de fora. `application::page::render`
+coloca esse JSON (sem o resumo) num modelo fixo (`page/template.html`); a IA não escreve
+HTML, o modelo põe todo texto com `textContent`, e o JSON é escapado para não fechar o
+`<script>` nem o `<title>`.
 
 - **Marca e fontes do app, embutidas.** O símbolo é o `xemnas-mark.svg` exato (ids com
   prefixo `xm-`, também como ícone da aba); o nome em Bricolage Grotesque, o texto em

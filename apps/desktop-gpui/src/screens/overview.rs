@@ -99,16 +99,19 @@ impl OverviewScreen {
     /// Writes the overview as a self-contained HTML page and opens it in the
     /// default browser (`application::page`).
     fn open_page(&mut self, cx: &mut Context<Self>) {
-        let Some(view) = self.view.as_ref() else {
+        let (Some(project), Some(api), true) =
+            (self.project.clone(), self.api.clone(), self.view.is_some())
+        else {
             return;
         };
-        let overview = view.overview.clone();
         let name = self.name.clone();
         cx.spawn(async move |this, cx| {
             let written = cx
                 .background_executor()
                 .spawn(async move {
-                    let html = application::page::render(&name, &overview);
+                    let html = api
+                        .page(&project, &name)
+                        .map_err(|error| std::io::Error::other(error.to_string()))?;
                     let dir = std::env::temp_dir().join("xemnas");
                     std::fs::create_dir_all(&dir)?;
                     let path = dir.join(application::page::file_name(&name));

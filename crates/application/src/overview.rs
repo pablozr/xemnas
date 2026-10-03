@@ -17,11 +17,13 @@ use crate::architecture::Architecture;
 use crate::captures::CaptureRepository;
 use crate::claims::ClaimStore;
 use crate::clock::now_rfc3339;
-use crate::decisions::DecisionStore;
+use crate::decisions::{DecisionQuery, DecisionStatus, DecisionStore};
 use crate::documents::{document_ref, DocumentError, DocumentStore, Documents, PROPOSE_PER_RUN};
 use crate::extract::ExtractError;
 use crate::graph::{GraphStore, KnowledgeGraph};
+use crate::inbox::InboxStore;
 use crate::injection::short_ref;
+use crate::page::{PageKnowledge, MAX_PAGE_DECISIONS};
 use crate::profile::{choose_extractor, AiSettings, ExtractorChoice, ProfileStore, SecretStore};
 use crate::projects::ProjectRepository;
 use crate::relations::RelationStore;
@@ -235,6 +237,8 @@ pub trait OverviewApi: Send + Sync {
     fn current(&self, project_id: &str) -> Result<Option<OverviewView>, OverviewError>;
     /// See [`ProjectOverviews::generate`].
     fn generate(&self, project_id: &str) -> Result<OverviewView, OverviewError>;
+    /// See [`ProjectOverviews::page`].
+    fn page(&self, project_id: &str, project_name: &str) -> Result<String, OverviewError>;
 }
 
 /// Instructions for the overview call.
@@ -774,6 +778,105 @@ where
     }
 }
 
+impl<S, P, K, F> ProjectOverviews<S, P, K, F>
+where
+    S: GraphStore
+        + RelationStore
+        + ClaimStore
+        + ProjectRepository
+        + DecisionStore
+        + OverviewStore
+        + DocumentStore
+        + CaptureRepository
+        + InboxStore
+        + Clone,
+    P: ProfileStore,
+    K: SecretStore,
+    F: ExtractorFactory,
+    F::Extractor: StructuredModel,
+{
+    /// The architecture and flows page (`crate::page`) of the stored
+    /// overview, with the decisions in force and the rules valid now that
+    /// explain it. Reads only; never calls the provider.
+    ///
+    /// # Errors
+    ///
+    /// `nothing_recorded` when no overview is stored yet, `storage` on failure.
+    pub fn page(&self, project_id: &str, project_name: &str) -> Result<String, OverviewError> {
+        let view = self
+            .current(project_id)?
+            .ok_or(OverviewError::NothingRecorded)?;
+        let knowledge = self.knowledge(project_id, &view.overview.architecture)?;
+        Ok(crate::page::render(
+            project_name,
+            &view.overview,
+            &knowledge,
+        ))
+    }
+
+    /// The decisions and rules of the page, tied to the containers of
+    /// `architecture`.
+    ///
+    /// # Errors
+    ///
+    /// `storage` on failure.
+    pub fn knowledge(
+        &self,
+        project_id: &str,
+        architecture: &Architecture,
+    ) -> Result<PageKnowledge, OverviewError> {
+        // Superseded decisions come along only to name the other end of a
+        // relation; the page shows those in force.
+        let decisions = DecisionStore::list(
+            &self.store,
+            &DecisionQuery {
+                project_id: Some(project_id.to_owned()),
+                statuses: vec![DecisionStatus::Accepted, DecisionStatus::Superseded],
+                limit: MAX_PAGE_DECISIONS * 4,
+                before: None,
+            },
+        )
+        .map_err(storage)?;
+        let relations = self.store.project_relations(project_id).map_err(storage)?;
+        let graph = KnowledgeGraph::new(self.store.clone());
+        let map = graph.project_map(project_id, None).map_err(storage)?;
+        let full = graph.project_graph(project_id, None).map_err(storage)?;
+        let now = domain::time::Timestamp::parse(&now_rfc3339());
+        let claims: Vec<_> = self
+            .store
+            .project_claims(project_id)
+            .map_err(storage)?
+            .into_iter()
+            .filter(|claim| now.as_ref().is_some_and(|at| claim.is_valid_at(at)))
+            .collect();
+        // The significance criteria live on the candidate each decision came
+        // from; an unreadable candidate only leaves the decision without them.
+        let mut criteria: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for decision in decisions
+            .iter()
+            .filter(|decision| decision.status == DecisionStatus::Accepted)
+            .take(MAX_PAGE_DECISIONS * 2)
+        {
+            if let Ok(Some(candidate)) = InboxStore::get(&self.store, &decision.candidate_id) {
+                let ticked: Vec<String> =
+                    serde_json::from_str(&candidate.criteria).unwrap_or_default();
+                if !ticked.is_empty() {
+                    criteria.insert(decision.decision_id.clone(), ticked);
+                }
+            }
+        }
+        Ok(crate::page::assemble(
+            &decisions,
+            &criteria,
+            &claims,
+            &map,
+            &full,
+            &relations,
+            architecture,
+        ))
+    }
+}
+
 /// Product copy for a provider failure.
 fn provider_message(error: &ExtractError) -> String {
     match error {
@@ -798,6 +901,7 @@ where
         + OverviewStore
         + DocumentStore
         + CaptureRepository
+        + InboxStore
         + Clone
         + Send
         + Sync,
@@ -812,6 +916,10 @@ where
 
     fn generate(&self, project_id: &str) -> Result<OverviewView, OverviewError> {
         ProjectOverviews::generate(self, project_id)
+    }
+
+    fn page(&self, project_id: &str, project_name: &str) -> Result<String, OverviewError> {
+        ProjectOverviews::page(self, project_id, project_name)
     }
 }
 
