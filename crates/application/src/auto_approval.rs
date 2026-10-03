@@ -12,7 +12,8 @@
 //! thing the extractor ever proposed, so each item first goes through free,
 //! local rules that settle the plain cases:
 //!
-//! * a tie derived from a touched file or dependency is accepted;
+//! * a tie derived from a touched file or dependency is accepted (one found
+//!   by a mention in the decision's text is asked, with its quote);
 //! * a relation that depends on another decision (its quote was already
 //!   checked verbatim) is accepted;
 //! * a candidate that repeats a recorded question is discarded;
@@ -21,7 +22,7 @@
 //!
 //! Only what these rules cannot settle (rules, middling confidence, context
 //! derived from a decision, relations that conflict with or replace another
-//! decision) is asked, and asked in **one batched call** per pass, with a
+//! decision, ties found by mention) is asked, and asked in **one batched call** per pass, with a
 //! compact text per item. Passes are spaced out: the call waits until a few
 //! items have gathered or the oldest has waited two hours, keeps twenty
 //! minutes between calls (and after a failure), and stops at six a day. An
@@ -45,7 +46,7 @@ use crate::claims::ClaimStore;
 use crate::clock::{add_hours, add_seconds, now_rfc3339};
 use crate::decisions::DecisionStore;
 use crate::extract::{CandidateKind, MIN_SIGNIFICANCE};
-use crate::graph::{GraphStore, KnowledgeGraph};
+use crate::graph::{mention_quote, GraphStore, KnowledgeGraph, Suggestion};
 use crate::inbox::{
     CandidateStatus, Cursor, Inbox, InboxQuery, InboxStore, StoredCandidate, MAX_PAGE_LIMIT,
 };
@@ -413,6 +414,32 @@ pub fn triage_relation(kind: RelationKind) -> Triage {
     }
 }
 
+/// What the rules say about a suggested tie to the map: one derived from a
+/// touched file or an added dependency is plain; one found by a mention in
+/// the decision's text may be a passing remark, so the AI judges its quote.
+pub fn triage_link(reason: &str) -> Triage {
+    if mention_quote(reason).is_some() {
+        Triage::Ask
+    } else {
+        Triage::Accept("derivado de arquivo ou dependência que a decisão tocou")
+    }
+}
+
+/// What the AI is told about a suggested tie.
+fn link_text(suggestion: &Suggestion) -> String {
+    let evidence = match mention_quote(&suggestion.reason) {
+        Some(quote) => format!("Citação: {}", clip(quote, SENT_CHARS)),
+        None => format!("Arquivo ou dependência: {}", clip(&suggestion.reason, 160)),
+    };
+    format!(
+        "[vínculo {}] \"{}\" -> {} \"{}\" | {evidence}",
+        suggestion.kind.as_str(),
+        clip(&suggestion.source.label, 160),
+        suggestion.entity.detail,
+        clip(&suggestion.entity.label, 80),
+    )
+}
+
 /// An item of a pass, with what the AI would be told about it.
 struct Item {
     kind: ItemKind,
@@ -431,7 +458,9 @@ which can go ahead without them. For each item answer accept (it is clearly righ
 and safe for coding agents to rely on), discard (it is wrong, trivial or repeats something) \
 or human (it is ambiguous, high impact, contradicts something or you are not sure). When in \
 doubt answer human: a wrong accept becomes context given to agents. A rule or relation that \
-conflicts with or replaces another decision is accept only when its quote clearly supports it.\n\
+conflicts with or replaces another decision is accept only when its quote clearly supports it. \
+A link from a decision to a part of the project map found by a mention is accept only when \
+its quote shows the decision really affects or uses that part, not a passing remark.\n\
 Give in reason one short sentence in the language of the item. Reply with one JSON object \
 only, matching exactly: {\"verdicts\":[{\"id\":string,\"verdict\":\"accept|discard|human\",\
 \"reason\":string}]}, one entry per item, using its id exactly as given.",
@@ -711,9 +740,9 @@ where
                 kind: ItemKind::Link,
                 id: suggestion.edge_id.clone(),
                 title: format!("{} → {}", suggestion.source.label, suggestion.entity.label),
-                text: String::new(),
-                waiting_since: String::new(),
-                triage: Triage::Accept("derivado de arquivo ou dependência que a decisão tocou"),
+                text: link_text(&suggestion),
+                waiting_since: suggestion.created_at.clone(),
+                triage: triage_link(&suggestion.reason),
             });
         }
         Ok(items)
@@ -1054,6 +1083,17 @@ mod tests {
         ));
         assert_eq!(triage_relation(RelationKind::Supersedes), Triage::Ask);
         assert_eq!(triage_relation(RelationKind::ConflictsWith), Triage::Ask);
+    }
+
+    #[test]
+    fn a_link_by_mention_is_asked_and_one_by_file_or_dependency_is_plain() {
+        assert!(matches!(
+            triage_link("crates/core/src/lib.rs"),
+            Triage::Accept(_)
+        ));
+        assert!(matches!(triage_link("rusqlite"), Triage::Accept(_)));
+        let mention = crate::graph::mention_reason("o core grava pela outbox");
+        assert_eq!(triage_link(&mention), Triage::Ask);
     }
 
     #[test]

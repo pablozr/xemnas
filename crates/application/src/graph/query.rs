@@ -186,8 +186,11 @@ pub struct Suggestion {
     pub source: NodeSummary,
     /// The entity it points to.
     pub entity: NodeSummary,
-    /// Why it was derived (file or dependency).
+    /// Why it was derived: a file, a dependency or a mention
+    /// ([`super::mention_quote`] reads its quote).
     pub reason: String,
+    /// RFC 3339 time it was derived.
+    pub created_at: String,
 }
 
 /// What happened in a timeline event.
@@ -1042,6 +1045,7 @@ where
                         source,
                         entity,
                         reason: edge.reason.clone(),
+                        created_at: edge.created_at.clone(),
                     },
                 ))
             })

@@ -447,3 +447,87 @@ fn a_discarded_candidate_can_be_put_back_and_nothing_else_can() {
         Err(ReviewError::NotUndoable)
     );
 }
+
+#[test]
+fn a_link_found_by_mention_is_asked_with_its_quote_and_a_file_link_is_accepted() {
+    use application::graph::{KnowledgeGraph, NewEntity};
+    use domain::entities::EntityKind;
+
+    let test = support::open("review-links", &[PROJECT]);
+    let graph = KnowledgeGraph::new(test.store.clone());
+    for (name, pattern) in [("core", "crates/core/**"), ("storage", "crates/storage/**")] {
+        graph
+            .create_entity(NewEntity {
+                project_id: PROJECT.into(),
+                kind: Some(EntityKind::Component),
+                name: name.into(),
+                patterns: vec![pattern.into()],
+                ..NewEntity::default()
+            })
+            .expect("component");
+    }
+    // From an ADR: only the document was touched, the text names the core.
+    support::decision_with_diff(
+        &test.store,
+        PROJECT,
+        "adr",
+        "Como o core grava os eventos sem perder nenhum?",
+        &["docs/adr/0003-outbox.md"],
+        "",
+    );
+    support::decision_with_diff(
+        &test.store,
+        PROJECT,
+        "code",
+        "Onde guardar os arquivos temporarios?",
+        &["crates/storage/src/lib.rs"],
+        "",
+    );
+    assert_eq!(
+        graph
+            .refresh_suggestions(PROJECT)
+            .expect("refresh")
+            .new_edges,
+        2
+    );
+
+    let judge = Judge::answering(
+        r#"{"verdicts":[{"id":"I1","verdict":"human","reason":"menção de passagem"}]}"#,
+    );
+    let review = review_with(&test.store, consented(), &judge);
+    review.set_mode(Mode::Automatic).expect("on");
+    // Long after the suggestions were derived: a lone item does not wait.
+    let report = review
+        .run_at(PROJECT, "2099-01-01T00:00:00Z")
+        .expect("pass");
+    assert!(report.asked);
+    assert_eq!(
+        (report.accepted, report.left),
+        (1, 1),
+        "file accepted, mention asked"
+    );
+    let asked = judge.asked.lock().expect("lock")[0].clone();
+    assert!(
+        asked.contains("Citação:") && asked.contains("o core grava"),
+        "{asked}"
+    );
+    assert!(
+        !asked.contains("crates/storage"),
+        "the file link is not sent: {asked}"
+    );
+
+    let ledger = review.ledger(PROJECT).expect("ledger");
+    let links: Vec<_> = ledger
+        .iter()
+        .filter(|entry| entry.kind == ItemKind::Link)
+        .map(|entry| (entry.verdict, entry.by))
+        .collect();
+    assert_eq!(links.len(), 2);
+    assert!(links.contains(&(Verdict::Accepted, By::Rules)));
+    assert!(links.contains(&(Verdict::NeedsHuman, By::Ai)));
+    let pending = graph.suggestions(PROJECT).expect("suggestions");
+    assert_eq!(pending.len(), 1, "the mention waits for the person");
+    assert!(pending[0]
+        .reason
+        .starts_with(application::graph::MENTION_REASON));
+}
