@@ -1,0 +1,43 @@
+{
+  "project_id": "01a100a4-918a-7488-bb58-65f3cb3747d7",
+  "task": "globs matching ignore CLI",
+  "as_of": "2026-10-03T21:49:49Z",
+  "budget_chars": 8000,
+  "used_chars": 677,
+  "decisions": [
+    {
+      "decision_id": "01a103af-5a93-773e-b613-969f9c18756b",
+      "version": 1,
+      "question": "Onde devem ficar a construção de globs e a tradução de opções em relação ao matching?",
+      "choice": "A construção de globs e a tradução de opções ficam na camada CLI/core; matching e precedência ficam em ignore, e a aplicação consumidora coordena os componentes.",
+      "rationale": "Mover o parsing para ignore acoplaria uma biblioteca reutilizável à interface de um executável e obrigaria outros consumidores a conhecer flags.",
+      "confirmed_at": "2026-10-03T21:33:06Z",
+      "evidence": [
+        "01a103ac-f71b-739b-9086-12f71f505bd0"
+      ],
+      "depends_on": [],
+      "conflicts_with": []
+    }
+  ],
+  "claims": [
+    {
+      "claim_id": "01a103bb-cbe7-74ca-833e-e8508e43e855",
+      "kind": "constraint",
+      "statement": "A construção de globs e a tradução de opções ficam na camada CLI/core; matching e precedência ficam em ignore, e a aplicação consumidora coordena os componentes.",
+      "valid_from": "2026-10-03T21:46:41Z",
+      "valid_until": null,
+      "source_decision_id": "01a103af-5a93-773e-b613-969f9c18756b",
+      "matched": true
+    },
+    {
+      "claim_id": "01a103ae-e18d-72b3-869c-c81d0b469eaa",
+      "kind": "constraint",
+      "statement": "O componente ignore deve permanecer independente do parsing CLI; alterações de parsing de argumentos ficam na camada CLI/core.",
+      "valid_from": "2026-10-03T21:32:35Z",
+      "valid_until": null,
+      "source_decision_id": null,
+      "matched": true
+    }
+  ],
+  "omitted": 0
+}

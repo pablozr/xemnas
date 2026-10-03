@@ -1,0 +1,9 @@
+{
+  "command": "cargo test --locked -p storage-sqlite --test relation_suggestions -- --nocapture",
+  "compilation": "passed in 17.08s",
+  "execution": "never executed",
+  "exit_code": 1,
+  "error": "Windows App Control, os error 4551",
+  "test_scope_reviewed": "SQLite RelationFinder + RelationSuggestions confirm/reject; synthetic Judge, not real model or evaluation repository",
+  "conclusion": "No runtime result; cannot substitute this for the missing simulation actions"
+}

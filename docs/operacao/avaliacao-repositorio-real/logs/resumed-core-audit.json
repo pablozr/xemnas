@@ -1,0 +1,33 @@
+{
+  "scope": "root independent read-only verification after case-of-use purge in isolated snapshot",
+  "counts": {
+    "projects": 0,
+    "engineering_decisions": 0,
+    "decision_candidates": 0,
+    "context_claims": 0,
+    "entities": 0,
+    "entity_edges": 0,
+    "claim_suggestions": 0,
+    "relation_suggestions": 0,
+    "capture_artifacts": 0,
+    "capture_receipts": 0,
+    "jobs": 2
+  },
+  "integrity_check": [
+    [
+      "ok"
+    ]
+  ],
+  "foreign_key_check": [],
+  "remaining_jobs": [
+    [
+      "suggest_relations",
+      "completed"
+    ],
+    [
+      "derive_claims",
+      "completed"
+    ]
+  ],
+  "clone_exists": true
+}
