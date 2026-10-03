@@ -593,6 +593,40 @@ impl<S: DecisionStore> Decisions<S> {
         })
     }
 
+    /// Lists one page of the given decisions, in the order given (a part's
+    /// decisions, newest first). The cursor is the opaque value of a
+    /// previous [`DecisionPage::next_cursor`]; ids that no longer exist are
+    /// skipped.
+    pub fn list_ids(
+        &self,
+        ids: &[String],
+        cursor: Option<&str>,
+        limit: usize,
+    ) -> Result<DecisionPage, DecisionsError> {
+        if limit == 0 {
+            return Err(DecisionsError::InvalidFilter("limite zero".to_string()));
+        }
+        let start = match cursor {
+            Some(cursor) => cursor
+                .parse::<usize>()
+                .map_err(|_| DecisionsError::InvalidFilter("cursor inválido".to_string()))?,
+            None => 0,
+        };
+        let end = start
+            .saturating_add(limit.min(MAX_PAGE_LIMIT))
+            .min(ids.len());
+        let mut decisions = Vec::new();
+        for id in ids.get(start..end).unwrap_or_default() {
+            if let Some(row) = self.store.get(id)? {
+                decisions.push(summary_from_row(&row));
+            }
+        }
+        Ok(DecisionPage {
+            decisions,
+            next_cursor: (end < ids.len()).then(|| end.to_string()),
+        })
+    }
+
     /// Loads the full detail of one decision.
     pub fn detail(&self, id: &str) -> Result<DecisionDetail, DecisionsError> {
         let row = self.store.get(id)?.ok_or(DecisionsError::NotFound)?;
