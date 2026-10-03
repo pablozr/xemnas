@@ -6,7 +6,8 @@
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-8b7fd6?style=flat-square"></a>
   <img alt="Rust + GPUI" src="https://img.shields.io/badge/Rust-GPUI-8b7fd6?style=flat-square&logo=rust&logoColor=white">
   <img alt="Windows" src="https://img.shields.io/badge/platform-Windows-8b7fd6?style=flat-square&logo=windows&logoColor=white">
-  <img alt="Local-first" src="https://img.shields.io/badge/data-100%25%20local-8b7fd6?style=flat-square">
+  <img alt="Local-first" src="https://img.shields.io/badge/data-local--first-8b7fd6?style=flat-square">
+  <img alt="Status: early" src="https://img.shields.io/badge/status-early%20%C2%B7%20building%20in%20the%20open-8b7fd6?style=flat-square">
 </p>
 
 <p align="center">
@@ -15,7 +16,8 @@
   <a href="#integrations">Integrations</a> ·
   <a href="#privacy">Privacy</a> ·
   <a href="#architecture">Architecture</a> ·
-  <a href="#documentation">Documentation</a>
+  <a href="#documentation">Documentation</a> ·
+  <a href="#contributing">Contributing</a>
 </p>
 
 ---
@@ -24,7 +26,12 @@ Coding agents make dozens of decisions per session, and almost all of them get
 lost in the chat history. **xemnas** follows that work, proposes the decisions that
 showed up in it together with the evidence behind them, and keeps the ones you
 confirm as a versioned, searchable memory of the project. That memory flows back
-to the agent as context, without the agent ever deciding for you.
+to the agent as context, so the next task starts from what the project already
+settled instead of deciding it again.
+
+> **Status: early and built in the open.** xemnas works end to end on Windows with
+> OpenCode, but it is a young project and many pieces are still moving. Ideas, issues
+> and pull requests are very welcome; see [Contributing](#contributing).
 
 <p align="center">
   <img src="docs/assets/readme/review.png" alt="Review: decision candidates with the suggested choice, rationale and evidence" width="92%">
@@ -33,16 +40,25 @@ to the agent as context, without the agent ever deciding for you.
 ## Highlights
 
 - **Review with evidence.** Each candidate comes with the suggested choice, the rationale and
-  the conversation or diff excerpts it came from. You confirm, adjust, defer or reject it.
+  the conversation or diff excerpts it came from. Evidence is shown before the AI's reasoning.
+  You confirm, adjust, defer or reject it, with undo.
+- **Automatic mode, when you want it.** A Manual | Automatic switch, like an agent's permission
+  mode. In automatic mode free local rules settle the obvious cases and the AI reviews the rest
+  in small batches, with hard limits on calls. Everything it did lands in a "Done on its own"
+  ledger, and anything it was unsure about stays in your queue, marked as such.
+- **Context back to the agent.** This is the core: decisions and rules in force are injected
+  into the agent's context inside a token budget, and a read-only MCP server answers when the
+  agent asks.
 - **Versioned decisions.** Revising creates a new version and keeps the previous one; every
   decision is searchable, carries its provenance and exports to Markdown or JSON.
-- **Project context at a glance.** A Context tab with the decisions in force, the project's
-  rules (assumptions, constraints, goals, conventions), how the agent receives them, and a
-  preview of the exact pack a task would get.
 - **Decisions that relate.** Mark what supersedes, depends on or conflicts with what; a
   superseded decision leaves the agent's context but stays in history.
-- **Context back to the agent.** A Context Pack with the decisions in force, plus a read-only
-  MCP server the agent can query when it needs to.
+- **Overview, architecture and flows.** The AI writes a short overview of the project from what
+  you confirmed, every sentence citing its sources. One click turns the architecture and the
+  main flows into a self-contained HTML page: a map you can explore and a guided, step-by-step
+  walk through each flow.
+- **Plain language.** Every text the AI writes for you follows a controlled style (about 80% of
+  ASD-STE100): short sentences, one idea each, facts and doubts kept, nothing added.
 - **Honest operations.** A connection test for the OpenCode integration and a diagnostics page
   with latency, losses and retryable jobs, exported without any content.
 - **Local by default.** SQLite on your machine and an offline extractor. An external AI provider
@@ -64,7 +80,8 @@ flowchart LR
    with secrets masked before anything is stored. If the app is closed, it waits in a file outbox.
 2. **Extraction.** A background job proposes candidates. The default extractor is offline; an
    OpenAI-compatible provider is optional.
-3. **Review.** Nothing becomes a decision without you.
+3. **Review.** In manual mode nothing becomes a decision without you. In automatic mode the AI
+   settles candidates and suggested links in batches, and every action is logged and reviewable.
 4. **Context.** Decisions in force go back to the agent through compact injection (enabled per
    project) or an MCP query.
 
@@ -124,10 +141,12 @@ A modular Rust monolith whose layering is enforced by an architecture test.
 | Path | Role |
 | --- | --- |
 | `crates/domain` | Domain rules and types, no I/O |
-| `crates/application` | Use cases and ports (Inbox, Decisions, Export, Context Pack, AI profile) |
+| `crates/application` | Use cases and ports (review, automatic mode, decisions, context, overview, export) |
 | `crates/storage-sqlite` | SQLite + FTS5, forward-only migrations |
 | `crates/local-api` | Local HTTP API for the adapter and for agents |
 | `crates/ai-provider` | OpenAI-compatible provider and OS key vault |
+| `crates/integration-contracts` | Versioned contracts shared with the adapter |
+| `crates/telemetry` | Logging with content sanitized out |
 | `apps/desktop-gpui` | Desktop app (GPUI) and composition root |
 | `apps/mcp-server` | Read-only MCP server |
 | `adapters/opencode` | TypeScript plugin for OpenCode |
@@ -144,6 +163,19 @@ Project documents are written in Portuguese.
 
 ## Contributing
 
+xemnas is early, so there is room to shape it. Good places to start:
+
+- **English interface.** The UI is in Portuguese today; an i18n layer with English as the
+  default would open the app to everyone.
+- **More agents.** Capture is built for OpenCode; adapters for Claude Code, Codex or other
+  agents are welcome (the MCP server already works with Claude Code).
+- **macOS and Linux.** The app targets Windows first; GPUI runs elsewhere, the packaging and a
+  few platform pieces do not yet.
+- **Better extraction and retrieval.** Measuring what the agent actually receives and whether
+  it helps.
+
+Open an issue to discuss an idea before a large change. Before sending a PR:
+
 ```powershell
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -151,7 +183,7 @@ cargo test --workspace --locked
 ```
 
 CI runs the same checks plus `cargo deny`, `cargo audit`, the adapter tests and packaging.
-Small commits, one topic each; see [AGENTS.md](AGENTS.md).
+Small commits, one topic each, in English; see [AGENTS.md](AGENTS.md).
 
 ## License
 
