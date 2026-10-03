@@ -31,6 +31,9 @@ propostos de investigação, compreensão, coordenação e verificação de muda
 
 ## Precedência
 
+Avaliação operacional: [ciclo supervisionado com agentes](operacao/avaliacao-agentes.md),
+com piloto GPT-6 Luna medium, controles sem memória/ADR/MCP, evidências e limites.
+
 Revisão backend sob demanda: [ADR-0009 — revisão consultiva de conhecimento](arquitetura/adr/0009-revisao-consultiva-de-conhecimento.md).
 
 Quando dois documentos divergirem, vale nesta ordem:
