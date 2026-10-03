@@ -88,6 +88,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 21,
         sql: include_str!("migrations/0021_create_auto_approval.sql"),
     },
+    Migration {
+        version: 22,
+        sql: include_str!("migrations/0022_create_auto_reviews.sql"),
+    },
 ];
 
 /// A single embedded schema migration.

@@ -170,7 +170,8 @@ fn upgrade_reapplies_the_missing_migrations() {
         let connection = Connection::open(&database).expect("open raw connection");
         connection
             .execute_batch(
-                "DROP TABLE auto_approvals; \
+                "DROP TABLE auto_review_calls; \
+                 DROP TABLE auto_reviews; \
                  DROP TABLE approval_settings; \
                  DROP TABLE claim_suggestions; \
                  DROP TABLE relation_suggestions; \
@@ -215,10 +216,10 @@ fn upgrade_reapplies_the_missing_migrations() {
         )
         .expect("count distinct migrations");
     assert_eq!(
-        versions, 20,
-        "0004, 0005, 0006 and 0008 to 0021 must be re-applied on upgrade"
+        versions, 21,
+        "0004, 0005, 0006 and 0008 to 0022 must be re-applied on upgrade"
     );
-    assert_eq!(distinct, 20);
+    assert_eq!(distinct, 21);
 
     let _ = std::fs::remove_dir_all(&root);
 }

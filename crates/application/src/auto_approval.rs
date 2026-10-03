@@ -1,75 +1,82 @@
-//! Approval by bands: the candidates a person would almost surely accept wait
-//! a day and are then accepted for them; everything else stays in the queue.
+//! Automatic review: one switch that lets the AI handle the whole cycle of
+//! approving what waits for a person, the way the permission modes of an
+//! agent let it get on with the work.
 //!
-//! Off by default and never a switch to flip on faith. A person who approves
-//! many AI proposals in a row approves more and looks less (the share
-//! accepted rose 14.5 points over a reviewer's experience in a study of
-//! 11,429 reviews of agent pull requests, while inline comments fell 22%),
-//! and an automatic mode has the same flaw if it leans on an unchecked
-//! number. So the mode opens only when the extractor's confidence has been
-//! measured against what the person really accepted (`calibration`), and it
-//! closes by itself when a blind check disagrees:
+//! With the mode on, the candidate decisions and rules, the relations between
+//! decisions, the context derived from them and the ties to the map are
+//! accepted, discarded or left for the person without anyone pressing
+//! Confirmar. What was done goes into a ledger, and what the AI would rather
+//! not decide says why.
 //!
-//! * **Band A, held.** A pending decision with a high, calibrated confidence,
-//!   a verifiable source, few files and nothing like it already recorded is
-//!   *held*: it stays in the queue, marked with the moment it will be
-//!   accepted (24 hours later). The person can accept or reject it earlier;
-//!   only silence lets it through, and nothing reaches the agents before
-//!   that.
-//! * **Blind audit.** One in ten of those is *not* held: it goes to the queue
-//!   like any other, without a mark, and what the person decides is compared
-//!   with what the policy would have done. Rejecting a held one counts as a
-//!   disagreement too.
-//! * **Breaker.** When at least ten checks exist and fewer than nine in ten
-//!   agree, the mode returns to manual and says why.
-//! * **Never automatic.** Rules (they change what an agent does), anything
-//!   that resembles a recorded question, thin evidence, many files.
-//! * **Watch first.** In manual mode the policy still looks at what it would
-//!   have done and keeps every eligible candidate for a check, accepting
-//!   nothing. The mode cannot be turned on until ten of those checks exist and
-//!   nine in ten agree, and the same watching lets a closed mode win its way
-//!   back.
+//! The AI is not asked about everything. A call per item would be a call per
+//! thing the extractor ever proposed, so each item first goes through free,
+//! local rules that settle the plain cases:
 //!
-//! The policy is a pure function over a stored candidate; the use case reads
-//! and writes through [`ApprovalStore`] and accepts through the same
-//! adoption path a person's Confirmar takes, so a held candidate becomes a
-//! decision tied to the map exactly as if it had been confirmed by hand.
+//! * a tie derived from a touched file or dependency is accepted;
+//! * a relation that depends on another decision (its quote was already
+//!   checked verbatim) is accepted;
+//! * a candidate that repeats a recorded question is discarded;
+//! * a decision with high confidence, a source, few files and nothing like it
+//!   recorded is accepted.
+//!
+//! Only what these rules cannot settle (rules, middling confidence, context
+//! derived from a decision, relations that conflict with or replace another
+//! decision) is asked, and asked in **one batched call** per pass, with a
+//! compact text per item. Passes are spaced out: the call waits until a few
+//! items have gathered or the oldest has waited two hours, keeps twenty
+//! minutes between calls (and after a failure), and stops at six a day. An
+//! item the AI judged is never asked about again.
+//!
+//! The ledger is written for every verdict, accepted or not. What the AI
+//! discarded is a candidate that can be put back; what it accepted is open in
+//! the page of the decision or rule it created, where it is edited or ended.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use domain::relations::RelationKind;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::adoption::AdoptionApi;
-use crate::calibration::{calibrate, Calibration, Outcome, Sample};
-use crate::clock::{add_hours, now_rfc3339};
+use crate::analysis::ExtractorFactory;
+use crate::claim_suggestions::{ClaimSuggestionStore, ClaimSuggestions};
+use crate::claims::ClaimStore;
+use crate::clock::{add_hours, add_seconds, now_rfc3339};
+use crate::decisions::DecisionStore;
 use crate::extract::{CandidateKind, MIN_SIGNIFICANCE};
+use crate::graph::{GraphStore, KnowledgeGraph};
 use crate::inbox::{
-    CandidateStatus, Cursor, InboxQuery, InboxStore, StoredCandidate, MAX_PAGE_LIMIT,
+    CandidateStatus, Cursor, Inbox, InboxQuery, InboxStore, StoredCandidate, MAX_PAGE_LIMIT,
 };
+use crate::overview::StructuredModel;
+use crate::profile::{choose_extractor, AiSettings, ExtractorChoice, ProfileStore, SecretStore};
+use crate::projects::ProjectRepository;
+use crate::relation_suggestions::{RelationSuggestionStore, RelationSuggestions};
+use crate::relations::RelationStore;
 
-/// Hours a held candidate waits before it is accepted.
-pub const HOLD_HOURS: i64 = 24;
-/// One in this many eligible candidates is left for a blind check.
-pub const AUDIT_ONE_IN: u64 = 10;
-/// Checks needed before the breaker can trip.
-pub const MIN_AUDITS: usize = 10;
-/// Share of checks that must agree.
-pub const MIN_AGREEMENT: f64 = 0.9;
-/// The most recent checks that count, so a mode that closed can recover.
-pub const HEALTH_WINDOW: usize = 20;
-/// Most files a candidate may touch and still be eligible.
-pub const MAX_FILES: usize = 3;
-/// Lowest confidence of the band (the lower edge of the top bin).
-pub const BAND_FLOOR: f64 = 0.85;
-/// Share of the top confidence bin that must have been kept.
-pub const BAND_KEPT: f64 = 0.9;
-/// Decisions the top bin needs before it vouches for the band.
-pub const BAND_MIN_DECIDED: i64 = 10;
-/// Word overlap (Jaccard) from which a question resembles another.
+/// Items sent to the AI in one call.
+pub const BATCH: usize = 12;
+/// Ambiguous items that make a call worth it before the oldest has waited.
+pub const MIN_TO_ASK: usize = 3;
+/// Hours the oldest ambiguous item may wait for company.
+pub const MAX_WAIT_HOURS: i64 = 2;
+/// Minutes kept between calls, and after a failed one.
+pub const CALL_GAP_MINUTES: i64 = 20;
+/// Calls per day, at most.
+pub const CALLS_PER_DAY: usize = 6;
+/// Confidence from which a plain decision is accepted without asking.
+pub const SURE_CONFIDENCE: f64 = 0.85;
+/// Word overlap from which a candidate repeats a recorded question.
+pub const DUPLICATE_AT: f64 = 0.85;
+/// Word overlap from which a candidate merely resembles one.
 pub const SIMILAR_AT: f64 = 0.6;
-/// Candidates read at most when looking for what resembles one.
-const COMPARE_LIMIT: usize = 500;
+/// Most files a decision may touch and still be settled by the rules.
+pub const MAX_FILES: usize = 3;
+/// Candidates read at most per pass.
+const READ_LIMIT: usize = 300;
+/// Characters of a rationale or quote sent to the AI.
+const SENT_CHARS: usize = 280;
 
 /// How approval works.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,7 +85,7 @@ pub enum Mode {
     /// A person decides everything (the default).
     #[default]
     Manual,
-    /// Band A candidates are held and then accepted.
+    /// The AI handles the cycle.
     Automatic,
 }
 
@@ -101,237 +108,241 @@ impl Mode {
     }
 }
 
-/// What the policy did with a candidate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Lane {
-    /// Waiting to be accepted unless the person acts first.
-    Held,
-    /// Left for a blind check.
-    Audit,
+/// What kind of thing was reviewed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ItemKind {
+    /// A candidate decision or rule.
+    Candidate,
+    /// A relation between two decisions.
+    Relation,
+    /// Context derived from a decision.
+    Claim,
+    /// A tie between a decision and the map.
+    Link,
 }
 
-impl Lane {
-    /// The literal persisted in the `lane` column.
+impl ItemKind {
+    /// The literal persisted in the ledger.
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Held => "held",
-            Self::Audit => "audit",
+            Self::Candidate => "candidate",
+            Self::Relation => "relation",
+            Self::Claim => "claim",
+            Self::Link => "link",
         }
     }
 
     /// Parses a persisted literal.
     pub fn parse(value: &str) -> Option<Self> {
         match value {
-            "held" => Some(Self::Held),
-            "audit" => Some(Self::Audit),
+            "candidate" => Some(Self::Candidate),
+            "relation" => Some(Self::Relation),
+            "claim" => Some(Self::Claim),
+            "link" => Some(Self::Link),
             _ => None,
         }
     }
 }
 
-/// The policy's record about one candidate.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Entry {
-    /// The candidate.
-    pub candidate_id: String,
-    /// Its project.
-    pub project_id: String,
-    /// What the policy did.
-    pub lane: Lane,
-    /// RFC 3339 moment the policy decided.
-    pub created_at: String,
-    /// Held: when it is accepted if still pending.
-    pub due_at: Option<String>,
-    /// Held: when the policy accepted it.
-    pub resolved_at: Option<String>,
-    /// The decision the acceptance created.
-    pub decision_id: Option<String>,
+/// What was decided about an item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Verdict {
+    /// Confirmed.
+    Accepted,
+    /// Rejected.
+    Discarded,
+    /// Left for the person.
+    NeedsHuman,
 }
 
-/// One line of the ledger of what was accepted or is waiting to be.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LedgerRow {
-    /// The candidate.
-    pub candidate_id: String,
-    /// Its question.
-    pub question: String,
-    /// RFC 3339 moment it is accepted if still pending.
-    pub due_at: Option<String>,
-    /// RFC 3339 moment the policy accepted it, when it did.
-    pub accepted_at: Option<String>,
-    /// The decision created, when accepted.
-    pub decision_id: Option<String>,
-}
-
-/// How the checks fared.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Health {
-    /// Checks a person has answered (blind audits and held ones decided by
-    /// hand).
-    pub checked: usize,
-    /// Of those, the ones that agreed with the policy.
-    pub agreed: usize,
-}
-
-impl Health {
-    /// Share that agreed, when any check exists.
-    pub fn agreement(&self) -> Option<f64> {
-        (self.checked > 0).then(|| self.agreed as f64 / self.checked as f64)
-    }
-
-    /// Whether the checks disagree enough to close the automatic mode.
-    pub fn tripped(&self) -> bool {
-        self.checked >= MIN_AUDITS && self.agreement().is_some_and(|share| share < MIN_AGREEMENT)
-    }
-}
-
-/// Why the automatic mode cannot be on right now.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Blocked {
-    /// The confidence of the extractor has not been shown to predict acceptance.
-    NotCalibrated,
-    /// The top confidence band has too few decisions or too few kept.
-    BandUnproven,
-    /// Fewer than ten checks exist yet: the policy has not been watched.
-    Unobserved,
-    /// The checks disagreed with the policy.
-    Tripped,
-}
-
-/// Where the automatic mode stands, for the settings page.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Status {
-    /// The saved mode.
-    pub automatic: bool,
-    /// Decided candidates measured.
-    pub decided: i64,
-    /// Whether the calibration allows the mode.
-    pub predicts: bool,
-    /// Whether the top band vouches for itself.
-    pub band_proven: bool,
-    /// How the checks fared.
-    pub health: Health,
-    /// Candidates held right now.
-    pub held: usize,
-}
-
-impl Status {
-    /// Why the mode cannot be turned on, if it cannot.
-    pub fn blocked(&self) -> Option<Blocked> {
-        if !self.predicts {
-            Some(Blocked::NotCalibrated)
-        } else if !self.band_proven {
-            Some(Blocked::BandUnproven)
-        } else if self.health.tripped() {
-            Some(Blocked::Tripped)
-        } else if self.health.checked < MIN_AUDITS {
-            Some(Blocked::Unobserved)
-        } else {
-            None
+impl Verdict {
+    /// The literal persisted in the ledger.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Accepted => "accepted",
+            Self::Discarded => "discarded",
+            Self::NeedsHuman => "needs_human",
         }
     }
+
+    /// Parses a persisted literal.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "accepted" => Some(Self::Accepted),
+            "discarded" => Some(Self::Discarded),
+            "needs_human" => Some(Self::NeedsHuman),
+            _ => None,
+        }
+    }
+}
+
+/// Who decided.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum By {
+    /// The local rules.
+    Rules,
+    /// The AI.
+    Ai,
+}
+
+impl By {
+    /// The literal persisted in the ledger.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Rules => "rules",
+            Self::Ai => "ai",
+        }
+    }
+
+    /// Parses a persisted literal.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "rules" => Some(Self::Rules),
+            "ai" => Some(Self::Ai),
+            _ => None,
+        }
+    }
+}
+
+/// One line of the ledger.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Entry {
+    /// What kind of item.
+    pub kind: ItemKind,
+    /// Its id (candidate id, suggestion id or edge id).
+    pub item_id: String,
+    /// Its project.
+    pub project_id: String,
+    /// What was decided.
+    pub verdict: Verdict,
+    /// Who decided.
+    pub by: By,
+    /// Why, in a sentence.
+    pub reason: String,
+    /// What the item says, for the list.
+    pub title: String,
+    /// The decision or rule that accepting created.
+    pub result_id: Option<String>,
+    /// RFC 3339 moment.
+    pub created_at: String,
+    /// RFC 3339 moment a person put it back, when they did.
+    pub undone_at: Option<String>,
 }
 
 /// What one pass did.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RunReport {
-    /// Candidates newly held.
-    pub held: usize,
-    /// Candidates newly left for a blind check.
-    pub audited: usize,
-    /// Held candidates accepted by the policy.
+    /// Items accepted.
     pub accepted: usize,
-    /// The breaker closed the mode on this pass.
-    pub tripped: bool,
+    /// Items discarded.
+    pub discarded: usize,
+    /// Items left for the person.
+    pub left: usize,
+    /// Whether the AI was asked.
+    pub asked: bool,
 }
 
-/// Failure modes of the approval use case.
+impl RunReport {
+    /// Whether the pass changed what a person sees in the queue.
+    pub fn changed(&self) -> bool {
+        self.accepted + self.discarded + self.left > 0
+    }
+}
+
+/// Where the mode stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Status {
+    /// The saved mode.
+    pub automatic: bool,
+    /// Whether an AI provider is enabled to judge what the rules cannot.
+    pub judge: bool,
+}
+
+/// Failure modes of the review use case.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ApprovalError {
+pub enum ReviewError {
     /// A storage query failed; the message is diagnostic only.
     Storage(String),
-    /// The automatic mode cannot be turned on yet.
-    Blocked(Blocked),
-    /// Accepting a held candidate failed.
-    Adoption(String),
+    /// The AI failed or answered out of contract.
+    Provider(String),
+    /// Something could not be applied.
+    Apply(String),
+    /// The item cannot be put back.
+    NotUndoable,
 }
 
-impl std::fmt::Display for ApprovalError {
+impl std::fmt::Display for ReviewError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Storage(message) => write!(formatter, "falha no armazenamento: {message}"),
-            Self::Blocked(_) => write!(
-                formatter,
-                "a aprovação automática ainda não pode ser ligada"
-            ),
-            Self::Adoption(message) => write!(formatter, "não foi possível aceitar: {message}"),
+            Self::Storage(message) => write!(formatter, "armazenamento: {message}"),
+            Self::Provider(message) => write!(formatter, "provedor: {message}"),
+            Self::Apply(message) => write!(formatter, "não foi possível aplicar: {message}"),
+            Self::NotUndoable => write!(formatter, "este item não pode ser desfeito aqui"),
         }
     }
 }
 
-impl std::error::Error for ApprovalError {}
+impl std::error::Error for ReviewError {}
 
-impl From<crate::inbox::InboxError> for ApprovalError {
+impl From<crate::inbox::InboxError> for ReviewError {
     fn from(error: crate::inbox::InboxError) -> Self {
         Self::Storage(error.to_string())
     }
 }
 
-/// Persistence the approval policy needs besides the inbox.
+/// Persistence the review needs besides the stores of the items.
 pub trait ApprovalStore {
     /// The saved mode (manual when nothing was saved).
-    fn approval_mode(&self) -> Result<Mode, ApprovalError>;
+    fn approval_mode(&self) -> Result<Mode, ReviewError>;
 
     /// Saves the mode.
-    fn set_approval_mode(&self, mode: Mode, at: &str) -> Result<(), ApprovalError>;
+    fn set_approval_mode(&self, mode: Mode, at: &str) -> Result<(), ReviewError>;
 
-    /// The policy's record about a candidate, if it has one.
-    fn auto_entry(&self, candidate_id: &str) -> Result<Option<Entry>, ApprovalError>;
+    /// Items of a project already reviewed, whatever the verdict.
+    fn reviewed(&self, project_id: &str) -> Result<BTreeSet<(ItemKind, String)>, ReviewError>;
 
-    /// Records what the policy did with a candidate.
-    fn insert_auto_entry(&self, entry: &Entry) -> Result<(), ApprovalError>;
+    /// Records a verdict.
+    fn record_review(&self, entry: &Entry) -> Result<(), ReviewError>;
 
-    /// Held entries of a project not yet resolved whose moment has come.
-    fn due_auto_entries(&self, project_id: &str, now: &str) -> Result<Vec<Entry>, ApprovalError>;
+    /// The ledger of a project, newest first.
+    fn review_ledger(&self, project_id: &str, limit: usize) -> Result<Vec<Entry>, ReviewError>;
 
-    /// Marks a held entry as resolved (accepted by the policy, or settled by
-    /// the person first when `decision_id` is `None`).
-    fn resolve_auto_entry(
-        &self,
-        candidate_id: &str,
-        decision_id: Option<&str>,
-        at: &str,
-    ) -> Result<(), ApprovalError>;
+    /// Marks an entry as put back.
+    fn mark_undone(&self, kind: ItemKind, item_id: &str, at: &str) -> Result<(), ReviewError>;
 
-    /// The ledger: held and accepted entries of a project, newest first.
-    fn ledger(&self, project_id: &str, limit: usize) -> Result<Vec<LedgerRow>, ApprovalError>;
+    /// The calls to the AI since `since`, as (moment, succeeded), oldest first.
+    fn review_calls(&self, since: &str) -> Result<Vec<(String, bool)>, ReviewError>;
 
-    /// Every entry (of a project, or of all), oldest first, with the
-    /// candidate's present status and whether the policy itself accepted it
-    /// (a decision created).
-    fn auto_outcomes(
-        &self,
-        project_id: Option<&str>,
-    ) -> Result<Vec<(Lane, CandidateStatus, bool)>, ApprovalError>;
+    /// Records a call to the AI.
+    fn record_review_call(&self, at: &str, items: usize, ok: bool) -> Result<(), ReviewError>;
 }
 
 /// Object-safe entry point for the desktop.
 pub trait ApprovalsApi: Send + Sync {
     /// Where the mode stands.
-    fn status(&self) -> Result<Status, ApprovalError>;
-    /// Turns the mode on or off; on only when nothing blocks it.
-    fn set_mode(&self, mode: Mode) -> Result<(), ApprovalError>;
-    /// One pass for a project: hold, audit and accept what is due.
-    fn run(&self, project_id: &str) -> Result<RunReport, ApprovalError>;
-    /// What is held or was accepted by the policy.
-    fn ledger(&self, project_id: &str) -> Result<Vec<LedgerRow>, ApprovalError>;
+    fn status(&self) -> Result<Status, ReviewError>;
+    /// Turns the automatic mode on or off.
+    fn set_mode(&self, mode: Mode) -> Result<(), ReviewError>;
+    /// One pass for a project.
+    fn run(&self, project_id: &str) -> Result<RunReport, ReviewError>;
+    /// What the review decided in a project.
+    fn ledger(&self, project_id: &str) -> Result<Vec<Entry>, ReviewError>;
+    /// Puts a discarded candidate back in the queue.
+    fn undo(&self, kind: ItemKind, item_id: &str) -> Result<(), ReviewError>;
 }
 
-/// The approval use case.
-#[derive(Clone)]
-pub struct Approvals<S> {
-    store: S,
-    adoption: Arc<dyn AdoptionApi>,
+/// What the local rules say about an item.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Triage {
+    /// Accept, for this reason.
+    Accept(&'static str),
+    /// Discard, for this reason.
+    Discard(&'static str),
+    /// The rules cannot tell: ask the AI.
+    Ask,
 }
 
 /// The words of a question, lowercase, without short noise words.
@@ -352,43 +363,26 @@ pub fn similarity(a: &str, b: &str) -> f64 {
     a.intersection(&b).count() as f64 / union as f64
 }
 
-/// Deterministic one-in-`AUDIT_ONE_IN` choice from the candidate id (FNV-1a).
-pub fn is_audited(candidate_id: &str) -> bool {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in candidate_id.bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0100_0000_01b3);
-    }
-    hash.is_multiple_of(AUDIT_ONE_IN)
-}
-
-/// Whether the top confidence band has earned the trust the policy needs.
-pub fn band_proven(calibration: &Calibration) -> bool {
-    calibration.verdict.allows_automation()
-        && calibration.bins.last().is_some_and(|bin| {
-            bin.total >= BAND_MIN_DECIDED
-                && bin.kept_share().is_some_and(|share| share >= BAND_KEPT)
-        })
-}
-
-/// Whether a stored candidate is in band A, given the calibration and the
-/// questions already recorded in its project.
-pub fn eligible(
-    candidate: &StoredCandidate,
-    calibration: &Calibration,
-    recorded_questions: &[String],
-) -> bool {
-    if !band_proven(calibration)
-        || candidate.status != CandidateStatus::Pending
-        || candidate.kind != CandidateKind::Decision.as_str()
-        || candidate.confidence < BAND_FLOOR
-        || candidate.significance < MIN_SIGNIFICANCE
-    {
-        return false;
-    }
-    let sources = serde_json::from_str::<Vec<serde_json::Value>>(&candidate.evidence_refs)
+/// Sources an evidence list holds.
+fn sources(candidate: &StoredCandidate) -> usize {
+    serde_json::from_str::<Vec<serde_json::Value>>(&candidate.evidence_refs)
         .map(|refs| refs.len())
-        .unwrap_or(0);
+        .unwrap_or(0)
+}
+
+/// What the rules say about a pending candidate, given the questions already
+/// recorded in its project.
+pub fn triage_candidate(candidate: &StoredCandidate, recorded: &[String]) -> Triage {
+    let likeness = recorded
+        .iter()
+        .map(|question| similarity(question, &candidate.question))
+        .fold(0.0, f64::max);
+    if likeness >= DUPLICATE_AT {
+        return Triage::Discard("repete uma decisão já registrada");
+    }
+    if candidate.kind != CandidateKind::Decision.as_str() {
+        return Triage::Ask;
+    }
     let files = serde_json::from_str::<serde_json::Value>(&candidate.diff_summary)
         .ok()
         .and_then(|summary| {
@@ -397,98 +391,178 @@ pub fn eligible(
                 .and_then(|files| files.as_array().map(Vec::len))
         })
         .unwrap_or(0);
-    sources >= 1
+    if candidate.confidence >= SURE_CONFIDENCE
+        && candidate.significance >= MIN_SIGNIFICANCE
+        && sources(candidate) >= 1
         && files <= MAX_FILES
-        && !recorded_questions
-            .iter()
-            .any(|question| similarity(question, &candidate.question) >= SIMILAR_AT)
+        && likeness < SIMILAR_AT
+    {
+        Triage::Accept("alta confiança, com fonte e sem parecido registrado")
+    } else {
+        Triage::Ask
+    }
 }
 
-impl<S> Approvals<S>
-where
-    S: ApprovalStore + InboxStore + Clone,
-{
-    /// Wraps the store and the adoption path used to accept.
-    pub fn new(store: S, adoption: Arc<dyn AdoptionApi>) -> Self {
-        Self { store, adoption }
+/// What the rules say about a relation between decisions.
+pub fn triage_relation(kind: RelationKind) -> Triage {
+    match kind {
+        RelationKind::DependsOn => {
+            Triage::Accept("depende de outra decisão, com citação conferida")
+        }
+        RelationKind::Supersedes | RelationKind::ConflictsWith => Triage::Ask,
     }
+}
 
-    /// Every decided candidate, as calibration samples.
-    fn samples(&self) -> Result<Vec<Sample>, ApprovalError> {
-        let mut samples = Vec::new();
-        let mut query = InboxQuery {
-            min_significance: None,
-            project_id: None,
-            statuses: vec![
-                CandidateStatus::Accepted,
-                CandidateStatus::EditedAndAccepted,
-                CandidateStatus::Dismissed,
-            ],
-            limit: MAX_PAGE_LIMIT,
-            before: None,
-        };
-        loop {
-            let rows = self.store.list(&query)?;
-            samples.extend(rows.iter().map(|row| Sample {
-                confidence: row.confidence,
-                significance: row.significance,
-                outcome: match row.status {
-                    CandidateStatus::Accepted => Outcome::Accepted,
-                    CandidateStatus::EditedAndAccepted => Outcome::Edited,
-                    _ => Outcome::Dismissed,
-                },
-            }));
-            match rows.last() {
-                Some(last) if rows.len() == query.limit => {
-                    query.before = Some(Cursor {
-                        created_at: last.created_at.clone(),
-                        id: last.id.clone(),
-                    });
+/// An item of a pass, with what the AI would be told about it.
+struct Item {
+    kind: ItemKind,
+    id: String,
+    title: String,
+    text: String,
+    waiting_since: String,
+    triage: Triage,
+}
+
+/// System prompt of the judge.
+pub const REVIEW_PROMPT: &str = "You help a developer keep the memory of the engineering \
+decisions of a software project. Items wait for the developer to approve them; you decide \
+which can go ahead without them. For each item answer accept (it is clearly right, useful \
+and safe for coding agents to rely on), discard (it is wrong, trivial or repeats something) \
+or human (it is ambiguous, high impact, contradicts something or you are not sure). When in \
+doubt answer human: a wrong accept becomes context given to agents. A rule or relation that \
+conflicts with or replaces another decision is accept only when its quote clearly supports it.\n\
+Give in reason one short sentence in the language of the item. Reply with one JSON object \
+only, matching exactly: {\"verdicts\":[{\"id\":string,\"verdict\":\"accept|discard|human\",\
+\"reason\":string}]}, one entry per item, using its id exactly as given.";
+
+/// Strict schema of the judge's answer.
+pub fn review_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["verdicts"],
+        "properties": {
+            "verdicts": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["id", "verdict", "reason"],
+                    "properties": {
+                        "id": { "type": "string" },
+                        "verdict": { "type": "string", "enum": ["accept", "discard", "human"] },
+                        "reason": { "type": "string" }
+                    }
                 }
-                _ => return Ok(samples),
             }
+        }
+    })
+}
+
+#[derive(Deserialize)]
+struct RawVerdicts {
+    #[serde(default)]
+    verdicts: Vec<RawVerdict>,
+}
+
+#[derive(Deserialize)]
+struct RawVerdict {
+    id: String,
+    verdict: String,
+    #[serde(default)]
+    reason: String,
+}
+
+/// The verdicts of an answer, by the ids given in the prompt; anything the
+/// answer left out or garbled is for the person.
+pub fn parse_verdicts(text: &str, ids: &[String]) -> Vec<(String, Verdict, String)> {
+    let start = text.find('{').unwrap_or(0);
+    let end = text.rfind('}').map_or(text.len(), |end| end + 1);
+    let raw: RawVerdicts = serde_json::from_str(text.get(start..end).unwrap_or(text))
+        .unwrap_or(RawVerdicts { verdicts: vec![] });
+    ids.iter()
+        .map(
+            |id| match raw.verdicts.iter().find(|verdict| verdict.id == *id) {
+                Some(verdict) => {
+                    let reason: String = verdict.reason.trim().chars().take(240).collect();
+                    match verdict.verdict.as_str() {
+                        "accept" => (id.clone(), Verdict::Accepted, reason),
+                        "discard" => (id.clone(), Verdict::Discarded, reason),
+                        _ => (id.clone(), Verdict::NeedsHuman, reason),
+                    }
+                }
+                None => (
+                    id.clone(),
+                    Verdict::NeedsHuman,
+                    "a IA não respondeu sobre este item".to_owned(),
+                ),
+            },
+        )
+        .collect()
+}
+
+fn clip(text: &str, max: usize) -> String {
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.chars().count() <= max {
+        text
+    } else {
+        let cut: String = text.chars().take(max.saturating_sub(1)).collect();
+        format!("{}…", cut.trim_end())
+    }
+}
+
+/// `timestamp` moved by `minutes`, in the same shape.
+fn add_minutes(timestamp: &str, minutes: i64) -> Option<String> {
+    add_seconds(timestamp, minutes * 60)
+}
+
+/// The review use case.
+pub struct Approvals<S, P, K, F> {
+    store: S,
+    adoption: Arc<dyn AdoptionApi>,
+    settings: AiSettings<P, K>,
+    factory: F,
+}
+
+impl<S, P, K, F> Approvals<S, P, K, F>
+where
+    S: ApprovalStore
+        + InboxStore
+        + RelationSuggestionStore
+        + ClaimSuggestionStore
+        + ClaimStore
+        + DecisionStore
+        + GraphStore
+        + RelationStore
+        + ProjectRepository
+        + Clone,
+    P: ProfileStore,
+    K: SecretStore,
+    F: ExtractorFactory,
+    F::Extractor: StructuredModel,
+{
+    /// Wraps the store, the adoption path, the AI settings and the provider.
+    pub fn new(
+        store: S,
+        adoption: Arc<dyn AdoptionApi>,
+        settings: AiSettings<P, K>,
+        factory: F,
+    ) -> Self {
+        Self {
+            store,
+            adoption,
+            settings,
+            factory,
         }
     }
 
-    /// How the confidence relates to what was decided.
-    pub fn calibration(&self) -> Result<Calibration, ApprovalError> {
-        Ok(calibrate(&self.samples()?))
-    }
-
-    /// How the checks fared across the projects.
-    pub fn health(&self) -> Result<Health, ApprovalError> {
-        let mut answered_checks: Vec<bool> = Vec::new();
-        for (lane, status, by_policy) in self.store.auto_outcomes(None)? {
-            let kept = matches!(
-                status,
-                CandidateStatus::Accepted | CandidateStatus::EditedAndAccepted
-            );
-            let answered = match lane {
-                // A blind audit counts once a person decided it.
-                Lane::Audit => kept || status == CandidateStatus::Dismissed,
-                // A held one counts when the person decided before the
-                // policy did; the policy's own acceptance proves nothing.
-                Lane::Held => !by_policy && (kept || status == CandidateStatus::Dismissed),
-            };
-            if answered {
-                answered_checks.push(kept);
-            }
-        }
-        // Oldest first: only the latest checks speak for the policy now.
-        let recent = &answered_checks[answered_checks.len().saturating_sub(HEALTH_WINDOW)..];
-        Ok(Health {
-            checked: recent.len(),
-            agreed: recent.iter().filter(|kept| **kept).count(),
-        })
-    }
-
-    /// Candidates of a project, by status.
+    /// Candidates of a project by status, newest first.
     fn candidates(
         &self,
         project_id: &str,
         statuses: Vec<CandidateStatus>,
         limit: usize,
-    ) -> Result<Vec<StoredCandidate>, ApprovalError> {
+    ) -> Result<Vec<StoredCandidate>, ReviewError> {
         let mut found = Vec::new();
         let mut query = InboxQuery {
             min_significance: None,
@@ -498,7 +572,7 @@ where
             before: None,
         };
         while found.len() < limit {
-            let rows = self.store.list(&query)?;
+            let rows = InboxStore::list(&self.store, &query)?;
             let full = rows.len() == query.limit;
             if let Some(last) = rows.last() {
                 query.before = Some(Cursor {
@@ -515,179 +589,384 @@ where
         Ok(found)
     }
 
-    /// One pass at the given moment (RFC 3339), so tests do not wait a day.
-    pub fn run_at(&self, project_id: &str, now: &str) -> Result<RunReport, ApprovalError> {
-        let mut report = RunReport::default();
-        let mode = self.store.approval_mode()?;
-        if mode == Mode::Automatic && self.health()?.tripped() {
-            self.store.set_approval_mode(Mode::Manual, now)?;
-            report.tripped = true;
-            return Ok(report);
-        }
-        let calibration = self.calibration()?;
-        if !band_proven(&calibration) {
-            return Ok(report);
-        }
+    /// Everything of a project that waits for a person and has not been
+    /// reviewed yet, with what the rules say about it.
+    fn gather(&self, project_id: &str) -> Result<Vec<Item>, ReviewError> {
+        let done = self.store.reviewed(project_id)?;
+        let storage = |detail: String| ReviewError::Storage(detail);
+        let mut items = Vec::new();
 
-        // Hold or audit what is eligible and not yet recorded.
-        let pending = self.candidates(project_id, vec![CandidateStatus::Pending], COMPARE_LIMIT)?;
-        let recorded: Vec<(String, String)> = self
+        let pending = self.candidates(project_id, vec![CandidateStatus::Pending], READ_LIMIT)?;
+        let recorded: Vec<String> = self
             .candidates(
                 project_id,
                 vec![
                     CandidateStatus::Accepted,
                     CandidateStatus::EditedAndAccepted,
                     CandidateStatus::Dismissed,
-                    CandidateStatus::Snoozed,
                 ],
-                COMPARE_LIMIT,
+                READ_LIMIT,
             )?
             .into_iter()
-            .map(|row| (row.id, row.question))
+            .map(|row| row.question)
             .collect();
-        for candidate in &pending {
-            if self.store.auto_entry(&candidate.id)?.is_some() {
+        for candidate in pending {
+            if candidate.significance < MIN_SIGNIFICANCE
+                || done.contains(&(ItemKind::Candidate, candidate.id.clone()))
+            {
                 continue;
             }
-            // What it must not resemble: what was decided and what else waits.
-            let others: Vec<String> = recorded
-                .iter()
-                .map(|(_, question)| question.clone())
-                .chain(
-                    pending
-                        .iter()
-                        .filter(|other| other.id != candidate.id)
-                        .map(|other| other.question.clone()),
-                )
-                .collect();
-            if !eligible(candidate, &calibration, &others) {
-                continue;
-            }
-            // Watching (manual) keeps every eligible one for a check; acting
-            // (automatic) holds nine in ten.
-            let lane = if mode == Mode::Manual || is_audited(&candidate.id) {
-                Lane::Audit
+            let triage = triage_candidate(&candidate, &recorded);
+            let kind = if candidate.kind == CandidateKind::Rule.as_str() {
+                "regra"
             } else {
-                Lane::Held
+                "decisão"
             };
-            let due_at = (lane == Lane::Held)
-                .then(|| add_hours(now, HOLD_HOURS))
-                .flatten();
-            self.store.insert_auto_entry(&Entry {
-                candidate_id: candidate.id.clone(),
-                project_id: project_id.to_owned(),
-                lane,
-                created_at: now.to_owned(),
-                due_at,
-                resolved_at: None,
-                decision_id: None,
-            })?;
-            match lane {
-                Lane::Held => report.held += 1,
-                Lane::Audit => report.audited += 1,
-            }
+            items.push(Item {
+                kind: ItemKind::Candidate,
+                id: candidate.id.clone(),
+                title: candidate.question.clone(),
+                text: format!(
+                    "[{kind}] Pergunta: {} | Escolha: {} | Motivo: {} | Confiança do extrator: \
+                     {:.0}% | Fontes: {}",
+                    clip(&candidate.question, 200),
+                    clip(&candidate.choice, 200),
+                    clip(&candidate.rationale, SENT_CHARS),
+                    candidate.confidence * 100.0,
+                    sources(&candidate)
+                ),
+                waiting_since: candidate.created_at.clone(),
+                triage,
+            });
         }
 
-        if mode != Mode::Automatic {
+        let relations = RelationSuggestions::new(self.store.clone());
+        for view in relations
+            .pending(project_id)
+            .map_err(|error| storage(error.to_string()))?
+        {
+            let record = &view.record;
+            if done.contains(&(ItemKind::Relation, record.suggestion_id.clone())) {
+                continue;
+            }
+            items.push(Item {
+                kind: ItemKind::Relation,
+                id: record.suggestion_id.clone(),
+                title: format!(
+                    "{} {} {}",
+                    view.from_question,
+                    record.kind.as_str(),
+                    view.to_question
+                ),
+                text: format!(
+                    "[relação {}] \"{}\" -> \"{}\" | Citação: {} | Motivo: {}",
+                    record.kind.as_str(),
+                    clip(&view.from_question, 160),
+                    clip(&view.to_question, 160),
+                    clip(&record.quote, SENT_CHARS),
+                    clip(&record.reason, SENT_CHARS)
+                ),
+                waiting_since: record.created_at.clone(),
+                triage: triage_relation(record.kind),
+            });
+        }
+
+        let claims = ClaimSuggestions::new(self.store.clone());
+        for view in claims
+            .pending(project_id)
+            .map_err(|error| storage(error.to_string()))?
+        {
+            let record = &view.record;
+            if done.contains(&(ItemKind::Claim, record.suggestion_id.clone())) {
+                continue;
+            }
+            items.push(Item {
+                kind: ItemKind::Claim,
+                id: record.suggestion_id.clone(),
+                title: record.statement.clone(),
+                text: format!(
+                    "[contexto {}] {} | Citação: {} | Da decisão: {}",
+                    record.kind.as_str(),
+                    clip(&record.statement, 200),
+                    clip(&record.quote, SENT_CHARS),
+                    clip(&view.decision_question, 160)
+                ),
+                waiting_since: record.created_at.clone(),
+                triage: Triage::Ask,
+            });
+        }
+
+        let graph = KnowledgeGraph::new(self.store.clone());
+        for suggestion in graph
+            .suggestions(project_id)
+            .map_err(|error| storage(error.to_string()))?
+        {
+            if done.contains(&(ItemKind::Link, suggestion.edge_id.clone())) {
+                continue;
+            }
+            items.push(Item {
+                kind: ItemKind::Link,
+                id: suggestion.edge_id.clone(),
+                title: format!("{} → {}", suggestion.source.label, suggestion.entity.label),
+                text: String::new(),
+                waiting_since: String::new(),
+                triage: Triage::Accept("derivado de arquivo ou dependência que a decisão tocou"),
+            });
+        }
+        Ok(items)
+    }
+
+    /// Accepts or discards one item through the use case a person's press
+    /// would run; the id of what accepting created, when it created one.
+    fn apply(&self, item: &Item, accept: bool) -> Result<Option<String>, ReviewError> {
+        let failed = |detail: String| ReviewError::Apply(detail);
+        match (item.kind, accept) {
+            (ItemKind::Candidate, true) => {
+                let links = self
+                    .adoption
+                    .preview(&item.id)
+                    .map(|preview| preview.links)
+                    .unwrap_or_default();
+                let outcome = self
+                    .adoption
+                    .adopt(&item.id, None, &links, &[])
+                    .map_err(|error| failed(error.to_string()))?;
+                Ok(Some(outcome.id))
+            }
+            (ItemKind::Candidate, false) => Inbox::new(self.store.clone())
+                .reject(&item.id)
+                .map(|_| None)
+                .map_err(|error| failed(error.to_string())),
+            (ItemKind::Relation, true) => RelationSuggestions::new(self.store.clone())
+                .confirm(&item.id)
+                .map(|_| None)
+                .map_err(|error| failed(error.to_string())),
+            (ItemKind::Relation, false) => RelationSuggestions::new(self.store.clone())
+                .reject(&item.id)
+                .map(|_| None)
+                .map_err(|error| failed(error.to_string())),
+            (ItemKind::Claim, true) => ClaimSuggestions::new(self.store.clone())
+                .confirm(&item.id)
+                .map(Some)
+                .map_err(|error| failed(error.to_string())),
+            (ItemKind::Claim, false) => ClaimSuggestions::new(self.store.clone())
+                .reject(&item.id)
+                .map(|_| None)
+                .map_err(|error| failed(error.to_string())),
+            (ItemKind::Link, true) => KnowledgeGraph::new(self.store.clone())
+                .confirm(&item.id)
+                .map(|_| None)
+                .map_err(|error| failed(error.to_string())),
+            (ItemKind::Link, false) => KnowledgeGraph::new(self.store.clone())
+                .invalidate(&item.id)
+                .map(|_| None)
+                .map_err(|error| failed(error.to_string())),
+        }
+    }
+
+    /// Applies a verdict and writes it to the ledger. An item that cannot be
+    /// applied (a person got there first) is skipped without a record.
+    #[allow(clippy::too_many_arguments)]
+    fn settle(
+        &self,
+        project_id: &str,
+        item: &Item,
+        verdict: Verdict,
+        by: By,
+        reason: &str,
+        now: &str,
+        report: &mut RunReport,
+    ) -> Result<(), ReviewError> {
+        let result_id = match verdict {
+            Verdict::NeedsHuman => None,
+            Verdict::Accepted | Verdict::Discarded => {
+                match self.apply(item, verdict == Verdict::Accepted) {
+                    Ok(result) => result,
+                    // A person got there first, or the item changed: nothing to record.
+                    Err(_) => {
+                        return Ok(());
+                    }
+                }
+            }
+        };
+        self.store.record_review(&Entry {
+            kind: item.kind,
+            item_id: item.id.clone(),
+            project_id: project_id.to_owned(),
+            verdict,
+            by,
+            reason: reason.to_owned(),
+            title: clip(&item.title, 200),
+            result_id,
+            created_at: now.to_owned(),
+            undone_at: None,
+        })?;
+        match verdict {
+            Verdict::Accepted => report.accepted += 1,
+            Verdict::Discarded => report.discarded += 1,
+            Verdict::NeedsHuman => report.left += 1,
+        }
+        Ok(())
+    }
+
+    /// The AI, when a provider is enabled and consented.
+    fn judge(&self) -> Option<F::Extractor> {
+        let profile = self.settings.load_or_seed().ok()?;
+        if choose_extractor(Some(&profile)) != ExtractorChoice::ExternalEnabled {
+            return None;
+        }
+        let secret = match self.settings.secret(&profile.credential_account()) {
+            Ok(Some(secret)) => secret,
+            Ok(None) if !profile.credential_required() => String::new(),
+            _ => return None,
+        };
+        self.factory.external(&profile, secret).ok()
+    }
+
+    /// Whether a call is allowed and worth making now.
+    fn may_ask(&self, ambiguous: &[&Item], now: &str) -> Result<bool, ReviewError> {
+        let day_ago = add_hours(now, -24).unwrap_or_default();
+        let calls = self.store.review_calls(&day_ago)?;
+        if calls.len() >= CALLS_PER_DAY {
+            return Ok(false);
+        }
+        if let Some((last, _)) = calls.last() {
+            let ready_at = add_minutes(last, CALL_GAP_MINUTES).unwrap_or_default();
+            if now < ready_at.as_str() {
+                return Ok(false);
+            }
+        }
+        let oldest = ambiguous
+            .iter()
+            .map(|item| item.waiting_since.as_str())
+            .filter(|moment| !moment.is_empty())
+            .min()
+            .unwrap_or(now);
+        let patient = add_hours(oldest, MAX_WAIT_HOURS).unwrap_or_default();
+        Ok(ambiguous.len() >= MIN_TO_ASK || now >= patient.as_str())
+    }
+
+    /// One pass at the given moment (RFC 3339), so tests do not wait.
+    pub fn run_at(&self, project_id: &str, now: &str) -> Result<RunReport, ReviewError> {
+        let mut report = RunReport::default();
+        if self.store.approval_mode()? != Mode::Automatic {
             return Ok(report);
         }
+        let items = self.gather(project_id)?;
 
-        // Accept what has waited out its day and is still pending.
-        for entry in self.store.due_auto_entries(project_id, now)? {
-            let still_pending = self
-                .store
-                .get(&entry.candidate_id)?
-                .is_some_and(|row| row.status == CandidateStatus::Pending);
-            if !still_pending {
-                self.store
-                    .resolve_auto_entry(&entry.candidate_id, None, now)?;
-                continue;
-            }
-            let links = self
-                .adoption
-                .preview(&entry.candidate_id)
-                .map(|preview| preview.links)
-                .unwrap_or_default();
-            let outcome = self
-                .adoption
-                .adopt(&entry.candidate_id, None, &links, &[])
-                .map_err(|error| ApprovalError::Adoption(error.to_string()))?;
-            self.store
-                .resolve_auto_entry(&entry.candidate_id, Some(&outcome.id), now)?;
-            report.accepted += 1;
+        // The plain cases, settled by the rules for free.
+        for item in &items {
+            let (verdict, reason) = match &item.triage {
+                Triage::Accept(reason) => (Verdict::Accepted, *reason),
+                Triage::Discard(reason) => (Verdict::Discarded, *reason),
+                Triage::Ask => continue,
+            };
+            self.settle(
+                project_id,
+                item,
+                verdict,
+                By::Rules,
+                reason,
+                now,
+                &mut report,
+            )?;
+        }
+
+        // The rest, in one batched call when it is worth one.
+        let ambiguous: Vec<&Item> = items
+            .iter()
+            .filter(|item| item.triage == Triage::Ask)
+            .collect();
+        if ambiguous.is_empty() || !self.may_ask(&ambiguous, now)? {
+            return Ok(report);
+        }
+        let Some(model) = self.judge() else {
+            return Ok(report);
+        };
+        let mut oldest_first = ambiguous;
+        oldest_first.sort_by(|a, b| a.waiting_since.cmp(&b.waiting_since));
+        let batch: Vec<&Item> = oldest_first.into_iter().take(BATCH).collect();
+        let ids: Vec<String> = (1..=batch.len()).map(|at| format!("I{at}")).collect();
+        let mut user = String::from("## Items\n");
+        for (id, item) in ids.iter().zip(&batch) {
+            user.push_str(&format!("- {id} {}\n", item.text));
+        }
+        report.asked = true;
+        let answer =
+            match model.complete(REVIEW_PROMPT, &user, "approval_verdicts", &review_schema()) {
+                Ok(answer) => {
+                    self.store.record_review_call(now, batch.len(), true)?;
+                    answer
+                }
+                Err(error) => {
+                    self.store.record_review_call(now, batch.len(), false)?;
+                    return Err(ReviewError::Provider(error.to_string()));
+                }
+            };
+        for ((_, verdict, reason), item) in parse_verdicts(&answer, &ids).into_iter().zip(&batch) {
+            let reason = if reason.is_empty() {
+                "decidido pela IA".to_owned()
+            } else {
+                reason
+            };
+            self.settle(project_id, item, verdict, By::Ai, &reason, now, &mut report)?;
         }
         Ok(report)
     }
 }
 
-impl<S> ApprovalsApi for Approvals<S>
+impl<S, P, K, F> ApprovalsApi for Approvals<S, P, K, F>
 where
-    S: ApprovalStore + InboxStore + Clone + Send + Sync,
+    S: ApprovalStore
+        + InboxStore
+        + RelationSuggestionStore
+        + ClaimSuggestionStore
+        + ClaimStore
+        + DecisionStore
+        + GraphStore
+        + RelationStore
+        + ProjectRepository
+        + Clone
+        + Send
+        + Sync,
+    P: ProfileStore + Send + Sync,
+    K: SecretStore + Send + Sync,
+    F: ExtractorFactory + Send + Sync,
+    F::Extractor: StructuredModel,
 {
-    fn status(&self) -> Result<Status, ApprovalError> {
-        let calibration = self.calibration()?;
-        let held = self
-            .store
-            .auto_outcomes(None)?
-            .iter()
-            .filter(|(lane, status, by_policy)| {
-                *lane == Lane::Held && !*by_policy && *status == CandidateStatus::Pending
-            })
-            .count();
+    fn status(&self) -> Result<Status, ReviewError> {
         Ok(Status {
             automatic: self.store.approval_mode()? == Mode::Automatic,
-            decided: calibration.decided,
-            predicts: calibration.verdict.allows_automation(),
-            band_proven: band_proven(&calibration),
-            health: self.health()?,
-            held,
+            judge: self.judge().is_some(),
         })
     }
 
-    fn set_mode(&self, mode: Mode) -> Result<(), ApprovalError> {
-        if mode == Mode::Automatic {
-            if let Some(blocked) = self.status()?.blocked() {
-                return Err(ApprovalError::Blocked(blocked));
-            }
-        }
+    fn set_mode(&self, mode: Mode) -> Result<(), ReviewError> {
         self.store.set_approval_mode(mode, &now_rfc3339())
     }
 
-    fn run(&self, project_id: &str) -> Result<RunReport, ApprovalError> {
+    fn run(&self, project_id: &str) -> Result<RunReport, ReviewError> {
         self.run_at(project_id, &now_rfc3339())
     }
 
-    fn ledger(&self, project_id: &str) -> Result<Vec<LedgerRow>, ApprovalError> {
-        self.store.ledger(project_id, 50)
+    fn ledger(&self, project_id: &str) -> Result<Vec<Entry>, ReviewError> {
+        self.store.review_ledger(project_id, 60)
+    }
+
+    fn undo(&self, kind: ItemKind, item_id: &str) -> Result<(), ReviewError> {
+        if kind != ItemKind::Candidate {
+            return Err(ReviewError::NotUndoable);
+        }
+        Inbox::new(self.store.clone())
+            .reopen(item_id)
+            .map_err(|_| ReviewError::NotUndoable)?;
+        self.store.mark_undone(kind, item_id, &now_rfc3339())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::calibration::{Bin, Verdict};
-
-    fn proven() -> Calibration {
-        Calibration {
-            decided: 80,
-            bins: vec![
-                Bin::default(),
-                Bin::default(),
-                Bin::default(),
-                Bin {
-                    from: 0.85,
-                    to: 1.0,
-                    total: 30,
-                    accepted: 28,
-                    edited: 0,
-                    dismissed: 2,
-                },
-            ],
-            confidence_separation: Some(0.82),
-            verdict: Verdict::Predicts,
-            ..Calibration::default()
-        }
-    }
 
     fn candidate(question: &str) -> StoredCandidate {
         StoredCandidate {
@@ -717,46 +996,79 @@ mod tests {
     }
 
     #[test]
-    fn a_confident_sourced_novel_decision_is_in_the_band() {
+    fn a_plain_confident_sourced_novel_decision_is_accepted_by_the_rules() {
         let recorded = vec!["Qual fila usar para os jobs?".to_owned()];
-        assert!(eligible(
-            &candidate("Como versionar as decisões revisadas?"),
-            &proven(),
-            &recorded
+        assert!(matches!(
+            triage_candidate(
+                &candidate("Como versionar as decisões revisadas?"),
+                &recorded
+            ),
+            Triage::Accept(_)
         ));
     }
 
     #[test]
-    fn each_condition_keeps_a_candidate_out() {
-        let calibration = proven();
+    fn a_repeated_question_is_discarded_by_the_rules() {
+        let recorded = vec!["Como versionar as decisões revisadas?".to_owned()];
+        assert!(matches!(
+            triage_candidate(
+                &candidate("Como versionar as decisões revisadas?"),
+                &recorded
+            ),
+            Triage::Discard(_)
+        ));
+    }
+
+    #[test]
+    fn what_the_rules_cannot_settle_is_asked() {
         let none: Vec<String> = Vec::new();
         let base = candidate("Como versionar as decisões revisadas?");
-        assert!(eligible(&base, &calibration, &none));
-
         let mut low = base.clone();
-        low.confidence = 0.84;
-        assert!(!eligible(&low, &calibration, &none), "below the band");
+        low.confidence = 0.7;
+        assert_eq!(triage_candidate(&low, &none), Triage::Ask);
         let mut rule = base.clone();
         rule.kind = "rule".into();
-        assert!(
-            !eligible(&rule, &calibration, &none),
-            "rules are never automatic"
-        );
+        assert_eq!(triage_candidate(&rule, &none), Triage::Ask);
         let mut unsourced = base.clone();
         unsourced.evidence_refs = "[]".into();
-        assert!(!eligible(&unsourced, &calibration, &none), "no source");
+        assert_eq!(triage_candidate(&unsourced, &none), Triage::Ask);
         let mut wide = base.clone();
         wide.diff_summary = "{\"files\":[\"a\",\"b\",\"c\",\"d\"]}".into();
-        assert!(!eligible(&wide, &calibration, &none), "too many files");
-        let mut snoozed = base.clone();
-        snoozed.status = CandidateStatus::Snoozed;
-        assert!(!eligible(&snoozed, &calibration, &none), "only pending");
-        let twin = vec!["Como versionar as decisões revisadas?".to_owned()];
-        assert!(!eligible(&base, &calibration, &twin), "already recorded");
-        assert!(
-            !eligible(&base, &Calibration::default(), &none),
-            "no calibration, no automation"
+        assert_eq!(triage_candidate(&wide, &none), Triage::Ask);
+        let alike = vec!["Como versionar as decisões revisadas depois?".to_owned()];
+        assert_eq!(
+            triage_candidate(&base, &alike),
+            Triage::Ask,
+            "resembles one without repeating it"
         );
+    }
+
+    #[test]
+    fn only_a_relation_that_depends_on_another_decision_is_plain() {
+        assert!(matches!(
+            triage_relation(RelationKind::DependsOn),
+            Triage::Accept(_)
+        ));
+        assert_eq!(triage_relation(RelationKind::Supersedes), Triage::Ask);
+        assert_eq!(triage_relation(RelationKind::ConflictsWith), Triage::Ask);
+    }
+
+    #[test]
+    fn verdicts_follow_the_ids_and_anything_missing_is_for_the_person() {
+        let ids = vec!["I1".to_owned(), "I2".to_owned(), "I3".to_owned()];
+        let answer = r#"```json
+        {"verdicts":[
+          {"id":"I1","verdict":"accept","reason":"correta e útil"},
+          {"id":"I2","verdict":"discard","reason":"repete outra"},
+          {"id":"I9","verdict":"accept","reason":"não existe"}]}
+        ```"#;
+        let parsed = parse_verdicts(answer, &ids);
+        assert_eq!(parsed[0].1, Verdict::Accepted);
+        assert_eq!(parsed[1].1, Verdict::Discarded);
+        assert_eq!(parsed[2].1, Verdict::NeedsHuman, "unanswered");
+        assert!(parse_verdicts("not json", &ids)
+            .iter()
+            .all(|(_, verdict, _)| *verdict == Verdict::NeedsHuman));
     }
 
     #[test]
@@ -770,85 +1082,14 @@ mod tests {
     }
 
     #[test]
-    fn about_one_in_ten_ids_is_audited_and_the_choice_is_stable() {
-        let audited = (0..2000)
-            .filter(|n| is_audited(&format!("candidate-{n}")))
-            .count();
-        assert!((130..270).contains(&audited), "{audited} of 2000");
-        assert_eq!(is_audited("candidate-7"), is_audited("candidate-7"));
-    }
-
-    #[test]
-    fn the_breaker_needs_enough_checks_and_a_real_disagreement() {
-        let few = Health {
-            checked: 9,
-            agreed: 0,
-        };
-        assert!(!few.tripped(), "nine checks prove nothing");
-        let good = Health {
-            checked: 20,
-            agreed: 19,
-        };
-        assert!(!good.tripped());
-        let bad = Health {
-            checked: 20,
-            agreed: 17,
-        };
-        assert!(bad.tripped());
-        assert_eq!(Health::default().agreement(), None);
-    }
-
-    #[test]
-    fn the_band_needs_a_predicting_confidence_and_a_proven_top_bin() {
-        assert!(band_proven(&proven()));
-        let mut thin = proven();
-        thin.bins[3].total = 5;
-        assert!(!band_proven(&thin));
-        let mut shaky = proven();
-        shaky.bins[3].accepted = 20;
-        shaky.bins[3].dismissed = 10;
-        assert!(!band_proven(&shaky));
-        let mut weak = proven();
-        weak.verdict = Verdict::Weak;
-        assert!(!band_proven(&weak));
-    }
-
-    #[test]
-    fn status_says_why_the_mode_is_blocked() {
-        let base = Status {
-            automatic: false,
-            decided: 10,
-            predicts: false,
-            band_proven: false,
-            health: Health::default(),
-            held: 0,
-        };
-        assert_eq!(base.blocked(), Some(Blocked::NotCalibrated));
-        let calibrated = Status {
-            predicts: true,
-            ..base.clone()
-        };
-        assert_eq!(calibrated.blocked(), Some(Blocked::BandUnproven));
-        let unwatched = Status {
-            band_proven: true,
-            ..calibrated.clone()
-        };
-        assert_eq!(unwatched.blocked(), Some(Blocked::Unobserved));
-        let ready = Status {
-            health: Health {
-                checked: 12,
-                agreed: 12,
-            },
-            ..unwatched
-        };
-        assert_eq!(ready.blocked(), None);
-        let tripped = Status {
-            health: Health {
-                checked: 12,
-                agreed: 8,
-            },
-            ..ready
-        };
-        assert_eq!(tripped.blocked(), Some(Blocked::Tripped));
+    fn minutes_are_added_across_the_hour() {
+        assert_eq!(
+            add_minutes("2026-03-01T10:50:00Z", 20).as_deref(),
+            Some("2026-03-01T11:10:00Z")
+        );
+        assert_eq!(
+            add_minutes("2026-03-01T23:50:30Z", 20).as_deref(),
+            Some("2026-03-02T00:10:30Z")
+        );
     }
 }

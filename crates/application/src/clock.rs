@@ -18,6 +18,12 @@ pub(crate) fn now_rfc3339() -> String {
 /// `timestamp` (RFC 3339 UTC, `Z`) moved by `hours`, in the same shape; `None`
 /// when it does not parse.
 pub(crate) fn add_hours(timestamp: &str, hours: i64) -> Option<String> {
+    add_seconds(timestamp, hours * 3_600)
+}
+
+/// `timestamp` (RFC 3339 UTC, `Z`) moved by `seconds`, in the same shape;
+/// `None` when it does not parse.
+pub(crate) fn add_seconds(timestamp: &str, seconds: i64) -> Option<String> {
     let number =
         |range: std::ops::Range<usize>| -> Option<i64> { timestamp.get(range)?.parse().ok() };
     if timestamp.len() < 19 || timestamp.get(4..5)? != "-" || timestamp.get(10..11)? != "T" {
@@ -25,13 +31,10 @@ pub(crate) fn add_hours(timestamp: &str, hours: i64) -> Option<String> {
     }
     let (year, month, day) = (number(0..4)?, number(5..7)?, number(8..10)?);
     let (hour, minute, second) = (number(11..13)?, number(14..16)?, number(17..19)?);
-    let seconds = days_from_civil(year, month, day) * 86_400
-        + hour * 3_600
-        + minute * 60
-        + second
-        + hours * 3_600;
-    let days = seconds.div_euclid(86_400);
-    let of_day = seconds.rem_euclid(86_400);
+    let total =
+        days_from_civil(year, month, day) * 86_400 + hour * 3_600 + minute * 60 + second + seconds;
+    let days = total.div_euclid(86_400);
+    let of_day = total.rem_euclid(86_400);
     let (year, month, day) = civil_from_days(days);
     Some(format!(
         "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",

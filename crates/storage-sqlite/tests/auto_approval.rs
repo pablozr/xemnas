@@ -1,29 +1,155 @@
-//! Approval by bands against the real database: the policy watches before it
-//! acts, then holds, accepts after the day, audits blind and closes itself.
+//! Automatic review against the real database: the rules settle the plain
+//! cases for free, the AI is asked once for the rest and never too often, and
+//! everything it decides is in a ledger.
 
 mod support;
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use application::adoption::{Adoption, AdoptionApi};
+use application::analysis::ExtractorFactory;
 use application::auto_approval::{
-    is_audited, ApprovalError, Approvals, ApprovalsApi, Blocked, Mode, HOLD_HOURS,
+    ApprovalStore, Approvals, ApprovalsApi, By, ItemKind, Mode, ReviewError, Verdict, CALLS_PER_DAY,
 };
-use application::extract::{DecisionCandidateRecord, ExtractionStore};
-use application::inbox::{CandidateStatus, Inbox, InboxStore};
+use application::extract::{
+    CandidateExtractor, CandidateProposal, DecisionCandidateRecord, DecisionEvidence, ExtractError,
+    ExtractionStore, RelevanceSignal,
+};
+use application::inbox::{CandidateStatus, InboxStore};
+use application::overview::{JsonValue, StructuredModel};
+use application::profile::{
+    build_preview, grant_consent, offline_default_profile, AiProfile, AiSettings, ProfileError,
+    ProfileKind, ProfileStore, SecretStore,
+};
 use storage_sqlite::SqliteStore;
 
 const PROJECT: &str = "p1";
-const WATCHING: &str = "2026-02-20T10:00:00Z";
 const NOW: &str = "2026-03-01T10:00:00Z";
-const NEXT_DAY: &str = "2026-03-02T10:00:01Z";
 
-fn approvals(store: &SqliteStore) -> Approvals<SqliteStore> {
-    let adoption: Arc<dyn AdoptionApi> = Arc::new(Adoption::new(store.clone()));
-    Approvals::new(store.clone(), adoption)
+struct Profiles(Mutex<AiProfile>);
+
+impl ProfileStore for Profiles {
+    fn load(&self) -> Result<Option<AiProfile>, ProfileError> {
+        Ok(Some(self.0.lock().expect("lock").clone()))
+    }
+    fn save(&self, profile: &AiProfile) -> Result<(), ProfileError> {
+        *self.0.lock().expect("lock") = profile.clone();
+        Ok(())
+    }
 }
 
-fn candidate(id: &str, status: &str, confidence: f64, question: &str) -> DecisionCandidateRecord {
+struct NoSecrets;
+
+impl SecretStore for NoSecrets {
+    fn set_secret(&self, _: &str, _: &str) -> Result<(), ProfileError> {
+        Ok(())
+    }
+    fn get_secret(&self, _: &str) -> Result<Option<String>, ProfileError> {
+        Ok(None)
+    }
+    fn delete_secret(&self, _: &str) -> Result<(), ProfileError> {
+        Ok(())
+    }
+}
+
+fn consented() -> AiProfile {
+    let profile = AiProfile {
+        kind: ProfileKind::OpenAiCompatible,
+        model: "local".into(),
+        endpoint: Some("http://127.0.0.1:9/v1".into()),
+        ..offline_default_profile()
+    };
+    grant_consent(
+        &profile,
+        &build_preview(&profile),
+        "2026-01-01T00:00:00Z",
+        true,
+    )
+    .expect("consent")
+}
+
+/// What the fake AI was asked, and what it answers.
+#[derive(Clone)]
+struct Judge {
+    answer: Arc<Mutex<Result<String, String>>>,
+    calls: Arc<AtomicUsize>,
+    asked: Arc<Mutex<Vec<String>>>,
+}
+
+impl Judge {
+    fn answering(answer: &str) -> Self {
+        Self {
+            answer: Arc::new(Mutex::new(Ok(answer.to_owned()))),
+            calls: Arc::new(AtomicUsize::new(0)),
+            asked: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn failing() -> Self {
+        let judge = Self::answering("");
+        *judge.answer.lock().expect("lock") = Err("fora do ar".into());
+        judge
+    }
+}
+
+impl CandidateExtractor for Judge {
+    fn extract(
+        &self,
+        _: &DecisionEvidence,
+        _: &[RelevanceSignal],
+    ) -> Result<Vec<CandidateProposal>, ExtractError> {
+        Ok(Vec::new())
+    }
+}
+
+impl StructuredModel for Judge {
+    fn complete(
+        &self,
+        _: &str,
+        user: &str,
+        schema_name: &str,
+        _: &JsonValue,
+    ) -> Result<String, ExtractError> {
+        assert_eq!(schema_name, "approval_verdicts");
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.asked.lock().expect("lock").push(user.to_owned());
+        self.answer
+            .lock()
+            .expect("lock")
+            .clone()
+            .map_err(|_| ExtractError::Extractor("fora do ar".into()))
+    }
+}
+
+struct Factory(Judge);
+
+impl ExtractorFactory for Factory {
+    type Extractor = Judge;
+    fn external(&self, _: &AiProfile, _: String) -> Result<Judge, ExtractError> {
+        Ok(self.0.clone())
+    }
+}
+
+type Review = Approvals<SqliteStore, Profiles, NoSecrets, Factory>;
+
+fn review_with(store: &SqliteStore, profile: AiProfile, judge: &Judge) -> Review {
+    let adoption: Arc<dyn AdoptionApi> = Arc::new(Adoption::new(store.clone()));
+    Approvals::new(
+        store.clone(),
+        adoption,
+        AiSettings::new(Profiles(Mutex::new(profile)), NoSecrets),
+        Factory(judge.clone()),
+    )
+}
+
+fn candidate(
+    id: &str,
+    status: &str,
+    confidence: f64,
+    question: &str,
+    created_at: &str,
+) -> DecisionCandidateRecord {
     DecisionCandidateRecord {
         id: id.to_string(),
         project_id: PROJECT.to_string(),
@@ -38,245 +164,286 @@ fn candidate(id: &str, status: &str, confidence: f64, question: &str) -> Decisio
         evidence_refs: format!("[\"art-{PROJECT}\"]"),
         diff_summary: "{\"files\":[\"src/lib.rs\"],\"artifacts\":1}".to_string(),
         dedup_hash: format!("dedup-{id}"),
-        created_at: "2026-02-01T00:00:00Z".to_string(),
-        updated_at: "2026-02-01T00:00:00Z".to_string(),
+        created_at: created_at.to_string(),
+        updated_at: created_at.to_string(),
         kind: "decision".to_string(),
         significance: 1.0,
         criteria: "[]".to_string(),
     }
 }
 
-/// 80 decided candidates whose confidence orders the outcomes: the top band
-/// is kept, the bottom one dismissed. Their questions share no words.
-fn seed_calibration(store: &SqliteStore) {
-    let mut rows = Vec::new();
-    for at in 0..40 {
-        rows.push(candidate(
-            &format!("hi-{at}"),
-            "accepted",
-            0.86 + at as f64 * 0.003,
-            &format!("topico{at} alto{at} resolvido{at}"),
-        ));
-        rows.push(candidate(
-            &format!("lo-{at}"),
-            "dismissed",
-            0.30 + at as f64 * 0.004,
-            &format!("tema{at} baixo{at} descartado{at}"),
-        ));
-    }
-    store.insert_candidates(&rows).expect("seed decided");
+fn old(id: &str, confidence: f64, question: &str) -> DecisionCandidateRecord {
+    candidate(id, "pending", confidence, question, "2026-02-01T00:00:00Z")
 }
 
-/// An id the policy leaves for a blind check, or not.
-fn id_with(audited: bool, prefix: &str) -> String {
-    (0..)
-        .map(|n| format!("{prefix}-{n}"))
-        .find(|id| is_audited(id) == audited)
-        .expect("an id")
-}
-
-/// Calibrated, watched (twelve eligible candidates a person accepted) and
-/// switched on: the state the policy needs before it acts.
-fn automatic(test: &support::TestStore) -> Approvals<SqliteStore> {
-    seed_calibration(&test.store);
-    let approvals = approvals(&test.store);
-    let rows: Vec<_> = (0..12)
-        .map(|at| {
-            candidate(
-                &format!("watched-{at}"),
-                "pending",
-                0.95,
-                &format!("observado{at} atento{at} paciente{at}"),
-            )
-        })
-        .collect();
-    test.store.insert_candidates(&rows).expect("pending");
-    let report = approvals.run_at(PROJECT, WATCHING).expect("watching pass");
-    assert_eq!(
-        (report.audited, report.held),
-        (12, 0),
-        "watching holds nothing"
-    );
-    let inbox = Inbox::new(test.store.clone());
-    for row in &rows {
-        inbox.confirm(&row.id, None).expect("the person agrees");
-    }
-    approvals.set_mode(Mode::Automatic).expect("turn on");
-    approvals
+fn status_of(store: &SqliteStore, id: &str) -> CandidateStatus {
+    store.get(id).expect("get").expect("row").status
 }
 
 #[test]
-fn the_automatic_mode_cannot_be_turned_on_without_a_calibration() {
-    let test = support::open("auto-blocked", &[PROJECT]);
-    let approvals = approvals(&test.store);
-    assert_eq!(
-        approvals.set_mode(Mode::Automatic),
-        Err(ApprovalError::Blocked(Blocked::NotCalibrated))
-    );
-    let status = approvals.status().expect("status");
-    assert!(!status.automatic);
-    assert_eq!(status.blocked(), Some(Blocked::NotCalibrated));
-    approvals.set_mode(Mode::Manual).expect("manual");
-    assert_eq!(
-        approvals.run_at(PROJECT, NOW).expect("run"),
-        Default::default(),
-        "nothing to watch without a calibrated band"
-    );
-}
-
-#[test]
-fn a_calibrated_policy_must_be_watched_before_it_can_act() {
-    let test = support::open("auto-watch", &[PROJECT]);
-    seed_calibration(&test.store);
-    let approvals = approvals(&test.store);
-    assert_eq!(
-        approvals.status().expect("status").blocked(),
-        Some(Blocked::Unobserved),
-        "calibrated but never watched"
-    );
-    assert_eq!(
-        approvals.set_mode(Mode::Automatic),
-        Err(ApprovalError::Blocked(Blocked::Unobserved))
-    );
-    // Watching: eligible candidates are kept for a check, none held, none accepted.
-    let id = id_with(false, "watched");
+fn nothing_happens_in_manual_mode() {
+    let test = support::open("review-manual", &[PROJECT]);
+    let judge = Judge::answering("{}");
+    let review = review_with(&test.store, consented(), &judge);
     test.store
-        .insert_candidates(&[candidate(
-            &id,
-            "pending",
-            0.95,
-            "como cobrir arquivos antigos",
-        )])
+        .insert_candidates(&[old("a", 0.95, "como versionar revisoes")])
         .expect("pending");
-    let report = approvals.run_at(PROJECT, WATCHING).expect("run");
-    assert_eq!((report.audited, report.held, report.accepted), (1, 0, 0));
-    assert!(approvals.ledger(PROJECT).expect("ledger").is_empty());
+    assert!(!review.status().expect("status").automatic);
     assert_eq!(
-        test.store.get(&id).expect("get").expect("row").status,
-        CandidateStatus::Pending
+        review.run_at(PROJECT, NOW).expect("run"),
+        Default::default()
     );
+    assert_eq!(status_of(&test.store, "a"), CandidateStatus::Pending);
 }
 
 #[test]
-fn a_calibrated_band_holds_then_accepts_after_the_day_and_a_person_can_act_first() {
-    let test = support::open("auto-hold", &[PROJECT]);
-    let approvals = automatic(&test);
-    assert!(approvals.status().expect("status").automatic);
-
-    let held = id_with(false, "novel-a");
-    let early = id_with(false, "novel-b");
-    let weak = id_with(false, "weak");
+fn the_rules_settle_the_plain_cases_and_one_batched_call_settles_the_rest() {
+    let test = support::open("review-batch", &[PROJECT]);
+    let judge = Judge::answering(
+        r#"{"verdicts":[
+          {"id":"I1","verdict":"accept","reason":"correta e útil"},
+          {"id":"I2","verdict":"discard","reason":"trivial"},
+          {"id":"I3","verdict":"human","reason":"muda o comportamento dos agentes"}]}"#,
+    );
+    let review = review_with(&test.store, consented(), &judge);
+    review.set_mode(Mode::Automatic).expect("on");
     test.store
         .insert_candidates(&[
-            candidate(&held, "pending", 0.95, "como versionar revisoes passadas"),
-            candidate(&early, "pending", 0.93, "onde guardar credenciais externas"),
             candidate(
-                &weak,
+                "seen",
+                "accepted",
+                0.9,
+                "onde guardar credenciais externas",
+                "2026-01-01T00:00:00Z",
+            ),
+            // Plain: confident, sourced, nothing like it recorded.
+            old("plain", 0.95, "como versionar as revisoes passadas"),
+            // A repeat of a recorded question.
+            old("twin", 0.95, "onde guardar credenciais externas"),
+            // Middling confidence: ambiguous, oldest first.
+            candidate(
+                "amb-1",
                 "pending",
                 0.60,
-                "qual formato para exportar relatorios",
+                "qual formato exportar relatorios",
+                "2026-02-01T00:00:01Z",
+            ),
+            candidate(
+                "amb-2",
+                "pending",
+                0.65,
+                "quando limpar arquivos temporarios",
+                "2026-02-01T00:00:02Z",
+            ),
+            candidate(
+                "amb-3",
+                "pending",
+                0.70,
+                "onde registrar rejeicoes antigas",
+                "2026-02-01T00:00:03Z",
             ),
         ])
         .expect("pending");
 
-    let report = approvals.run_at(PROJECT, NOW).expect("first pass");
-    assert_eq!((report.held, report.audited, report.accepted), (2, 0, 0));
-    let ledger = approvals.ledger(PROJECT).expect("ledger");
-    assert_eq!(ledger.len(), 2, "the weak one is not in the band");
-    assert!(ledger.iter().all(|row| row.accepted_at.is_none()));
-    assert!(ledger
-        .iter()
-        .all(|row| row.due_at.as_deref() == Some("2026-03-02T10:00:00Z")));
-    assert_eq!(HOLD_HOURS, 24);
+    let report = review.run_at(PROJECT, NOW).expect("pass");
+    assert!(report.asked);
+    assert_eq!(
+        (report.accepted, report.discarded, report.left),
+        (2, 2, 1),
+        "plain and amb-1 accepted, twin and amb-2 discarded, amb-3 for the person"
+    );
+    assert_eq!(
+        judge.calls.load(Ordering::SeqCst),
+        1,
+        "one call for the three"
+    );
+    let asked = judge.asked.lock().expect("lock")[0].clone();
+    assert!(asked.contains("qual formato exportar relatorios"));
+    assert!(
+        !asked.contains("como versionar as revisoes passadas"),
+        "the plain one is not sent"
+    );
 
-    // Nothing is decided before the day is out.
-    let again = approvals
-        .run_at(PROJECT, "2026-03-02T09:00:00Z")
+    assert_eq!(status_of(&test.store, "plain"), CandidateStatus::Accepted);
+    assert_eq!(status_of(&test.store, "twin"), CandidateStatus::Dismissed);
+    assert_eq!(status_of(&test.store, "amb-1"), CandidateStatus::Accepted);
+    assert_eq!(status_of(&test.store, "amb-2"), CandidateStatus::Dismissed);
+    assert_eq!(status_of(&test.store, "amb-3"), CandidateStatus::Pending);
+
+    let ledger = review.ledger(PROJECT).expect("ledger");
+    assert_eq!(ledger.len(), 5);
+    let entry = |id: &str| {
+        ledger
+            .iter()
+            .find(|entry| entry.item_id == id)
+            .expect("entry")
+            .clone()
+    };
+    assert_eq!(
+        (entry("plain").verdict, entry("plain").by),
+        (Verdict::Accepted, By::Rules)
+    );
+    assert_eq!(
+        (entry("twin").verdict, entry("twin").by),
+        (Verdict::Discarded, By::Rules)
+    );
+    assert_eq!(
+        (entry("amb-1").verdict, entry("amb-1").by),
+        (Verdict::Accepted, By::Ai)
+    );
+    assert!(
+        entry("plain").result_id.is_some(),
+        "the decision it created"
+    );
+    assert_eq!(entry("amb-3").verdict, Verdict::NeedsHuman);
+    assert_eq!(entry("amb-3").reason, "muda o comportamento dos agentes");
+
+    // Nothing is asked twice, and a pass right after asks nothing.
+    let again = review
+        .run_at(PROJECT, "2026-03-01T10:05:00Z")
         .expect("again");
-    assert_eq!((again.held, again.accepted), (0, 0));
-    let inbox = Inbox::new(test.store.clone());
-    inbox.reject(&early).expect("the person rejects one early");
-
-    let after = approvals.run_at(PROJECT, NEXT_DAY).expect("after the day");
-    assert_eq!(after.accepted, 1, "only the one still pending is accepted");
-    let rows = approvals.ledger(PROJECT).expect("ledger");
-    let accepted: Vec<_> = rows
-        .iter()
-        .filter(|row| row.decision_id.is_some())
-        .collect();
-    assert_eq!(accepted.len(), 1);
-    assert_eq!(accepted[0].candidate_id, held);
-    let status_of = |id: &str| test.store.get(id).expect("get").expect("row").status;
-    assert_eq!(status_of(&held), CandidateStatus::Accepted);
-    assert_eq!(status_of(&early), CandidateStatus::Dismissed);
-    assert_eq!(status_of(&weak), CandidateStatus::Pending);
-    // Rejecting a held candidate is a disagreement with the policy.
-    let health = approvals.status().expect("status").health;
-    assert_eq!((health.checked, health.agreed), (13, 12));
+    assert!(!again.asked && !again.changed());
+    assert_eq!(judge.calls.load(Ordering::SeqCst), 1);
 }
 
 #[test]
-fn a_candidate_that_resembles_a_recorded_question_stays_in_the_queue() {
-    let test = support::open("auto-similar", &[PROJECT]);
-    let approvals = automatic(&test);
-    let id = id_with(false, "twin");
+fn a_lone_ambiguous_item_waits_for_company_up_to_two_hours() {
+    let test = support::open("review-wait", &[PROJECT]);
+    let judge = Judge::answering(r#"{"verdicts":[{"id":"I1","verdict":"accept","reason":"ok"}]}"#);
+    let review = review_with(&test.store, consented(), &judge);
+    review.set_mode(Mode::Automatic).expect("on");
     test.store
         .insert_candidates(&[candidate(
-            &id,
+            "lone",
             "pending",
-            0.97,
-            "topico3 alto3 resolvido3 de novo",
+            0.6,
+            "qual formato exportar relatorios",
+            "2026-03-01T09:30:00Z",
         )])
         .expect("pending");
-    let report = approvals.run_at(PROJECT, NOW).expect("run");
-    assert_eq!((report.held, report.audited), (0, 0));
+    let early = review
+        .run_at(PROJECT, "2026-03-01T10:00:00Z")
+        .expect("early");
+    assert!(!early.asked, "30 minutes old and alone: it waits");
+    assert_eq!(judge.calls.load(Ordering::SeqCst), 0);
+    let late = review
+        .run_at(PROJECT, "2026-03-01T11:31:00Z")
+        .expect("late");
+    assert!(late.asked, "two hours old: it is asked");
+    assert_eq!(status_of(&test.store, "lone"), CandidateStatus::Accepted);
 }
 
 #[test]
-fn one_in_ten_is_left_for_a_blind_check_and_disagreement_closes_the_mode() {
-    let test = support::open("auto-breaker", &[PROJECT]);
-    let approvals = automatic(&test);
-
-    // Twelve audited candidates the person then rejects: the policy was wrong.
-    let mut rows = Vec::new();
-    for at in 0..12 {
-        rows.push(candidate(
-            &id_with(true, &format!("audit-{at}")),
-            "pending",
-            0.96,
-            &format!("assunto{at} inedito{at} sem{at} parecido{at}"),
-        ));
-    }
+fn calls_are_spaced_capped_per_day_and_not_retried_at_once_after_a_failure() {
+    let test = support::open("review-limits", &[PROJECT]);
+    let judge = Judge::failing();
+    let review = review_with(&test.store, consented(), &judge);
+    review.set_mode(Mode::Automatic).expect("on");
+    let rows: Vec<_> = (0..4)
+        .map(|at| {
+            old(
+                &format!("amb-{at}"),
+                0.6,
+                &format!("assunto{at} ambiguo{at} sem{at} resposta{at}"),
+            )
+        })
+        .collect();
     test.store.insert_candidates(&rows).expect("pending");
-    let report = approvals.run_at(PROJECT, NOW).expect("run");
-    assert_eq!(
-        (report.audited, report.held),
-        (12, 0),
-        "audited are not held"
-    );
-    assert!(approvals.ledger(PROJECT).expect("ledger").is_empty());
-    let inbox = Inbox::new(test.store.clone());
-    for row in &rows {
-        inbox.reject(&row.id).expect("reject");
-    }
-    let health = approvals.status().expect("status").health;
-    assert_eq!(
-        (health.checked, health.agreed),
-        (20, 8),
-        "the latest twenty"
-    );
-    assert!(health.tripped());
 
-    let closing = approvals.run_at(PROJECT, NEXT_DAY).expect("closing pass");
-    assert!(closing.tripped);
-    assert!(!approvals.status().expect("status").automatic);
-    // The rejections also pull the top band below the share it needs, so the
-    // mode stays closed on two counts until a person's own reviews win both
-    // back; the policy watches nothing while the band is unproven.
-    assert!(matches!(
-        approvals.set_mode(Mode::Automatic),
-        Err(ApprovalError::Blocked(_))
-    ));
-    let status = approvals.status().expect("status");
-    assert!(!status.band_proven);
+    let first = review.run_at(PROJECT, NOW);
+    assert!(
+        matches!(first, Err(ReviewError::Provider(_))),
+        "the failure is reported"
+    );
+    assert_eq!(judge.calls.load(Ordering::SeqCst), 1);
+    let soon = review
+        .run_at(PROJECT, "2026-03-01T10:10:00Z")
+        .expect("soon");
+    assert!(!soon.asked, "20 minutes keep apart even after a failure");
+    assert_eq!(judge.calls.load(Ordering::SeqCst), 1);
+    for at in 0..4 {
+        assert_eq!(
+            status_of(&test.store, &format!("amb-{at}")),
+            CandidateStatus::Pending
+        );
+    }
+
+    // The daily cap: six calls in the last day and nothing more is asked.
+    for hour in 0..CALLS_PER_DAY {
+        test.store
+            .record_review_call(&format!("2026-03-01T{:02}:00:00Z", 11 + hour), 3, true)
+            .expect("call");
+    }
+    let capped = review
+        .run_at(PROJECT, "2026-03-01T20:00:00Z")
+        .expect("capped");
+    assert!(!capped.asked);
+    assert_eq!(judge.calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn without_an_enabled_provider_only_the_rules_act() {
+    let test = support::open("review-offline", &[PROJECT]);
+    let judge = Judge::answering("{}");
+    let review = review_with(&test.store, offline_default_profile(), &judge);
+    review.set_mode(Mode::Automatic).expect("on");
+    assert!(!review.status().expect("status").judge);
+    test.store
+        .insert_candidates(&[
+            old("plain", 0.95, "como versionar as revisoes passadas"),
+            old("amb-1", 0.6, "qual formato exportar relatorios"),
+            old("amb-2", 0.6, "quando limpar arquivos temporarios"),
+            old("amb-3", 0.6, "onde registrar rejeicoes antigas"),
+        ])
+        .expect("pending");
+    let report = review.run_at(PROJECT, NOW).expect("pass");
+    assert_eq!((report.accepted, report.asked), (1, false));
+    assert_eq!(judge.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(status_of(&test.store, "plain"), CandidateStatus::Accepted);
+    assert_eq!(status_of(&test.store, "amb-1"), CandidateStatus::Pending);
+}
+
+#[test]
+fn a_discarded_candidate_can_be_put_back_and_nothing_else_can() {
+    let test = support::open("review-undo", &[PROJECT]);
+    let judge = Judge::answering("{}");
+    let review = review_with(&test.store, consented(), &judge);
+    review.set_mode(Mode::Automatic).expect("on");
+    test.store
+        .insert_candidates(&[
+            candidate(
+                "seen",
+                "accepted",
+                0.9,
+                "onde guardar credenciais externas",
+                "2026-01-01T00:00:00Z",
+            ),
+            old("twin", 0.95, "onde guardar credenciais externas"),
+            old("plain", 0.95, "como versionar as revisoes passadas"),
+        ])
+        .expect("pending");
+    review.run_at(PROJECT, NOW).expect("pass");
+    assert_eq!(status_of(&test.store, "twin"), CandidateStatus::Dismissed);
+
+    review.undo(ItemKind::Candidate, "twin").expect("put back");
+    assert_eq!(status_of(&test.store, "twin"), CandidateStatus::Pending);
+    let ledger = review.ledger(PROJECT).expect("ledger");
+    assert!(ledger
+        .iter()
+        .find(|entry| entry.item_id == "twin")
+        .is_some_and(|entry| entry.undone_at.is_some()));
+    assert_eq!(
+        review.undo(ItemKind::Candidate, "twin"),
+        Err(ReviewError::NotUndoable),
+        "already back"
+    );
+    assert_eq!(
+        review.undo(ItemKind::Candidate, "plain"),
+        Err(ReviewError::NotUndoable),
+        "an accepted one is edited or ended in its own page"
+    );
+    assert_eq!(
+        review.undo(ItemKind::Claim, "x"),
+        Err(ReviewError::NotUndoable)
+    );
 }
