@@ -40,6 +40,8 @@ const SENDS: &str = "Gera um resumo e os principais fluxos com o provedor de IA 
                      Envia as decisões em vigor, as regras, os nomes do mapa e títulos, seções \
                      e o primeiro parágrafo da documentação; nada do código.";
 
+const PAGE_HINT: &str = "Abre no navegador uma página só com o resumo, a arquitetura e os                          fluxos, para ler ou enviar a alguém. Nada sai do computador.";
+
 const PROVENANCE: &str = "Escrita pela IA a partir das decisões e regras confirmadas e da \
                           documentação do projeto. Cada trecho mostra as fontes; o que não \
                           tinha fonte ficou de fora.";
@@ -53,6 +55,8 @@ enum Outcome {
 pub struct OverviewScreen {
     api: Option<Arc<dyn OverviewApi>>,
     project: Option<String>,
+    /// Name of the project, for the title of the exported page.
+    name: String,
     generation: u64,
     busy: bool,
     generating: bool,
@@ -91,6 +95,7 @@ impl OverviewScreen {
         Self {
             api: Some(api),
             project: None,
+            name: String::new(),
             generation: 0,
             busy: false,
             generating: false,
@@ -128,6 +133,48 @@ impl OverviewScreen {
         self.loaded = false;
         self.error = None;
         self.refresh(cx);
+    }
+
+    /// Tells the screen the project's name (the exported page carries it).
+    pub fn set_name(&mut self, name: &str) {
+        self.name = name.to_owned();
+    }
+
+    /// Writes the overview as a self-contained HTML page and opens it in the
+    /// default browser (`application::page`).
+    fn open_page(&mut self, cx: &mut Context<Self>) {
+        let Some(view) = self.view.as_ref() else {
+            return;
+        };
+        let overview = view.overview.clone();
+        let name = self.name.clone();
+        cx.spawn(async move |this, cx| {
+            let written = cx
+                .background_executor()
+                .spawn(async move {
+                    let html = application::page::render(&name, &overview);
+                    let dir = std::env::temp_dir().join("xemnas");
+                    std::fs::create_dir_all(&dir)?;
+                    let path = dir.join(application::page::file_name(&name));
+                    std::fs::write(&path, html)?;
+                    Ok::<_, std::io::Error>(path)
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| match written {
+                Ok(path) => {
+                    let local = path.to_string_lossy().replace('\\', "/");
+                    let url = format!("file:///{}", local.replace(' ', "%20"));
+                    cx.open_url(&url);
+                    this.show_notice("Página aberta no navegador.".into(), cx);
+                }
+                Err(error) => {
+                    tracing::error!(%error, operation = "overview-page", "page not written");
+                    this.error = Some("Não foi possível criar a página. Tente de novo.".into());
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     /// Opens a flow by position once the overview is read (demo captures).
@@ -277,6 +324,14 @@ impl OverviewScreen {
                     cx.stop_propagation();
                 }
             }))
+    }
+
+    fn page_button(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Stateful<Div> {
+        let button = action_button(theme, "overview-page", ButtonKind::Secondary, true)
+            .aria_label("Ver como página")
+            .tooltip(tooltip(PAGE_HINT, None))
+            .child("Ver como página");
+        self.pressable(button, "overview-page", |this, cx| this.open_page(cx), cx)
     }
 
     fn generate_button(
@@ -674,6 +729,7 @@ impl OverviewScreen {
         let colors = theme.colors;
         let overview = &view.overview;
         let update = self.generate_button(theme, ButtonKind::Secondary, cx);
+        let page = self.page_button(theme, cx);
         let mut sources = vec![
             plural(overview.decisions, "decisão", "decisões"),
             plural(overview.rules, "regra", "regras"),
@@ -753,7 +809,14 @@ impl OverviewScreen {
                     .items_start()
                     .gap(px(SpacingScale::S4))
                     .child(title)
-                    .child(update),
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(SpacingScale::S2))
+                            .child(page)
+                            .child(update),
+                    ),
             )
             .child(
                 div()

@@ -368,7 +368,15 @@ impl<
                         .0
                         .as_ref()
                         .map(|project| project.id().as_str().to_owned());
-                    overview.update(cx, |screen, cx| screen.set_project(project, cx));
+                    let name = event
+                        .0
+                        .as_ref()
+                        .map(|project| project.name().to_owned())
+                        .unwrap_or_default();
+                    overview.update(cx, |screen, cx| {
+                        screen.set_name(&name);
+                        screen.set_project(project, cx);
+                    });
                 }
                 if let Some(decisions) = &shell.decisions {
                     decisions.update(cx, |screen, cx| {

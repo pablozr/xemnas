@@ -346,6 +346,37 @@ que as tocam e uma ligação existe só porque um fluxo passa de uma parte a out
   acende as setas que a tocam. Cada passo pode trazer o meio ("via HTTP/JSON", mono
   na cor de tecnologia), informado pelo modelo ao gerar a Visão (`OverviewStep.via`).
 
+## Texto da IA e página da Visão
+
+**Estilo dos textos.** Todo texto que a IA escreve para uma pessoa (pergunta, escolha e
+motivo dos candidatos, Visão, motivos do juiz, regras sugeridas, ligações, revisão
+consultiva) segue 80% do ASD-STE100, o inglês técnico controlado: uma ideia por frase,
+até 20 palavras, voz ativa, uma palavra para um sentido, resultado antes do motivo. As
+travas fazem parte do prompt (`plain_rules!` em `application::plain_style`): manter
+todo fato e toda ressalva, não acrescentar fato, não mexer em código, nomes, ids nem
+citações, que seguem literais. Texto mais claro convence mais; por isso a evidência
+continua vindo antes do motivo. Todo prompt novo que gera texto para pessoas termina
+com `crate::plain_rules!()`.
+
+**Ver como página.** Na Visão, o botão secundário "Ver como página" (ao lado de
+"Atualizar visão") grava `visao-<projeto>.html` em `%TEMP%\xemnas` e abre no navegador.
+É um arquivo único, sem rede (fontes, estilos e scripts embutidos), que abre offline e
+pode ser enviado a alguém. `application::page::render` coloca o JSON da Visão num
+modelo fixo (`page/template.html`); a IA não escreve HTML, e o JSON é escapado para não
+fechar o `<script>`. O modelo desenha tudo com os mesmos tokens do app (lavanda para
+seleção e ação, tema escuro e claro, alternável):
+
+- **Resumo:** parágrafos com chips de fonte, números, cartões de arquitetura e fluxos.
+- **Arquitetura:** diagrama em colunas com curvas, pan e zoom, filtro por fluxo (setas
+  numeradas), clique numa parte para ver o que chama e quem a chama, clique numa seta
+  para ver os passos. Botões "Copiar Mermaid" e "Baixar SVG".
+- **Fluxos:** diagrama de sequência por fluxo (participantes, setas numeradas, meio de
+  cada passo), passos em cartões, setas do teclado e "Reproduzir". "Copiar Mermaid".
+- **Fontes:** as decisões e regras citadas, com quantos usos cada uma tem.
+
+Para uma tela nova na página: acrescentar a função de montagem em `BUILD` no modelo e a
+aba em `TABS`; os dados novos entram no JSON sem mudar a Rust além do tipo.
+
 ## Revisão — uma fila, evidência primeiro
 
 - **Uma fila para tudo o que espera uma pessoa.** A Revisão mostra os candidatos; quando
