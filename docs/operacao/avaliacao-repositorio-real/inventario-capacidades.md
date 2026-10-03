@@ -1,8 +1,8 @@
 # Inventário de ferramentas do Xemnas para avaliação
 
-**Data:** 03/10/2026  
-**Pergunta:** Quais capacidades acionáveis existem no código atual do Xemnas, por quais entradas reais podem ser exercitadas, de quais dependências precisam e que evidência prova seu comportamento?  
-**Status:** Aberta
+**Data:** 03/10/2026
+**Pergunta:** Quais capacidades acionáveis existem no código atual do Xemnas, por quais entradas reais podem ser exercitadas, de quais dependências precisam e que evidência prova seu comportamento?
+**Status:** Inventário concluído e migrado da pesquisa para a avaliação operacional; execução por capacidade em [avaliacao-repositorio-real.md](../avaliacao-repositorio-real.md).
 
 Este inventário descreve caminhos implementados no repositório, não possibilidades futuras descritas em pesquisas ou roadmap. As fontes são código local; referências `arquivo:linha` apontam para implementação ou contrato. Uma avaliação completa ainda precisa preparar projetos de teste e observar a UI e os fluxos de ponta a ponta. Não executei o app nem consultei dados locais.
 

@@ -33,6 +33,8 @@ propostos de investigação, compreensão, coordenação e verificação de muda
 
 Avaliação operacional: [ciclo supervisionado com agentes](operacao/avaliacao-agentes.md),
 com piloto GPT-6 Luna medium, controles sem memória/ADR/MCP, evidências e limites.
+A [avaliação em repositório real](operacao/avaliacao-repositorio-real.md) reúne cinco críticas
+Luna medium, testes no ripgrep, auditoria do core, valor e pendências de cobertura.
 
 Revisão backend sob demanda: [ADR-0009 — revisão consultiva de conhecimento](arquitetura/adr/0009-revisao-consultiva-de-conhecimento.md).
 
