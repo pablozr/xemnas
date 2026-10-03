@@ -349,6 +349,15 @@ HTML, o modelo põe todo texto com `textContent`, e o JSON é escapado para não
   motivo, regra em azul). Passo ativo sincronizado entre
   o diagrama, a linha do tempo e a barra de progresso; "Ver no mapa" abre o mesmo passo
   no passo a passo da arquitetura.
+- **Decisões** (`#decisoes`, `#decisoes/<id>`, tecla 3). Vista calma "Por que é assim":
+  uma coluna por parte do mapa, com o glifo do mapa, e cada decisão em vigor num cartão
+  na parte principal que toca (código, pergunta, escolha, "porque …", "Também em …");
+  as que não tocam parte desenhada ficam em "Fora do mapa". Curvas entre cartões, por
+  trás deles: depende de (linha), substitui (tracejada), conflito (cor de perigo); ao
+  passar ou selecionar, o cartão e suas ligações acendem e o resto apaga. Filtros em
+  pílulas: Todas, Só conflitos, uma por parte. O cartão abre a mesma leitura do
+  inspetor numa gaveta de vidro fixa à direita; "Ver em Decisões" e as fontes dos
+  passos levam a ela.
 
 Para acrescentar uma tela: uma função de montagem em `BUILD` e uma entrada em `TABS` no
 modelo; os dados novos entram no JSON sem mudar a Rust além do tipo.
