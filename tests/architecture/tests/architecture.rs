@@ -419,7 +419,12 @@ fn color_literal_violations(file: &Path, source: &str) -> Vec<String> {
 
         let mut flagged_constructor = false;
         for constructor in ["rgb(", "rgba(", "rgb8(", "rgba8(", "hsl(", "hsla(", "hsba("] {
-            if line.contains(constructor) {
+            if line.match_indices(constructor).any(|(position, _)| {
+                line[..position]
+                    .chars()
+                    .next_back()
+                    .is_none_or(|ch| !(ch.is_alphanumeric() || ch == '_'))
+            }) {
                 flagged_constructor = true;
                 violations.push(format!(
                     "ARCH-001: {}:{} builds a color with `{constructor}`; colors belong in ui/tokens.rs",
@@ -440,6 +445,32 @@ fn color_literal_violations(file: &Path, source: &str) -> Vec<String> {
         }
     }
     violations
+}
+
+#[test]
+fn color_constructors_require_identifier_boundaries() {
+    let file = Path::new("ui/example.rs");
+    let qualified = ["gpui", "::"].concat();
+    for name in ["rgb", "rgba", "rgb8", "rgba8", "hsl", "hsla", "hsba"] {
+        for source in [
+            format!("{name}(value)"),
+            format!("{qualified}{name}(value)"),
+        ] {
+            assert_eq!(color_literal_violations(file, &source).len(), 1, "{source}");
+        }
+        for source in [
+            format!("image.to_{name}(value)"),
+            format!("image.into_{name}(value)"),
+            format!("other{name}(value)"),
+        ] {
+            assert!(
+                color_literal_violations(file, &source).is_empty(),
+                "{source}"
+            );
+        }
+        let source = format!("image.to_rgb8(); {qualified}{name}(value)");
+        assert_eq!(color_literal_violations(file, &source).len(), 1, "{source}");
+    }
 }
 
 /// Strips a trailing `//` comment, but only when it is outside a string (an

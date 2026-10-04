@@ -12,7 +12,7 @@
 //! 27480d99); see `NOTICE`.
 
 use gpui::prelude::*;
-use gpui::{hsla, linear_color_stop, linear_gradient, px, Background, BoxShadow, Hsla, Rgba};
+use gpui::{linear_color_stop, linear_gradient, px, Background, BoxShadow, Hsla, Rgba};
 
 use crate::ui::theme::Theme;
 
@@ -44,12 +44,12 @@ impl Plate {
     }
 }
 
-fn white(alpha: f32) -> Hsla {
-    hsla(0.0, 0.0, 1.0, alpha)
+fn white(theme: &Theme, alpha: f32) -> Hsla {
+    Hsla::from(theme.colors.emphasis_highlight()).alpha(alpha)
 }
 
-fn black(alpha: f32) -> Hsla {
-    hsla(0.0, 0.0, 0.0, alpha)
+fn black(theme: &Theme, alpha: f32) -> Hsla {
+    Hsla::from(theme.colors.shadow_emphasis()).alpha(alpha)
 }
 
 fn vertical(top: Hsla, bottom: Hsla) -> Background {
@@ -80,14 +80,14 @@ fn lift(color: Rgba, amount: f32) -> Hsla {
 
 /// The neutral plate of a secondary control. `lit` (0 rest, 1 hover) raises
 /// the whole treatment one step.
-pub fn neutral_plate(_theme: &Theme, lit: f32) -> Plate {
+pub fn neutral_plate(theme: &Theme, lit: f32) -> Plate {
     let top = 0.075 + 0.035 * lit;
     Plate {
-        background: vertical(white(top), white(top * 0.55)),
-        rim: white(0.10 + 0.05 * lit),
+        background: vertical(white(theme, top), white(theme, top * 0.55)),
+        rim: white(theme, 0.10 + 0.05 * lit),
         shadows: vec![
-            shadow(white(0.07 + 0.03 * lit), 1.0, 0.0, true),
-            shadow(black(0.22), 1.0, 2.0, false),
+            shadow(white(theme, 0.07 + 0.03 * lit), 1.0, 0.0, true),
+            shadow(black(theme, 0.22), 1.0, 2.0, false),
         ],
     }
 }
@@ -102,7 +102,7 @@ pub fn accent_plate(theme: &Theme, glow: f32) -> Plate {
         background: vertical(top, Hsla::from(base)),
         rim: lift(base, 0.35).opacity(0.55),
         shadows: vec![
-            shadow(white(0.22), 1.0, 0.0, true),
+            shadow(white(theme, 0.22), 1.0, 0.0, true),
             BoxShadow::new(px(0.0), px(2.0 + 2.0 * glow), halo).blur_radius(px(6.0 + 10.0 * glow)),
         ],
     }
@@ -114,7 +114,7 @@ pub fn accent_pressed(theme: &Theme) -> Plate {
     Plate {
         background: vertical(Hsla::from(base), Hsla::from(base)),
         rim: lift(base, 0.2).opacity(0.5),
-        shadows: vec![shadow(black(0.18), 1.0, 2.0, true)],
+        shadows: vec![shadow(black(theme, 0.18), 1.0, 2.0, true)],
     }
 }
 
@@ -141,7 +141,7 @@ pub fn elevation(theme: &Theme, level: Elevation) -> Vec<BoxShadow> {
     };
     vec![
         BoxShadow::new(px(0.0), px(y), drop).blur_radius(px(blur)),
-        BoxShadow::new(px(0.0), px(1.0), black(contact)).blur_radius(px(2.0)),
-        shadow(white(0.05), 1.0, 0.0, true),
+        BoxShadow::new(px(0.0), px(1.0), black(theme, contact)).blur_radius(px(2.0)),
+        shadow(white(theme, 0.05), 1.0, 0.0, true),
     ]
 }
