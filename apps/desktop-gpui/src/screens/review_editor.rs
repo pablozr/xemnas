@@ -1,5 +1,6 @@
 //! Labelled editing form; submitting is explicit and cancellation writes nothing.
 use crate::app::SaveEditor;
+use crate::i18n::inbox as t;
 use crate::ui::controls::{action_button, ButtonKind};
 use crate::ui::patterns::{action_footer, form_field, reading_page, section_label};
 use crate::ui::search_field::SearchField;
@@ -10,7 +11,9 @@ use application::qualifiers::{KnowledgeQualifier, QualifierKind};
 use gpui::prelude::*;
 use gpui::{div, px, App, Context, Entity, EventEmitter, FocusHandle, Focusable, Render, Window};
 
-const LABELS: [&str; 3] = ["Pergunta", "Escolha sugerida", "Motivo"];
+fn labels() -> [&'static str; 3] {
+    [t::editor_question(), t::editor_choice(), t::editor_reason()]
+}
 
 pub(super) enum EditorEvent {
     Cancel,
@@ -35,6 +38,7 @@ impl ReviewEditor {
     }
     pub(super) fn new(original: CandidateEdits, cx: &mut Context<Self>) -> Self {
         let values = [&original.question, &original.choice, &original.rationale];
+        let labels = labels();
         let fields = std::array::from_fn(|index| {
             cx.new(|cx| {
                 let mut field = SearchField::new(cx);
@@ -43,7 +47,7 @@ impl ReviewEditor {
                 } else {
                     field.stretch();
                 }
-                field.set_context(LABELS[index], cx);
+                field.set_context(labels[index], cx);
                 field.set_value(values[index], cx);
                 field
             })
@@ -103,8 +107,8 @@ impl Render for ReviewEditor {
         let theme = Theme::current(cx);
         let hints = [
             None,
-            Some("A escolha que será registrada se você confirmar."),
-            Some("Por que essa escolha foi feita, nas palavras da equipe."),
+            Some(t::editor_choice_hint()),
+            Some(t::editor_reason_hint()),
         ];
         let column = div()
             .flex()
@@ -115,18 +119,18 @@ impl Render for ReviewEditor {
                     .flex()
                     .flex_col()
                     .gap(px(SpacingScale::S2))
-                    .child(section_label(&theme, "Ajustar candidato"))
+                    .child(section_label(&theme, t::editor_title()))
                     .child(
                         text_style(div(), TypeScale::BODY)
                             .text_color(theme.colors.text_secondary())
-                            .child("Revise a pergunta, a escolha e o motivo antes de confirmar."),
+                            .child(t::editor_intro()),
                     ),
             )
-            .children(LABELS.into_iter().enumerate().map(|(index, label)| {
+            .children(labels().into_iter().enumerate().map(|(index, label)| {
                 form_field(&theme, label, hints[index], self.fields[index].clone())
             }))
             .child(self.qualifiers.render(&theme))
-            .child(section_label(&theme, "Evidências para consulta"))
+            .child(section_label(&theme, t::editor_evidence_title()))
             .children(self.evidence.iter().enumerate().map(|(index, artifact)| {
                 let lines = super::evidence::SourceLines::new(artifact);
                 super::evidence::frame(&theme)
@@ -139,28 +143,32 @@ impl Render for ReviewEditor {
                         theme,
                     ))
             }));
-        let actions = ["Cancelar", "Salvar ajustes", "Salvar e confirmar"]
-            .into_iter()
-            .enumerate()
-            .map(|(index, label)| {
-                let kind = match index {
-                    0 => ButtonKind::Ghost,
-                    1 => ButtonKind::Secondary,
-                    _ => ButtonKind::Primary,
-                };
-                action_button(&theme, ("editor-action", index), kind, !self.busy)
-                    .px(px(SpacingScale::S4))
-                    .aria_label(label)
-                    .track_focus(&self.focus[index])
-                    .on_click(cx.listener(move |this, _, _, cx| this.submit(index, cx)))
-                    .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
-                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                            this.submit(index, cx);
-                            cx.stop_propagation();
-                        }
-                    }))
-                    .child(label)
-            });
+        let actions = [
+            t::editor_cancel(),
+            t::editor_save_edits(),
+            t::editor_save_confirm(),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, label)| {
+            let kind = match index {
+                0 => ButtonKind::Ghost,
+                1 => ButtonKind::Secondary,
+                _ => ButtonKind::Primary,
+            };
+            action_button(&theme, ("editor-action", index), kind, !self.busy)
+                .px(px(SpacingScale::S4))
+                .aria_label(label)
+                .track_focus(&self.focus[index])
+                .on_click(cx.listener(move |this, _, _, cx| this.submit(index, cx)))
+                .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                        this.submit(index, cx);
+                        cx.stop_propagation();
+                    }
+                }))
+                .child(label)
+        });
         div()
             .id("review-editor")
             .key_context("Editor")
@@ -170,16 +178,17 @@ impl Render for ReviewEditor {
             .flex_col()
             .child(reading_page("review-editor-fields", column))
             .child(
-                action_footer(&theme, self.busy.then_some(("Salvando…", false))).children(actions),
+                action_footer(&theme, self.busy.then_some((t::editor_saving(), false)))
+                    .children(actions),
             )
     }
 }
 
 pub(super) fn qualifier_label(kind: QualifierKind) -> &'static str {
     match kind {
-        QualifierKind::Attribution => "Atribuição",
-        QualifierKind::Scope => "Escopo",
-        QualifierKind::Validation => "Validação",
+        QualifierKind::Attribution => t::qualifier_attribution(),
+        QualifierKind::Scope => t::qualifier_scope(),
+        QualifierKind::Validation => t::qualifier_validation(),
     }
 }
 
@@ -192,7 +201,7 @@ pub(super) fn qualifier_reading(theme: &Theme, items: &[KnowledgeQualifier]) -> 
         .flex()
         .flex_col()
         .gap(px(SpacingScale::S2))
-        .child(section_label(theme, "Alcance e ressalvas"))
+        .child(section_label(theme, t::qualifiers_title()))
         .children(items.iter().map(|item| {
             div()
                 .flex()
@@ -206,9 +215,9 @@ pub(super) fn qualifier_reading(theme: &Theme, items: &[KnowledgeQualifier]) -> 
                             "{} · {}",
                             qualifier_label(item.kind),
                             if item.artifact_id.is_some() {
-                                "citado da evidência"
+                                t::qualifier_cited()
                             } else {
-                                "escrito na revisão, sem fonte"
+                                t::qualifier_written()
                             }
                         )),
                 )
@@ -281,16 +290,31 @@ impl QualifierFields {
     }
 
     pub(super) fn render(&self, theme: &Theme) -> gpui::Div {
-        div().flex().flex_col().gap(px(SpacingScale::S4))
-            .child(section_label(theme, "Alcance e ressalvas"))
-            .child("Alterar uma citação a torna declaração do revisor, sem fonte verificada. Apague o texto para remover.")
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(SpacingScale::S4))
+            .child(section_label(theme, t::qualifiers_title()))
+            .child(t::qualifiers_edit_note())
             .children(self.original.iter().zip(&self.fields).map(|(item, field)| {
-                form_field(theme, qualifier_label(item.kind), Some(if item.artifact_id.is_some() {
-                    "Citação da evidência; consulte a fonte antes de alterar."
-                } else { "Declaração do revisor · sem fonte verificada." }), field.clone())
+                form_field(
+                    theme,
+                    qualifier_label(item.kind),
+                    Some(if item.artifact_id.is_some() {
+                        t::qualifier_quote_hint()
+                    } else {
+                        t::qualifier_reviewer_hint()
+                    }),
+                    field.clone(),
+                )
             }))
             .children(self.additions.iter().map(|(kind, field)| {
-                form_field(theme, qualifier_label(*kind), Some("Adicionar declaração do revisor (opcional)."), field.clone())
+                form_field(
+                    theme,
+                    qualifier_label(*kind),
+                    Some(t::qualifier_add_hint()),
+                    field.clone(),
+                )
             }))
     }
 }
