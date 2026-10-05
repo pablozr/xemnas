@@ -1,5 +1,6 @@
 //! Explicit revision form. Unchanged fields retain their original snapshots.
 use crate::app::SaveEditor;
+use crate::i18n::decisions as text;
 use crate::ui::controls::{action_button, ButtonKind};
 use crate::ui::patterns::{action_footer, form_field, reading_page, section_label};
 use crate::ui::search_field::{SearchChanged, SearchField};
@@ -27,15 +28,17 @@ pub(super) struct DecisionEditor {
     original_qualifiers: Vec<application::qualifiers::KnowledgeQualifier>,
 }
 impl EventEmitter<RevisionEvent> for DecisionEditor {}
-const LABELS: [&str; 7] = [
-    "Pergunta",
-    "Escolha",
-    "Justificativa",
-    "Premissas",
-    "Escopo",
-    "Consequências",
-    "Reconsiderar quando",
-];
+fn labels() -> [&'static str; 7] {
+    [
+        text::label_question(),
+        text::label_choice(),
+        text::label_rationale(),
+        text::label_assumptions(),
+        text::label_scope(),
+        text::label_consequences(),
+        text::label_reconsider_when(),
+    ]
+}
 impl DecisionEditor {
     pub(super) fn new(detail: &DecisionDetail, cx: &mut Context<Self>) -> Self {
         let arrays = [
@@ -53,11 +56,12 @@ impl DecisionEditor {
             arrays[2].join("\n"),
             arrays[3].join("\n"),
         ];
+        let labels = labels();
         let fields = std::array::from_fn(|i| {
             cx.new(|cx| {
                 let mut field = SearchField::new(cx);
                 field.multiline(if i == 2 { 160.0 } else { 100.0 });
-                field.set_context(LABELS[i], cx);
+                field.set_context(labels[i], cx);
                 field.set_value(&original[i], cx);
                 field
             })
@@ -145,31 +149,28 @@ impl Render for DecisionEditor {
                     .flex()
                     .flex_col()
                     .gap(px(SpacingScale::S2))
-                    .child(section_label(&t, "Revisar decisão"))
+                    .child(section_label(&t, text::editor_title()))
                     .child(
                         text_style(div(), TypeScale::BODY)
                             .text_color(t.colors.text_secondary())
-                            .child("A versão anterior permanece no histórico."),
+                            .child(text::editor_history_note()),
                     ),
             )
-            .children(LABELS.iter().enumerate().map(|(index, label)| {
+            .children(labels().into_iter().enumerate().map(|(index, label)| {
                 form_field(
                     &t,
                     label,
-                    (index >= 3).then_some("Um item por linha."),
+                    (index >= 3).then_some(text::one_per_line()),
                     self.fields[index].clone(),
                 )
             }))
             .child(self.qualifiers.render(&t));
         let message = if self.busy {
-            Some(("Salvando…", false))
+            Some((text::saving(), false))
         } else if !edits.is_empty() && !valid {
-            Some((
-                "Preencha os campos obrigatórios e respeite os limites de tamanho.",
-                true,
-            ))
+            Some((text::fields_invalid(), true))
         } else if edits.is_empty() {
-            Some(("Nenhuma alteração ainda.", false))
+            Some((text::no_changes(), false))
         } else {
             None
         };
@@ -183,9 +184,9 @@ impl Render for DecisionEditor {
             action_button(&t, ("revision-action", index), kind, enabled)
                 .px(px(SpacingScale::S4))
                 .aria_label(if save {
-                    "Salvar nova versão"
+                    text::save_version()
                 } else {
-                    "Cancelar revisão"
+                    text::cancel_revision_aria()
                 })
                 .track_focus(&self.focus[index])
                 .on_click(cx.listener(move |this, _, _, cx| this.submit(save, cx)))
@@ -196,9 +197,9 @@ impl Render for DecisionEditor {
                     }
                 }))
                 .child(if save {
-                    "Salvar nova versão"
+                    text::save_version()
                 } else {
-                    "Cancelar"
+                    text::cancel()
                 })
         });
         div()
