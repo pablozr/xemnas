@@ -690,6 +690,22 @@ mod tests {
         assert!(!shared.diff_summary.contains("web/form.ts"));
     }
 
+    #[test]
+    fn a_proposal_citing_part_of_the_capture_passes_validation() {
+        // A Claude Code turn carries many tool summaries; a decision cites a few.
+        let capture = evidence(vec![
+            artifact("talk", "user_text", "Vamos usar Redis para o cache."),
+            artifact("tool-1", "tool_summary", r#"{"tool":"Read","status":"ok"}"#),
+            artifact("tool-2", "tool_summary", r#"{"tool":"Bash","status":"ok"}"#),
+        ]);
+        let mut cited = proposal(&["talk"]);
+        cited.signals = vec![RelevanceSignal::DependencyAdded];
+        let cited = reconcile_with_evidence(cited, &capture, false);
+        assert_eq!(cited.evidence_refs, ["talk"]);
+        super::validate_proposal(&cited, &capture, &[RelevanceSignal::DependencyAdded])
+            .expect("a partial citation is valid");
+    }
+
     fn artifact(id: &str, kind: &str, content: &str) -> EvidenceArtifact {
         EvidenceArtifact {
             artifact_id: id.to_string(),

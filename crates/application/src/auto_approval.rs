@@ -23,10 +23,10 @@
 //! Only what these rules cannot settle (rules, middling confidence, context
 //! derived from a decision, relations that conflict with or replace another
 //! decision, ties found by mention) is asked, and asked in **one batched call** per pass, with a
-//! compact text per item. Passes are spaced out: the call waits until a few
-//! items have gathered or the oldest has waited two hours, keeps twenty
-//! minutes between calls (and after a failure), and stops at six a day. An
-//! item the AI judged is never asked about again.
+//! compact text per item and up to [`BATCH`] items. Calls are not spaced or
+//! capped, so a backlog drains pass after pass; only a failed call pauses the
+//! next for [`FAILURE_PAUSE_MINUTES`]. An item the AI judged is never asked
+//! about again.
 //!
 //! The ledger is written for every verdict, accepted or not. What the AI
 //! discarded is a candidate that can be put back; what it accepted is open in
@@ -56,16 +56,13 @@ use crate::projects::ProjectRepository;
 use crate::relation_suggestions::{RelationSuggestionStore, RelationSuggestions};
 use crate::relations::RelationStore;
 
-/// Items sent to the AI in one call.
-pub const BATCH: usize = 12;
-/// Ambiguous items that make a call worth it before the oldest has waited.
-pub const MIN_TO_ASK: usize = 3;
-/// Hours the oldest ambiguous item may wait for company.
-pub const MAX_WAIT_HOURS: i64 = 2;
-/// Minutes kept between calls, and after a failed one.
-pub const CALL_GAP_MINUTES: i64 = 20;
-/// Calls per day, at most.
-pub const CALLS_PER_DAY: usize = 6;
+/// Items sent to the AI in one call: each is a short text, so a call carries
+/// a backlog's worth without growing much.
+pub const BATCH: usize = 30;
+/// Minutes kept after a failed call, so a provider that is down is not
+/// asked again on every pass. Calls that work are not spaced or capped: the
+/// person chose to let the AI do the review (05/10/2026).
+pub const FAILURE_PAUSE_MINUTES: i64 = 20;
 /// Confidence from which a plain decision is accepted without asking.
 pub const SURE_CONFIDENCE: f64 = 0.85;
 /// Word overlap from which a candidate repeats a recorded question.
@@ -887,27 +884,16 @@ where
         self.factory.external(&profile, secret).ok()
     }
 
-    /// Whether a call is allowed and worth making now.
-    fn may_ask(&self, ambiguous: &[&Item], now: &str) -> Result<bool, ReviewError> {
+    /// Whether a call may go now: always, unless the last one failed less
+    /// than [`FAILURE_PAUSE_MINUTES`] ago.
+    fn may_ask(&self, now: &str) -> Result<bool, ReviewError> {
         let day_ago = add_hours(now, -24).unwrap_or_default();
         let calls = self.store.review_calls(&day_ago)?;
-        if calls.len() >= CALLS_PER_DAY {
-            return Ok(false);
-        }
-        if let Some((last, _)) = calls.last() {
-            let ready_at = add_minutes(last, CALL_GAP_MINUTES).unwrap_or_default();
-            if now < ready_at.as_str() {
-                return Ok(false);
-            }
-        }
-        let oldest = ambiguous
-            .iter()
-            .map(|item| item.waiting_since.as_str())
-            .filter(|moment| !moment.is_empty())
-            .min()
-            .unwrap_or(now);
-        let patient = add_hours(oldest, MAX_WAIT_HOURS).unwrap_or_default();
-        Ok(ambiguous.len() >= MIN_TO_ASK || now >= patient.as_str())
+        let Some((last, false)) = calls.last() else {
+            return Ok(true);
+        };
+        let ready_at = add_minutes(last, FAILURE_PAUSE_MINUTES).unwrap_or_default();
+        Ok(now >= ready_at.as_str())
     }
 
     /// One pass at the given moment (RFC 3339), so tests do not wait.
@@ -936,12 +922,12 @@ where
             )?;
         }
 
-        // The rest, in one batched call when it is worth one.
+        // The rest, in one batched call.
         let ambiguous: Vec<&Item> = items
             .iter()
             .filter(|item| item.triage == Triage::Ask)
             .collect();
-        if ambiguous.is_empty() || !self.may_ask(&ambiguous, now)? {
+        if ambiguous.is_empty() || !self.may_ask(now)? {
             return Ok(report);
         }
         let Some(model) = self.judge() else {
