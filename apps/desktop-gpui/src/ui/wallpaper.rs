@@ -16,13 +16,15 @@ use std::sync::Arc;
 
 use gpui::{App, Global, Image, ImageFormat};
 
+use crate::i18n::common as t;
 use crate::ui::appearance::{self, Level, Wallpaper};
 
 /// A shipped background: id, title and the full and thumbnail images.
 pub struct Builtin {
     /// Stable id saved in the preference.
     pub id: &'static str,
-    /// Name shown in the picker.
+    /// Name in English. The picker shows [`Builtin::title`], which follows
+    /// the interface language.
     pub title: &'static str,
     /// The 2560×1440 JPEG.
     full: &'static [u8],
@@ -44,13 +46,23 @@ macro_rules! builtin {
 /// The backgrounds shipped with the app, inspired by the Organization's
 /// world (original images rendered by `tools/wallpapers/render.py`).
 pub const BUILTINS: [Builtin; 4] = [
-    builtin!("never", "A cidade que nunca existiu"),
-    builtin!("castle", "O castelo"),
-    builtin!("thirteen", "Onde nada se reúne"),
-    builtin!("chain", "Corrente"),
+    builtin!("never", "The city that never existed"),
+    builtin!("castle", "The castle"),
+    builtin!("thirteen", "Where nothing gathers"),
+    builtin!("chain", "Chain"),
 ];
 
 impl Builtin {
+    /// Name shown in the picker, in the interface language.
+    pub fn title(&self) -> &'static str {
+        match self.id {
+            "never" => t::wallpaper_never(),
+            "castle" => t::wallpaper_castle(),
+            "thirteen" => t::wallpaper_thirteen(),
+            _ => t::wallpaper_chain(),
+        }
+    }
+
     /// The picker thumbnail.
     pub fn thumbnail(&self) -> Arc<Image> {
         Arc::new(Image::from_bytes(ImageFormat::Jpeg, self.thumb.to_vec()))
