@@ -13,7 +13,9 @@ use gpui::{
 
 use crate::ui::icons::{icon, IconName};
 use crate::ui::theme::{text_style, Theme};
-use crate::ui::tokens::{MotionTokens, RadiusScale, SpacingScale, TypeScale, TypeToken};
+use crate::ui::tokens::{
+    ControlSize, MotionTokens, RadiusScale, SpacingScale, TypeScale, TypeToken,
+};
 
 /// The quiet title of a side panel: 12 px, muted. The content, not the
 /// panel name, carries the weight.
@@ -634,6 +636,98 @@ pub fn radio_row(
                 mark.child(div().size(px(8.0)).rounded_full().bg(colors.accent_hover()))
             }),
     )
+}
+
+/// Tallest a [`menu_panel`] grows before its options scroll.
+pub const MENU_MAX_HEIGHT: f32 = 320.0;
+
+/// A dropdown menu under the control that opened it: the floating surface
+/// of the quick theme menu (`floating`, card border, floating elevation),
+/// with the options scrolling past [`MENU_MAX_HEIGHT`]. The caller places it
+/// (absolute, under its trigger), adds the click-outside and key handlers,
+/// wraps it in `menu_in`/`menu_out` and fills it with [`menu_item`]s.
+pub fn menu_panel(theme: &Theme, id: impl Into<ElementId>, label: &str) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .flex_col()
+        .p(px(SpacingScale::S1))
+        .max_h(px(MENU_MAX_HEIGHT))
+        .overflow_y_scroll()
+        .rounded(theme.radius.surface())
+        .border_1()
+        .border_color(theme.colors.glass_border_card())
+        .bg(theme.colors.floating())
+        .shadow(crate::ui::material::elevation(
+            theme,
+            crate::ui::material::Elevation::Floating,
+        ))
+        .occlude()
+        .role(Role::Menu)
+        .aria_label(label.to_owned())
+}
+
+/// One exclusive option of a [`menu_panel`]: glyph, label, an optional count
+/// and the check of the chosen one. Hover tints it; the chosen option reads
+/// in the primary text with a lavender check (no second selection fill in a
+/// floating surface). The caller adds focus, click and key handlers.
+pub fn menu_item(
+    theme: &Theme,
+    id: impl Into<ElementId>,
+    glyph: IconName,
+    label: &str,
+    count: Option<usize>,
+    selected: bool,
+) -> Stateful<Div> {
+    let colors = theme.colors;
+    div()
+        .id(id)
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(SpacingScale::S3))
+        .h(px(ControlSize::MD))
+        .px(px(SpacingScale::S2))
+        .rounded(theme.radius.control())
+        .cursor_pointer()
+        .hover(move |style| style.bg(colors.glass_fill_medium()))
+        .active(move |style| style.bg(colors.glass_fill_strong()))
+        .focus_visible(crate::ui::controls::focus_ring(theme))
+        .role(Role::MenuItemRadio)
+        .aria_label(match count {
+            Some(count) => format!("{label}, {count}"),
+            None => label.to_owned(),
+        })
+        .aria_toggled(if selected {
+            Toggled::True
+        } else {
+            Toggled::False
+        })
+        .child(icon(
+            glyph,
+            14.0,
+            if selected {
+                colors.text_primary()
+            } else {
+                colors.text_muted()
+            },
+        ))
+        .child(
+            text_style(div(), TypeScale::BODY_SMALL)
+                .flex_1()
+                .min_w(px(0.0))
+                .truncate()
+                .text_color(if selected {
+                    colors.text_primary()
+                } else {
+                    colors.text_secondary()
+                })
+                .child(label.to_owned()),
+        )
+        .children(count.map(|count| count_chip(theme, count.to_string())))
+        .child(div().size(px(14.0)).flex_none().when(selected, |mark| {
+            mark.child(icon(IconName::Check, 14.0, colors.accent_hover()))
+        }))
 }
 
 /// Width of the index rail beside a reading column (Mapa, Contexto).

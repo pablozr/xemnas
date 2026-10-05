@@ -243,6 +243,59 @@ pub struct TimelineEvent {
     pub other: Option<NodeSummary>,
 }
 
+/// A part of the project: a top-level component of the map (the same
+/// "container" as in [`crate::architecture`]) and how much was decided on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PartCount {
+    /// The component's entity id.
+    pub entity_id: String,
+    /// Its name.
+    pub name: String,
+    /// Decisions in force tied to it or to a component inside it.
+    pub decisions: usize,
+}
+
+/// Decisions in force grouped by part of the project, to narrow a list of
+/// decisions to "everything decided about the storage".
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DecisionParts {
+    /// Every live top-level component, by name (parts without decisions too).
+    pub parts: Vec<PartCount>,
+    /// Decisions in force of each part (by entity id), newest first.
+    pub decisions: BTreeMap<String, Vec<String>>,
+}
+
+impl DecisionParts {
+    /// The part with this entity id.
+    pub fn part(&self, entity_id: &str) -> Option<&PartCount> {
+        self.parts.iter().find(|part| part.entity_id == entity_id)
+    }
+
+    /// Decisions in force of a part, newest first (empty for an unknown part).
+    pub fn decisions_of(&self, entity_id: &str) -> &[String] {
+        self.decisions
+            .get(entity_id)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+
+    /// Parts a decision affects, directly or through a component inside them,
+    /// in the order of [`DecisionParts::parts`].
+    pub fn parts_of(&self, decision_id: &str) -> Vec<&PartCount> {
+        self.parts
+            .iter()
+            .filter(|part| {
+                self.decisions_of(&part.entity_id)
+                    .iter()
+                    .any(|id| id == decision_id)
+            })
+            .collect()
+    }
+}
+
+/// Climbs of `part_of` before giving up (a cycle in the data).
+const MAX_PART_DEPTH: usize = 16;
+
 /// Whether a decision holds at `at`: confirmed by then and not superseded by then.
 pub(crate) fn decision_in_force(
     decision: &DecisionNode,
@@ -428,6 +481,73 @@ impl Snapshot {
         rows
     }
 
+    /// Decisions in force by top-level component; one pass over the edges.
+    fn decision_parts(&self) -> DecisionParts {
+        let components: BTreeSet<&str> = self
+            .entities
+            .values()
+            .filter(|entity| entity.kind == EntityKind::Component && entity.alive_at(&self.at))
+            .map(|entity| entity.entity_id.as_str())
+            .collect();
+        let parent: BTreeMap<&str, &str> = self
+            .holding()
+            .filter(|edge| edge.kind == EdgeKind::PartOf)
+            .filter(|edge| components.contains(edge.entity_id.as_str()))
+            .map(|edge| (edge.source_id.as_str(), edge.entity_id.as_str()))
+            .collect();
+        let top = |id: &str| -> Option<&str> {
+            let mut at = *components.get(id)?;
+            for _ in 0..MAX_PART_DEPTH {
+                match parent.get(at) {
+                    Some(next) => at = next,
+                    None => break,
+                }
+            }
+            Some(at)
+        };
+        let mut grouped: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+        for edge in self.holding() {
+            if edge.source_kind != NodeKind::Decision || !self.decision_active(&edge.source_id) {
+                continue;
+            }
+            if let Some(part) = top(&edge.entity_id) {
+                grouped
+                    .entry(part)
+                    .or_default()
+                    .insert(edge.source_id.clone());
+            }
+        }
+        let mut parts: Vec<PartCount> = components
+            .iter()
+            .filter(|id| top(id) == Some(**id))
+            .filter_map(|id| self.entities.get(*id))
+            .map(|entity| PartCount {
+                entity_id: entity.entity_id.clone(),
+                name: entity.name.clone(),
+                decisions: grouped
+                    .get(entity.entity_id.as_str())
+                    .map_or(0, BTreeSet::len),
+            })
+            .collect();
+        parts.sort_by(|left, right| {
+            (left.name.to_lowercase(), &left.entity_id)
+                .cmp(&(right.name.to_lowercase(), &right.entity_id))
+        });
+        let decisions = grouped
+            .into_iter()
+            .map(|(part, ids)| {
+                let ids: Vec<String> = ids.into_iter().collect();
+                let newest_first = self
+                    .summaries(&ids, NodeKind::Decision)
+                    .into_iter()
+                    .map(|summary| summary.node.id)
+                    .collect();
+                (part.to_owned(), newest_first)
+            })
+            .collect();
+        DecisionParts { parts, decisions }
+    }
+
     /// Edges touching `node` at `at`: graph edges and decision relations.
     fn adjacent(&self, node: &NodeRef) -> Vec<GraphEdge> {
         let mut edges: Vec<GraphEdge> = self
@@ -565,6 +685,21 @@ where
             part_of,
             pending,
         })
+    }
+
+    /// The parts of the project (top-level components) with the decisions in
+    /// force on each, directly or through a component inside them: what the
+    /// Decisions screen narrows its list by.
+    ///
+    /// # Errors
+    ///
+    /// `project_not_found`, `invalid_request` for a bad date, `storage`.
+    pub fn decision_parts(
+        &self,
+        project_id: &str,
+        as_of: Option<&str>,
+    ) -> Result<DecisionParts, GraphError> {
+        Ok(self.snapshot(project_id, as_of)?.decision_parts())
     }
 
     /// The whole map as nodes and edges: entities alive, decisions in force,
@@ -1101,4 +1236,157 @@ fn tied_to_all(snapshot: &Snapshot, entities: &[String]) -> (Vec<String>, Vec<St
         decisions.into_iter().collect(),
         claims.into_iter().collect(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use domain::entities::EdgeOrigin;
+
+    fn component(id: &str, name: &str) -> EntityRecord {
+        EntityRecord {
+            entity_id: id.into(),
+            project_id: "p".into(),
+            kind: EntityKind::Component,
+            name: name.into(),
+            key: id.into(),
+            description: String::new(),
+            patterns: vec![],
+            aliases: vec![],
+            created_at: "2026-01-01T00:00:00Z".into(),
+            retired_at: None,
+        }
+    }
+
+    fn edge(kind: EdgeKind, source: (NodeKind, &str), target: &str) -> EdgeRecord {
+        EdgeRecord {
+            edge_id: format!("{}-{target}", source.1),
+            project_id: "p".into(),
+            kind,
+            source_kind: source.0,
+            source_id: source.1.into(),
+            entity_id: target.into(),
+            origin: EdgeOrigin::Human,
+            reason: String::new(),
+            created_at: "2026-01-02T00:00:00Z".into(),
+            confirmed_at: Some("2026-01-02T00:00:00Z".into()),
+            invalidated_at: None,
+        }
+    }
+
+    fn decision(id: &str, confirmed_at: &str) -> DecisionNode {
+        DecisionNode {
+            decision_id: id.into(),
+            question: format!("pergunta {id}"),
+            choice: String::new(),
+            confirmed_at: confirmed_at.into(),
+            files: vec![],
+            diffs: vec![],
+        }
+    }
+
+    /// storage (with its part inbox), app, and an empty docs; d1 and d2 on the
+    /// storage (d2 through inbox), d3 on app and inbox, d4 superseded, d5 only
+    /// suggested.
+    fn snapshot() -> Snapshot {
+        let mut technology = component("sqlite", "SQLite");
+        technology.kind = EntityKind::Technology;
+        let mut retired = component("old", "Antigo");
+        retired.retired_at = Some("2026-02-01T00:00:00Z".into());
+        let entities = [
+            component("storage", "storage-sqlite"),
+            component("inbox", "inbox"),
+            component("app", "Application"),
+            component("docs", "docs"),
+            technology,
+            retired,
+        ];
+        let mut pending = edge(EdgeKind::Affects, (NodeKind::Decision, "d5"), "app");
+        pending.confirmed_at = None;
+        let edges = vec![
+            edge(EdgeKind::PartOf, (NodeKind::Entity, "inbox"), "storage"),
+            edge(EdgeKind::Affects, (NodeKind::Decision, "d1"), "storage"),
+            edge(EdgeKind::Uses, (NodeKind::Decision, "d1"), "sqlite"),
+            edge(EdgeKind::Affects, (NodeKind::Decision, "d2"), "inbox"),
+            edge(EdgeKind::Affects, (NodeKind::Decision, "d3"), "app"),
+            edge(EdgeKind::Affects, (NodeKind::Decision, "d3"), "inbox"),
+            edge(EdgeKind::Affects, (NodeKind::Decision, "d4"), "storage"),
+            edge(EdgeKind::AppliesTo, (NodeKind::Claim, "c1"), "docs"),
+            pending,
+        ];
+        let decisions = [
+            decision("d1", "2026-03-01T00:00:00Z"),
+            decision("d2", "2026-03-03T00:00:00Z"),
+            decision("d3", "2026-03-02T00:00:00Z"),
+            decision("d4", "2026-03-01T00:00:00Z"),
+            decision("d5", "2026-03-01T00:00:00Z"),
+        ];
+        Snapshot {
+            at: Timestamp::parse("2026-10-01").expect("date"),
+            entities: entities
+                .into_iter()
+                .map(|entity| (entity.entity_id.clone(), entity))
+                .collect(),
+            edges,
+            decisions: decisions
+                .into_iter()
+                .map(|decision| (decision.decision_id.clone(), decision))
+                .collect(),
+            claims: BTreeMap::new(),
+            relations: vec![RelationRow {
+                from: "d1".into(),
+                to: "d4".into(),
+                kind: RelationKind::Supersedes.as_str().into(),
+                created_at: "2026-03-05T00:00:00Z".into(),
+            }],
+        }
+    }
+
+    #[test]
+    fn parts_are_top_level_components_with_decisions_in_force() {
+        let parts = snapshot().decision_parts();
+        let listed: Vec<(&str, usize)> = parts
+            .parts
+            .iter()
+            .map(|part| (part.entity_id.as_str(), part.decisions))
+            .collect();
+        // By name; a part (inbox), a technology and a retired component are
+        // not parts; a part without decisions still is one.
+        assert_eq!(listed, vec![("app", 1), ("docs", 0), ("storage", 3)]);
+        // Through a component inside it, newest first; the superseded d4 and
+        // the suggested d5 do not count.
+        assert_eq!(parts.decisions_of("storage"), ["d2", "d3", "d1"]);
+        assert_eq!(parts.decisions_of("app"), ["d3"]);
+        assert!(parts.decisions_of("docs").is_empty());
+        assert!(parts.decisions_of("nowhere").is_empty());
+    }
+
+    #[test]
+    fn a_decision_knows_every_part_it_affects() {
+        let parts = snapshot().decision_parts();
+        let names = |id: &str| -> Vec<String> {
+            parts
+                .parts_of(id)
+                .iter()
+                .map(|part| part.name.clone())
+                .collect()
+        };
+        assert_eq!(names("d3"), vec!["Application", "storage-sqlite"]);
+        assert_eq!(names("d2"), vec!["storage-sqlite"]);
+        assert!(names("d4").is_empty(), "superseded");
+        assert_eq!(parts.part("docs").map(|part| part.decisions), Some(0));
+    }
+
+    #[test]
+    fn a_part_of_cycle_does_not_hang() {
+        let mut snapshot = snapshot();
+        snapshot.edges.push(edge(
+            EdgeKind::PartOf,
+            (NodeKind::Entity, "storage"),
+            "inbox",
+        ));
+        // Neither is top-level any more; the count stays finite.
+        let parts = snapshot.decision_parts();
+        assert!(parts.part("app").is_some());
+    }
 }

@@ -14,9 +14,9 @@ pub use derive::{added_dependencies, ComponentProposal, SuggestionReport, Techno
 pub use discover::{declared_components, DeclaredComponent, WorkspaceKind};
 pub use mention::{mention_quote, mention_reason, MENTION_REASON};
 pub use query::{
-    EntityDetail, FileLens, GraphEdge, GraphNode, MapEntity, Neighborhood, NodeRef, NodeSummary,
-    ProjectGraph, ProjectMap, Suggestion, TimelineEvent, TimelineKind, DEFAULT_NEIGHBORHOOD_LIMIT,
-    MAX_NEIGHBORHOOD_DEPTH,
+    DecisionParts, EntityDetail, FileLens, GraphEdge, GraphNode, MapEntity, Neighborhood, NodeRef,
+    NodeSummary, PartCount, ProjectGraph, ProjectMap, Suggestion, TimelineEvent, TimelineKind,
+    DEFAULT_NEIGHBORHOOD_LIMIT, MAX_NEIGHBORHOOD_DEPTH,
 };
 
 use domain::entities::{

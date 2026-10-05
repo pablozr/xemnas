@@ -4,40 +4,62 @@ use super::{
     decision_editor::{DecisionEditor, RevisionEvent},
     evidence::{self, SourceLines},
 };
-use crate::ui::controls::{action_button, button_foreground, ButtonKind};
+use crate::ui::controls::{action_button, button_foreground, icon_action, ButtonKind};
 use crate::ui::{
     glass::focus_ring,
     icons::{icon, IconName},
     list::{scroll_thumb, ScrollMemory},
+    motion::{menu_in, menu_out},
     patterns::{
-        count_chip, empty_panel, error_banner, fade_in, hover_tint, mark_selected, panel_title,
-        reading_title, section_header, section_label, skeleton_list, status_pill, toast,
-        track_hover, word_wrapped, READING_WIDTH, TOAST_DURATION,
+        count_chip, empty_panel, error_banner, fade_in, hover_tint, mark_selected, menu_item,
+        menu_panel, panel_title, reading_title, section_header, section_label, skeleton_list,
+        status_pill, toast, track_hover, word_wrapped, READING_WIDTH, TOAST_DURATION,
     },
+    popup::{reap, Popup},
     search_field::{SearchChanged, SearchField},
     theme::{text_style, Theme},
-    tokens::{SpacingScale, TypeScale},
+    tokens::{ControlSize, SpacingScale, TypeScale},
+    tooltip::tooltip,
 };
 
+use application::claims::ClaimStore;
 use application::decisions::{
     DecisionDetail, DecisionFilter, DecisionPage, DecisionSearchHit, DecisionSource,
     DecisionStatus, DecisionStore, DecisionSummary, Decisions, SearchQuery,
 };
 use application::export::{Export, ExportDocument, ExportError, ExportFormat};
+use application::graph::{DecisionParts, GraphStore, KnowledgeGraph};
 use application::inbox::InboxStore;
+use application::projects::ProjectRepository;
 use application::relations::{DecisionRelations, RelationDirection, RelationStore};
 use domain::relations::RelationKind;
 use gpui::prelude::*;
 use gpui::{
-    div, list, px, AnyElement, ClipboardItem, Context, Entity, FocusHandle, Focusable,
+    deferred, div, list, px, AnyElement, ClipboardItem, Context, Entity, FocusHandle, Focusable,
     ListAlignment, ListState, Render, Role, Subscription, Window,
 };
-use std::{collections::BTreeMap, path::PathBuf, time::Duration};
+use std::{collections::BTreeMap, path::PathBuf, sync::Arc, time::Duration};
+
+/// What the Decisions screen reads: decisions with their sources and
+/// relations, and the map, for the parts of the project.
+pub trait DecisionsStores:
+    DecisionStore + InboxStore + RelationStore + GraphStore + ClaimStore + ProjectRepository
+{
+}
+
+impl<T> DecisionsStores for T where
+    T: DecisionStore + InboxStore + RelationStore + GraphStore + ClaimStore + ProjectRepository
+{
+}
+
+/// Decisions loaded per page of the index.
+const PAGE: usize = 50;
 
 struct Backend<S> {
     decisions: Decisions<S>,
     export: Export<S>,
     relations: DecisionRelations<S>,
+    graph: KnowledgeGraph<S>,
 }
 /// A relation of the open decision, with the other decision's question.
 #[derive(Clone)]
@@ -71,7 +93,13 @@ struct IndexEntry {
     status: Option<DecisionStatus>,
 }
 enum Outcome {
-    Page(Result<DecisionPage, String>, bool),
+    /// A page of the index; a fresh load also brings the parts of the
+    /// project (`None` when they could not be read: the filter hides).
+    Page(
+        Result<DecisionPage, String>,
+        bool,
+        Option<Arc<DecisionParts>>,
+    ),
     Search(Result<Vec<DecisionSearchHit>, String>),
     Detail(Result<(DecisionDetail, Vec<DecisionSource>), String>),
     Revised(Result<(DecisionDetail, Vec<DecisionSource>), String>),
@@ -99,10 +127,14 @@ enum Action {
     Filter,
     Relate(Option<RelationKind>),
     Link(String),
+    /// Opens or closes the menu of parts.
+    PartMenu,
+    /// Narrows the index to one part (`None`: every part).
+    Part(Option<String>),
 }
 
 /// All storage work runs off the UI thread; project/query generations reject stale reads.
-pub struct DecisionsScreen<S: DecisionStore + InboxStore + RelationStore + Send + 'static> {
+pub struct DecisionsScreen<S: DecisionsStores + Send + 'static> {
     /// Row under the pointer, driving the hover spring.
     hovered: Option<String>,
     /// What the index shows, as cheap keys, and the virtual list that builds
@@ -146,14 +178,26 @@ pub struct DecisionsScreen<S: DecisionStore + InboxStore + RelationStore + Send 
     links: Option<Vec<LinkItem>>,
     /// The relation kind being created, while the picker is open.
     relating: Option<RelationKind>,
+    /// The parts of the project with their decisions in force, once read.
+    parts: Option<Arc<DecisionParts>>,
+    /// The part the index is narrowed to (entity id).
+    part: Option<String>,
+    /// The menu of parts under the filter control.
+    part_menu: Popup<()>,
+    /// Moves focus into the menu (or back to its trigger) on the next frame.
+    part_focus: Option<bool>,
+    /// A demo or palette route waiting for the parts to load: `parts` opens
+    /// the menu, `part:<name>` narrows the index.
+    pending_route: Option<String>,
 }
-impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsScreen<S> {
+impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
     /// Mounts the persistent document reader and its project-scoped search.
     pub fn new(
         cx: &mut Context<Self>,
         decisions: Decisions<S>,
         export: Export<S>,
         relations: DecisionRelations<S>,
+        graph: KnowledgeGraph<S>,
     ) -> Self {
         let search = cx.new(|cx| {
             let mut field = SearchField::new(cx);
@@ -198,6 +242,7 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
                 decisions,
                 export,
                 relations,
+                graph,
             }),
             project: None,
             generation: 0,
@@ -231,6 +276,11 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
             restore_focus: false,
             links: None,
             relating: None,
+            parts: None,
+            part: None,
+            part_menu: Popup::default(),
+            part_focus: None,
+            pending_route: None,
         }
     }
     /// Focuses the index search while the reader is active.
@@ -307,9 +357,90 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
         self.loaded = false;
         self.error = None;
         self.notice = None;
+        self.parts = None;
+        self.part = None;
+        self.close_part_menu(cx);
         self.search
             .update(cx, |field, cx| field.set_context("Buscar nas decisões", cx));
         self.refresh(cx);
+    }
+    /// The part the index is narrowed to, when its parts are loaded.
+    fn active_part(&self) -> Option<&application::graph::PartCount> {
+        self.parts.as_ref()?.part(self.part.as_deref()?)
+    }
+    /// The decisions of the active part, newest first.
+    fn part_ids(&self) -> Option<Arc<[String]>> {
+        let part = self.part.as_deref()?;
+        let parts = self.parts.as_ref()?;
+        Some(parts.decisions_of(part).into())
+    }
+    /// Narrows the index to one part (or back to every part) and reloads it.
+    pub fn choose_part(&mut self, part: Option<String>, cx: &mut Context<Self>) {
+        if self.editor.is_some() || self.preview.is_some() {
+            return;
+        }
+        self.close_part_menu(cx);
+        self.part_focus = Some(false);
+        if self.part == part {
+            cx.notify();
+            return;
+        }
+        self.part = part;
+        self.generation += 1;
+        self.rows.clear();
+        self.hits.clear();
+        self.cursor = None;
+        self.clear_document();
+        self.loaded = false;
+        self.refresh(cx);
+        cx.notify();
+    }
+    /// Opens the menu of parts with the focus on the chosen one.
+    pub fn open_part_menu(&mut self, cx: &mut Context<Self>) {
+        if self.parts.is_none() || self.editor.is_some() || self.preview.is_some() {
+            return;
+        }
+        self.part_menu.open(());
+        self.part_focus = Some(true);
+        cx.notify();
+    }
+    fn close_part_menu(&mut self, cx: &mut Context<Self>) {
+        if self.part_menu.begin_close() {
+            reap(cx, |screen: &mut Self| &mut screen.part_menu);
+        }
+    }
+    /// Parts for the command palette: id, name and decisions in force.
+    pub fn palette_parts(&self) -> Vec<(String, String, usize)> {
+        self.parts
+            .iter()
+            .flat_map(|parts| parts.parts.iter())
+            .map(|part| (part.entity_id.clone(), part.name.clone(), part.decisions))
+            .collect()
+    }
+    /// Opens a route (`parts`, `part:<name>`) once the parts are loaded.
+    pub fn open_route(&mut self, route: String, cx: &mut Context<Self>) {
+        self.pending_route = Some(route);
+        self.apply_route(cx);
+    }
+    fn apply_route(&mut self, cx: &mut Context<Self>) {
+        let Some(parts) = self.parts.clone() else {
+            return;
+        };
+        let Some(route) = self.pending_route.take() else {
+            return;
+        };
+        if route == "parts" {
+            self.open_part_menu(cx);
+        } else if let Some(name) = route.strip_prefix("part:") {
+            let id = parts
+                .parts
+                .iter()
+                .find(|part| part.name.eq_ignore_ascii_case(name) || part.entity_id == name)
+                .map(|part| part.entity_id.clone());
+            if id.is_some() {
+                self.choose_part(id, cx);
+            }
+        }
     }
     /// Reloads the current index after returning from candidate review.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
@@ -324,8 +455,29 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
         }
         let project = self.project.clone();
         let query = self.query.clone();
+        let part_ids = self.part_ids();
         if !query.trim().is_empty() {
-            self.run(cx,move|backend|Outcome::Search(backend.decisions.search(&SearchQuery{query,project_id:project,limit:50}).map_err(|_|"Não foi possível buscar. Use palavras da pergunta, escolha ou justificativa.".into())));
+            self.run(cx, move |backend| {
+                let hits = backend.decisions.search(&SearchQuery {
+                    query,
+                    project_id: project,
+                    limit: PAGE,
+                });
+                Outcome::Search(
+                    hits.map(|mut hits| {
+                        // Within a part, only the hits that belong to it.
+                        if let Some(ids) = &part_ids {
+                            hits.retain(|hit| ids.contains(&hit.decision_id));
+                        }
+                        hits
+                    })
+                    .map_err(|_| {
+                        "Não foi possível buscar. Use palavras da pergunta, escolha ou \
+                         justificativa."
+                            .into()
+                    }),
+                )
+            });
         } else {
             let cursor = if append { self.cursor.clone() } else { None };
             let statuses = if self.all_statuses {
@@ -333,19 +485,45 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
             } else {
                 vec![DecisionStatus::Accepted]
             };
+            let part = self.part.clone();
+            let known = self.parts.clone();
             self.run(cx, move |backend| {
-                Outcome::Page(
-                    backend
+                // A fresh load reads the parts again: a new decision or link
+                // changes their counts.
+                let parts = if append {
+                    known
+                } else {
+                    let project = project.as_deref().unwrap_or_default();
+                    match backend.graph.decision_parts(project, None) {
+                        Ok(parts) => Some(Arc::new(parts)),
+                        Err(error) => {
+                            tracing::error!(
+                                code = error.code(),
+                                operation = "decision_parts",
+                                "parts failed"
+                            );
+                            None
+                        }
+                    }
+                };
+                let failed = || "Não foi possível carregar as decisões.".to_owned();
+                let page = match (part, &parts) {
+                    (Some(part), Some(parts)) => backend
+                        .decisions
+                        .list_ids(parts.decisions_of(&part), cursor.as_deref(), PAGE)
+                        .map_err(|_| failed()),
+                    (Some(_), None) => Err(failed()),
+                    (None, _) => backend
                         .decisions
                         .list(&DecisionFilter {
                             project_id: project,
                             cursor,
                             statuses,
-                            limit: 50,
+                            limit: PAGE,
                         })
-                        .map_err(|_| "Não foi possível carregar as decisões.".into()),
-                    append,
-                )
+                        .map_err(|_| failed()),
+                };
+                Outcome::Page(page, append, parts)
             });
         }
     }
@@ -394,7 +572,12 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
                 if let Some(editor)=&this.editor{editor.update(cx,|editor,cx|editor.set_busy(false,cx));}
                 if generation!=this.generation{this.refresh(cx);cx.notify();return;}
                 match outcome{
-                    Outcome::Page(Ok(page),append)=>{
+                    Outcome::Page(Ok(page),append,parts)=>{
+                        this.parts=parts;
+                        if this.pending_route.is_some(){
+                            this.apply_route(cx);
+                            if generation!=this.generation{cx.notify();return;}
+                        }
                         this.loaded=true;if !append{this.rows.clear();}
                         for row in page.decisions{if let Some(old)=this.rows.iter_mut().find(|old|old.decision_id==row.decision_id){*old=row;}else{this.rows.push(row);}}
                         this.cursor=page.next_cursor;
@@ -413,7 +596,13 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
                     Outcome::Saved(Ok(None),_)=>{},
                     Outcome::Saved(Err(ExportError::DestinationExists),path)=>{this.overwrite=path;},
                     Outcome::Saved(Err(_),_)=>this.error=Some("Não foi possível salvar o arquivo. Escolha outro destino e tente novamente.".into()),
-                    Outcome::Page(Err(error),_)|Outcome::Search(Err(error))|Outcome::Detail(Err(error))|Outcome::Revised(Err(error))|Outcome::Preview(Err(error))=>{this.loaded=true;this.error=Some(error);}
+                    Outcome::Page(Err(error),_,parts)=>{
+                        this.parts=parts;this.loaded=true;this.error=Some(error);
+                    }
+                    Outcome::Search(Err(error))|Outcome::Detail(Err(error))
+                    |Outcome::Revised(Err(error))|Outcome::Preview(Err(error))=>{
+                        this.loaded=true;this.error=Some(error);
+                    }
                 }
                 cx.notify();
             });
@@ -533,8 +722,20 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
                     }))
                 });
             }
+            Action::PartMenu => {
+                if self.part_menu.take_press_was_open() || self.part_menu.is_open() {
+                    self.close_part_menu(cx);
+                    self.part_focus = Some(false);
+                } else {
+                    self.open_part_menu(cx);
+                }
+            }
+            Action::Part(part) => self.choose_part(part, cx),
             Action::Filter => {
-                if self.editor.is_some() || self.preview.is_some() || !self.query.trim().is_empty()
+                if self.editor.is_some()
+                    || self.preview.is_some()
+                    || !self.query.trim().is_empty()
+                    || self.part.is_some()
                 {
                     return;
                 }
@@ -647,7 +848,11 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
         } else {
             None
         };
-        let counted = matches!(action, Action::History | Action::Context(_));
+        let counted = matches!(
+            action,
+            Action::History | Action::Context(_) | Action::PartMenu
+        );
+        let menu_trigger = matches!(action, Action::PartMenu);
         let (caption, count) = if counted {
             label
                 .rsplit_once('·')
@@ -676,6 +881,8 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
             Action::Context(2) => Some(IconName::Activity),
             Action::Context(_) => Some(IconName::Rotate),
             Action::Filter => Some(IconName::Filter),
+            Action::PartMenu => Some(IconName::Component),
+            Action::Part(None) => Some(IconName::Close),
             Action::Relate(Some(_)) if label == "Relacionar" => Some(IconName::Plus),
             Action::ExpandSource => Some(IconName::Expand),
             Action::Revise => Some(IconName::Edit),
@@ -691,6 +898,14 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
             .aria_label(label.clone())
             .aria_selected(selected)
             .track_focus(&focus)
+            .when(menu_trigger, |button| {
+                // The menu's click-outside closes it on this press; the
+                // click must not reopen it.
+                button.on_mouse_down(
+                    gpui::MouseButton::Left,
+                    cx.listener(|this, _, _, _| this.part_menu.note_trigger_press()),
+                )
+            })
             .on_click(cx.listener(move |this, _, window, cx| this.act(action.clone(), window, cx)))
             .on_key_down(
                 cx.listener(move |this, event: &gpui::KeyDownEvent, window, cx| {
@@ -701,8 +916,25 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
                 }),
             )
             .children(glyph_icon)
-            .child(caption)
+            .child(if menu_trigger {
+                // A long part name truncates instead of pushing the count out.
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .truncate()
+                    .child(caption)
+                    .into_any_element()
+            } else {
+                caption.into_any_element()
+            })
             .children(count.map(|count| count_chip(&t, count)))
+            .when(menu_trigger, |button| {
+                button.flex_1().min_w(px(0.0)).child(icon(
+                    IconName::ChevronDown,
+                    12.0,
+                    t.colors.text_muted(),
+                ))
+            })
             .when(disclosure.is_some(), |button| {
                 button.w_full().child(div().flex_1()).child(icon(
                     if disclosure.unwrap_or(false) {
@@ -728,15 +960,18 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
             "decision-filter".into(),
             if searching {
                 "Todos os estados · busca".into()
+            } else if self.part.is_some() {
+                "Em vigor · parte".into()
             } else if self.all_statuses {
                 "Todos os estados".into()
             } else {
                 "Confirmadas".into()
             },
             Action::Filter,
-            self.all_statuses,
+            self.all_statuses && self.part.is_none(),
             cx,
         );
+        let part_filter = self.part_filter(cx);
         // The lines of the index as keys; a month heading starts wherever the
         // month of the row changes (compared on the date's year and month,
         // without building the label).
@@ -799,7 +1034,14 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
                             .child(count_chip(&t, count.to_string())),
                     )
                     .when(self.editor.is_none() && self.preview.is_none(), |header| {
-                        header.child(self.search.clone()).child(filter)
+                        header.child(self.search.clone()).child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(SpacingScale::S1))
+                                .child(filter)
+                                .children(part_filter),
+                        )
                     })
                     .when(self.editor.is_some() || self.preview.is_some(), |header| {
                         header.child(
@@ -838,12 +1080,180 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
                                 "resultados"
                             }
                         )
+                    } else if let Some(part) = self.active_part() {
+                        format!("{count} de {} em vigor · {}", part.decisions, part.name)
                     } else {
                         format!("{count} carregadas · ordem de confirmação")
                     }),
             )
             .into_any_element()
     }
+    /// The filter by part: a menu trigger ("Todas as partes", or the chosen
+    /// part with its count), the clear control while a part is chosen, and
+    /// the menu under them. Hidden until the parts are read.
+    fn part_filter(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let parts = self.parts.clone()?;
+        let t = Theme::current(cx);
+        let active = self.active_part().cloned();
+        let label = match &active {
+            Some(part) => format!("{} · {}", part.name, part.decisions),
+            None => "Todas as partes".to_owned(),
+        };
+        let trigger = self.button(
+            "decision-part".into(),
+            label,
+            Action::PartMenu,
+            active.is_some(),
+            cx,
+        );
+        let clear = active.as_ref().map(|part| {
+            let focus = self
+                .focus
+                .entry("decision-part-clear".into())
+                .or_insert_with(|| cx.focus_handle().tab_stop(true))
+                .clone();
+            icon_action(
+                &t,
+                "decision-part-clear",
+                &format!("Mostrar todas as partes, sair de {}", part.name),
+            )
+            .track_focus(&focus)
+            .tooltip(tooltip("Mostrar todas as partes", Some("Esc")))
+            .on_click(cx.listener(|this, _, window, cx| this.act(Action::Part(None), window, cx)))
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    this.act(Action::Part(None), window, cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .child(icon(IconName::Close, 14.0, t.colors.text_muted()))
+        });
+        let menu = self.part_menu_view(&parts, &t, cx);
+        Some(
+            div()
+                .relative()
+                .flex()
+                .items_center()
+                .gap(px(SpacingScale::S1))
+                .child(trigger)
+                .children(clear)
+                .children(menu)
+                .into_any_element(),
+        )
+    }
+
+    /// The menu of parts: "Todas as partes" and each part with its count.
+    fn part_menu_view(
+        &mut self,
+        parts: &DecisionParts,
+        t: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        self.part_menu.get()?;
+        let exit = self.part_menu.exit_progress();
+        let options: Vec<(Option<String>, String, Option<usize>)> =
+            std::iter::once((None, "Todas as partes".to_owned(), None))
+                .chain(parts.parts.iter().map(|part| {
+                    (
+                        Some(part.entity_id.clone()),
+                        part.name.clone(),
+                        Some(part.decisions),
+                    )
+                }))
+                .collect();
+        let keys: Vec<String> = options
+            .iter()
+            .map(|(id, _, _)| part_focus_key(id.as_deref()))
+            .collect();
+        let mut menu = menu_panel(t, "decision-part-menu", "Decisões por parte").on_mouse_down_out(
+            cx.listener(|this, _, _, cx| {
+                this.close_part_menu(cx);
+                cx.notify();
+            }),
+        );
+        for (index, (id, name, count)) in options.into_iter().enumerate() {
+            let focus = self
+                .focus
+                .entry(keys[index].clone())
+                .or_insert_with(|| cx.focus_handle().tab_stop(true))
+                .clone();
+            let selected = self.part == id;
+            let glyph = if id.is_some() {
+                IconName::Component
+            } else {
+                IconName::Layers
+            };
+            let click = id.clone();
+            let keys = keys.clone();
+            menu = menu.child(
+                menu_item(
+                    t,
+                    ("decision-part-option", index),
+                    glyph,
+                    &name,
+                    count,
+                    selected,
+                )
+                .track_focus(&focus)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if this.part_menu.is_open() {
+                        this.act(Action::Part(click.clone()), window, cx);
+                    }
+                }))
+                .on_key_down(cx.listener(
+                    move |this, event: &gpui::KeyDownEvent, window, cx| {
+                        let step = match event.keystroke.key.as_str() {
+                            "enter" | "space" => {
+                                this.act(Action::Part(id.clone()), window, cx);
+                                cx.stop_propagation();
+                                return;
+                            }
+                            "down" => 1,
+                            "up" => -1,
+                            _ => return,
+                        };
+                        let next = (index as isize + step).rem_euclid(keys.len() as isize);
+                        if let Some(focus) = this.focus.get(&keys[next as usize]) {
+                            window.focus(focus, cx);
+                        }
+                        cx.stop_propagation();
+                    },
+                )),
+            );
+        }
+        if parts.parts.is_empty() {
+            menu = menu.child(
+                text_style(div(), TypeScale::META)
+                    .px(px(SpacingScale::S2))
+                    .py(px(SpacingScale::S2))
+                    .text_color(t.colors.text_muted())
+                    .child(
+                        "O Mapa ainda não tem partes. Cada componente de topo do Mapa vira \
+                         uma parte aqui.",
+                    ),
+            );
+        }
+        let menu = div().child(menu);
+        let menu = match exit {
+            None => menu_in("decision-part-menu-in", -4.0, menu).into_any_element(),
+            Some(progress) => {
+                menu_out("decision-part-menu-out", -4.0, progress, menu).into_any_element()
+            }
+        };
+        Some(
+            deferred(
+                div()
+                    .absolute()
+                    .top(px(ControlSize::MD + SpacingScale::S1))
+                    .left_0()
+                    .right_0()
+                    .child(menu),
+            )
+            .with_priority(1)
+            .into_any_element(),
+        )
+    }
+
     /// One line of the index, built when the virtual list asks for it.
     fn index_item(&mut self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
         let t = Theme::current(cx);
@@ -908,10 +1318,15 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
             IndexItem::Empty => text_style(div(), TypeScale::BODY_SMALL)
                 .p(px(SpacingScale::S3))
                 .text_color(t.colors.text_muted())
-                .child(if self.query.trim().is_empty() {
-                    "As decisões confirmadas aparecerão aqui."
-                } else {
-                    "Nenhum resultado. Tente outra palavra."
+                .child(match (self.query.trim().is_empty(), self.active_part()) {
+                    (true, Some(part)) => {
+                        format!("Nenhuma decisão em vigor sobre {}.", part.name)
+                    }
+                    (true, None) => "As decisões confirmadas aparecerão aqui.".to_owned(),
+                    (false, Some(part)) => {
+                        format!("Nenhum resultado em {}. Tente outra palavra.", part.name)
+                    }
+                    (false, None) => "Nenhum resultado. Tente outra palavra.".to_owned(),
                 })
                 .into_any_element(),
         }
@@ -1004,6 +1419,38 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
         let Some(mut detail) = self.detail.clone() else {
             if self.busy || !self.loaded {
                 return div().into_any_element();
+            }
+            if let Some(name) = self.active_part().map(|part| part.name.clone()) {
+                let searching = !self.query.trim().is_empty();
+                let clear = self.button(
+                    "part-empty-clear".into(),
+                    "Mostrar todas as partes".into(),
+                    Action::Part(None),
+                    false,
+                    cx,
+                );
+                let (title, body) = if searching {
+                    (
+                        format!("Nenhuma decisão de {name} com essa busca"),
+                        format!(
+                            "A busca cobre pergunta, escolha e justificativa das decisões em \
+                             vigor sobre {name}. Tente outra palavra ou todas as partes."
+                        ),
+                    )
+                } else {
+                    (
+                        format!("Nada decidido sobre {name} ainda"),
+                        format!(
+                            "Uma decisão aparece aqui quando está ligada a {name}, ou a uma \
+                             parte dela, no Mapa. Confirme as ligações sugeridas na Revisão \
+                             ou vincule uma decisão na página do componente."
+                        ),
+                    )
+                };
+                return empty_panel(&t, IconName::Component, "Parte", &title, &body)
+                    .min_h(px(420.0))
+                    .child(div().pt(px(SpacingScale::S2)).child(clear))
+                    .into_any_element();
             }
             return if self.query.trim().is_empty() {
                 crate::ui::patterns::empty_panel_mascot(
@@ -1743,7 +2190,7 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
             .into_any_element()
     }
 }
-impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> Render for DecisionsScreen<S> {
+impl<S: DecisionsStores + Send + 'static> Render for DecisionsScreen<S> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _probe = crate::ui::perf::Probe::start("decisions");
         if self.restore_focus {
@@ -1834,14 +2281,48 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> Render for 
             reader = reader.relative().child(toast(&t, notice, SpacingScale::S6));
         }
         reader = reader.child(div().flex_1().min_h(px(0.0)).child(content));
+        let index = self.index(compact, cx);
+        // Focus moves once the menu's options (or the trigger) exist.
+        if let Some(into_menu) = self.part_focus.take() {
+            let key = if into_menu && self.part_menu.is_open() {
+                part_focus_key(self.part.as_deref())
+            } else {
+                "decision-part".to_owned()
+            };
+            if let Some(focus) = self.focus.get(&key) {
+                window.focus(focus, cx);
+            }
+        }
         div()
             .id("decisions-screen")
             .track_focus(&self.reader_focus)
             .size_full()
             .flex()
-            .child(self.index(compact, cx))
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if event.keystroke.key != "escape" {
+                    return;
+                }
+                if this.part_menu.is_open() {
+                    this.close_part_menu(cx);
+                    this.part_focus = Some(false);
+                    cx.stop_propagation();
+                    cx.notify();
+                } else if this.part.is_some()
+                    && this.relating.is_none()
+                    && !this.search.read(cx).focus_handle(cx).is_focused(window)
+                {
+                    this.choose_part(None, cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .child(index)
             .child(reader)
     }
+}
+
+/// Focus key of an option of the menu of parts.
+fn part_focus_key(part: Option<&str>) -> String {
+    format!("part-option-{}", part.unwrap_or("all"))
 }
 fn load_document<S: DecisionStore + InboxStore>(
     decisions: &Decisions<S>,
