@@ -22,6 +22,7 @@ use gpui::{
 };
 
 use super::format::date_time;
+use crate::i18n::projects as t;
 use crate::ui::controls::{action_button, button_foreground, icon_action, ButtonKind};
 use crate::ui::feedback::{error_state, status_dot, StatusKind};
 use crate::ui::glass::focus_ring;
@@ -74,14 +75,14 @@ impl StorageContext {
     fn failure(self) -> StorageFailure {
         match self {
             Self::Load => StorageFailure {
-                title: "Não foi possível carregar os projetos",
-                body: "O armazenamento local não respondeu; a lista pode estar desatualizada.",
-                recovery: "Tente de novo. Se o erro continuar, feche e abra o app.",
+                title: t::load_failed_title(),
+                body: t::load_failed_body(),
+                recovery: t::storage_recovery(),
             },
             Self::Mutate => StorageFailure {
-                title: "Não foi possível concluir a ação",
-                body: "O armazenamento local recusou a operação; nada foi alterado.",
-                recovery: "Tente de novo. Se o erro continuar, feche e abra o app.",
+                title: t::action_failed_title(),
+                body: t::action_failed_body(),
+                recovery: t::storage_recovery(),
             },
         }
     }
@@ -175,7 +176,7 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
         let purge_name = cx.new(|cx| {
             let mut field = SearchField::new(cx);
             field.stretch();
-            field.set_context("Nome do projeto", cx);
+            field.set_context(t::project_name_context(), cx);
             field
         });
         let purge_subscription =
@@ -348,7 +349,7 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                 self.reload(cx);
             }
             IoOutcome::Removed(Ok(false)) => {
-                self.inline_error = Some("Esse projeto já não estava na lista.".to_string());
+                self.inline_error = Some(t::project_already_gone().to_string());
                 self.reload(cx);
             }
             IoOutcome::Removed(Err(error)) => {
@@ -369,7 +370,7 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                 self.reload(cx);
             }
             IoOutcome::Purged(Err(RemovalError::ConfirmationMismatch)) => {
-                self.inline_error = Some("O nome digitado não confere; nada foi apagado.".into());
+                self.inline_error = Some(t::name_mismatch().into());
             }
             IoOutcome::Purged(Err(RemovalError::Project(error))) => {
                 self.purge = None;
@@ -404,7 +405,7 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("Abrir pasta".into()),
+            prompt: Some(t::picker_prompt().into()),
         });
         cx.spawn(async move |this, cx| match receiver.await {
             Ok(Ok(Some(paths))) => {
@@ -420,8 +421,7 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                     "could not select a folder"
                 );
                 let _ = this.update(cx, |screen, cx| {
-                    screen.inline_error =
-                        Some("Não foi possível abrir o seletor de pastas.".into());
+                    screen.inline_error = Some(t::picker_failed().into());
                     cx.notify();
                 });
             }
@@ -461,8 +461,9 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             id: id.clone(),
             impact: None,
         });
-        self.purge_name
-            .update(cx, |field, cx| field.set_context("Nome do projeto", cx));
+        self.purge_name.update(cx, |field, cx| {
+            field.set_context(t::project_name_context(), cx)
+        });
         cx.notify();
         self.spawn_io(cx, move |projects| {
             let impact = projects.removal_impact(&id);
@@ -524,7 +525,7 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
     fn render_empty(&self, theme: &Theme, cx: &mut Context<Self>) -> Stateful<Div> {
         let button = action_button(theme, "projects-empty-open", ButtonKind::Primary, true)
             .px(px(SpacingScale::S4))
-            .aria_label("Abrir pasta no seletor do sistema")
+            .aria_label(t::open_folder_aria())
             .track_focus(&self.empty_focus)
             .on_click(cx.listener(|this, _, _, cx| this.open_folder(cx)))
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
@@ -538,7 +539,7 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                 16.0,
                 button_foreground(theme, ButtonKind::Primary, true),
             ))
-            .child("Abrir pasta…");
+            .child(t::open_folder());
 
         div()
             .id("projects-empty")
@@ -547,7 +548,7 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             .items_center()
             .justify_center()
             .role(Role::Status)
-            .aria_label("Nenhum projeto acompanhado")
+            .aria_label(t::empty_aria())
             .child(
                 div()
                     .w_full()
@@ -570,16 +571,16 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                             .justify_center()
                             .child(icon(IconName::Folder, 20.0, theme.colors.text_secondary())),
                     )
-                    .child(section_label(theme, "Primeiro projeto"))
+                    .child(section_label(theme, t::first_project()))
                     .child(
                         text_style(div(), TypeScale::HEADING_1)
                             .text_color(theme.colors.text_primary())
-                            .child("Comece por uma pasta"),
+                            .child(t::empty_title()),
                     )
                     .child(
                         text_style(div(), TypeScale::BODY)
                             .text_color(theme.colors.text_secondary())
-                            .child("Escolha uma pasta existente para acompanhar. Seus arquivos permanecem no lugar."),
+                            .child(t::empty_body()),
                     )
                     .child(div().mt(px(SpacingScale::S3)).child(button)),
             )
@@ -613,7 +614,7 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             .gap(px(SpacingScale::S3));
         mark_selected(row, theme, selected)
             .role(Role::Button)
-            .aria_label(format!("Selecionar {}", summary.name()))
+            .aria_label(t::select_project(summary.name()))
             .aria_selected(selected)
             .track_focus(&focus)
             .focus_visible(focus_ring(theme))
@@ -698,25 +699,21 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                 )
             })
             .collect();
-        let open = icon_action(
-            &theme,
-            "projects-open-folder",
-            "Abrir pasta no seletor do sistema",
-        )
-        .tooltip(tooltip("Abrir pasta…", None))
-        .track_focus(&self.register_focus)
-        .on_click(cx.listener(|this, _, _, cx| this.open_folder(cx)))
-        .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                this.open_folder(cx);
-                cx.stop_propagation();
-            }
-        }))
-        .child(icon(
-            IconName::FolderPlus,
-            16.0,
-            theme.colors.text_secondary(),
-        ));
+        let open = icon_action(&theme, "projects-open-folder", t::open_folder_aria())
+            .tooltip(tooltip(t::open_folder(), None))
+            .track_focus(&self.register_focus)
+            .on_click(cx.listener(|this, _, _, cx| this.open_folder(cx)))
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    this.open_folder(cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .child(icon(
+                IconName::FolderPlus,
+                16.0,
+                theme.colors.text_secondary(),
+            ));
 
         let sidebar = div()
             .id("projects-sidebar")
@@ -746,13 +743,13 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                             .flex()
                             .items_center()
                             .gap(px(SpacingScale::S2))
-                            .child(panel_title(&theme, "Projetos"))
+                            .child(panel_title(&theme, t::projects_title()))
                             .child(count_chip(
                                 &theme,
                                 if self.query.is_empty() {
                                     total.to_string()
                                 } else {
-                                    format!("{} de {total}", visible.len())
+                                    t::filtered_count(visible.len(), total)
                                 },
                             ))
                             .child(div().flex_1())
@@ -832,7 +829,7 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                 .child(
                     text_style(div(), TypeScale::BODY_SMALL)
                         .text_color(theme.colors.text_secondary())
-                        .child("Remover da lista? A pasta permanece no disco."),
+                        .child(t::remove_question()),
                 )
                 .child(
                     div()
@@ -840,14 +837,14 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                         .justify_end()
                         .gap(px(SpacingScale::S2))
                         .child(
-                            detail_action(&theme, "projects-cancel", "Cancelar", false)
+                            detail_action(&theme, "projects-cancel", t::cancel(), false)
                                 .track_focus(&self.cancel_focus)
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.cancel_remove(window, cx)
                                 })),
                         )
                         .child(
-                            detail_action(&theme, "projects-confirm", "Remover", true)
+                            detail_action(&theme, "projects-confirm", t::remove(), true)
                                 .track_focus(&self.confirm_focus)
                                 .on_click({
                                     let id = id.clone();
@@ -864,14 +861,14 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                 .flex()
                 .gap(px(SpacingScale::S2))
                 .child(
-                    detail_action(&theme, "projects-remove", "Remover da lista", false)
+                    detail_action(&theme, "projects-remove", t::remove_from_list(), false)
                         .track_focus(&self.remove_focus)
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.request_remove(id.clone(), window, cx)
                         })),
                 )
                 .child(
-                    detail_action(&theme, "projects-purge", "Apagar dados…", true).on_click(
+                    detail_action(&theme, "projects-purge", t::purge_data(), true).on_click(
                         cx.listener(move |this, _, _, cx| this.request_purge(purge_id.clone(), cx)),
                     ),
                 )
@@ -885,7 +882,7 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                 .flex()
                 .flex_col()
                 .gap(px(SpacingScale::S1))
-                .child(section_label(&theme, "Projeto"))
+                .child(section_label(&theme, t::project_label()))
                 .child(
                     text_style(div(), TypeScale::HEADING_3)
                         .pb(px(SpacingScale::S1))
@@ -894,12 +891,12 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                 )
                 .child(detail_line(
                     &theme,
-                    "Localização",
+                    t::location(),
                     summary.location().to_string(),
                 ))
                 .child(detail_line(
                     &theme,
-                    "Adicionado",
+                    t::added(),
                     date_time(summary.registered_at()),
                 ))
                 .child(
@@ -929,49 +926,32 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
         let counts: AnyElement = match impact {
             None => text_style(div(), TypeScale::META)
                 .text_color(colors.text_muted())
-                .child("Medindo o que será apagado…")
+                .child(t::measuring())
                 .into_any_element(),
             Some(impact) if impact.is_empty() => text_style(div(), TypeScale::BODY_SMALL)
                 .text_color(colors.text_secondary())
-                .child("Este projeto ainda não tem dados; só o cadastro será apagado.")
+                .child(t::no_data())
                 .into_any_element(),
             Some(impact) => {
-                let kinds = [
+                let kinds: [(i64, gpui::Rgba, fn(usize) -> &'static str); 5] = [
                     (
                         impact.decisions,
                         colors.accent_default(),
-                        "decisão com versões e relações",
-                        "decisões com versões e relações",
+                        t::impact_decisions,
                     ),
                     (
                         impact.candidates,
                         colors.status_info(),
-                        "candidato",
-                        "candidatos",
+                        t::impact_candidates,
                     ),
-                    (
-                        impact.claims,
-                        colors.status_success(),
-                        "regra do projeto",
-                        "regras do projeto",
-                    ),
-                    (
-                        impact.captures,
-                        colors.status_warning(),
-                        "captura com evidências",
-                        "capturas com evidências",
-                    ),
-                    (
-                        impact.injections,
-                        colors.text_muted(),
-                        "registro de contexto enviado",
-                        "registros de contexto enviado",
-                    ),
+                    (impact.claims, colors.status_success(), t::impact_claims),
+                    (impact.captures, colors.status_warning(), t::impact_captures),
+                    (impact.injections, colors.text_muted(), t::impact_injections),
                 ];
                 // What the project is made of, in one bar; the rows name it.
                 let parts: Vec<(usize, gpui::Rgba)> = kinds
                     .iter()
-                    .map(|(count, color, _, _)| ((*count).max(0) as usize, *color))
+                    .map(|(count, color, _)| ((*count).max(0) as usize, *color))
                     .collect();
                 div()
                     .flex()
@@ -980,8 +960,8 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                     .child(meter_stack(theme, &parts))
                     .child(div().flex().flex_col().gap(px(2.0)).children(
                         kinds.into_iter().filter(|(count, ..)| *count > 0).map(
-                            |(count, color, one, many)| {
-                                let label = if count == 1 { one } else { many };
+                            |(count, color, label)| {
+                                let label = label(count.max(0) as usize);
                                 div()
                                     .flex()
                                     .items_center()
@@ -1012,16 +992,13 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             .child(
                 text_style(div(), TypeScale::ROW_TITLE)
                     .text_color(colors.status_danger())
-                    .child("Apagar o projeto e todos os dados?"),
+                    .child(t::purge_title()),
             )
             .child(counts)
             .child(
                 text_style(div(), TypeScale::META)
                     .text_color(colors.text_muted())
-                    .child(format!(
-                        "Não dá para desfazer. A pasta no disco não é tocada. \
-                         Digite {name} para confirmar."
-                    )),
+                    .child(t::purge_warning(&name)),
             )
             .child(self.purge_name.clone())
             .children(self.inline_error.clone().map(|error| {
@@ -1035,7 +1012,7 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                     .justify_end()
                     .gap(px(SpacingScale::S2))
                     .child(
-                        detail_action(theme, "projects-purge-cancel", "Cancelar", false)
+                        detail_action(theme, "projects-purge-cancel", t::cancel(), false)
                             .on_click(cx.listener(|this, _, _, cx| this.cancel_purge(cx))),
                     )
                     .child(
@@ -1045,14 +1022,14 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                             ButtonKind::Secondary,
                             matches && self.projects.is_some(),
                         )
-                        .aria_label("Apagar tudo")
+                        .aria_label(t::purge_all())
                         .when(matches, |button| button.text_color(colors.status_danger()))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if matches {
                                 this.confirm_purge(id.clone(), cx)
                             }
                         }))
-                        .child("Apagar tudo"),
+                        .child(t::purge_all()),
                     ),
             )
             .into_any_element()
@@ -1161,18 +1138,16 @@ fn no_matches_state(theme: &Theme, query: &str) -> Stateful<Div> {
         .flex_col()
         .gap(px(SpacingScale::S2))
         .role(Role::Status)
-        .aria_label(format!("Nenhum projeto corresponde a {query}"))
+        .aria_label(t::no_matches_aria(query))
         .child(
             text_style(div(), TypeScale::HEADING_2)
                 .text_color(theme.colors.text_primary())
-                .child("Nada corresponde"),
+                .child(t::no_matches_title()),
         )
         .child(
             text_style(div(), TypeScale::BODY_SMALL)
                 .text_color(theme.colors.text_secondary())
-                .child(format!(
-                    "Nenhum projeto corresponde a “{query}”. Esc limpa a busca."
-                )),
+                .child(t::no_matches_body(query)),
         )
 }
 
@@ -1208,7 +1183,7 @@ fn loading_state(theme: &Theme) -> Div {
             theme,
             "projects-loading",
             StatusKind::Info,
-            "Carregando projetos",
+            t::loading_projects(),
         ))
 }
 
@@ -1216,9 +1191,9 @@ fn loading_state(theme: &Theme) -> Div {
 /// failures to the full error state instead.
 fn inline_message(error: &ProjectError) -> Option<&'static str> {
     match error {
-        ProjectError::InvalidLocation => Some("Esse caminho não existe ou não é um diretório."),
-        ProjectError::AlreadyRegistered => Some("Esse diretório já está sendo acompanhado."),
-        ProjectError::NotFound => Some("Esse projeto não foi encontrado."),
+        ProjectError::InvalidLocation => Some(t::invalid_location()),
+        ProjectError::AlreadyRegistered => Some(t::already_registered()),
+        ProjectError::NotFound => Some(t::project_not_found()),
         ProjectError::Storage(_) => None,
     }
 }
@@ -1293,7 +1268,7 @@ mod tests {
             StorageContext::Mutate,
             &ProjectError::Storage("disk I/O".into()),
         );
-        assert_eq!(failure.title, "Não foi possível concluir a ação");
+        assert_eq!(failure.title, "Couldn’t complete the action");
         assert!(!failure.body.contains("disk"));
         assert!(!failure.recovery.contains("disk"));
     }
