@@ -84,6 +84,10 @@ fn main() {
             services,
             overview,
             Box::new(|_| Arc::new(demo::SampleKnowledgeReview)),
+            approvals_api(
+                demo::ai_settings(),
+                Arc::new(ai_provider::ChatGptSession::default()),
+            ),
             true,
             CaptureStatus::Demo,
             None,
@@ -111,6 +115,7 @@ fn main() {
                 services,
                 overview_api(ai_settings(&paths.ai_profile), Arc::default()),
                 review_api(ai_settings(&paths.ai_profile), Arc::default()),
+                approvals_api(ai_settings(&paths.ai_profile), Arc::default()),
                 false,
                 CaptureStatus::Unavailable,
                 None,
@@ -120,6 +125,12 @@ fn main() {
     };
 
     let mut jobs = application::jobs::Jobs::new(store.clone());
+    // Every job lane shares one cap on concurrent provider calls.
+    // "Análises em paralelo" is read once here; a change applies on restart.
+    let parallel = jobs
+        .parallel_analyses()
+        .unwrap_or(application::limiter::DEFAULT_PARALLEL);
+    let limiter = application::limiter::ProviderLimiter::new(usize::from(parallel));
 
     // AI settings: the profile file is seeded with the offline default so the
     // inbox keeps working without any provider (MVP-SPEC §7 line 404).
@@ -163,17 +174,17 @@ fn main() {
     // Capture analysis reloads the profile on every run, so a Settings change
     // takes effect without a restart. The offline fake stays the default; the
     // external provider is only reachable with consent and a stored key.
-    jobs.register(
-        application::jobs::ANALYZE_CAPTURE_KIND,
-        std::sync::Arc::new({
-            let analysis = application::analysis::AnalyzeCapture::new(
-                store.clone(),
-                settings.clone(),
-                ai_provider::ProviderFactory::new(chatgpt.clone()),
-            );
-            move |record: &application::jobs::JobRecord| analyze_capture(&analysis, record)
-        }),
-    );
+    let analyze = std::sync::Arc::new({
+        let analysis = application::analysis::AnalyzeCapture::new(
+            store.clone(),
+            settings.clone(),
+            ai_provider::ProviderFactory::new(chatgpt.clone()).with_limiter(limiter.clone()),
+        );
+        move |record: &application::jobs::JobRecord| analyze_capture(&analysis, record)
+    });
+    // Sessions and documentation share the handler but not the lane.
+    jobs.register(application::jobs::ANALYZE_CAPTURE_KIND, analyze.clone());
+    jobs.register(application::jobs::ANALYZE_DOCUMENT_KIND, analyze);
     // After an adoption, earlier decisions related to the new one are judged
     // by the configured provider and stored as suggestions.
     jobs.register(
@@ -182,13 +193,16 @@ fn main() {
             let finder = application::relation_suggestions::RelationFinder::new(
                 store.clone(),
                 settings.clone(),
-                ai_provider::ProviderFactory::new(chatgpt.clone()),
+                ai_provider::ProviderFactory::new(chatgpt.clone()).with_limiter(limiter.clone()),
             );
             move |record: &application::jobs::JobRecord| match finder.run(&record.payload) {
                 Ok(stored) => {
                     tracing::info!(stored, operation = "suggest_relations", "relations judged");
                     Ok(())
                 }
+                Err(application::relation_suggestions::RelationFindError::Deferred(
+                    retry_after,
+                )) => Err(application::jobs::JobFailure::Deferred { retry_after }),
                 Err(error) => {
                     tracing::warn!(error = %error, operation = "suggest_relations", "failed");
                     Ok(())
@@ -203,13 +217,16 @@ fn main() {
             let finder = application::claim_suggestions::ClaimFinder::new(
                 store.clone(),
                 settings.clone(),
-                ai_provider::ProviderFactory::new(chatgpt.clone()),
+                ai_provider::ProviderFactory::new(chatgpt.clone()).with_limiter(limiter.clone()),
             );
             move |record: &application::jobs::JobRecord| match finder.run(&record.payload) {
                 Ok(stored) => {
                     tracing::info!(stored, operation = "derive_claims", "context derived");
                     Ok(())
                 }
+                Err(application::claim_suggestions::ClaimSuggestionError::Deferred(
+                    retry_after,
+                )) => Err(application::jobs::JobFailure::Deferred { retry_after }),
                 Err(error) => {
                     tracing::warn!(error = %error, operation = "derive_claims", "failed");
                     Ok(())
@@ -248,8 +265,8 @@ fn main() {
                 "recovered interrupted jobs"
             );
             (
-                Some(jobs.spawn_worker()),
-                Some(local_jobs.spawn_worker()),
+                Some(jobs.spawn_workers(usize::from(parallel))),
+                Some(local_jobs.spawn_workers(1)),
                 Some(ObservationReconciler::spawn(store.clone())),
             )
         }
@@ -312,11 +329,13 @@ fn main() {
     );
     let overview = overview_api(ai_settings(&paths.ai_profile), chatgpt.clone());
     let reviewer = review_api(ai_settings(&paths.ai_profile), chatgpt.clone());
+    let approvals = approvals_api(ai_settings(&paths.ai_profile), chatgpt.clone());
     run_shell_mode(
         Ok(store),
         services,
         overview,
         reviewer,
+        approvals,
         false,
         capture,
         Some(routing),
@@ -327,6 +346,8 @@ fn main() {
     if let Some(api) = api {
         api.shutdown();
     }
+    // Nobody waits on the provider limiter once the app is closing.
+    limiter.close();
     if let Some(reconciler) = &reconciler {
         reconciler.stop();
     }
@@ -534,6 +555,31 @@ fn backdrop_from_env() -> WindowBackgroundAppearance {
 type OverviewFactory = Box<dyn FnOnce(SqliteStore) -> Arc<dyn application::overview::OverviewApi>>;
 type ReviewFactory =
     Box<dyn FnOnce(SqliteStore) -> Arc<dyn application::knowledge_review::KnowledgeReviewApi>>;
+/// Builds the automatic review over the opened store.
+type ApprovalsFactory =
+    Box<dyn FnOnce(SqliteStore) -> Arc<dyn application::auto_approval::ApprovalsApi>>;
+
+/// The automatic review accepts through the adoption path and asks the AI
+/// profile's provider, loaded on every pass like the other jobs.
+fn approvals_api<P, K>(
+    settings: application::profile::AiSettings<P, K>,
+    chatgpt: Arc<ai_provider::ChatGptSession>,
+) -> ApprovalsFactory
+where
+    P: application::profile::ProfileStore + Send + Sync + 'static,
+    K: application::profile::SecretStore + Send + Sync + 'static,
+{
+    Box::new(move |store| {
+        let adoption: Arc<dyn application::adoption::AdoptionApi> =
+            Arc::new(application::adoption::Adoption::new(store.clone()));
+        Arc::new(application::auto_approval::Approvals::new(
+            store,
+            adoption,
+            settings,
+            ai_provider::ProviderFactory::new(chatgpt),
+        ))
+    })
+}
 
 fn review_api<P, K>(
     settings: application::profile::AiSettings<P, K>,
@@ -570,11 +616,14 @@ where
     })
 }
 
+// The composition root receives every service the shell needs.
+#[allow(clippy::too_many_arguments)]
 fn run_shell_mode(
     store: Result<SqliteStore, String>,
     settings: SettingsServices,
     overview: OverviewFactory,
     reviewer: ReviewFactory,
+    approvals: ApprovalsFactory,
     demo: bool,
     capture: CaptureStatus,
     routing: Option<Arc<application::context_routing::RoutingLookup>>,
@@ -685,6 +734,20 @@ fn run_shell_mode(
         }
         cx.set_global(appearance.theme);
         cx.set_global(appearance);
+        // When each project was last looked at (the Revisão's briefing); the
+        // demo pretends the last look was before its sample data.
+        if demo {
+            cx.set_global(xemnas_desktop::ui::visits::DemoVisit(
+                "2026-09-29T09:30:00Z".into(),
+            ));
+        } else {
+            cx.set_global(xemnas_desktop::ui::visits::VisitsFile(
+                application::AppPaths::from_env()
+                    .data_dir
+                    .join("settings")
+                    .join("visits.json"),
+            ));
+        }
         let adoption: Option<Arc<dyn application::adoption::AdoptionApi>> = store
             .as_ref()
             .ok()
@@ -702,6 +765,8 @@ fn run_shell_mode(
             });
             (read, retry)
         });
+        let approvals: Option<Arc<dyn application::auto_approval::ApprovalsApi>> =
+            store.as_ref().ok().map(|store| approvals(store.clone()));
         let (projects, inbox, decisions, context, map, overview) = match store {
             Ok(store) => (
                 Ok(application::projects::Projects::new(store.clone())),
@@ -710,6 +775,7 @@ fn run_shell_mode(
                     application::decisions::Decisions::new(store.clone()),
                     application::export::Export::new(store.clone()),
                     application::relations::DecisionRelations::new(store.clone()),
+                    application::graph::KnowledgeGraph::new(store.clone()),
                 )),
                 Some(xemnas_desktop::screens::context::ContextServices {
                     reviewer: Some(reviewer(store.clone())),
@@ -750,6 +816,9 @@ fn run_shell_mode(
             }
             if let Some(adoption) = adoption {
                 shell.set_adoption(adoption, cx);
+            }
+            if let Some(approvals) = approvals {
+                shell.set_approvals(approvals, cx);
             }
             shell.set_demo(demo);
             if let Some((read, retry)) = capture_progress {
@@ -857,7 +926,7 @@ fn analyze_capture(
                 operation = "analyze_capture",
                 "capture analysis failed"
             );
-            Err(application::jobs::JobFailure::Failed)
+            Err(error.job_failure())
         }
     }
 }
@@ -966,7 +1035,7 @@ mod tests {
         let local = observation_jobs(store);
         remote.recover().unwrap();
         assert!(local.run_next().unwrap().is_none());
-        let remote_worker = remote.spawn_worker();
+        let remote_worker = remote.spawn_workers(1);
         started_rx
             .recv_timeout(std::time::Duration::from_secs(5))
             .unwrap();
@@ -982,7 +1051,7 @@ mod tests {
             outcome.kind,
             application::observations::refresh::REFRESH_OBSERVATIONS_KIND
         );
-        let local_worker = local.spawn_worker();
+        let local_worker = local.spawn_workers(1);
         remote_worker.stop();
         local_worker.stop();
         release_tx.send(()).unwrap();

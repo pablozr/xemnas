@@ -96,3 +96,74 @@ hoje não têm interface.
 3. Importar ADRs/`AGENTS.md` existentes.
 4. Exportar resumo para `AGENTS.md`.
 5. Proposta de decisão pela conversa (MCP de escrita), depois de ADR.
+
+## 5. Direções anotadas em 02/10/2026 (para o futuro)
+
+Duas ideias da conversa de 02/10, guardadas aqui para decidir depois. A opinião e
+a proposta de medição estão em
+[medir-eficacia-do-contexto.md](medir-eficacia-do-contexto.md).
+
+1. **Controlar agentes autônomos e um assistente de decisão entre projetos.** No
+   futuro o xemnas se integra aos agentes para controlá-los como agentes autônomos
+   (como orquestradores do tipo Symphony/Codex da OpenAI). O assistente serviria à
+   tomada de decisão, apoiado nas decisões e contextos de **todos os projetos já
+   feitos**, para aproveitar o que eles têm em comum quando um projeto novo
+   começa. Cuidados já apontados: níveis de autonomia por risco (a Revisão vira o
+   portão do que passa do limite), condições de aplicabilidade em cada decisão
+   (para não transferir conselho fora de contexto), fronteiras de
+   confidencialidade entre projetos e custo (busca local primeiro).
+2. **Medir se o contexto injetado ajuda na implementação.** Mecanismo para saber
+   se a injeção tem efeito na implementação do agente e qual. Proposta: escada de
+   evidência (exposição, absorção, adesão, retrabalho, resultado), canários,
+   holdout em `shadow`, repetição offline e painel de Eficácia em Contexto. É
+   pré-requisito da ideia 1.
+
+Também anotado: **filtrar a documentação** que entra na Revisão (feito em
+`documents::digest`: só partes centrais; ver ADR-0008). Falta aprender com o que a
+pessoa dispensa e mostrar, na aba Contexto, quais documentos entram e por quê.
+
+## 6. Conhecimento geral do dev (refinamento de 02/10/2026)
+
+A ideia 1 da seção 5 fica mais precisa assim: em vez de "o assistente lê os outros
+projetos", uma camada própria de **conhecimento geral do dev**, extraída de todos os
+projetos: padrões e decisões tomadas em situações que se repetem. Quando o agente
+chega a um problema que a pessoa já resolveu antes, o conhecimento entra no contexto
+como **padrão reaproveitável**, e o projeto novo mantém a mesma resposta (consistência)
+em vez de reinventar.
+
+**Um padrão é mais que uma decisão copiada.** Proposta de forma:
+
+- **Situação** (gatilho): o problema reconhecível ("guardar credencial do provedor",
+  "reenviar captura com segurança"), em palavras e em sinais (tecnologia, tipo de
+  arquivo, componente).
+- **Resposta**: a decisão ou regra que funcionou, com o porquê.
+- **Condições de aplicabilidade**: stack, restrições e escala em que vale, e **quando
+  não usar** (contraexemplos). É o que impede o conselho confiante e errado.
+- **Proveniência**: de quais projetos e decisões veio, e onde já foi aplicado.
+- **Estado**: candidato, confirmado, aposentado; como tudo no xemnas, só vale depois
+  de uma pessoa confirmar.
+
+**Como nasce:** comparar decisões e regras confirmadas entre projetos (mesma
+tecnologia, perguntas parecidas, mesmos componentes) e **propor** padrões na Revisão
+como um novo tipo de candidato, com as decisões de origem como evidência. Nada sai
+de um projeto para outro sem aceite.
+
+**Como é usado (do mais barato ao mais ambicioso):**
+
+1. **Análogos na Revisão:** ao revisar um candidato, "você decidiu algo parecido em
+   `projeto-x` (D:ab12cd34): usar SQLite local por causa de…". Só leitura, custo
+   quase zero, valor imediato, e já mede se a pessoa os acha úteis.
+2. **Padrão no começo de um projeto novo:** ao criar o projeto, sugerir os padrões
+   cujas condições batem (como candidatos a confirmar).
+3. **Padrão no contexto do agente:** quando o gatilho de um padrão confirmado bate
+   com a tarefa ou o arquivo editado, injetá-lo com proveniência. Só depois de o
+   painel de eficácia (ver `medir-eficacia-do-contexto.md`) mostrar que o contexto de
+   outros projetos ajuda; é a fonte de ruído mais provável.
+4. **Consistência:** avisar quando um projeto se afasta de um padrão confirmado ("aqui
+   vocês fazem X; seu padrão é Y"), como pergunta, não como erro.
+
+**Cuidados:** fronteiras de confidencialidade (espaços de projetos; o padrão é isolar
+clientes diferentes), custo (busca local primeiro; modelo só sob pedido), padrões que
+envelhecem (validade e revisão, como as decisões) e o risco de rigidez: um padrão
+pode ser a resposta errada para o contexto novo.
+

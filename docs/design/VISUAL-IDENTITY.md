@@ -120,16 +120,25 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   oficial do personagem nem o emblema dos Nobodies.
 - É 3D pré-renderizado: `tools/mascot/model.py` (modelo de distâncias com
   sombreamento toon, contorno e brilho nos olhos) e `tools/mascot/render.py`
-  geram `assets/mascot/{idle,blink,glow,left,right}.png` (192 px, mesmo
-  recorte). O app só exibe as imagens; não há 3D em tempo real.
+  geram `assets/mascot/sheet.png` (32 quadros de 160 px, 8 × 4, mesmo
+  recorte) e `idle`, `blink`, `glow` avulsos para retrato e estados vazios.
+  O app só exibe as imagens; não há 3D em tempo real.
 - Fica no pé da lateral, acima da linha de status: figura de 72 px, "Nº I"
   em mono prata e uma frase real ("5 para revisar", ou o nome), com ponto
-  âmbar quando há fila. Respira a cada ~5 s (sobe 3 px e assenta em 1,8 s,
-  na taxa do monitor) e fica parado entre uma respiração e outra; pisca e
-  olha para os lados. É uma view própria e as telas são views em cache
-  (`cached`), então um quadro do mascote não refaz o app. Com movimento
-  reduzido, só pisca. Hover e painel aberto acendem os
-  olhos (`glow`).
+  âmbar quando há fila. Respira a cada ~5 s (sobe 3 px e assenta em 2,2 s)
+  e fica parado entre uma respiração e outra; pisca e olha para os lados.
+- Fluidez vem do relógio, não do layout (`screens/mascot.rs`). A folha tem
+  27 giros da cabeça (a cada 0,03 rad), 4 passos de piscada e 1 quadro de
+  olhos acesos; cada gesto escolhe o quadro pelo tempo decorrido, com
+  entrada e saída suaves (`smooth`, cosseno elevado na respiração). Cada
+  quadro sobe com margem e é pintado numa janela fixa, alinhada ao pixel,
+  enquanto a imagem desliza por frações de pixel (o GPUI recorta a origem
+  em texels, ~0,45 px a 72 px): a flutuação deixa de andar de 1 em 1 px. O
+  olho aceso é o quadro `glow` sobre o base, com opacidade de 160 ms. Só se
+  pede o próximo quadro enquanto um gesto dura; parado, não redesenha. É uma
+  view própria e as telas são views em cache (`cached`), então um quadro do
+  mascote não refaz o app. Com movimento reduzido, só pisca. Hover e painel
+  aberto acendem os olhos.
 - Clique, Enter ou Ctrl K ("Falar com o Xemnas") abrem o painel ao lado da
   lateral (400 × 540, `floating`, raio `dialog`, sombra de ênfase): retrato,
   "Xemnas" em Bricolage, "Nº I · assistente do projeto", a corrente prata,
@@ -190,6 +199,25 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
 - Em Decisões o índice fica à esquerda, como em todo destino. Não há segunda fileira de abas: estado, versão, o acesso ao
   histórico ("Versões") e as ações Exportar/Revisar ficam na linha de metadados
   do documento. Linhas de lista e abas têm hover com mola criticamente amortecida.
+- **Decisões por parte.** Sob "Confirmadas", um segundo filtro do índice
+  (botão fantasma com o glifo de componente e seta) abre um menu: "Todas as
+  partes" e cada parte do projeto (os componentes de topo do Mapa, os mesmos
+  "containers" da arquitetura) com a contagem de decisões em vigor nela ou num
+  componente dentro dela (`KnowledgeGraph::decision_parts`). Escolher uma
+  estreita a lista (paginada por `Decisions::list_ids`) e a busca; o botão
+  passa a "storage-sqlite · 2" com fundo de seleção, "Confirmadas" vira "Em
+  vigor · parte" e o rodapé diz "2 de 2 em vigor · storage-sqlite". Limpar: o
+  X ao lado (tooltip com Esc) ou Esc fora da busca. Parte sem decisões:
+  `empty_panel` "Nada decidido sobre X ainda", dizendo que a decisão aparece
+  quando ligada a X no Mapa, e "Mostrar todas as partes". Menu: setas, Enter e
+  Esc; o foco vai à opção escolhida ao abrir e volta ao botão ao fechar.
+  Paleta: "Decisões por parte" e "Decisões sobre <parte>". Rotas de captura:
+  `decisions:parts` (menu aberto) e `decisions:part:<nome>`.
+- **Menu suspenso** (`ui::patterns::menu_panel` + `menu_item`): a superfície
+  do menu de tema (`floating`, borda de cartão, elevação flutuante, até 320 px
+  e depois rola), sob o gatilho, com `menu_in`/`menu_out` e `Popup`. Opção:
+  glifo, rótulo truncado, contagem opcional (`count_chip`) e o check lavanda
+  na escolhida; hover tinge, sem segundo fundo de seleção.
 - Trocar de projeto limpa lista, evidência e filtro; respostas antigas não podem
   aparecer no novo workspace. O filtro de projeto é aplicado no caso de uso.
 - Lista de candidatos de 320 px, com data, estado, pergunta e escolha proposta.
@@ -278,12 +306,14 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   título "Visão do projeto", linha de meta (data, quantas decisões e regras,
   e em âmbar "N decisões novas desde então") e "Atualizar visão" secundário;
   seção Resumo com parágrafos e, abaixo de cada um, chips mono das fontes
-  (decisão abre em Decisões; regra é só rótulo); seção Principais fluxos como
-  lista numerada numa borda só (numeral romano em mono, título, descrição, passos e
-  componentes, chevron), nunca grade de cartões.
-- O cartão abre o fluxo na mesma coluna: "Todos os fluxos" (ghost) volta;
-  passos numerados em romanos em pílulas de 24 px ligados por filete vertical, com
-  título, texto, chip do componente (ícone de grafo, abre no Mapa) e fontes.
+  (decisão abre em Decisões; regra é só rótulo); depois a seção "Arquitetura e
+  fluxos": uma frase com o que a página guarda ("8 partes e 3 fluxos") e o botão
+  primário "Ver arquitetura e fluxos".
+- **Arquitetura e fluxos não se desenham no app.** Um diagrama de arquitetura e a
+  leitura de um fluxo passo a passo pedem espaço, zoom e câmera, e a janela do app é
+  uma coluna de leitura de 760 px. Eles vivem numa página HTML (próxima seção); o app
+  só carrega o resumo e o caminho até ela. O modelo `application::architecture`
+  continua sendo derivado do Mapa e dos fluxos, sem IA nova, e alimenta a página.
 - Fontes são chips com ícone (documento = decisão, escudo = regra) e o
   título encurtado em palavra inteira; o texto completo fica no tooltip.
   Defasagem é uma linha própria com ponto âmbar, nunca a meta inteira em cor.
@@ -294,6 +324,138 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
 - Vazio: `empty_panel` com o que será enviado ao provedor e "Gerar visão"
   primário; gerando: "Gerando…" desabilitado; erro em `error_banner`; nota de
   procedência no rodapé. Nunca texto sem fonte.
+
+## Texto da IA e página da Visão
+
+**Estilo dos textos.** Todo texto que a IA escreve para uma pessoa (pergunta, escolha e
+motivo dos candidatos, Visão, motivos do juiz, regras sugeridas, ligações, revisão
+consultiva) segue 80% do ASD-STE100, o inglês técnico controlado: uma ideia por frase,
+até 20 palavras, voz ativa, uma palavra para um sentido, resultado antes do motivo. As
+travas fazem parte do prompt (`plain_rules!` em `application::plain_style`): manter
+todo fato e toda ressalva, não acrescentar fato, não mexer em código, nomes, ids nem
+citações, que seguem literais. Texto mais claro convence mais; por isso a evidência
+continua vindo antes do motivo. Todo prompt novo que gera texto para pessoas termina
+com `crate::plain_rules!()`.
+
+**Página de arquitetura e fluxos.** Na Visão, o botão "Ver arquitetura e fluxos" grava
+`arquitetura-<projeto>.html` em `%TEMP%\xemnas` e abre no navegador. É um arquivo único,
+sem rede, que abre offline e pode ser enviado a alguém. Só tem arquitetura e fluxos: o
+resumo fica no app. O caso de uso `OverviewApi::page` lê a Visão gravada e as decisões
+em vigor e regras válidas (`page::assemble`: pergunta, escolha, motivo e sua primeira
+frase, premissas, consequências, quando reconsiderar, escopo, critérios de relevância do
+candidato, entidades por vínculo confirmado, a parte do mapa de cada uma e as relações
+entre decisões); sugestões de vínculo pendentes ficam de fora. `application::page::render`
+coloca esse JSON (sem o resumo) num modelo fixo (`page/template.html`); a IA não escreve
+HTML, o modelo põe todo texto com `textContent`, e o JSON é escapado para não fechar o
+`<script>` nem o `<title>`.
+
+- **Marca e fontes do app, embutidas.** O símbolo é o `xemnas-mark.svg` exato (ids com
+  prefixo `xm-`, também como ícone da aba); o nome em Bricolage Grotesque, o texto em
+  Inter e os rótulos mono em JetBrains Mono, subconjuntos (`tools/page-fonts.py` gera
+  `page/fonts/*.b64`; licenças OFL ao lado das fontes do app).
+- **Calma premium.** Fundo de tinta com duas auroras muito suaves e grade de pontos;
+  vidro (`--glass`) só nas camadas que flutuam; lavanda só para seleção, foco e a ação
+  primária; Bricolage nos títulos, números tabulares, movimento curto com
+  `prefers-reduced-motion` respeitado; tema escuro e claro com a mesma paleta do app.
+- **Arquitetura.** Mapa em colunas com curvas, um glifo por tipo de parte (banco, IA,
+  fila, janela, agente...) deduzido do nome e das tecnologias, só decoração. Clicar
+  numa parte abre o inspetor flutuante (o que chama, quem a chama, onde aparece) com
+  **Por que é assim**: as decisões em vigor da parte e das partes dentro dela,
+  agrupadas pelo primeiro critério de relevância gravado (sem critério, lista simples;
+  nenhum tema inventado), pergunta como título e escolha embaixo; clicar abre o motivo,
+  premissas, consequências, quando reconsiderar, escopo, o que toca e as relações
+  ("substitui", "depende de", conflito na cor de perigo); abaixo, as regras que valem
+  ali. Clicar numa seta mostra os passos que a formam. Pan, zoom, "Copiar Mermaid" e "Baixar
+  SVG". **Passo a passo** (a referência é o fluxo guiado do IcePanel): escolher um
+  fluxo nas pílulas acima liga uma barra no pé com "Passo n de m", título e texto; a
+  câmera voa até as duas partes do passo, o resto apaga, a seta ativa corre tracejada
+  com uma luz que a percorre; cada decisão citada no passo aparece com a escolha e a
+  primeira frase do motivo ("— porque …"). Setas do teclado, "Reproduzir" e Esc.
+- **Fluxos.** Diagrama de sequência por fluxo (participantes com glifo, setas
+  numeradas, meio em mono) e a linha do tempo dos passos, cada um com o componente, o
+  texto e as fontes (decisão em lavanda com a escolha e "porque" e a primeira frase do
+  motivo, regra em azul). Passo ativo sincronizado entre
+  o diagrama, a linha do tempo e a barra de progresso; "Ver no mapa" abre o mesmo passo
+  no passo a passo da arquitetura.
+- **Decisões** (`#decisoes`, `#decisoes/<id>`, tecla 3). Vista calma "Por que é assim":
+  uma coluna por parte do mapa, com o glifo do mapa, e cada decisão em vigor num cartão
+  na parte principal que toca (código, pergunta, escolha, "porque …", "Também em …");
+  as que não tocam parte desenhada ficam em "Fora do mapa". Curvas entre cartões, por
+  trás deles: depende de (linha), substitui (tracejada), conflito (cor de perigo); ao
+  passar ou selecionar, o cartão e suas ligações acendem e o resto apaga. Filtros em
+  pílulas: Todas, Só conflitos, uma por parte. O cartão abre a mesma leitura do
+  inspetor numa gaveta de vidro fixa à direita; "Ver em Decisões" e as fontes dos
+  passos levam a ela.
+
+Para acrescentar uma tela: uma função de montagem em `BUILD` e uma entrada em `TABS` no
+modelo; os dados novos entram no JSON sem mudar a Rust além do tipo.
+
+## Revisão — uma fila, evidência primeiro
+
+- **Uma fila para tudo o que espera uma pessoa.** A Revisão mostra os candidatos; quando
+  o Mapa tem sugestões (relações entre decisões, contexto sugerido, vínculos), uma barra
+  fina com "Decisões propostas | Ligações sugeridas" aparece no topo, com o total. O
+  número na aba é a soma. O Mapa deixou de listar Sugestões no índice (três visões:
+  Visão geral, Lente de arquivo, Linha do tempo).
+- **Desde a última visita:** uma linha discreta no topo da lista (relógio, "há 3 d: 10
+  candidatos novos · 5 decisões · 3 entregas ao agente"), que se dispensa. Some quando
+  nada mudou. O momento da última visita é guardado por projeto em
+  `settings/visits.json` e atualizado quando a janela perde o foco.
+- **Marcador por tipo** em cada candidato (decisão em cinza, regra em azul).
+- **Evidência antes do motivo:** no detalhe a ordem é pergunta, escolha sugerida,
+  evidências, "Motivo escrito pela IA" (recolhido por padrão), No mapa, confiança. Uma
+  explicação convincente aumenta a aceitação certa ou errada, então a fonte verificável
+  vem primeiro.
+- **Desfazer em vez de confirmar:** Rejeitar e Adiar mostram "Desfazer" no aviso.
+
+## Aprovação automática
+
+É um interruptor como o modo de permissão de um agente: **Manual | Automático**, uma
+chave segmentada no topo da lista da Revisão, com uma linha dizendo o que o modo faz
+("A IA revisa em lote; o que ela decide fica em Feito sozinho" ou, sem provedor,
+"Sem provedor de IA ativo: só as regras locais agem"). Manual é o padrão e não faz nada
+sozinho. Ligado, a IA cuida de todo o ciclo: decisões propostas, ligações sugeridas,
+regras e vínculos.
+
+Cada item passa primeiro por uma triagem local e gratuita (repete uma decisão já
+registrada: descarta; alta confiança, com fonte e sem parecido: aceita; vínculo ao
+Mapa por arquivo ou dependência: aceita; vínculo por menção no texto: pergunta, com o
+trecho; o resto pergunta). Só o que sobra vai ao juiz de IA, **em lote** e com limites para não gerar
+chamadas: no mínimo 3 itens (ou o mais antigo esperando 2 h), no máximo 12 por chamada,
+20 minutos entre chamadas e 6 chamadas por dia. A falha do provedor não perde nada: o
+item espera a próxima rodada. O que a IA não resolve fica na fila com o marcador
+**"a IA deixou para você"** na linha e a frase do motivo no alto do detalhe.
+
+Aceitar passa pelo mesmo caminho da confirmação manual (prévia e adoção), sem pausa: o
+resultado vale na hora. O registro é o ledger **"Feito sozinho · N"**, recolhido sob a
+lista; cada linha mostra o veredito, quem decidiu (regras ou IA) e o motivo, abre a
+decisão quando foi aceita e oferece **Desfazer** quando foi descartada (volta à fila).
+Uma sequência de oito confirmações com poucos segundos entre elas mostra "Ritmo alto:
+abra a evidência de um dos próximos antes de confirmar", uma vez, sem bloquear.
+
+## Contexto — quatro entradas
+
+O índice do Contexto tem quatro entradas (Visão geral, Fontes, Entregas, Ajustes), sem
+cabeçalhos de grupo; só Entregas leva contagem. As páginas de um grupo se alternam numa
+chave segmentada fina no topo da página, e cada entrada abre na página que a pessoa
+usou por último naquele grupo (Fontes: Decisões, Regras, Documentação, Revisar com IA;
+Entregas: Histórico, Testar uma tarefa). As rotas de captura (`context:rules`,
+`context:test`, `context:knowledge-review`) seguem iguais.
+
+## Formas para números
+
+Um número que vale mostrar vale desenhar (`ui::patterns`, canvas de poucos pixels,
+sem custo por linha). Sempre com o número ou uma frase ao lado, ou `aria_label` no
+pai: a forma não é a única fonte.
+
+- `meter(fração, cor)`: barra de 3 px, uma quantidade contra um limite (tokens do
+  bloco contra o orçamento). `meter_stack(partes)`: barra de 6 px dividida por peso,
+  do que algo é feito (o que será apagado de um projeto).
+- `sparkline(valores, w, h, cor)`: tendência, mais antigo à esquerda, maior no topo,
+  área tingida e ponto no último; sem eixos (entregas e sessões dos últimos 7 dias).
+- `ring(fração, lado, cor)`: anel que enche no sentido horário a partir do topo
+  (média de tokens contra o limite; itens fora do orçamento, âmbar quando há).
+- `share(valor, total)` mantém a fração entre 0 e 1 (total vazio dá 0).
 
 ## Mapa — o grafo do projeto
 
@@ -370,6 +532,28 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
 - A **Vizinhança** do detalhe continua determinística em camadas. Nada entra
   no mapa sem confirmação; aposentar e rejeitar não apagam.
 
+## Sugestões — cada cartão se explica
+
+Sugestões (Mapa) tinha linhas curtas que só faziam sentido para quem já sabia o
+que era um "vínculo" ou uma "relação". Agora cada seção abre com uma frase que
+diz o que ela é e o que confirmar faz, e cada sugestão é um cartão
+(`ui::patterns::suggestion_card`, `suggestion_section`, `rich_sentence`):
+
+- **O que é**, numa frase com os nomes em negrito: "A decisão “X” depende da
+  decisão “Y” só faz sentido porque a segunda foi tomada"; "A decisão “X”
+  mexeu em `arquivo`, que pertence ao componente “Z”"; "Da decisão “X” o xemnas
+  tirou uma restrição: …"; "A dependência `serde` foi adicionada em 3
+  decisões, mas ainda não é uma tecnologia do Mapa".
+- **De onde veio**: o trecho citado ("Trecho que originou a sugestão") e, nas
+  relações, o motivo.
+- **O que muda ao confirmar**, numa linha com marcador lavanda ("Ao confirmar,
+  a decisão passa a valer para Z: aparece na página do componente e é entregue
+  ao agente quando ele edita arquivos dele"). Só se descreve o que o
+  produto de fato faz; nada de promessa.
+- Rejeitar e Confirmar no rodapé do cartão (uma ação por sugestão, nenhuma
+  primária concorrendo); "Confirmar os N" fica no cabeçalho da seção de
+  vínculos.
+
 ## Configurações
 
 - Página do app (engrenagem na barra de título, paleta Ctrl K ou a linha de
@@ -412,6 +596,59 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   sanitizado.
 - Painel do projeto: **Apagar dados…** mede o impacto real e só libera Apagar
   tudo depois de digitar o nome do projeto; a pasta no disco não é tocada.
+
+## Desempenho
+
+O pilar do projeto é desempenho e baixo custo; as regras e orçamentos estão
+em `docs/arquitetura/desempenho-e-escala.md`. No visual, isso vira:
+
+- **Listas longas são virtuais.** O índice do Mapa e o índice de Decisões
+  usam a lista do GPUI (`list` + `ListState`): só as linhas em vista viram
+  elementos, então rolar custa o mesmo com 10 ou 10 mil itens. As linhas são
+  chaves baratas (`IndexRow`, `IndexItem`) e cada elemento é montado quando
+  entra na tela. Quando o formato muda, `splice` refaz a medição.
+- **Barra fina que some** (`ui::list::{ScrollMemory, scroll_thumb}`): 3 px,
+  `text_muted` a 55 %, aparece ao rolar, fica 650 ms e some em 350 ms; não é
+  controle, só mostra posição e tamanho. Só pede quadro enquanto visível.
+- **Rodapé de revelação** (`ui::list::reveal_footer`) para listas que crescem
+  sob demanda e não são virtuais (linha do tempo, Sugestões, blocos de um
+  item, lente de arquivo, regras): fio, "N de M" em algarismos tabulares, linha
+  de progresso de 2 px em lavanda, "Mostrar mais N" (duas páginas) e, se o que
+  resta é no máximo 200, "Mostrar todas (N)". Páginas: `LIST_PAGE` = 12,
+  `TIMELINE_PAGE` = 30, `RULES_PAGE` = 10 por tipo.
+- **Grafo em escala.** Um componente com mais decisões ou regras do que o
+  desenho comporta (orçamento de 260 folhas, entre 2 e 10 por componente)
+  mantém uma parte e dobra o resto num nó de grupo ("+590 decisões", anel
+  com núcleo, maior quanto mais guarda) que abre a página do componente; as
+  contagens seguem exatas. A pintura visita só o que está na viewport (com
+  margem de 48 px) e, com mais de 140 links à vista, usa o modo barato:
+  links retos de um traço, sem sinal correndo, nós sem halos e rótulos de
+  componente só a partir de 0,9 de zoom.
+- **Panorama.** Em mapas com mais de 150 nós, abaixo de zoom 0,45 só ficam
+  componentes, tecnologias e grupos; decisões e regras individuais voltam ao
+  aproximar (histerese de 0,1), exceto as com conflito ou sugestão, que ficam
+  sempre. O cabeçalho avisa: "Panorama · N decisões e regras ocultas ·
+  aproxime para vê-las". A dica de interação e os filtros dividem uma linha
+  que quebra: em janela estreita a dica desce, nunca cobre os filtros.
+- **Blocos virtuais.** O layout em Blocos é uma lista virtual de linhas (dois
+  blocos por linha, quatro tecnologias por linha) na mesma coluna de 760 px;
+  um bloco lista até 6 partes e conta o resto ("+N partes"), e a página do
+  componente lista todas.
+- O que pesa vai para fora da thread da interface: o layout de forças do
+  grafo roda em segundo plano, só é feito quando o Grafo é aberto (na visão
+  em Blocos espera), é aplicado se ainda for o mais recente e, em mapas com
+  mais de 200 nós, usa menos passos. A simulação limita força e velocidade
+  para um componente com centenas de decisões não explodir em posições
+  infinitas.
+- Nada de copiar listas dentro do `render`: o Mapa guarda sugestões, detalhe,
+  linha do tempo e lente em `Arc` e o render pega um ponteiro.
+- Telas pesadas ficam em views com cache (`cached`) e o mascote é view
+  própria: um quadro dele não refaz o app.
+- Medir antes de mexer: `XEMNAS_PERF=1` grava em `xemnas-perf.log` (pasta
+  temporária) o tempo de montagem de cada tela (`ui::perf::Probe`), e
+  `XEMNAS_DEMO_SCALE=N` semeia N decisões, N/4 componentes e N/3 regras, a
+  maior parte num componente "docs". A janela fora da tela tem ritmo próprio
+  da plataforma (~36 ms entre quadros): o número útil é o tempo de montagem.
 
 ## Movimento
 

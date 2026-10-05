@@ -14,6 +14,7 @@ pub mod graph;
 pub mod inbox;
 pub mod knowledge_review;
 pub mod map;
+pub mod mascot;
 pub mod overview;
 pub mod projects;
 mod review_editor;

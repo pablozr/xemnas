@@ -13,14 +13,17 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::analysis::ExtractorFactory;
+use crate::architecture::Architecture;
 use crate::captures::CaptureRepository;
 use crate::claims::ClaimStore;
 use crate::clock::now_rfc3339;
-use crate::decisions::DecisionStore;
+use crate::decisions::{DecisionQuery, DecisionStatus, DecisionStore};
 use crate::documents::{document_ref, DocumentError, DocumentStore, Documents, PROPOSE_PER_RUN};
 use crate::extract::ExtractError;
 use crate::graph::{GraphStore, KnowledgeGraph};
+use crate::inbox::InboxStore;
 use crate::injection::short_ref;
+use crate::page::{PageKnowledge, MAX_PAGE_DECISIONS};
 use crate::profile::{choose_extractor, AiSettings, ExtractorChoice, ProfileStore, SecretStore};
 use crate::projects::ProjectRepository;
 use crate::relations::RelationStore;
@@ -39,6 +42,8 @@ pub const MAX_STEPS: usize = 8;
 pub const MAX_PARAGRAPHS: usize = 4;
 /// Longest text kept per field.
 const MAX_TEXT_CHARS: usize = 900;
+/// Longest `via` label kept, in characters.
+const MAX_VIA_CHARS: usize = 40;
 /// Documents sent at most.
 pub const MAX_DOCUMENTS: usize = 40;
 /// Characters of documentation sent at most.
@@ -161,6 +166,10 @@ pub struct OverviewStep {
     pub entity_id: Option<String>,
     /// Its name, for display.
     pub entity_name: Option<String>,
+    /// How the previous component reaches this one: the protocol or medium
+    /// (HTTP/JSON, a queue, a function call), when the model names it.
+    #[serde(default)]
+    pub via: Option<String>,
     /// Decisions and rules that govern it.
     pub citations: Vec<Citation>,
 }
@@ -194,6 +203,10 @@ pub struct ProjectOverview {
     pub summary: Vec<OverviewParagraph>,
     /// Main flows.
     pub flows: Vec<OverviewFlow>,
+    /// The containers and interactions the flows draw (C4 level 2), made when
+    /// the overview was generated.
+    #[serde(default)]
+    pub architecture: Architecture,
 }
 
 impl ProjectOverview {
@@ -236,27 +249,30 @@ pub trait OverviewApi: Send + Sync {
     fn current(&self, project_id: &str) -> Result<Option<OverviewView>, OverviewError>;
     /// See [`ProjectOverviews::generate`].
     fn generate(&self, project_id: &str) -> Result<OverviewView, OverviewError>;
+    /// See [`ProjectOverviews::page`].
+    fn page(&self, project_id: &str, project_name: &str) -> Result<String, OverviewError>;
 }
 
 /// Instructions for the overview call.
-pub const OVERVIEW_PROMPT: &str = "Preserve explicit scope and qualifiers in every summary. \
-Empty scope means not informed, not the entire project. Empty qualifiers mean not informed. \
-Artifact-less qualifiers are reviewer declarations, not verified support. Never invent authority \
-or turn unexecuted validation into a successful check. You write the overview of one software project for its own \
-team, using only the recorded knowledge given: decisions in force (D:...), rules (R:...) and \
+pub const OVERVIEW_PROMPT: &str = concat!(
+    "Preserve explicit scope and qualifiers in every summary. Empty scope means not informed, not the entire project. Empty qualifiers mean not informed. Artifact-less qualifiers are reviewer declarations, not verified support. Never invent authority or turn unexecuted validation into a successful check. You write the overview of one software project for its own team, using only the recorded knowledge given: decisions in force (D:...), rules (R:...) and \
 the project map (components and technologies) and the project's own documentation (F:..., title, sections and opening paragraph; documents describe intent and may be outdated: when they disagree with a decision, the decision wins). You never see the code; do not invent \
 components, libraries or behaviour that the records do not state.\n\
 Write in the language of the records. summary: 2 to 4 short paragraphs: what the project is \
 for, how it is organised, the central choices and the rules that weigh most. flows: the 3 to \
 6 main flows of the system (how a request, a piece of data or a user action travels \
 through it), each with 3 to 8 ordered steps; a step names the component where it happens \
-(use the component name exactly as listed, or null) and what happens there.\n\
+(use the component name exactly as listed, or null) and what happens there; via is how the \
+previous step's component reaches this one (protocol or medium, up to four words, e.g. \
+HTTP/JSON, fila SQLite, chamada direta), or null when unknown.\n\
 Every paragraph and every step must cite the records it rests on in refs, using the ids \
 exactly as given (D:xxxxxxxx, R:xxxxxxxx or F:xxxxxxxx). Anything you cannot cite, leave out. Prefer \
 fewer, well-cited flows over many vague ones.\n\
 Reply with one JSON object only, matching exactly: {\"summary\":[{\"text\":string,\
 \"refs\":[string]}],\"flows\":[{\"title\":string,\"description\":string,\"steps\":[{\
-\"title\":string,\"text\":string,\"component\":string|null,\"refs\":[string]}]}]}.";
+\"title\":string,\"text\":string,\"component\":string|null,\"via\":string|null,\"refs\":[string]}]}]}.",
+    crate::plain_rules!()
+);
 
 /// Strict JSON Schema of the overview answer.
 pub fn overview_schema() -> serde_json::Value {
@@ -289,11 +305,12 @@ pub fn overview_schema() -> serde_json::Value {
                             "items": {
                                 "type": "object",
                                 "additionalProperties": false,
-                                "required": ["title", "text", "component", "refs"],
+                                "required": ["title", "text", "component", "via", "refs"],
                                 "properties": {
                                     "title": { "type": "string" },
                                     "text": { "type": "string" },
                                     "component": { "type": ["string", "null"] },
+                                    "via": { "type": ["string", "null"] },
                                     "refs": refs
                                 }
                             }
@@ -353,6 +370,8 @@ struct RawStep {
     text: String,
     #[serde(default)]
     component: Option<String>,
+    #[serde(default)]
+    via: Option<String>,
     #[serde(default)]
     refs: Vec<String>,
 }
@@ -415,6 +434,11 @@ pub fn parse_overview(
                         text: bounded(&step.text),
                         entity_id: entity.map(|(id, _)| id.clone()),
                         entity_name: entity.map(|(_, name)| name.clone()),
+                        via: step
+                            .via
+                            .as_deref()
+                            .map(|via| via.trim().chars().take(MAX_VIA_CHARS).collect::<String>())
+                            .filter(|via| !via.is_empty()),
                         citations,
                     })
                 })
@@ -474,9 +498,14 @@ where
     ///
     /// `storage` on failure.
     pub fn current(&self, project_id: &str) -> Result<Option<OverviewView>, OverviewError> {
-        let Some(overview) = self.store.overview(project_id)? else {
+        let Some(mut overview) = self.store.overview(project_id)? else {
             return Ok(None);
         };
+        // An overview stored before the architecture existed gets it from
+        // the current map, without being rewritten.
+        if overview.architecture.is_empty() && !overview.flows.is_empty() {
+            overview.architecture = self.architecture(project_id, &overview.flows);
+        }
         let new_decisions = self
             .store
             .project_decisions(project_id)
@@ -541,6 +570,7 @@ where
             decisions: input.decisions,
             rules: input.rules,
             documents: input.documents,
+            architecture: self.architecture(project_id, &flows),
             summary,
             flows,
         };
@@ -558,6 +588,19 @@ where
             new_decisions: 0,
             queued_documents,
         })
+    }
+
+    /// The containers and interactions of the project's flows; empty (never
+    /// an error) when the map cannot be read, so the rest of the page stays.
+    fn architecture(&self, project_id: &str, flows: &[OverviewFlow]) -> Architecture {
+        let graph = KnowledgeGraph::new(self.store.clone());
+        match (
+            graph.project_map(project_id, None),
+            graph.project_graph(project_id, None),
+        ) {
+            (Ok(map), Ok(full)) => crate::architecture::derive(&map, &full, flows),
+            _ => Architecture::default(),
+        }
     }
 
     /// Builds the prompt content from the records of the project.
@@ -798,6 +841,105 @@ where
     }
 }
 
+impl<S, P, K, F> ProjectOverviews<S, P, K, F>
+where
+    S: GraphStore
+        + RelationStore
+        + ClaimStore
+        + ProjectRepository
+        + DecisionStore
+        + OverviewStore
+        + DocumentStore
+        + CaptureRepository
+        + InboxStore
+        + Clone,
+    P: ProfileStore,
+    K: SecretStore,
+    F: ExtractorFactory,
+    F::Extractor: StructuredModel,
+{
+    /// The architecture and flows page (`crate::page`) of the stored
+    /// overview, with the decisions in force and the rules valid now that
+    /// explain it. Reads only; never calls the provider.
+    ///
+    /// # Errors
+    ///
+    /// `nothing_recorded` when no overview is stored yet, `storage` on failure.
+    pub fn page(&self, project_id: &str, project_name: &str) -> Result<String, OverviewError> {
+        let view = self
+            .current(project_id)?
+            .ok_or(OverviewError::NothingRecorded)?;
+        let knowledge = self.knowledge(project_id, &view.overview.architecture)?;
+        Ok(crate::page::render(
+            project_name,
+            &view.overview,
+            &knowledge,
+        ))
+    }
+
+    /// The decisions and rules of the page, tied to the containers of
+    /// `architecture`.
+    ///
+    /// # Errors
+    ///
+    /// `storage` on failure.
+    pub fn knowledge(
+        &self,
+        project_id: &str,
+        architecture: &Architecture,
+    ) -> Result<PageKnowledge, OverviewError> {
+        // Superseded decisions come along only to name the other end of a
+        // relation; the page shows those in force.
+        let decisions = DecisionStore::list(
+            &self.store,
+            &DecisionQuery {
+                project_id: Some(project_id.to_owned()),
+                statuses: vec![DecisionStatus::Accepted, DecisionStatus::Superseded],
+                limit: MAX_PAGE_DECISIONS * 4,
+                before: None,
+            },
+        )
+        .map_err(storage)?;
+        let relations = self.store.project_relations(project_id).map_err(storage)?;
+        let graph = KnowledgeGraph::new(self.store.clone());
+        let map = graph.project_map(project_id, None).map_err(storage)?;
+        let full = graph.project_graph(project_id, None).map_err(storage)?;
+        let now = domain::time::Timestamp::parse(&now_rfc3339());
+        let claims: Vec<_> = self
+            .store
+            .project_claims(project_id)
+            .map_err(storage)?
+            .into_iter()
+            .filter(|claim| now.as_ref().is_some_and(|at| claim.is_valid_at(at)))
+            .collect();
+        // The significance criteria live on the candidate each decision came
+        // from; an unreadable candidate only leaves the decision without them.
+        let mut criteria: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for decision in decisions
+            .iter()
+            .filter(|decision| decision.status == DecisionStatus::Accepted)
+            .take(MAX_PAGE_DECISIONS * 2)
+        {
+            if let Ok(Some(candidate)) = InboxStore::get(&self.store, &decision.candidate_id) {
+                let ticked: Vec<String> =
+                    serde_json::from_str(&candidate.criteria).unwrap_or_default();
+                if !ticked.is_empty() {
+                    criteria.insert(decision.decision_id.clone(), ticked);
+                }
+            }
+        }
+        Ok(crate::page::assemble(
+            &decisions,
+            &criteria,
+            &claims,
+            &map,
+            &full,
+            &relations,
+            architecture,
+        ))
+    }
+}
+
 /// Product copy for a provider failure.
 fn provider_message(error: &ExtractError) -> String {
     match error {
@@ -822,6 +964,7 @@ where
         + OverviewStore
         + DocumentStore
         + CaptureRepository
+        + InboxStore
         + Clone
         + Send
         + Sync,
@@ -836,6 +979,10 @@ where
 
     fn generate(&self, project_id: &str) -> Result<OverviewView, OverviewError> {
         ProjectOverviews::generate(self, project_id)
+    }
+
+    fn page(&self, project_id: &str, project_name: &str) -> Result<String, OverviewError> {
+        ProjectOverviews::page(self, project_id, project_name)
     }
 }
 
@@ -876,7 +1023,7 @@ mod tests {
          "flows":[
            {"title":"Gravar","description":"x","steps":[
               {"title":"Recebe","text":"a","component":"Storage","refs":["d:aaaa1111"]},
-              {"title":"Valida","text":"b","component":null,"refs":["R:bbbb2222"]},
+              {"title":"Valida","text":"b","component":null,"via":"  HTTP/JSON ","refs":["R:bbbb2222"]},
               {"title":"Sem fonte","text":"c","component":null,"refs":[]}]},
            {"title":"Vago","description":"y","steps":[
               {"title":"Um","text":"a","component":null,"refs":["D:aaaa1111"]}]}]}
@@ -887,6 +1034,8 @@ mod tests {
         assert_eq!(flows[0].steps.len(), 2);
         assert_eq!(flows[0].steps[0].entity_id.as_deref(), Some("ent-1"));
         assert_eq!(flows[0].steps[1].citations[0].kind, "claim");
+        assert_eq!(flows[0].steps[0].via, None, "a step may name no medium");
+        assert_eq!(flows[0].steps[1].via.as_deref(), Some("HTTP/JSON"));
     }
 
     #[test]

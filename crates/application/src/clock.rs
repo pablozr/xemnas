@@ -15,6 +15,46 @@ pub(crate) fn now_rfc3339() -> String {
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
 }
 
+/// `timestamp` (RFC 3339 UTC, `Z`) moved by `hours`, in the same shape; `None`
+/// when it does not parse.
+pub(crate) fn add_hours(timestamp: &str, hours: i64) -> Option<String> {
+    add_seconds(timestamp, hours * 3_600)
+}
+
+/// `timestamp` (RFC 3339 UTC, `Z`) moved by `seconds`, in the same shape;
+/// `None` when it does not parse.
+pub(crate) fn add_seconds(timestamp: &str, seconds: i64) -> Option<String> {
+    let number =
+        |range: std::ops::Range<usize>| -> Option<i64> { timestamp.get(range)?.parse().ok() };
+    if timestamp.len() < 19 || timestamp.get(4..5)? != "-" || timestamp.get(10..11)? != "T" {
+        return None;
+    }
+    let (year, month, day) = (number(0..4)?, number(5..7)?, number(8..10)?);
+    let (hour, minute, second) = (number(11..13)?, number(14..16)?, number(17..19)?);
+    let total =
+        days_from_civil(year, month, day) * 86_400 + hour * 3_600 + minute * 60 + second + seconds;
+    let days = total.div_euclid(86_400);
+    let of_day = total.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    Some(format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        of_day / 3_600,
+        (of_day % 3_600) / 60,
+        of_day % 60
+    ))
+}
+
+/// Days since 1970-01-01 of a civil date (the inverse of [`civil_from_days`]).
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let month_prime = if month > 2 { month - 3 } else { month + 9 };
+    let day_of_year = (153 * month_prime + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
 /// Converts a count of days since 1970-01-01 into `(year, month, day)`.
 fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
     let shifted = days_since_epoch + 719_468;
@@ -41,7 +81,37 @@ fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
 
 #[cfg(test)]
 mod tests {
-    use super::{civil_from_days, now_rfc3339};
+    use super::{add_hours, civil_from_days, days_from_civil, now_rfc3339};
+
+    #[test]
+    fn days_from_civil_is_the_inverse_of_civil_from_days() {
+        for days in [-1, 0, 59, 60, 365, 19_723, 20_000, 25_000] {
+            let (year, month, day) = civil_from_days(days);
+            assert_eq!(days_from_civil(year, month, day), days);
+        }
+    }
+
+    #[test]
+    fn hours_are_added_across_days_months_and_years() {
+        assert_eq!(
+            add_hours("2026-10-02T12:30:05Z", 24).as_deref(),
+            Some("2026-10-03T12:30:05Z")
+        );
+        assert_eq!(
+            add_hours("2026-12-31T23:00:00Z", 2).as_deref(),
+            Some("2027-01-01T01:00:00Z")
+        );
+        assert_eq!(
+            add_hours("2028-02-28T12:00:00Z", 24).as_deref(),
+            Some("2028-02-29T12:00:00Z"),
+            "2028 is a leap year"
+        );
+        assert_eq!(
+            add_hours("2026-10-02T12:00:00Z", -13).as_deref(),
+            Some("2026-10-01T23:00:00Z")
+        );
+        assert_eq!(add_hours("not a date", 1), None);
+    }
 
     #[test]
     fn civil_from_days_matches_known_dates() {

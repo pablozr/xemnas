@@ -132,6 +132,7 @@ const PURGE_STATEMENTS: &[&str] = &[
     "DELETE FROM jobs WHERE kind = 'refresh_observations' AND payload = ?1",
     "DELETE FROM jobs WHERE kind = 'context_routing' AND payload = ?1",
     "DELETE FROM context_routing_entries WHERE project_id = ?1",
+    "DELETE FROM auto_reviews WHERE project_id = ?1",
     "DELETE FROM project_overviews WHERE project_id = ?1",
     "DELETE FROM project_documents WHERE project_id = ?1",
     "DELETE FROM relation_suggestions WHERE project_id = ?1",
@@ -154,7 +155,7 @@ const PURGE_STATEMENTS: &[&str] = &[
     "DELETE FROM decision_revisions WHERE decision_id IN \
      (SELECT decision_id FROM engineering_decisions WHERE project_id = ?1)",
     "DELETE FROM engineering_decisions WHERE project_id = ?1",
-    "DELETE FROM jobs WHERE kind = 'analyze_capture' AND payload IN \
+    "DELETE FROM jobs WHERE kind IN ('analyze_capture', 'analyze_document') AND payload IN \
      (SELECT capture_id FROM capture_receipts \
       WHERE canonical_path = (SELECT location FROM projects WHERE id = ?1))",
     "DELETE FROM capture_receipts \

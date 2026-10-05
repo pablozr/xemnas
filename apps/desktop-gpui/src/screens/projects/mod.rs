@@ -27,7 +27,7 @@ use crate::ui::feedback::{error_state, status_dot, StatusKind};
 use crate::ui::glass::focus_ring;
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
-    count_chip, hover_tint, mark_selected, panel_title, section_label, track_hover,
+    count_chip, hover_tint, mark_selected, meter_stack, panel_title, section_label, track_hover,
 };
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme};
@@ -935,52 +935,75 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                 .text_color(colors.text_secondary())
                 .child("Este projeto ainda não tem dados; só o cadastro será apagado.")
                 .into_any_element(),
-            Some(impact) => div()
-                .flex()
-                .flex_col()
-                .gap(px(2.0))
-                .children(
-                    [
-                        (
-                            impact.decisions,
-                            "decisão com versões e relações",
-                            "decisões com versões e relações",
+            Some(impact) => {
+                let kinds = [
+                    (
+                        impact.decisions,
+                        colors.accent_default(),
+                        "decisão com versões e relações",
+                        "decisões com versões e relações",
+                    ),
+                    (
+                        impact.candidates,
+                        colors.status_info(),
+                        "candidato",
+                        "candidatos",
+                    ),
+                    (
+                        impact.claims,
+                        colors.status_success(),
+                        "regra do projeto",
+                        "regras do projeto",
+                    ),
+                    (
+                        impact.captures,
+                        colors.status_warning(),
+                        "captura com evidências",
+                        "capturas com evidências",
+                    ),
+                    (
+                        impact.injections,
+                        colors.text_muted(),
+                        "registro de contexto enviado",
+                        "registros de contexto enviado",
+                    ),
+                ];
+                // What the project is made of, in one bar; the rows name it.
+                let parts: Vec<(usize, gpui::Rgba)> = kinds
+                    .iter()
+                    .map(|(count, color, _, _)| ((*count).max(0) as usize, *color))
+                    .collect();
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S2))
+                    .child(meter_stack(theme, &parts))
+                    .child(div().flex().flex_col().gap(px(2.0)).children(
+                        kinds.into_iter().filter(|(count, ..)| *count > 0).map(
+                            |(count, color, one, many)| {
+                                let label = if count == 1 { one } else { many };
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(SpacingScale::S2))
+                                    .child(div().size(px(6.0)).flex_none().rounded_full().bg(color))
+                                    .child(
+                                        text_style(div(), TypeScale::ROW_TITLE)
+                                            .w(px(40.0))
+                                            .flex_none()
+                                            .text_color(colors.status_danger())
+                                            .child(count.to_string()),
+                                    )
+                                    .child(
+                                        text_style(div(), TypeScale::BODY_SMALL)
+                                            .text_color(colors.text_secondary())
+                                            .child(label),
+                                    )
+                            },
                         ),
-                        (impact.candidates, "candidato", "candidatos"),
-                        (impact.claims, "regra do projeto", "regras do projeto"),
-                        (
-                            impact.captures,
-                            "captura com evidências",
-                            "capturas com evidências",
-                        ),
-                        (
-                            impact.injections,
-                            "registro de contexto enviado",
-                            "registros de contexto enviado",
-                        ),
-                    ]
-                    .into_iter()
-                    .filter(|(count, _, _)| *count > 0)
-                    .map(|(count, one, many)| {
-                        let label = if count == 1 { one } else { many };
-                        div()
-                            .flex()
-                            .gap(px(SpacingScale::S2))
-                            .child(
-                                text_style(div(), TypeScale::ROW_TITLE)
-                                    .w(px(40.0))
-                                    .flex_none()
-                                    .text_color(colors.status_danger())
-                                    .child(count.to_string()),
-                            )
-                            .child(
-                                text_style(div(), TypeScale::BODY_SMALL)
-                                    .text_color(colors.text_secondary())
-                                    .child(label),
-                            )
-                    }),
-                )
-                .into_any_element(),
+                    ))
+                    .into_any_element()
+            }
         };
         div()
             .flex()

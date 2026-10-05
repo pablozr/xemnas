@@ -314,7 +314,7 @@ fn migration_0005_applies_on_fresh_and_upgraded_databases() {
                  ALTER TABLE decision_revisions DROP COLUMN qualifiers;
                  ALTER TABLE context_claims DROP COLUMN qualifiers;
                  ALTER TABLE claim_suggestions DROP COLUMN qualifiers;
-                 DELETE FROM schema_migrations WHERE version IN (5, 15, 21);",
+                 DELETE FROM schema_migrations WHERE version IN (5, 15, 25);",
             )
             .expect("simulate version 4");
     }
@@ -323,7 +323,7 @@ fn migration_0005_applies_on_fresh_and_upgraded_databases() {
     Connection::open(&database)
         .expect("raw")
         .execute_batch(
-            include_str!("../src/migrations/0033_incremental_review.sql")
+            include_str!("../src/migrations/0037_incremental_review.sql")
                 .split("CREATE TRIGGER")
                 .skip(1)
                 .map(|part| format!("CREATE TRIGGER IF NOT EXISTS{part}"))

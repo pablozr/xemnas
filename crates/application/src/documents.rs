@@ -15,7 +15,7 @@ use crate::captures::{
     CaptureArtifactRecord, CaptureCheckpointRecord, CaptureError, CaptureReceiptRecord,
     CaptureRepository, CaptureWrite,
 };
-use crate::jobs::{JobRecord, JobState, ANALYZE_CAPTURE_KIND};
+use crate::jobs::{JobRecord, JobState, ANALYZE_DOCUMENT_KIND};
 use crate::projects::ProjectRepository;
 use crate::redact::redact_secrets;
 
@@ -58,6 +58,10 @@ const MAX_DEPTH: usize = 6;
 const MAX_HEADINGS: usize = 12;
 /// Characters of the opening paragraph kept.
 const EXCERPT_CHARS: usize = 600;
+
+mod digest;
+
+pub use digest::{digest as digest_document, Digest, Verdict, DIGEST_CHARS};
 
 /// Artifact kind of a document sent to extraction.
 pub const DOCUMENT_ARTIFACT: &str = "document";
@@ -259,11 +263,10 @@ where
             .map_err(|error| DocumentError::Storage(error.to_string()))?
             .ok_or(DocumentError::ProjectNotFound)?;
         let root = PathBuf::from(&project.location);
-        let mut queued = 0;
+        // What would be queued: new or changed documents that have central
+        // parts, with only those parts. The rest never reaches Revisão.
+        let mut candidates: Vec<(ProjectDocument, digest::Digest)> = Vec::new();
         for document in self.list(project_id)? {
-            if queued >= limit {
-                break;
-            }
             let key = document_capture_key(project_id, &document);
             if self
                 .store
@@ -283,11 +286,31 @@ where
             if content.trim().is_empty() {
                 continue;
             }
+            let digest = digest::digest(document.kind, &document.path, &content);
+            if digest.verdict == digest::Verdict::Central {
+                candidates.push((document, digest));
+            }
+        }
+        // ADRs and specifications first, and within a kind the ones that
+        // speak most in decisions.
+        candidates.sort_by(|left, right| {
+            (left.0.kind, std::cmp::Reverse(left.1.score), &left.0.path).cmp(&(
+                right.0.kind,
+                std::cmp::Reverse(right.1.score),
+                &right.0.path,
+            ))
+        });
+        let mut queued = 0;
+        for (document, digest) in candidates {
+            if queued >= limit {
+                break;
+            }
+            let key = document_capture_key(project_id, &document);
             match self.store.insert_capture(&document_capture(
                 &project.location,
                 &key,
                 &document,
-                content,
+                digest,
             )) {
                 Ok(()) => queued += 1,
                 Err(CaptureError::DuplicateIdempotencyKey) => {}
@@ -310,14 +333,16 @@ fn document_capture(
     location: &str,
     key: &str,
     document: &ProjectDocument,
-    content: String,
+    digest: digest::Digest,
 ) -> CaptureWrite {
+    let content = digest.text;
     let now = crate::clock::now_rfc3339();
     let capture_id = uuid::Uuid::now_v7().to_string();
     let metadata = serde_json::json!({
         "file": document.path,
         "doc_kind": document.kind.as_str(),
         "title": document.title,
+        "sections": digest.sections,
     })
     .to_string();
     CaptureWrite {
@@ -338,7 +363,7 @@ fn document_capture(
         }],
         job: JobRecord {
             id: uuid::Uuid::now_v7().to_string(),
-            kind: ANALYZE_CAPTURE_KIND.to_string(),
+            kind: ANALYZE_DOCUMENT_KIND.to_string(),
             payload: capture_id.clone(),
             state: JobState::Queued,
             idempotent: true,
@@ -430,6 +455,26 @@ fn walk(
 fn documentation_extension(name: &str) -> bool {
     name.rsplit_once('.')
         .is_some_and(|(_, extension)| EXTENSIONS.contains(&extension.to_lowercase().as_str()))
+}
+
+/// Whether a project-relative path is documentation: a Markdown, reST or
+/// AsciiDoc file anywhere, or a `.txt` inside a documentation folder
+/// (`requirements.txt` at the root is a manifest, not a document).
+///
+/// Documentation is evidence of a decision, not the part it affects: the map
+/// does not derive `affects` from these paths (ADR-0005).
+pub fn is_documentation_path(path: &str) -> bool {
+    let path = domain::entities::normalize_path(path).to_lowercase();
+    let name = path.rsplit('/').next().unwrap_or(&path);
+    if !documentation_extension(name) {
+        return false;
+    }
+    if !name.ends_with(".txt") {
+        return true;
+    }
+    path.split('/')
+        .next()
+        .is_some_and(|folder| folder != name && DOC_DIRS.contains(&folder))
 }
 
 fn read(project_id: &str, relative: &str, path: &Path, now: &str) -> Option<ProjectDocument> {
@@ -614,6 +659,17 @@ fn fingerprint(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn documentation_paths_are_text_documents_not_manifests() {
+        assert!(is_documentation_path("docs/arquitetura/adr/0005-grafo.md"));
+        assert!(is_documentation_path("README.md"));
+        assert!(is_documentation_path("crates\\core\\NOTES.MD"));
+        assert!(is_documentation_path("docs/notas.txt"));
+        assert!(!is_documentation_path("requirements.txt"));
+        assert!(!is_documentation_path("crates/core/src/lib.rs"));
+        assert!(!is_documentation_path("docs/build.rs"));
+    }
 
     #[test]
     fn kinds_come_from_place_and_name() {

@@ -1,21 +1,23 @@
 //! Xemnas, the assistant: the mascot that sits at the foot of the sidebar
 //! and the panel it opens.
 //!
-//! The mascot is a pre-rendered toon figure (`assets/mascot/*.png`, rendered
+//! The mascot is a pre-rendered toon figure (`assets/mascot`, rendered
 //! offline from a signed-distance model) so it reads as 3D without a 3D
-//! renderer in the app. It floats, blinks and glances; with reduced motion it
-//! only blinks. The panel offers what the app can actually do now: it reports
+//! renderer in the app; `mascot.rs` plays its frames. It floats, blinks and
+//! glances, every move computed from the clock at the display's own rate and
+//! only while it lasts; with reduced motion it only blinks. The panel offers what the app can actually do now: it reports
 //! the real queue and takes the person to the right screen. Conversation with
 //! a model is not wired yet, and the panel says so instead of faking it.
 
 use std::sync::{Arc, LazyLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui::prelude::*;
 use gpui::{
-    div, img, px, Animation, AnimationExt, AnyElement, Context, Div, ElementId, EventEmitter,
-    Image, ImageFormat, Render, Role, Window,
+    div, img, px, AnyElement, Context, Div, EventEmitter, Image, ImageFormat, Render, Role, Window,
 };
+
+use super::mascot::{self, Pose};
 
 use crate::ui::controls::{focus_ring, icon_action};
 use crate::ui::icons::{icon, IconName};
@@ -37,11 +39,8 @@ macro_rules! sprite {
     };
 }
 
-static IDLE: LazyLock<Arc<Image>> = sprite!("idle.png");
 static BLINK: LazyLock<Arc<Image>> = sprite!("blink.png");
 static GLOW: LazyLock<Arc<Image>> = sprite!("glow.png");
-static LEFT: LazyLock<Arc<Image>> = sprite!("left.png");
-static RIGHT: LazyLock<Arc<Image>> = sprite!("right.png");
 
 /// The mascot at rest, eyes lit: for the opening mark and empty states.
 pub fn portrait() -> Arc<Image> {
@@ -60,12 +59,14 @@ const PORTRAIT_SIZE: f32 = 44.0;
 /// Width and height of the panel.
 pub const PANEL_WIDTH: f32 = 400.0;
 const PANEL_HEIGHT: f32 = 540.0;
-/// One beat of the idle loop; blinks and glances land on beats.
-const BEAT: Duration = Duration::from_millis(650);
 /// One breath of the docked mascot: rise and settle.
-const BREATH: Duration = Duration::from_millis(1800);
-/// Beats between breaths (~5 s at [`BEAT`]).
-const BREATH_EVERY: u64 = 8;
+const BREATH: Duration = Duration::from_millis(2200);
+/// Height of a breath, in pixels.
+const BREATH_LIFT: f32 = 3.0;
+/// How long the eyes take to light or dim.
+const GLOW_FADE: Duration = Duration::from_millis(160);
+/// Quiet time between one thing the mascot does and the next.
+const REST: Duration = Duration::from_millis(2600);
 
 /// Where the assistant can take the person.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,12 +99,53 @@ impl AssistantRoute {
 /// Emitted when the person picks a place in the panel.
 pub struct AssistantGo(pub AssistantRoute);
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Pose {
-    Idle,
+/// One thing the mascot does, played from its start by the clock.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Gesture {
     Blink,
-    Left,
-    Right,
+    Look(usize),
+}
+
+impl Gesture {
+    fn duration(self) -> Duration {
+        match self {
+            Self::Blink => Duration::from_millis(190),
+            Self::Look(_) => Duration::from_millis(1300),
+        }
+    }
+
+    /// The frame `t` (0 to 1) into the gesture.
+    fn frame(self, t: f32) -> usize {
+        match self {
+            // Shut and open again: 0, 1 .. 4 .. 1, 0 closed steps.
+            Self::Blink => {
+                let closed = 1.0 - (2.0 * t - 1.0).abs();
+                match (closed * mascot::BLINK_STEPS as f32).round() as usize {
+                    0 => mascot::REST,
+                    step => mascot::BLINK_FIRST + step - 1,
+                }
+            }
+            // Turn, hold, turn back, each leg eased so it starts and ends
+            // slowly.
+            Self::Look(to) => {
+                let turn = if t < 0.2 {
+                    smooth(t / 0.2)
+                } else if t < 0.65 {
+                    1.0
+                } else {
+                    1.0 - smooth((t - 0.65) / 0.35)
+                };
+                let rest = mascot::REST as f32;
+                (rest + (to as f32 - rest) * turn).round() as usize
+            }
+        }
+    }
+}
+
+/// Ease in and out over 0 to 1.
+fn smooth(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 /// What the assistant knows to say: only real numbers from the shell.
@@ -120,10 +162,15 @@ pub struct AssistantScreen {
     /// The panel, held mounted while it leaves.
     panel: Popup<()>,
     hovered: bool,
-    pose: Pose,
-    beat: u64,
-    /// Breaths taken: each one keys a fresh one-shot rise.
-    breath: u64,
+    /// What it is doing now with the head or eyes, and when it began.
+    gesture: Option<(Gesture, Instant)>,
+    /// When the current breath began.
+    breath: Option<Instant>,
+    /// How lit the eyes were when they last changed, where they are headed
+    /// and when that began.
+    glow_from: f32,
+    glow_to: bool,
+    glow_at: Instant,
     briefing: Briefing,
     focus: gpui::FocusHandle,
 }
@@ -131,43 +178,62 @@ pub struct AssistantScreen {
 impl EventEmitter<AssistantGo> for AssistantScreen {}
 
 impl AssistantScreen {
-    /// Starts the idle loop (blinks and glances on a slow beat).
+    /// Starts the idle routine: every few seconds a blink, a breath or a
+    /// glance, in turn.
     pub fn new(cx: &mut Context<Self>) -> Self {
-        // The idle loop: a blink every few beats and, now and then, a glance.
-        cx.spawn(async move |this, cx| loop {
-            cx.background_executor().timer(BEAT).await;
-            let alive = this.update(cx, |screen, cx| {
-                screen.beat = screen.beat.wrapping_add(1);
-                let still = cx.reduce_motion();
-                let next = match screen.beat % 16 {
-                    5 | 13 => Pose::Blink,
-                    9 if !still => Pose::Left,
-                    10 if !still => Pose::Right,
-                    _ => Pose::Idle,
+        cx.spawn(async move |this, cx| {
+            let mut round = 0_usize;
+            loop {
+                cx.background_executor().timer(REST).await;
+                let (still, idle) = match this.update(cx, |_, cx| {
+                    (
+                        cx.reduce_motion(),
+                        !crate::ui::motion::clock::window_active(cx),
+                    )
+                }) {
+                    Ok(state) => state,
+                    Err(_) => break,
                 };
-                let mut changed = next != screen.pose;
-                screen.pose = next;
-                // A breath every eight beats: one smooth rise and settle at
-                // the display's own rate, then stillness until the next.
-                if !still && screen.beat % BREATH_EVERY == 1 {
-                    screen.breath = screen.breath.wrapping_add(1);
-                    changed = true;
+                // Nothing moves in a window nobody is looking at.
+                if idle {
+                    continue;
                 }
-                if changed {
+                let gesture = match round % 6 {
+                    0 | 3 => Some(Gesture::Blink),
+                    2 if !still => Some(Gesture::Look(mascot::LOOK_LEFT)),
+                    5 if !still => Some(Gesture::Look(mascot::LOOK_RIGHT)),
+                    _ => None,
+                };
+                let breathe = !still && matches!(round % 6, 1 | 4);
+                let wait = gesture.map_or(if breathe { BREATH } else { Duration::ZERO }, |g| {
+                    g.duration()
+                });
+                let started = this.update(cx, |screen, cx| {
+                    let now = Instant::now();
+                    if let Some(gesture) = gesture {
+                        screen.gesture = Some((gesture, now));
+                    }
+                    if breathe {
+                        screen.breath = Some(now);
+                    }
                     cx.notify();
+                });
+                if started.is_err() {
+                    break;
                 }
-            });
-            if alive.is_err() {
-                break;
+                cx.background_executor().timer(wait).await;
+                round = round.wrapping_add(1);
             }
         })
         .detach();
         Self {
             panel: Popup::default(),
             hovered: false,
-            pose: Pose::Idle,
-            beat: 0,
-            breath: 0,
+            gesture: None,
+            breath: None,
+            glow_from: 0.0,
+            glow_to: false,
+            glow_at: Instant::now(),
             briefing: Briefing::default(),
             focus: cx.focus_handle().tab_stop(true),
         }
@@ -206,15 +272,58 @@ impl AssistantScreen {
         }
     }
 
-    fn sprite(&self) -> Arc<Image> {
-        if self.hovered || self.panel.is_open() {
-            return GLOW.clone();
+    /// What the mascot looks like now, computed from the clock: the frame of
+    /// the head, how high it floats and how lit the eyes are.
+    fn pose(&mut self, cx: &mut Context<Self>) -> Pose {
+        let now = Instant::now();
+        let still = cx.reduce_motion();
+        let mut animating = false;
+
+        let lit = self.hovered || self.panel.is_open();
+        let level = |from: f32, to: bool, at: Instant| {
+            let target = if to { 1.0 } else { 0.0 };
+            if still {
+                return (target, false);
+            }
+            let t = now.duration_since(at).as_secs_f32() / GLOW_FADE.as_secs_f32();
+            (from + (target - from) * smooth(t), t < 1.0)
+        };
+        if lit != self.glow_to {
+            self.glow_from = level(self.glow_from, self.glow_to, self.glow_at).0;
+            self.glow_to = lit;
+            self.glow_at = now;
         }
-        match self.pose {
-            Pose::Idle => IDLE.clone(),
-            Pose::Blink => BLINK.clone(),
-            Pose::Left => LEFT.clone(),
-            Pose::Right => RIGHT.clone(),
+        let (glow, fading) = level(self.glow_from, self.glow_to, self.glow_at);
+        animating |= fading;
+
+        let mut frame = mascot::REST;
+        if let Some((gesture, began)) = self.gesture {
+            let t = now.duration_since(began).as_secs_f32() / gesture.duration().as_secs_f32();
+            if t < 1.0 {
+                frame = gesture.frame(t);
+                animating = true;
+            } else {
+                self.gesture = None;
+            }
+        }
+
+        let mut lift = 0.0;
+        if let (Some(began), false) = (self.breath, still) {
+            let t = now.duration_since(began).as_secs_f32() / BREATH.as_secs_f32();
+            if t < 1.0 {
+                // A raised cosine: rises and settles with no velocity at either
+                // end, so there is no start or stop to see.
+                lift = BREATH_LIFT * (0.5 - 0.5 * (t * std::f32::consts::TAU).cos());
+                animating = true;
+            } else {
+                self.breath = None;
+            }
+        }
+        Pose {
+            frame,
+            lift,
+            glow,
+            animating,
         }
     }
 
@@ -231,25 +340,10 @@ impl AssistantScreen {
     fn render_dock(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
         let colors = theme.colors;
-        // The breath: a one-shot rise of 3 px and back, at the display's
-        // rate, keyed by the breath count so each plays once. Between
-        // breaths nothing animates and nothing redraws. A continuous float
-        // stepped at a throttled rate read as lag; a full-rate one would
-        // never let the window rest.
-        let figure = div()
-            .relative()
-            .child(img(self.sprite()).size(px(DOCK_SIZE)).flex_none());
-        let figure: AnyElement = if cx.reduce_motion() || self.breath == 0 {
-            figure.into_any_element()
-        } else {
-            figure
-                .with_animation(
-                    ElementId::Name(format!("assistant-breath-{}", self.breath).into()),
-                    Animation::new(BREATH).with_easing(gpui::ease_in_out),
-                    |figure, t| figure.top(px(-3.0 * (t * std::f32::consts::PI).sin())),
-                )
-                .into_any_element()
-        };
+        // Every move is the clock choosing a frame and a sub-pixel lift
+        // (`mascot.rs`); between moves nothing animates and nothing redraws.
+        let pose = self.pose(cx);
+        let figure = mascot::figure(DOCK_SIZE, pose);
         let pending = self.briefing.pending.unwrap_or(0) > 0;
         div()
             .id("assistant-dock")

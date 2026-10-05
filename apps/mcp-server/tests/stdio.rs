@@ -100,7 +100,8 @@ fn a_session_initializes_lists_tools_and_opens_a_decision() {
     );
     assert_eq!(
         responses[1]["result"]["tools"].as_array().map(Vec::len),
-        Some(2)
+        Some(3),
+        "get_decision, search_context and file_context"
     );
     assert_eq!(
         responses[2]["result"]["content"][0]["text"],

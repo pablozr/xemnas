@@ -850,3 +850,85 @@ fn connection_test_flags_an_answer_that_breaks_the_contract() {
     let result = test_connection(&profile, "sk-synthetic".to_string());
     assert_eq!(result.map_err(|error| error.code()), Err("validation"));
 }
+
+#[test]
+fn a_429_is_a_pause_with_its_retry_after_and_is_not_retried_in_the_call() {
+    let server = start_server(
+        "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7",
+        b"slow down".to_vec(),
+    );
+    let profile = granted_profile(server.port, 64);
+    let (sleep, delays) = recording_sleep();
+    let extractor = OpenAiCompatibleExtractor::new(&profile, "sk-synthetic".to_string())
+        .expect("new")
+        .with_sleep(sleep);
+
+    let error = extractor
+        .extract(&evidence(SCHEMA_DIFF), &[RelevanceSignal::PublicContract])
+        .expect_err("a 429 does not succeed");
+    assert_eq!(
+        error,
+        ExtractError::RateLimited {
+            retry_after: Some(Duration::from_secs(7))
+        }
+    );
+    assert!(error.is_deferred(), "the job goes back to the queue");
+    assert_eq!(server.requests.load(Ordering::SeqCst), 1);
+    assert!(
+        delays.lock().expect("lock").is_empty(),
+        "no sleep inside the call"
+    );
+}
+
+#[test]
+fn timeouts_and_5xx_end_as_unavailable_so_the_job_is_requeued() {
+    let server = start_sequence_server(vec![(
+        "HTTP/1.1 503 Service Unavailable",
+        b"try later".to_vec(),
+    )]);
+    let profile = granted_profile(server.port, 64);
+    let extractor = OpenAiCompatibleExtractor::new(&profile, "sk-synthetic".to_string())
+        .expect("new")
+        .with_sleep(no_sleep());
+    let error = extractor
+        .extract(&evidence(SCHEMA_DIFF), &[RelevanceSignal::PublicContract])
+        .expect_err("every attempt fails");
+    assert_eq!(error, ExtractError::Unavailable { attempts: 3 });
+    assert!(error.is_deferred());
+}
+
+#[test]
+fn a_429_pauses_every_call_behind_the_shared_limiter() {
+    use ai_provider::{ChatGptSession, ProviderFactory};
+    use application::analysis::ExtractorFactory;
+    use application::limiter::ProviderLimiter;
+
+    let server = start_server("HTTP/1.1 429 Too Many Requests", b"slow down".to_vec());
+    let profile = granted_profile(server.port, 64);
+    let limiter = ProviderLimiter::new(2);
+    let factory =
+        ProviderFactory::new(Arc::new(ChatGptSession::default())).with_limiter(limiter.clone());
+    let first = factory
+        .external(&profile, "sk-synthetic".to_string())
+        .expect("extractor");
+    let error = first
+        .extract(&evidence(SCHEMA_DIFF), &[RelevanceSignal::PublicContract])
+        .expect_err("rate limited");
+    assert!(matches!(error, ExtractError::RateLimited { .. }));
+    assert_eq!(limiter.active(), 0, "the slot is released");
+
+    let second = factory
+        .external(&profile, "sk-synthetic".to_string())
+        .expect("extractor");
+    match second.extract(&evidence(SCHEMA_DIFF), &[RelevanceSignal::PublicContract]) {
+        Err(ExtractError::RateLimited {
+            retry_after: Some(left),
+        }) => assert!(left <= Duration::from_secs(20)),
+        other => panic!("expected the shared pause, got {other:?}"),
+    }
+    assert_eq!(
+        server.requests.load(Ordering::SeqCst),
+        1,
+        "nobody calls the provider during the pause"
+    );
+}

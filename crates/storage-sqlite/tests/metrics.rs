@@ -118,8 +118,9 @@ fn candidate(
         project_id: "project-1".to_string(),
         capture_id: capture_id.to_string(),
         status: status.to_string(),
-        question: "q".to_string(),
-        choice: "c".to_string(),
+        // Distinct per id: equal questions would form one review group.
+        question: format!("q-{id}"),
+        choice: format!("c-{id}"),
         rationale: "r".to_string(),
         signals: "[]".to_string(),
         confidence: 0.5,
@@ -252,10 +253,75 @@ fn metrics_are_aggregated_from_seeded_timestamps() {
     assert_eq!(document.metrics.noise.decided_total, 4);
     assert_eq!(document.metrics.noise.dismissed_ratio, Some(0.25));
 
+    let calibration = &document.metrics.calibration;
+    assert_eq!(calibration.decided, 4);
+    assert_eq!(
+        (
+            calibration.accepted,
+            calibration.edited,
+            calibration.dismissed
+        ),
+        (2, 1, 1)
+    );
+    assert_eq!(
+        calibration.verdict,
+        application::calibration::Verdict::TooFew,
+        "four decisions answer nothing"
+    );
+
     assert_eq!(document.metrics.losses.assessments_failed, 2);
     assert_eq!(document.metrics.losses.assessments_skipped, 1);
     assert_eq!(document.metrics.losses.jobs_failed, 1);
     assert_eq!(document.metrics.losses.outbox_rejected, 1);
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn the_briefing_counts_what_arrived_after_the_previous_visit() {
+    let root = temporary_directory("briefing");
+    let store = SqliteStore::open(root.join("app.db")).expect("open store");
+    ProjectRepository::insert(
+        &store,
+        &ProjectRecord::new(
+            "project-1".to_string(),
+            LOCATION.to_string(),
+            "2026-01-01T00:00:00Z".to_string(),
+        ),
+    )
+    .expect("seed project");
+    seed_capture(&store, "capture-1", "session-1", "2026-01-01T00:00:00Z");
+    store
+        .insert_candidates(&[
+            candidate("old", "capture-1", "2026-01-01T00:00:01Z", "pending"),
+            candidate("new-1", "capture-1", "2026-01-02T00:00:00Z", "pending"),
+            candidate("new-2", "capture-1", "2026-01-03T00:00:00Z", "pending"),
+        ])
+        .expect("insert candidates");
+    Inbox::new(store.clone())
+        .confirm("new-1", None)
+        .expect("confirm a new candidate");
+    Inbox::new(store.clone())
+        .confirm("old", None)
+        .expect("confirm an old candidate");
+
+    let inbox = Inbox::new(store.clone());
+    let briefing = inbox
+        .briefing("project-1", "2026-01-01T12:00:00Z")
+        .expect("briefing");
+    assert_eq!(briefing.since, "2026-01-01T12:00:00Z");
+    assert_eq!(briefing.new_candidates, 2, "the two after the visit");
+    assert_eq!(briefing.deliveries, 0);
+    assert!(!briefing.is_quiet());
+
+    let later = inbox
+        .briefing("project-1", "2999-01-01T00:00:00Z")
+        .expect("briefing");
+    assert!(later.is_quiet(), "nothing after the end of time");
+    let other = inbox
+        .briefing("another-project", "2000-01-01T00:00:00Z")
+        .expect("briefing");
+    assert!(other.is_quiet(), "other projects do not leak in");
 
     let _ = std::fs::remove_dir_all(&root);
 }

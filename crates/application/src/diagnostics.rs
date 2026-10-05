@@ -216,6 +216,9 @@ pub struct DiagnosticsMetrics {
     /// Context injection volume.
     #[serde(default)]
     pub context: ContextMetrics,
+    /// Whether the extractor's confidence predicts what is accepted.
+    #[serde(default)]
+    pub calibration: crate::calibration::Calibration,
 }
 
 /// The exported diagnostics document.

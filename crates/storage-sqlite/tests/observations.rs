@@ -5,6 +5,8 @@ use application::observations::*;
 use application::projects::{ProjectRecord, ProjectRepository};
 use storage_sqlite::SqliteStore;
 
+mod rewind;
+
 fn fixture() -> (std::path::PathBuf, SqliteStore) {
     let root = std::env::temp_dir().join(format!(
         "observations-{}-{}",
@@ -424,34 +426,12 @@ fn registered_root_replaced_by_junction_is_rejected() {
 }
 
 #[test]
-fn upgrade_24_to_current_preserves_project() {
+fn upgrade_28_to_current_preserves_project() {
     let (root, store) = fixture();
     drop(store);
     let connection = rusqlite::Connection::open(root.join("db.sqlite")).unwrap();
-    // Reconstruct the pre-observation schema without modifying earlier tables.
-    connection
-        .execute_batch("PRAGMA foreign_keys=OFF;")
-        .unwrap();
-    let mut statement = connection
-        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'observation_%'")
-        .unwrap();
-    let tables = statement
-        .query_map([], |r| r.get::<_, String>(0))
-        .unwrap()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
-    drop(statement);
-    for table in tables {
-        connection
-            .execute_batch(&format!("DROP TABLE {table};"))
-            .unwrap();
-    }
-    connection
-        .execute_batch("DROP TABLE context_routing_entries;")
-        .unwrap();
-    connection
-        .execute("DELETE FROM schema_migrations WHERE version>=25", [])
-        .unwrap();
+    // The schema just before descriptive observations (migration 29).
+    rewind::rewind(&connection, 28);
     drop(connection);
     let store = SqliteStore::open(root.join("db.sqlite")).unwrap();
     assert!(ProjectRepository::get(&store, "p").unwrap().is_some());
@@ -463,7 +443,7 @@ fn upgrade_24_to_current_preserves_project() {
             r.get(0)
         })
         .unwrap();
-    assert_eq!(version, 29);
+    assert_eq!(version, 39);
     drop(connection);
     std::fs::remove_dir_all(root).unwrap();
 }

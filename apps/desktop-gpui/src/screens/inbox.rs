@@ -10,6 +10,8 @@ pub type ProgressRead = Arc<dyn Fn(&str) -> Result<Vec<CaptureProgress>, String>
 pub type ProgressRetry = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 
 use application::adoption::{AdoptionApi, AdoptionError, AdoptionPreview, ProposedLink};
+use application::auto_approval::{ApprovalsApi, By, Entry, ItemKind, Mode, Status, Verdict};
+use application::briefing::Briefing;
 use application::extract::{CandidateKind, MIN_SIGNIFICANCE};
 use application::inbox::{
     CandidateDetail, CandidateEdits, CandidateStatus, CandidateSummary, Inbox, InboxError,
@@ -19,30 +21,51 @@ use application::review_exception::{ReviewExceptionStore, ReviewGroup, ReviewMet
 use domain::entities::{EdgeKind, EntityKind};
 use gpui::prelude::*;
 use gpui::{
-    div, px, AnyElement, Context, Div, ElementId, Entity, FocusHandle, Render, Role, ScrollHandle,
-    Stateful, Subscription, Window,
+    div, px, AnyElement, Context, Div, ElementId, Entity, EventEmitter, FocusHandle, Render, Role,
+    ScrollHandle, Stateful, Subscription, Window,
 };
 
+use super::context::OpenDecision;
 use super::evidence;
-use super::format::short_date;
+use super::format::{plural, relative, short_date};
 use super::review_editor::{EditorEvent, ReviewEditor};
 use crate::ui::controls::{action_button, button_foreground, ButtonKind};
 use crate::ui::glass::focus_ring;
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
-    action_footer, count_chip, error_banner, fade_in, hover_tint, kbd, mark_selected, panel_title,
-    reading_title, section_header, section_label, skeleton_list, status_pill, tag, toast,
-    track_hover, word_wrapped, READING_WIDTH, TOAST_DURATION,
+    action_footer, count_chip, error_banner, fade_in, hover_tint, kbd, mark_selected, meter,
+    panel_title, reading_title, section_header, section_label, skeleton_list, status_pill, tag,
+    toast_with, track_hover, word_wrapped, READING_WIDTH, TOAST_DURATION,
 };
 use crate::ui::search_field::SearchField;
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{SpacingScale, TypeScale};
+use crate::ui::visits;
+
+/// What a person can take back from the last action.
+#[derive(Clone)]
+enum Undo {
+    /// A rejected candidate goes back to the queue.
+    Reject(String),
+    /// A snoozed candidate goes back to the queue.
+    Snooze(String),
+}
+
+/// A page, the queue's size, how many are kept out for low significance and,
+/// on a first page after a visit, what changed since the previous visit.
+type PageLoad = (
+    InboxPage,
+    usize,
+    usize,
+    Option<Briefing>,
+    Option<Vec<Entry>>,
+);
 
 enum Outcome {
     Group(Result<(ReviewGroup, ReviewMetrics), InboxError>, usize),
     Member(Result<Box<CandidateDetail>, InboxError>, String),
     Live(Result<(InboxPage, usize, usize), InboxError>),
-    Page(Result<(InboxPage, usize, usize), InboxError>, bool),
+    Page(Result<PageLoad, InboxError>, bool),
     Detail(Result<Box<CandidateDetail>, InboxError>),
     Action(Result<(), InboxError>, &'static str),
 }
@@ -133,6 +156,42 @@ pub struct InboxScreen<S: InboxStore + ReviewExceptionStore + Send + 'static> {
     progress_busy: bool,
     progress_error: bool,
     progress_action_error: Option<String>,
+    /// The previous visit to the project, read once to build the briefing.
+    since_visit: Option<String>,
+    /// What changed since that visit, shown as one quiet line.
+    briefing: Option<Briefing>,
+    /// Whether the person dismissed the briefing line.
+    briefing_hidden: bool,
+    /// The undo the current action would offer once it succeeds.
+    pending_undo: Option<Undo>,
+    /// The undo offered beside the notice, until the notice goes away.
+    undo: Option<Undo>,
+    /// Whether the written reason is open (it starts closed: the evidence
+    /// comes first and the explanation can nudge a decision).
+    reason_open: bool,
+    /// The automatic review, when the store has it.
+    approvals: Option<Arc<dyn ApprovalsApi>>,
+    /// Where the mode stands (read once and after each change).
+    status: Option<Status>,
+    /// Whether a pass of the review is running.
+    reviewing: bool,
+    /// What the automatic approval holds or accepted in this project.
+    ledger: Vec<Entry>,
+    /// Whether the list of what was accepted on its own is open.
+    ledger_open: bool,
+    /// When the last confirmations happened, to notice a reflex.
+    streak: Vec<std::time::Instant>,
+}
+
+/// Confirmations in a row, each within `STREAK_GAP`, that read as a reflex.
+const STREAK_LEN: usize = 8;
+const STREAK_GAP: std::time::Duration = std::time::Duration::from_secs(4);
+/// Lines of the ledger shown when it is open.
+const LEDGER_SHOWN: usize = 8;
+
+impl<S: InboxStore + ReviewExceptionStore + Send + 'static> EventEmitter<OpenDecision>
+    for InboxScreen<S>
+{
 }
 
 /// The "No mapa" section of one candidate.
@@ -402,6 +461,97 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
     }
     /// Confirms through the adoption use case, so a decision lands on the
     /// map with the ties the person kept.
+    pub fn set_approvals(&mut self, approvals: Arc<dyn ApprovalsApi>, cx: &mut Context<Self>) {
+        self.approvals = Some(approvals.clone());
+        cx.spawn(async move |this, cx| {
+            let status = cx
+                .background_executor()
+                .spawn(async move { approvals.status().ok() })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.status = status;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Turns the automatic review on or off; on, a pass runs at once.
+    fn set_mode(&mut self, mode: Mode, cx: &mut Context<Self>) {
+        let Some(api) = self.approvals.clone() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let status = cx
+                .background_executor()
+                .spawn(async move { api.set_mode(mode).ok().and_then(|_| api.status().ok()) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if status.is_some() {
+                    this.status = status;
+                    this.review_pass(cx);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// One pass of the automatic review, off the interface thread (it may
+    /// ask the AI), refreshing the queue when it changed anything.
+    fn review_pass(&mut self, cx: &mut Context<Self>) {
+        let (Some(api), Some(project)) = (self.approvals.clone(), self.project_id.clone()) else {
+            return;
+        };
+        if self.reviewing || !self.status.is_some_and(|status| status.automatic) {
+            return;
+        }
+        self.reviewing = true;
+        let generation = self.generation;
+        cx.spawn(async move |this, cx| {
+            let report = cx
+                .background_executor()
+                .spawn(async move { api.run(&project) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.reviewing = false;
+                if generation != this.generation {
+                    return;
+                }
+                match report {
+                    Ok(report) if report.changed() => this.page(false, cx),
+                    Ok(_) => {}
+                    Err(error) => tracing::warn!(error = %error, "automatic review failed"),
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Puts back what the review discarded.
+    fn put_back(&mut self, kind: ItemKind, item_id: String, cx: &mut Context<Self>) {
+        let Some(api) = self.approvals.clone() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let done = cx
+                .background_executor()
+                .spawn(async move { api.undo(kind, &item_id).is_ok() })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.notice = Some(if done {
+                    "Candidato de volta à fila."
+                } else {
+                    "Não foi possível desfazer."
+                });
+                this.page(false, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// Confirms through the adoption use case, so a decision lands on the
+    /// map with the ties the person kept.
     pub fn set_adoption(&mut self, adoption: Arc<dyn AdoptionApi>) {
         self.adoption = Some(adoption);
     }
@@ -518,6 +668,18 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             low_focus: cx.focus_handle().tab_stop(true),
             adoption: None,
             links: None,
+            since_visit: None,
+            briefing: None,
+            briefing_hidden: false,
+            pending_undo: None,
+            undo: None,
+            reason_open: false,
+            approvals: None,
+            status: None,
+            reviewing: false,
+            ledger: Vec::new(),
+            ledger_open: false,
+            streak: Vec::new(),
         }
     }
 
@@ -555,6 +717,17 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
         self.progress_error = false;
         self.progress_action_error = None;
         self.poll_progress(cx);
+        self.briefing = None;
+        self.briefing_hidden = false;
+        self.ledger.clear();
+        self.streak.clear();
+        self.since_visit = self
+            .project_id
+            .as_deref()
+            .and_then(|project| visits::previous(cx, project));
+        if let Some(project) = self.project_id.as_deref() {
+            visits::mark(cx, project, &visits::now());
+        }
         self.rows.clear();
         self.cursor = None;
         self.selected = None;
@@ -604,14 +777,29 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             cursor: None,
             ..filter.clone()
         };
+        let visit = if append {
+            None
+        } else {
+            self.since_visit.take().zip(self.project_id.clone())
+        };
+        let approvals = if append {
+            None
+        } else {
+            self.approvals.clone().zip(self.project_id.clone())
+        };
         self.run(cx, move |inbox| {
+            let ledger = approvals
+                .as_ref()
+                .map(|(api, project)| api.ledger(project).unwrap_or_default());
             Outcome::Page(
                 inbox.list(&filter).and_then(|page| {
                     let count = inbox.count(&filter)?;
                     let hidden = inbox
                         .count(&everything)?
                         .saturating_sub(inbox.count(&relevant)?);
-                    Ok((page, count, hidden))
+                    let briefing =
+                        visit.and_then(|(since, project)| inbox.briefing(&project, &since).ok());
+                    Ok((page, count, hidden, briefing, ledger))
                 }),
                 append,
             )
@@ -692,6 +880,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
         self.detail = None;
         self.clear_group();
         self.links = None;
+        self.reason_open = false;
         self.source_index = 0;
         self.source_focus.clear();
         self.editor = None;
@@ -782,9 +971,18 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                         tracing::warn!(code = error.code(), "inbox live refresh failed");
                         this.error = Some(failure_copy(&error));
                     }
-                    Outcome::Page(Ok((page, total, hidden)), append) => {
+                    Outcome::Page(Ok((page, total, hidden, briefing, ledger)), append) => {
                         this.total = Some(total);
                         this.hidden_low = hidden;
+                        if let Some(ledger) = ledger {
+                            this.ledger = ledger;
+                        }
+                        if !append {
+                            this.review_pass(cx);
+                        }
+                        if briefing.is_some() {
+                            this.briefing = briefing;
+                        }
                         this.loaded = true;
                         if !append {
                             this.rows.clear();
@@ -864,11 +1062,14 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                         this.editor = None;
                         this.editor_subscription = None;
                         this.notice = Some(notice);
+                        this.undo = this.pending_undo.take();
+                        this.note_confirmation(notice);
                         this.page(false, cx);
                     }
                     Outcome::Page(Err(error), _)
                     | Outcome::Detail(Err(error))
                     | Outcome::Action(Err(error), _) => {
+                        this.pending_undo = None;
                         tracing::warn!(code = error.code(), "inbox view operation failed");
                         this.error = Some(failure_copy(&error));
                     }
@@ -1027,6 +1228,12 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
         let adoption = self.adoption.clone();
         let chosen = self.chosen_links(&id);
         self.notice = None;
+        self.undo = None;
+        self.pending_undo = match action {
+            ReviewAction::Reject => Some(Undo::Reject(id.clone())),
+            ReviewAction::Snooze if !snoozed => Some(Undo::Snooze(id.clone())),
+            _ => None,
+        };
         window.focus(&self.refresh_focus, cx);
         self.run(cx, move |inbox| {
             let (result, notice) = match action {
@@ -1052,6 +1259,91 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             };
             Outcome::Action(result, notice)
         });
+    }
+
+    /// Keeps the time of each confirmation. A run of them, each a few seconds
+    /// after the last, is the habit that makes approving stop being checking
+    /// (approval rises and scrutiny falls with practice), so the notice says
+    /// so once and does not block anything.
+    fn note_confirmation(&mut self, notice: &'static str) {
+        if !notice.starts_with("Candidato confirmado") && !notice.starts_with("Ajustes confirmados")
+        {
+            self.streak.clear();
+            return;
+        }
+        let now = std::time::Instant::now();
+        if self
+            .streak
+            .last()
+            .is_some_and(|last| now.duration_since(*last) > STREAK_GAP)
+        {
+            self.streak.clear();
+        }
+        self.streak.push(now);
+        if self.streak.len() >= STREAK_LEN {
+            self.streak.clear();
+            self.notice =
+                Some("Ritmo alto: abra a evidência de um dos próximos antes de confirmar.");
+        }
+    }
+
+    /// Takes back the last rejection or deferral.
+    fn undo(&mut self, cx: &mut Context<Self>) {
+        let Some(undo) = self.undo.take() else {
+            return;
+        };
+        self.notice = None;
+        self.run(cx, move |inbox| match undo {
+            Undo::Reject(id) => Outcome::Action(inbox.reopen(&id), "Rejeição desfeita."),
+            Undo::Snooze(id) => Outcome::Action(inbox.unsnooze(&id), "Adiamento desfeito."),
+        });
+    }
+
+    /// The written reason, closed until asked for: the evidence above it is
+    /// what a decision should rest on, and a persuasive explanation raises
+    /// acceptance whether or not it is right.
+    fn reason_disclosure(&self, theme: &Theme, rationale: &str, cx: &mut Context<Self>) -> Div {
+        let colors = theme.colors;
+        let open = self.reason_open;
+        let toggle = div()
+            .id("inbox-reason-toggle")
+            .flex()
+            .items_center()
+            .gap(px(SpacingScale::S2))
+            .cursor_pointer()
+            .role(Role::Button)
+            .aria_label(if open {
+                "Esconder o motivo escrito pela IA"
+            } else {
+                "Mostrar o motivo escrito pela IA"
+            })
+            .focus_visible(focus_ring(theme))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.reason_open = !this.reason_open;
+                cx.notify();
+            }))
+            .child(icon(
+                if open {
+                    IconName::ChevronDown
+                } else {
+                    IconName::ChevronRight
+                },
+                13.0,
+                colors.text_muted(),
+            ))
+            .child(section_label(theme, "Motivo escrito pela IA"));
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(SpacingScale::S2))
+            .child(toggle)
+            .when(open, |column| {
+                column.child(
+                    text_style(div(), TypeScale::BODY)
+                        .text_color(colors.text_secondary())
+                        .child(rationale.to_owned()),
+                )
+            })
     }
 
     fn review_actions(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -1121,21 +1413,34 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
         let key_id = id.clone();
         let hover_key = id.clone();
         let hovered = self.hovered.as_deref() == Some(row.id.as_str());
+        let rule = row.kind == CandidateKind::Rule;
+        // A rule is blue, as on the timeline; a decision not yet confirmed
+        // stays neutral.
+        let tone = if rule {
+            theme.colors.status_info()
+        } else {
+            theme.colors.text_muted()
+        };
         let element = div()
             .id((ElementId::from("candidate"), row.id.clone()))
             .relative()
             .px(px(SpacingScale::S4))
             .py(px(SpacingScale::S3))
             .flex()
-            .flex_col()
-            .gap(px(SpacingScale::S1))
+            .gap(px(SpacingScale::S3))
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                 if track_hover(&mut this.hovered, hover_key.clone(), *hovered) {
                     cx.notify();
                 }
             }))
             .role(Role::Button)
-            .aria_label(row.question.clone())
+            .aria_label(format!(
+                "{}: {}. Relevância {:.0}%, confiança {:.0}%.",
+                if rule { "Regra" } else { "Decisão" },
+                row.question,
+                row.significance * 100.0,
+                row.confidence * 100.0
+            ))
             .aria_selected(selected)
             .cursor_pointer()
             .focus_visible(focus_ring(&theme))
@@ -1153,28 +1458,66 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             }))
             .child(
                 div()
+                    .size(px(22.0))
+                    .flex_none()
                     .flex()
                     .items_center()
-                    .justify_between()
-                    .gap(px(SpacingScale::S2))
+                    .justify_center()
+                    .rounded_full()
+                    .bg(crate::ui::tokens::tint(tone, 0.14))
+                    .child(icon(
+                        if rule {
+                            IconName::Shield
+                        } else {
+                            IconName::Decision
+                        },
+                        12.0,
+                        tone,
+                    )),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S1))
                     .child(
-                        text_style(div(), TypeScale::META)
-                            .text_color(theme.colors.text_muted())
-                            .child(short_date(&row.received_at)),
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap(px(SpacingScale::S2))
+                            .child(
+                                text_style(div(), TypeScale::META)
+                                    .text_color(theme.colors.text_muted())
+                                    .child(relative(&row.received_at)),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(SpacingScale::S2))
+                                    .when(row.status != CandidateStatus::Pending, |line| {
+                                        line.child(status_badge(row.status, theme))
+                                    })
+                                    .children(self.left_for_you(&row.id).map(|_| {
+                                        text_style(div(), TypeScale::META)
+                                            .text_color(theme.colors.status_info())
+                                            .child("a IA deixou para você")
+                                    })),
+                            ),
                     )
-                    .when(row.status != CandidateStatus::Pending, |line| {
-                        line.child(status_badge(row.status, theme))
-                    }),
-            )
-            .child(
-                word_wrapped(&row.question, TypeScale::ROW_TITLE, Some(2))
-                    .text_color(theme.colors.text_primary()),
-            )
-            .child(
-                text_style(div(), TypeScale::BODY_SMALL)
-                    .text_color(theme.colors.text_muted())
-                    .line_clamp(2)
-                    .child(row.choice.clone()),
+                    .child(
+                        word_wrapped(&row.question, TypeScale::ROW_TITLE, Some(2))
+                            .text_color(theme.colors.text_primary()),
+                    )
+                    .child(
+                        text_style(div(), TypeScale::BODY_SMALL)
+                            .text_color(theme.colors.text_muted())
+                            .line_clamp(2)
+                            .child(row.choice.clone()),
+                    ),
             );
         let mut element = mark_selected(element, &theme, selected);
         if let Some((_, focus)) = self.row_focus.iter().find(|(id, _)| *id == row.id) {
@@ -1212,6 +1555,257 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                 }
             }))
             .child(label)
+    }
+
+    /// What the review decided to leave for the person about a candidate.
+    fn left_for_you(&self, candidate_id: &str) -> Option<&Entry> {
+        self.ledger.iter().find(|entry| {
+            entry.kind == ItemKind::Candidate
+                && entry.item_id == candidate_id
+                && entry.verdict == Verdict::NeedsHuman
+                && entry.undone_at.is_none()
+        })
+    }
+
+    /// The switch between deciding everything and letting the AI handle the
+    /// cycle, with one line of what that means right now.
+    fn mode_switch(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<Div> {
+        let status = self.status?;
+        let colors = theme.colors;
+        let mut track = crate::ui::patterns::segmented(theme)
+            .id("inbox-mode")
+            .role(Role::RadioGroup);
+        for (mode, id, label) in [
+            (Mode::Manual, "inbox-mode-manual", "Manual"),
+            (Mode::Automatic, "inbox-mode-auto", "Automático"),
+        ] {
+            track = track.child(
+                crate::ui::patterns::segment_label(
+                    theme,
+                    id,
+                    label,
+                    (mode == Mode::Automatic) == status.automatic,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| this.set_mode(mode, cx))),
+            );
+        }
+        Some(
+            div()
+                .flex_none()
+                .flex()
+                .flex_col()
+                .gap(px(SpacingScale::S1))
+                .px(px(SpacingScale::S4))
+                .pb(px(SpacingScale::S2))
+                .child(div().flex().child(track))
+                .when(status.automatic, |column| {
+                    column.child(
+                        text_style(div(), TypeScale::META)
+                            .text_color(colors.text_muted())
+                            .child(if status.judge {
+                                "A IA aceita o que é seguro e deixa o resto para você."
+                            } else {
+                                "Sem provedor de IA ativo: só as regras locais agem."
+                            }),
+                    )
+                }),
+        )
+    }
+
+    /// What the review did on its own, a short list under the queue that
+    /// opens on request: an accepted candidate opens its decision, a
+    /// discarded one can be put back.
+    fn ledger_section(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<Div> {
+        let accepted: Vec<&Entry> = self
+            .ledger
+            .iter()
+            .filter(|entry| entry.verdict != Verdict::NeedsHuman && entry.undone_at.is_none())
+            .collect();
+        if accepted.is_empty() {
+            return None;
+        }
+        let colors = theme.colors;
+        let open = self.ledger_open;
+        let header = div()
+            .id("inbox-ledger-toggle")
+            .flex()
+            .items_center()
+            .gap(px(SpacingScale::S2))
+            .px(px(SpacingScale::S4))
+            .py(px(SpacingScale::S2))
+            .cursor_pointer()
+            .role(Role::Button)
+            .aria_label("Mostrar o que foi feito sozinho")
+            .focus_visible(focus_ring(theme))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.ledger_open = !this.ledger_open;
+                cx.notify();
+            }))
+            .child(icon(
+                if open {
+                    IconName::ChevronDown
+                } else {
+                    IconName::ChevronRight
+                },
+                13.0,
+                colors.text_muted(),
+            ))
+            .child(
+                text_style(div(), TypeScale::META)
+                    .text_color(colors.text_secondary())
+                    .child(format!("Feito sozinho · {}", accepted.len())),
+            );
+        let mut list = div().flex().flex_col();
+        if open {
+            for (index, entry) in accepted.iter().enumerate().take(LEDGER_SHOWN) {
+                let opens = (entry.kind == ItemKind::Candidate
+                    && entry.verdict == Verdict::Accepted)
+                    .then(|| entry.result_id.clone())
+                    .flatten();
+                let put_back = (entry.kind == ItemKind::Candidate
+                    && entry.verdict == Verdict::Discarded)
+                    .then(|| entry.item_id.clone());
+                let word = match entry.verdict {
+                    Verdict::Accepted => "aceita",
+                    _ => "descartada",
+                };
+                let kind = match entry.kind {
+                    ItemKind::Candidate => "candidato",
+                    ItemKind::Relation => "relação",
+                    ItemKind::Claim => "contexto",
+                    ItemKind::Link => "ligação",
+                };
+                let by = match entry.by {
+                    By::Rules => "pelas regras",
+                    By::Ai => "pela IA",
+                };
+                let mut line = div()
+                    .id(("inbox-ledger-row", index))
+                    .flex()
+                    .items_start()
+                    .gap(px(SpacingScale::S2))
+                    .px(px(SpacingScale::S4))
+                    .py(px(SpacingScale::S2))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .flex()
+                            .flex_col()
+                            .child(
+                                text_style(div(), TypeScale::BODY_SMALL)
+                                    .line_clamp(2)
+                                    .text_color(colors.text_primary())
+                                    .child(entry.title.clone()),
+                            )
+                            .child(
+                                text_style(div(), TypeScale::META)
+                                    .text_color(colors.text_muted())
+                                    .child(format!(
+                                        "{kind} {word} {by}, há {} · {}",
+                                        relative(&entry.created_at),
+                                        entry.reason
+                                    )),
+                            ),
+                    );
+                if let Some(decision) = opens {
+                    line = line
+                        .cursor_pointer()
+                        .role(Role::Link)
+                        .aria_label(format!("Abrir a decisão: {}", entry.title))
+                        .hover(move |style| style.bg(colors.glass_fill_low()))
+                        .focus_visible(focus_ring(theme))
+                        .on_click(
+                            cx.listener(move |_, _, _, cx| cx.emit(OpenDecision(decision.clone()))),
+                        );
+                }
+                if let Some(item_id) = put_back {
+                    line = line.child(
+                        action_button(theme, ("inbox-put-back", index), ButtonKind::Ghost, true)
+                            .aria_label("Desfazer")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.put_back(ItemKind::Candidate, item_id.clone(), cx)
+                            }))
+                            .child("Desfazer"),
+                    );
+                }
+                list = list.child(line);
+            }
+        }
+        Some(
+            div()
+                .flex_none()
+                .border_t_1()
+                .border_color(colors.hairline_divider())
+                .child(header)
+                .child(list),
+        )
+    }
+
+    /// One quiet line of what changed since the previous visit: the cue to
+    /// resume from. Nothing when nothing changed or the person closed it.
+    fn briefing_strip(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<Div> {
+        let briefing = self
+            .briefing
+            .as_ref()
+            .filter(|briefing| !briefing.is_quiet() && !self.briefing_hidden)?;
+        let colors = theme.colors;
+        let mut parts = Vec::new();
+        if briefing.new_candidates > 0 {
+            parts.push(plural(
+                briefing.new_candidates,
+                "candidato novo",
+                "candidatos novos",
+            ));
+        }
+        if briefing.decisions > 0 {
+            parts.push(plural(briefing.decisions, "decisão", "decisões"));
+        }
+        if briefing.deliveries > 0 {
+            parts.push(format!(
+                "{} ao agente ({})",
+                plural(briefing.deliveries, "entrega", "entregas"),
+                plural(briefing.sessions, "sessão", "sessões")
+            ));
+        }
+        let label = format!(
+            "Desde a última visita, há {}: {}",
+            relative(&briefing.since),
+            parts.join(" · ")
+        );
+        Some(
+            div()
+                .flex()
+                .items_start()
+                .gap(px(SpacingScale::S2))
+                .mx(px(SpacingScale::S4))
+                .mb(px(SpacingScale::S3))
+                .px(px(SpacingScale::S3))
+                .py(px(SpacingScale::S2))
+                .rounded(theme.radius.control())
+                .bg(colors.glass_fill_low())
+                .child(
+                    div()
+                        .mt(px(2.0))
+                        .child(icon(IconName::Clock, 12.0, colors.text_muted())),
+                )
+                .child(
+                    text_style(div(), TypeScale::META)
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .text_color(colors.text_secondary())
+                        .child(label),
+                )
+                .child(
+                    crate::ui::controls::icon_action(theme, "inbox-briefing-close", "Dispensar")
+                        .size(px(18.0))
+                        .child(icon(IconName::Close, 10.0, colors.text_muted()))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.briefing_hidden = true;
+                            cx.notify();
+                        })),
+                ),
+        )
     }
 
     /// Shows or hides the low-significance candidates kept out of the queue.
@@ -1628,6 +2222,27 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                         )),
                 )
             })
+            .children(self.left_for_you(&detail.summary.id).map(|entry| {
+                div()
+                    .flex()
+                    .items_start()
+                    .gap(px(SpacingScale::S2))
+                    .child(
+                        div()
+                            .mt(px(6.0))
+                            .size(px(6.0))
+                            .flex_none()
+                            .rounded_full()
+                            .bg(theme.colors.status_info()),
+                    )
+                    .child(
+                        text_style(div(), TypeScale::BODY_SMALL)
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .text_color(theme.colors.text_secondary())
+                            .child(format!("A IA deixou este para você: {}", entry.reason)),
+                    )
+            }))
             .child(reading_title(&detail.summary.question).text_color(theme.colors.text_primary()))
             .child(
                 div()
@@ -1647,13 +2262,11 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                             .child(detail.summary.choice.clone()),
                     ),
             )
-            .child(section(theme, "Motivo", &detail.rationale))
             .child(super::review_editor::qualifier_reading(
                 &theme,
                 &detail.qualifiers,
             ))
             .child(self.group_section(&theme, cx))
-            .children(self.map_section(&theme, &detail.summary.id, detail.summary.kind, cx))
             .child(
                 div()
                     .pt(px(SpacingScale::S2))
@@ -1686,6 +2299,8 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                     })
                     .child(evidence_block),
             )
+            .child(self.reason_disclosure(&theme, &detail.rationale, cx))
+            .children(self.map_section(&theme, &detail.summary.id, detail.summary.kind, cx))
             .child(
                 div()
                     .pt(px(SpacingScale::S5))
@@ -1718,7 +2333,9 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                     ),
             );
         div()
-            .id("inbox-reading")
+            .id(ElementId::Name(
+                format!("inbox-reading-{}", detail.summary.id).into(),
+            ))
             .size_full()
             .overflow_y_scroll()
             .px(px(SpacingScale::S8))
@@ -1733,6 +2350,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
 
 impl<S: InboxStore + ReviewExceptionStore + Send + 'static> Render for InboxScreen<S> {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _probe = crate::ui::perf::Probe::start("inbox");
         let theme = Theme::current(cx);
         let visible: Vec<_> = self
             .rows
@@ -1747,6 +2365,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> Render for InboxScre
                 let _ = this.update(cx, |screen, cx| {
                     if screen.notice == shown {
                         screen.notice = None;
+                        screen.undo = None;
                         screen.notice_scheduled = None;
                         cx.notify();
                     }
@@ -1762,7 +2381,16 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> Render for InboxScre
         });
         div().size_full().relative().flex().flex_col()
             .children(self.error.map(|message| error_banner(&theme, message).id("inbox-error").role(Role::Alert).children(retry)))
-            .children(self.notice.map(|message| toast(&theme, message, 72.0)))
+            .children(self.notice.map(|message| {
+                let action = self.undo.is_some().then(|| {
+                    action_button(&theme, "inbox-undo", ButtonKind::Ghost, !self.busy)
+                        .aria_label("Desfazer")
+                        .on_click(cx.listener(|this, _, _, cx| this.undo(cx)))
+                        .child("Desfazer")
+                        .into_any_element()
+                });
+                toast_with(&theme, message, 72.0, action)
+            }))
             .child(div().flex_1().min_h(px(0.0)).flex()
                 .child(div().w(px(320.0)).flex_none().h_full().flex().flex_col().bg(theme.colors.pane())
                     .border_r_1().border_color(theme.colors.hairline_divider())
@@ -1775,7 +2403,9 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> Render for InboxScre
                         }))
                         .child(div().flex_1())
                         .child(self.button("inbox-refresh", "Atualizar", false, cx)))
+                    .children(self.mode_switch(&theme, cx))
                     .child(div().px(px(SpacingScale::S4)).pb(px(SpacingScale::S3)).children(self.search.clone()))
+                    .children(self.briefing_strip(&theme, cx))
                     .when(self.hidden_low > 0 || self.show_low, |rail| rail.child(self.low_toggle(cx)))
                     .child(div().id("inbox-list").flex_1().min_h(px(0.0)).overflow_y_scroll().track_scroll(&self.list_scroll)
                         .children(visible.iter().enumerate().map(|(index, row)| {
@@ -1791,6 +2421,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> Render for InboxScre
                             if !self.loaded { "Atualize para carregar os candidatos." }
                             else if self.rows.is_empty() { "Fila vazia." }
                             else { "Nenhum candidato carregado corresponde à busca." }))))
+                    .children(self.ledger_section(&theme, cx))
                     .when(self.cursor.is_some() || self.rows.len() != visible.len(), |rail| rail.child(text_style(div(), TypeScale::META).flex_none().px(px(SpacingScale::S4)).py(px(SpacingScale::S2))
                         .flex().items_center().justify_between()
                         .border_t_1().border_color(theme.colors.hairline_divider()).text_color(theme.colors.text_muted())
@@ -1941,20 +2572,11 @@ fn confidence(theme: Theme, value: f32, reason: &str) -> Div {
                 .flex()
                 .items_center()
                 .gap(px(SpacingScale::S3))
-                .child(
-                    div()
-                        .w(px(120.0))
-                        .h(px(4.0))
-                        .rounded_full()
-                        .bg(theme.colors.surface())
-                        .child(
-                            div()
-                                .h_full()
-                                .w(gpui::relative(value))
-                                .rounded_full()
-                                .bg(theme.colors.accent_default()),
-                        ),
-                )
+                .child(div().w(px(120.0)).child(meter(
+                    &theme,
+                    value,
+                    theme.colors.accent_default(),
+                )))
                 .child(
                     text_style(div(), TypeScale::BODY_SMALL)
                         .text_color(theme.colors.text_primary())

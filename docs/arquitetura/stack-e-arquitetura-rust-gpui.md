@@ -266,6 +266,7 @@ Não é necessário criar um único `CommandBus` abstrato desde o começo. As te
 - CPU pesada usa `spawn_blocking` ou um pool próprio limitado.
 - Jobs são persistidos antes da execução e possuem estados `queued`, `running`, `completed`, `failed`, `cancelled`.
 - Ao reiniciar, jobs interrompidos voltam para `queued` quando a operação for idempotente.
+- Jobs rodam em filas por assunto (sessões, documentação, sugestões), cada uma com seus workers; detalhes em `desempenho-e-escala.md`.
 
 ### SQLite
 

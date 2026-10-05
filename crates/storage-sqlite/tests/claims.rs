@@ -208,7 +208,7 @@ fn migration_0011_upgrades_a_version_10_database() {
                   ALTER TABLE claim_suggestions DROP COLUMN qualifiers; \
                   ALTER TABLE claim_suggestions DROP COLUMN inherited_scope; \
                   ALTER TABLE claim_suggestions DROP COLUMN source_version; \
-                  DELETE FROM schema_migrations WHERE version IN (11, 21, 23, 24);",
+                  DELETE FROM schema_migrations WHERE version IN (11, 25, 27, 28);",
             )
             .expect("simulate version 10");
     }
@@ -236,7 +236,7 @@ fn migration_21_preserves_real_legacy_rows_and_defaults_qualifiers() {
         ALTER TABLE decision_revisions DROP COLUMN qualifiers;
         ALTER TABLE context_claims DROP COLUMN qualifiers;
         ALTER TABLE claim_suggestions DROP COLUMN qualifiers;
-        DELETE FROM schema_migrations WHERE version = 21;",
+        DELETE FROM schema_migrations WHERE version = 25;",
         )
         .unwrap();
     drop(connection);
@@ -407,7 +407,7 @@ fn migration_23_to_24_keeps_legacy_claim_and_suggestion_without_inferred_version
     let db = Connection::open(&database).unwrap();
     db.execute_batch(
         "ALTER TABLE context_claims DROP COLUMN source_version;
-        DELETE FROM schema_migrations WHERE version=24;
+        DELETE FROM schema_migrations WHERE version=28;
         UPDATE claim_suggestions SET source_version=NULL WHERE suggestion_id='legacy-suggestion';",
     )
     .unwrap();
@@ -427,5 +427,5 @@ fn migration_23_to_24_keeps_legacy_claim_and_suggestion_without_inferred_version
     let count: i64 = db
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(count, 28); // Version 7 intentionally has no registered migration.
+    assert_eq!(count, 38); // Version 7 intentionally has no registered migration.
 }

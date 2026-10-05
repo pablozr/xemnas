@@ -27,7 +27,7 @@ use crate::projects::ProjectRepository;
 use crate::relations::RelationStore;
 
 /// Job kind that derives context from one adopted decision.
-pub const CLAIM_JOB_KIND: &str = "derive_claims";
+pub const CLAIM_JOB_KIND: &str = crate::jobs::JobKind::DeriveClaims.as_str();
 /// Items proposed per decision, at most.
 pub const MAX_DERIVED: usize = 3;
 /// Longest statement accepted.
@@ -82,6 +82,8 @@ pub enum ClaimSuggestionError {
     Claim(String),
     /// The provider failed.
     Provider(String),
+    /// The provider asked for a pause or timed out; the job is requeued.
+    Deferred(Option<std::time::Duration>),
 }
 
 impl ClaimSuggestionError {
@@ -92,6 +94,7 @@ impl ClaimSuggestionError {
             Self::NotFound => "not_found",
             Self::Claim(_) => "claim",
             Self::Provider(_) => "provider",
+            Self::Deferred(_) => "deferred",
         }
     }
 }
@@ -103,6 +106,7 @@ impl std::fmt::Display for ClaimSuggestionError {
             Self::NotFound => formatter.write_str("sugestão não encontrada"),
             Self::Claim(detail) => write!(formatter, "regra: {detail}"),
             Self::Provider(detail) => write!(formatter, "provedor: {detail}"),
+            Self::Deferred(_) => formatter.write_str("provedor: pausa pedida"),
         }
     }
 }
@@ -330,7 +334,8 @@ where
 }
 
 /// System prompt of the context extractor.
-pub const CLAIM_PROMPT: &str = "You read one engineering decision a software team adopted and \
+pub const CLAIM_PROMPT: &str = concat!(
+    "You read one engineering decision a software team adopted and \
 list the lasting context an agent must respect when working on the parts it affects. kind \
 is assumption (believed true but not proven), constraint (a limit the work must respect), \
 convention (an agreed way of working) or goal (an outcome the project pursues). Only what \
@@ -338,7 +343,9 @@ the decision states or directly implies, never general advice; at most 3; an emp
 a correct answer. statement: the rule in one short sentence, in the decision's language. \
 quote: one sentence copied verbatim from the decision text that supports it.\n\
 Reply with one JSON object only, matching exactly: {\"claims\":[{\"kind\":\
-\"assumption|constraint|convention|goal\",\"statement\":string,\"quote\":string}]}.";
+\"assumption|constraint|convention|goal\",\"statement\":string,\"quote\":string}]}.",
+    crate::plain_rules!()
+);
 
 /// Strict schema of the extractor's answer.
 pub fn claim_schema() -> serde_json::Value {
@@ -493,7 +500,14 @@ where
         );
         let answer = model
             .complete(CLAIM_PROMPT, &user, "decision_context", &claim_schema())
-            .map_err(|error| ClaimSuggestionError::Provider(error.to_string()))?;
+            .map_err(|error| match error.job_failure() {
+                crate::jobs::JobFailure::Deferred { retry_after } => {
+                    ClaimSuggestionError::Deferred(retry_after)
+                }
+                crate::jobs::JobFailure::Failed => {
+                    ClaimSuggestionError::Provider(error.to_string())
+                }
+            })?;
         let existing: Vec<String> = self
             .store
             .project_claims(&decision.project_id)

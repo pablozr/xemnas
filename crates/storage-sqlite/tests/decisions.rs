@@ -155,7 +155,7 @@ fn migration_0008_applies_on_fresh_and_upgraded_databases() {
             row.get(0)
         })
         .expect("count");
-    assert_eq!(versions, 28);
+    assert_eq!(versions, 38);
 
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -299,11 +299,12 @@ fn promote_rolls_back_completely_on_failure() {
     let root = temporary_directory("rollback");
     let store = SqliteStore::open(root.join("app.db")).expect("open store");
     seed_project_and_capture(&store);
+    // A different question: equal ones form one review group, and confirming
+    // the first would settle the second instead of colliding.
+    let mut second = candidate("cand-2", "[\"art-1\"]");
+    second.question = "q2".into();
     store
-        .insert_candidates(&[
-            candidate("cand-1", "[\"art-1\"]"),
-            candidate("cand-2", "[\"art-1\"]"),
-        ])
+        .insert_candidates(&[candidate("cand-1", "[\"art-1\"]"), second])
         .expect("insert candidates");
 
     let first = Inbox::new(store.clone())

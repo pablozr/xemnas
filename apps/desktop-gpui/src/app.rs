@@ -2,6 +2,7 @@
 
 use application::decisions::{DecisionStore, Decisions};
 use application::export::Export;
+use application::graph::KnowledgeGraph;
 use application::inbox::{Inbox, InboxStore};
 use application::jobs::JobSummary;
 use application::overview::OverviewApi;
@@ -22,8 +23,9 @@ use crate::screens::assistant::{AssistantGo, AssistantScreen, AssistantToggled, 
 use crate::screens::context::{ContextScreen, ContextServices, ContextStores, OpenDecision};
 use crate::screens::decisions::DecisionsScreen;
 use crate::screens::inbox::InboxScreen;
+use crate::screens::map::OpenSuggestions;
 use crate::screens::map::{MapScreen, MapServices};
-use crate::screens::overview::{OpenEntity, OverviewScreen};
+use crate::screens::overview::OverviewScreen;
 use crate::screens::projects::{ProjectChanged, ProjectsScreen};
 use crate::screens::settings::{CloseSettings, SettingsScreen, SettingsSection, SettingsServices};
 use crate::ui::controls::icon_action;
@@ -124,10 +126,20 @@ pub type ActivitySource = Arc<dyn Fn() -> Option<JobSummary> + Send + Sync>;
 /// How often the status line re-reads the jobs table.
 const ACTIVITY_POLL: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// The use cases the Decisões screen is mounted with.
+pub type DecisionsServices<R> = (
+    Decisions<R>,
+    Export<R>,
+    DecisionRelations<R>,
+    KnowledgeGraph<R>,
+);
+
 /// What a palette item does.
 #[derive(Clone, Debug)]
 enum Command {
     KnowledgeReview,
+    /// Decisões narrowed to a part, or (`None`) with the menu of parts open.
+    DecisionsByPart(Option<String>),
     Go(Destination),
     Project(String),
     Candidate(String),
@@ -154,6 +166,14 @@ struct Palette {
 
 /// Rows shown at once before the palette scrolls.
 const PALETTE_MAX_HEIGHT: f32 = 380.0;
+
+/// What the Revisão is showing: the candidates, or the suggested ties the
+/// map derives (one place to act on everything waiting for a person).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReviewTab {
+    Candidates,
+    Ties,
+}
 
 /// The places a selected project can be read from. Its properties are not a
 /// destination: they open in the panel under the project name.
@@ -233,6 +253,7 @@ pub struct Shell<
     _search_subscription: Subscription,
     _project_subscription: Option<Subscription>,
     _inbox_subscription: Option<Subscription>,
+    _inbox_opens: Option<Subscription>,
     projects: Option<Entity<ProjectsScreen<R>>>,
     inbox: Option<Entity<InboxScreen<R>>>,
     decisions: Option<Entity<DecisionsScreen<R>>>,
@@ -246,6 +267,11 @@ pub struct Shell<
     _context_subscription: Option<Subscription>,
     map: Option<Entity<MapScreen<R>>>,
     _map_subscription: Option<Subscription>,
+    _map_suggestions: Option<Subscription>,
+    /// Which list the Revisão shows.
+    review_tab: ReviewTab,
+    /// Parks the motion loops while the window is not focused.
+    _activation: Option<Subscription>,
     overview: Option<Entity<OverviewScreen>>,
     _overview_subscriptions: Vec<Subscription>,
     /// Destination tab under the pointer, driving the hover spring.
@@ -297,7 +323,7 @@ impl<
         cx: &mut Context<Self>,
         projects: Result<Projects<R>, String>,
         inbox: Option<Inbox<R>>,
-        decisions: Option<(Decisions<R>, Export<R>, DecisionRelations<R>)>,
+        decisions: Option<DecisionsServices<R>>,
         context: Option<ContextServices<R>>,
         map: Option<MapServices<R>>,
         settings: Option<SettingsServices>,
@@ -375,7 +401,15 @@ impl<
                         .0
                         .as_ref()
                         .map(|project| project.id().as_str().to_owned());
-                    overview.update(cx, |screen, cx| screen.set_project(project, cx));
+                    let name = event
+                        .0
+                        .as_ref()
+                        .map(|project| project.name().to_owned())
+                        .unwrap_or_default();
+                    overview.update(cx, |screen, cx| {
+                        screen.set_name(&name);
+                        screen.set_project(project, cx);
+                    });
                 }
                 if let Some(decisions) = &shell.decisions {
                     decisions.update(cx, |screen, cx| {
@@ -407,8 +441,13 @@ impl<
         let inbox_subscription = inbox
             .as_ref()
             .map(|screen| cx.observe(screen, |_, _, cx| cx.notify()));
-        let decisions = decisions.map(|(decisions, export, relations)| {
-            cx.new(|cx| DecisionsScreen::new(cx, decisions, export, relations))
+        let inbox_opens = inbox.as_ref().map(|screen| {
+            cx.subscribe(screen, |shell, _, event: &OpenDecision, cx| {
+                shell.show_decision(event.0.clone(), cx)
+            })
+        });
+        let decisions = decisions.map(|(decisions, export, relations, graph)| {
+            cx.new(|cx| DecisionsScreen::new(cx, decisions, export, relations, graph))
         });
         let context = context.map(|services| cx.new(|cx| ContextScreen::new(cx, services)));
         let context_subscription = context.as_ref().map(|screen| {
@@ -422,6 +461,11 @@ impl<
                 shell.show_decision(event.0.clone(), cx)
             })
         });
+        let map_suggestions = map.as_ref().map(|screen| {
+            cx.subscribe(screen, |shell, _, _: &OpenSuggestions, cx| {
+                shell.show_ties(cx)
+            })
+        });
         let settings = settings.map(|services| cx.new(|cx| SettingsScreen::new(cx, services)));
         let settings_subscription = settings.as_ref().map(|screen| {
             cx.subscribe(screen, |shell, _, _: &CloseSettings, cx| {
@@ -433,9 +477,11 @@ impl<
             theme: Theme::quiet_glass(),
             focus: cx.focus_handle(),
             search: search.clone(),
+            _activation: None,
             _search_subscription: search_subscription,
             _project_subscription: project_subscription,
             _inbox_subscription: inbox_subscription,
+            _inbox_opens: inbox_opens,
             projects: screen,
             inbox,
             decisions,
@@ -455,6 +501,8 @@ impl<
             _context_subscription: context_subscription,
             map,
             _map_subscription: map_subscription,
+            _map_suggestions: map_suggestions,
+            review_tab: ReviewTab::Candidates,
             overview: None,
             _overview_subscriptions: Vec::new(),
             hovered_tab: None,
@@ -619,6 +667,17 @@ impl<
         self.backdrop = backdrop;
     }
 
+    /// Lets Revisão run the automatic approval and show what it did.
+    pub fn set_approvals(
+        &mut self,
+        approvals: Arc<dyn application::auto_approval::ApprovalsApi>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(inbox) = &self.inbox {
+            inbox.update(cx, |screen, cx| screen.set_approvals(approvals, cx));
+        }
+    }
+
     /// Lets Revisão confirm candidates together with their ties on the map.
     pub fn set_adoption(
         &mut self,
@@ -634,14 +693,10 @@ impl<
     /// empty, like the others when the database fails.
     pub fn set_overview(&mut self, api: Arc<dyn OverviewApi>, cx: &mut Context<Self>) {
         let screen = cx.new(|_| OverviewScreen::new(api));
-        self._overview_subscriptions = vec![
-            cx.subscribe(&screen, |shell, _, event: &OpenDecision, cx| {
+        self._overview_subscriptions = vec![cx
+            .subscribe(&screen, |shell, _, event: &OpenDecision, cx| {
                 shell.show_decision(event.0.clone(), cx)
-            }),
-            cx.subscribe(&screen, |shell, _, event: &OpenEntity, cx| {
-                shell.show_entity(event.0.clone(), cx)
-            }),
-        ];
+            })];
         let project = self
             .projects
             .as_ref()
@@ -721,6 +776,11 @@ impl<
             self.open_settings_at(section, cx);
             return;
         }
+        if matches!(route, "map:suggestions" | "review:ties") {
+            self.review_tab = ReviewTab::Ties;
+            self.switch_to(Destination::Review, window, cx);
+            return;
+        }
         let (destination, view) = route.split_once(':').unwrap_or((route, ""));
         let destination = match destination {
             "overview" => Destination::Overview,
@@ -735,6 +795,11 @@ impl<
                 Destination::Map => {
                     if let Some(map) = &self.map {
                         map.update(cx, |screen, _| screen.open_route(view));
+                    }
+                }
+                Destination::Decisions => {
+                    if let Some(screen) = &self.decisions {
+                        screen.update(cx, |screen, cx| screen.open_route(view, cx));
                     }
                 }
                 Destination::Context => {
@@ -752,19 +817,116 @@ impl<
                         });
                     }
                 }
-                Destination::Overview => {
-                    if let (Some(screen), Some(flow)) = (
-                        &self.overview,
-                        view.strip_prefix("flow")
-                            .and_then(|index| index.parse().ok()),
-                    ) {
-                        screen.update(cx, |screen, _| screen.open_flow(flow));
-                    }
-                }
                 _ => {}
             }
         }
         self.switch_to(destination, window, cx);
+    }
+
+    /// Suggested ties waiting for a person, from the map.
+    fn pending_ties(&self, cx: &Context<Self>) -> usize {
+        self.map
+            .as_ref()
+            .map_or(0, |screen| screen.read(cx).pending_suggestions())
+    }
+
+    /// Opens the Revisão on the suggested ties.
+    fn show_ties(&mut self, cx: &mut Context<Self>) {
+        self.retire_context_surface(cx);
+        self.destination = Destination::Review;
+        self.set_review_tab(ReviewTab::Ties, cx);
+    }
+
+    fn set_review_tab(&mut self, tab: ReviewTab, cx: &mut Context<Self>) {
+        self.review_tab = tab;
+        if let Some(screen) = &self.map {
+            screen.update(cx, |screen, cx| {
+                screen.set_embedded(tab == ReviewTab::Ties, cx);
+                if tab == ReviewTab::Ties {
+                    screen.refresh(cx);
+                }
+            });
+        }
+        cx.notify();
+    }
+
+    /// The Revisão: the candidates, plus the map's suggested ties when there
+    /// are any. One place and one count for everything that waits for a
+    /// person; the switch only appears when there is a second list.
+    fn render_review(&mut self, theme: &Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let colors = theme.colors;
+        let ties = self.pending_ties(cx);
+        let candidates = self
+            .inbox
+            .as_ref()
+            .and_then(|screen| screen.read(cx).total_count());
+        let body = if self.review_tab == ReviewTab::Ties {
+            self.map.as_ref().map(|screen| {
+                screen
+                    .clone()
+                    .cached(gpui::StyleRefinement::default().size_full())
+                    .into_any_element()
+            })
+        } else {
+            self.inbox.as_ref().map(|screen| {
+                screen
+                    .clone()
+                    .cached(gpui::StyleRefinement::default().size_full())
+                    .into_any_element()
+            })
+        }
+        .unwrap_or_else(|| div().into_any_element());
+        if ties == 0 && self.review_tab == ReviewTab::Candidates {
+            return body;
+        }
+        let mut switch = crate::ui::patterns::segmented(theme).id("review-switch");
+        for (tab, id, label) in [
+            (
+                ReviewTab::Candidates,
+                "review-tab-candidates",
+                "Decisões propostas",
+            ),
+            (ReviewTab::Ties, "review-tab-ties", "Ligações sugeridas"),
+        ] {
+            switch = switch.child(
+                crate::ui::patterns::segment_label(theme, id, label, self.review_tab == tab)
+                    .on_click(cx.listener(move |this, _, _, cx| this.set_review_tab(tab, cx))),
+            );
+        }
+        let count_of = |count: usize, one: &str, many: &str| {
+            format!("{count} {}", if count == 1 { one } else { many })
+        };
+        let waiting = format!(
+            "{} · {}",
+            candidates.map_or_else(
+                || "…".to_owned(),
+                |count| count_of(count, "decisão", "decisões")
+            ),
+            count_of(ties, "ligação", "ligações")
+        );
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(px(SpacingScale::S4))
+                    .px(px(SpacingScale::S4))
+                    .py(px(SpacingScale::S2))
+                    .border_b_1()
+                    .border_color(colors.hairline_divider())
+                    .child(switch)
+                    .child(
+                        text_style(div(), TypeScale::META)
+                            .text_color(colors.text_muted())
+                            .child(format!("Aguardando você: {waiting}")),
+                    ),
+            )
+            .child(div().flex_1().min_h(px(0.0)).child(body))
+            .into_any_element()
     }
 
     /// Identifies opt-in sample data visibly, without changing navigation.
@@ -905,6 +1067,32 @@ impl<
                     glyph: IconName::Inbox,
                     shortcut: None,
                     command: Command::Candidate(id),
+                });
+            }
+        }
+        if let (true, Some(decisions)) = (selected.is_some(), &self.decisions) {
+            let parts = decisions.read(cx).palette_parts();
+            if !parts.is_empty() {
+                items.push(PaletteItem {
+                    group: "Ir para",
+                    label: "Decisões por parte".into(),
+                    detail: Some("Decisões · filtro".into()),
+                    glyph: IconName::Component,
+                    shortcut: None,
+                    command: Command::DecisionsByPart(None),
+                });
+            }
+            for (id, name, count) in parts {
+                items.push(PaletteItem {
+                    group: "Decisões por parte",
+                    label: format!("Decisões sobre {name}"),
+                    detail: Some(match count {
+                        1 => "1 em vigor".to_owned(),
+                        n => format!("{n} em vigor"),
+                    }),
+                    glyph: IconName::Component,
+                    shortcut: None,
+                    command: Command::DecisionsByPart(Some(id)),
                 });
             }
         }
@@ -1058,6 +1246,15 @@ impl<
         self.close_palette(window, cx);
         match item.command {
             Command::KnowledgeReview => self.go_route("context:knowledge-review", window, cx),
+            Command::DecisionsByPart(part) => {
+                self.switch_to(Destination::Decisions, window, cx);
+                if let Some(screen) = &self.decisions {
+                    screen.update(cx, |screen, cx| match part {
+                        Some(part) => screen.choose_part(Some(part), cx),
+                        None => screen.open_part_menu(cx),
+                    });
+                }
+            }
             Command::Go(destination) => self.switch_to(destination, window, cx),
             Command::Project(id) => {
                 if let Some(projects) = &self.projects {
@@ -1220,9 +1417,18 @@ impl<
                     .border_t_1()
                     .border_color(theme.colors.hairline_divider())
                     .text_color(theme.colors.text_muted())
-                    .child("↑↓ navegar")
-                    .child("Enter abrir")
-                    .child("Esc fechar"),
+                    .children(
+                        [("↑↓", "Navegar"), ("↵", "Abrir"), ("esc", "Fechar")]
+                            .into_iter()
+                            .map(|(key, label)| {
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(SpacingScale::S2))
+                                    .child(kbd(theme.colors.text_muted(), key))
+                                    .child(label)
+                            }),
+                    ),
             );
         Some(
             deferred(
@@ -1301,16 +1507,6 @@ impl<
         cx.notify();
     }
 
-    /// Opens an entity in the Mapa from another destination (Visão).
-    fn show_entity(&mut self, id: String, cx: &mut Context<Self>) {
-        self.retire_context_surface(cx);
-        self.destination = Destination::Map;
-        if let Some(map) = &self.map {
-            map.update(cx, |screen, cx| screen.show_entity(id, cx));
-        }
-        cx.notify();
-    }
-
     fn switch_to(&mut self, destination: Destination, window: &mut Window, cx: &mut Context<Self>) {
         if destination != Destination::Context {
             self.retire_context_surface(cx);
@@ -1325,6 +1521,13 @@ impl<
                 if let Some(screen) = &self.inbox {
                     screen.update(cx, |screen, cx| screen.refresh(cx));
                 }
+                let ties = self.review_tab == ReviewTab::Ties;
+                if let Some(screen) = &self.map {
+                    screen.update(cx, |screen, cx| {
+                        screen.set_embedded(ties, cx);
+                        screen.refresh(cx);
+                    });
+                }
             }
             Destination::Decisions => {
                 if let Some(screen) = &self.decisions {
@@ -1338,7 +1541,10 @@ impl<
             }
             Destination::Map => {
                 if let Some(screen) = &self.map {
-                    screen.update(cx, |screen, cx| screen.refresh(cx));
+                    screen.update(cx, |screen, cx| {
+                        screen.set_embedded(false, cx);
+                        screen.refresh(cx);
+                    });
                 }
             }
             Destination::Overview => {
@@ -1427,7 +1633,7 @@ impl<
             self.inbox
                 .as_ref()
                 .and_then(|screen| screen.read(cx).total_count())
-                .map(|count| count.to_string())
+                .map(|count| (count + self.pending_ties(cx)).to_string())
                 .unwrap_or_else(|| "…".into())
         });
         text_style(div(), TypeScale::BODY_SMALL)
@@ -1829,6 +2035,27 @@ impl<
     > Render for Shell<R>
 {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self._activation.is_none() {
+            self._activation = Some(cx.observe_window_activation(window, |shell, window, cx| {
+                crate::ui::motion::clock::set_window_active(window.is_window_active(), cx);
+                // Leaving the window is the end of a visit: the next briefing
+                // counts from here.
+                if !window.is_window_active() {
+                    if let Some(project) = shell
+                        .projects
+                        .as_ref()
+                        .and_then(|projects| projects.read(cx).selected_project())
+                    {
+                        crate::ui::visits::mark(
+                            cx,
+                            project.id().as_str(),
+                            &crate::ui::visits::now(),
+                        );
+                    }
+                }
+            }));
+        }
+        let _probe = crate::ui::perf::Probe::start("shell");
         if self.route.is_some() {
             self.follow_route(window, cx);
         }
@@ -1995,15 +2222,7 @@ impl<
                     })
                     .unwrap_or_else(|| div().into_any_element())
             } else if selected.is_some() && self.destination == Destination::Review {
-                self.inbox
-                    .as_ref()
-                    .map(|screen| {
-                        screen
-                            .clone()
-                            .cached(gpui::StyleRefinement::default().size_full())
-                            .into_any_element()
-                    })
-                    .unwrap_or_else(|| div().into_any_element())
+                self.render_review(&theme, cx)
             } else {
                 projects.update(cx, |screen, cx| screen.render_details(cx))
             };

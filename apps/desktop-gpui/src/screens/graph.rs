@@ -9,10 +9,19 @@
 //! everything but a node's neighborhood, and the pulses that run along the
 //! focused links. Selection opens a side card with the node's ties and the
 //! real actions (open, confirm or reject a suggestion).
+//!
+//! It stays light at any size (the project's pillar is performance). A
+//! component with more decisions or rules than the drawing can show keeps a
+//! handful and folds the rest into one group node ("+590 decisões") that
+//! opens the component's page, where the full lists live; counts stay true.
+//! Painting only visits what is on screen and drops to a cheap mode (straight
+//! single-stroke links, no signal, flat nodes) when many links are in view.
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 use application::graph::{NodeRef, ProjectGraph};
@@ -54,8 +63,52 @@ const MIN_SCALE: f32 = 0.35;
 const MAX_SCALE: f32 = 2.6;
 /// Below this zoom only components and technologies keep their names.
 const DETAIL_SCALE: f32 = 2.2;
+/// Decisions and rules the whole drawing keeps as individual nodes, shared
+/// among the components that have any; the rest fold into group nodes.
+const LEAF_BUDGET: usize = 260;
+/// Fewest and most leaves one component keeps before folding.
+const MIN_LEAVES: usize = 2;
+const MAX_LEAVES: usize = 10;
+/// Folding fewer than this many is not worth a group node.
+const FOLD_SLACK: usize = 3;
+/// Above this many links in view, painting drops to the cheap mode.
+const CROWDED_LINKS: usize = 140;
+/// Below this zoom (and above [`PANORAMA_FROM`] nodes) the map is a
+/// panorama: components, technologies and groups only; single decisions and
+/// rules come back when the camera comes closer. It leaves again above
+/// `PANORAMA_BELOW + PANORAMA_BAND`, so a zoom resting at the edge does not
+/// make the picture flicker.
+const PANORAMA_BELOW: f32 = 0.45;
+const PANORAMA_BAND: f32 = 0.1;
+/// Smallest map that ever becomes a panorama.
+const PANORAMA_FROM: usize = 150;
+/// Beyond the viewport, how far a node may sit and still be painted.
+const CULL_MARGIN: f32 = 48.0;
 /// Width of the side card.
 const CARD_WIDTH: f32 = 300.0;
+
+/// How much of the painting work is spared; `lod` is the app's. The others
+/// exist to measure what each saving is worth (`XEMNAS_GRAPH_RENDER`):
+/// `full` visits every node and link with all effects, `cull` adds the
+/// viewport cut, `cheap` adds the cheap mode for crowded views, `lod` adds the
+/// panorama on top.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RenderMode {
+    Full,
+    Cull,
+    Cheap,
+    Lod,
+}
+
+fn render_mode() -> RenderMode {
+    static MODE: std::sync::OnceLock<RenderMode> = std::sync::OnceLock::new();
+    *MODE.get_or_init(|| match std::env::var("XEMNAS_GRAPH_RENDER").as_deref() {
+        Ok("full") => RenderMode::Full,
+        Ok("cull") => RenderMode::Cull,
+        Ok("cheap") => RenderMode::Cheap,
+        _ => RenderMode::Lod,
+    })
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
@@ -91,14 +144,20 @@ enum LinkKind {
 struct Node {
     node: NodeRef,
     kind: Kind,
-    label: String,
-    detail: String,
+    label: SharedString,
+    detail: SharedString,
+    /// For a group node, how many decisions or rules it stands for.
+    folded: usize,
+    /// For a group node, the component whose page lists them.
+    home: Option<SharedString>,
     /// Index of the top-level component it gathers around.
     cluster: Option<usize>,
     degree: usize,
     /// Decisions and rules tied to it (components and technologies).
     weight: (usize, usize),
     conflict: bool,
+    /// Tied to a suggested link: kept visible at every scale.
+    suggested: bool,
     pos: (f32, f32),
     vel: (f32, f32),
     /// Displayed opacity, eased toward the focus target every frame.
@@ -108,7 +167,19 @@ struct Node {
 }
 
 impl Node {
+    /// What the node is, for the card and screen readers.
+    fn caption(&self) -> &'static str {
+        match (self.folded > 0, self.kind) {
+            (true, Kind::Rule) => "Regras agrupadas",
+            (true, _) => "Decisões agrupadas",
+            _ => self.kind.label(),
+        }
+    }
+
     fn radius(&self) -> f32 {
+        if self.folded > 0 {
+            return (6.0 + (self.folded as f32).ln() * 1.7).min(14.0);
+        }
         match self.kind {
             Kind::Component => 11.0 + (self.degree.min(12) as f32) * 1.3,
             Kind::Technology => 8.5,
@@ -118,6 +189,9 @@ impl Node {
     }
 
     fn charge(&self) -> f32 {
+        if self.folded > 0 {
+            return 1100.0;
+        }
         match self.kind {
             Kind::Component => 5200.0,
             Kind::Technology => 1600.0,
@@ -199,6 +273,17 @@ pub struct GraphCanvas {
     /// Simulation heat while a node is dragged.
     heat: f32,
     fitted: bool,
+    /// Layouts started; a result is installed only if it is the latest.
+    generation: u64,
+    /// The newest generation, readable from the layout thread: a layout
+    /// whose number is behind it stops between steps.
+    latest: Arc<AtomicU64>,
+    /// Whether a layout is still being computed.
+    pending: bool,
+    /// Whether the map is drawn as a panorama (see [`PANORAMA_BELOW`]).
+    panorama: bool,
+    /// A node to select once the layout in progress is installed (demo).
+    select_later: Option<String>,
     focus: FocusHandle,
     buttons: BTreeMap<String, FocusHandle>,
 }
@@ -231,6 +316,11 @@ impl GraphCanvas {
             clock: Instant::now(),
             heat: 0.0,
             fitted: false,
+            generation: 0,
+            latest: Arc::new(AtomicU64::new(0)),
+            pending: false,
+            panorama: false,
+            select_later: None,
             focus: cx.focus_handle().tab_stop(true),
             buttons: BTreeMap::new(),
         }
@@ -238,7 +328,17 @@ impl GraphCanvas {
 
     /// Replaces the data, keeping the place of nodes already shown; only a
     /// first load (or a new project) plays the entrance.
+    ///
+    /// The force layout is the heaviest thing the app computes (hundreds of
+    /// milliseconds at a few hundred nodes, seconds at a thousand), so it
+    /// runs off the interface thread and is installed when ready; a newer
+    /// call supersedes an older one still running.
     pub fn set_graph(&mut self, graph: &ProjectGraph, fresh: bool, cx: &mut Context<Self>) {
+        self.generation += 1;
+        self.latest.store(self.generation, Ordering::Relaxed);
+        self.pending = true;
+        let generation = self.generation;
+        let latest = Arc::clone(&self.latest);
         let previous: BTreeMap<NodeRef, (f32, f32)> = if fresh {
             BTreeMap::new()
         } else {
@@ -251,29 +351,55 @@ impl GraphCanvas {
             .selected
             .and_then(|index| self.nodes.get(index))
             .map(|node| node.node.clone());
-        let (mut nodes, links) = build(graph);
-        let known = place(&mut nodes, &links, &previous);
-        settle(
-            &mut nodes,
-            &links,
-            if known {
-                SETTLE_STEPS / 4
-            } else {
-                SETTLE_STEPS
-            },
-            known,
-        );
-        stagger(&mut nodes);
-        self.nodes = nodes;
-        self.links = links;
-        self.hover = None;
-        self.selected =
-            selected.and_then(|node| self.nodes.iter().position(|row| row.node == node));
-        if fresh || !self.fitted {
-            self.born = Instant::now();
-            self.fitted = false;
-        }
-        cx.notify();
+        let graph = graph.clone();
+        cx.spawn(async move |this, cx| {
+            let Some((nodes, links)) = cx
+                .background_executor()
+                .spawn(async move {
+                    let _probe = crate::ui::perf::Probe::start("graph-layout");
+                    let (mut nodes, links) = build(&graph);
+                    let known = place(&mut nodes, &links, &previous);
+                    let finished = settle_with(
+                        solver_for(nodes.len()),
+                        &mut nodes,
+                        &links,
+                        if known {
+                            SETTLE_STEPS / 4
+                        } else {
+                            SETTLE_STEPS
+                        },
+                        known,
+                        &|| latest.load(Ordering::Relaxed) != generation,
+                    );
+                    stagger(&mut nodes);
+                    finished.then_some((nodes, links))
+                })
+                .await
+            else {
+                // A newer layout (or another project) took over mid-way.
+                return;
+            };
+            let _ = this.update(cx, |canvas, cx| {
+                if canvas.generation != generation {
+                    return;
+                }
+                canvas.pending = false;
+                canvas.nodes = nodes;
+                canvas.links = links;
+                canvas.hover = None;
+                canvas.selected =
+                    selected.and_then(|node| canvas.nodes.iter().position(|row| row.node == node));
+                if let Some(label) = canvas.select_later.take() {
+                    canvas.selected = canvas.nodes.iter().position(|node| node.label == label);
+                }
+                if fresh || !canvas.fitted {
+                    canvas.born = Instant::now();
+                    canvas.fitted = false;
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Selects the node named `label`, so demo captures reach the focus
@@ -283,6 +409,8 @@ impl GraphCanvas {
         if found.is_some() {
             self.selected = found;
             cx.notify();
+        } else if self.pending {
+            self.select_later = Some(label.to_owned());
         }
     }
 
@@ -561,8 +689,9 @@ impl GraphCanvas {
     fn step(&mut self, reduce_motion: bool) -> bool {
         let mut busy = false;
         if self.heat > 0.01 {
-            let links = self.links.clone();
+            let links = std::mem::take(&mut self.links);
             tick(&mut self.nodes, &links, self.heat);
+            self.links = links;
             self.heat *= 0.94;
             busy = true;
         }
@@ -635,7 +764,13 @@ impl GraphCanvas {
 
     fn layer_chips(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Div {
         let colors = theme.colors;
-        let count = |kind: Kind| self.nodes.iter().filter(|node| node.kind == kind).count();
+        let count = |kind: Kind| {
+            self.nodes
+                .iter()
+                .filter(|node| node.kind == kind)
+                .map(|node| node.folded.max(1))
+                .sum::<usize>()
+        };
         let suggested = self
             .links
             .iter()
@@ -769,11 +904,19 @@ impl GraphCanvas {
                         .child(label),
                 )
         };
+        // A quiet plate behind it: on a crowded map the nodes would show
+        // through the words.
         div()
             .flex()
             .flex_wrap()
             .gap_x(px(SpacingScale::S3))
             .gap_y(px(SpacingScale::S1))
+            .px(px(SpacingScale::S3))
+            .py(px(SpacingScale::S2))
+            .rounded(theme.radius.control())
+            .border_1()
+            .border_color(colors.hairline_divider())
+            .bg(colors.canvas_deep().alpha(0.82))
             .child(item(
                 div()
                     .size(px(12.0))
@@ -798,6 +941,21 @@ impl GraphCanvas {
                     .rounded_full()
                     .bg(colors.graph_decision()),
                 "Decisão",
+            ))
+            .child(item(
+                div()
+                    .size(px(10.0))
+                    .rounded_full()
+                    .border_1()
+                    .border_color(colors.graph_decision())
+                    .child(
+                        div()
+                            .m(px(2.5))
+                            .size(px(3.0))
+                            .rounded_full()
+                            .bg(colors.graph_decision()),
+                    ),
+                "Agrupadas",
             ))
             .child(item(
                 div()
@@ -866,7 +1024,7 @@ impl GraphCanvas {
                 .cursor_pointer()
                 .hover(move |style| style.bg(colors.glass_fill_low()))
                 .role(Role::Button)
-                .aria_label(format!("{}: {}", other_node.kind.label(), other_node.label))
+                .aria_label(format!("{}: {}", other_node.caption(), other_node.label))
                 .focus_visible(focus_ring(theme))
                 .child(swatch(theme, other_node))
                 .child(
@@ -955,16 +1113,20 @@ impl GraphCanvas {
             );
         }
 
-        let (open_label, open_event) = match node.kind {
-            Kind::Component | Kind::Technology => (
+        let (open_label, open_event) = match (&node.home, node.kind) {
+            (Some(home), _) => (
+                Some("Ver todas no Mapa"),
+                Some(GraphEvent::OpenEntity(home.to_string())),
+            ),
+            (_, Kind::Component | Kind::Technology) => (
                 Some("Abrir no Mapa"),
                 Some(GraphEvent::OpenEntity(node.node.id.clone())),
             ),
-            Kind::Decision => (
+            (_, Kind::Decision) => (
                 Some("Abrir em Decisões"),
                 Some(GraphEvent::OpenDecision(node.node.id.clone())),
             ),
-            Kind::Rule => (None, None),
+            (_, Kind::Rule) => (None, None),
         };
         let open = open_label.zip(open_event).map(|(label, event)| {
             let event = Rc::new(Cell::new(Some(event)));
@@ -1027,9 +1189,9 @@ impl GraphCanvas {
                                         text_style(div(), TypeScale::META)
                                             .text_color(colors.text_muted())
                                             .child(if node.conflict {
-                                                format!("{} · em conflito", node.kind.label())
+                                                format!("{} · em conflito", node.caption())
                                             } else {
-                                                node.kind.label().to_owned()
+                                                node.caption().to_owned()
                                             }),
                                     ),
                             )
@@ -1117,6 +1279,21 @@ impl Render for GraphCanvas {
             }
         }
         let busy = self.step(reduce_motion);
+        let leave_above = if self.panorama {
+            PANORAMA_BELOW + PANORAMA_BAND
+        } else {
+            PANORAMA_BELOW
+        };
+        self.panorama = self.nodes.len() > PANORAMA_FROM && self.camera.scale < leave_above;
+        let omitted = if self.panorama && render_mode() == RenderMode::Lod {
+            self.nodes
+                .iter()
+                .enumerate()
+                .filter(|(index, node)| self.visible(*index) && leaf_hidden_in_panorama(node))
+                .count()
+        } else {
+            0
+        };
         let bloom = if reduce_motion {
             1.0
         } else {
@@ -1127,7 +1304,7 @@ impl Render for GraphCanvas {
         if busy || bloom < 1.0 || !self.fitted {
             // Settling, the entrance and camera moves: every frame.
             window.request_animation_frame();
-        } else if motion {
+        } else if motion && self.links.len() <= CROWDED_LINKS {
             // Only the ambient signal moves: the shared 30 Hz clock, which
             // parks as soon as the graph leaves the screen.
             crate::ui::motion::clock::phase(
@@ -1157,6 +1334,9 @@ impl Render for GraphCanvas {
             selected: self.selected,
             time: self.clock.elapsed().as_secs_f32(),
             motion,
+            crowded: Cell::new(false),
+            panorama: self.panorama && render_mode() == RenderMode::Lod,
+            mode: render_mode(),
         };
         let bounds_cell = self.bounds.clone();
         let painter = canvas(
@@ -1169,10 +1349,20 @@ impl Render for GraphCanvas {
         let zoom = self.zoom_controls(&theme, cx);
         let legend = self.legend(&theme);
         let card = self.side_card(&theme, cx);
+        // The hint sits in the header's own row and wraps under the filters
+        // when the canvas is narrow, instead of lying over them.
         let hint = (self.selected.is_none()).then(|| {
             text_style(div(), TypeScale::META)
+                .flex_none()
+                .pt(px(5.0))
                 .text_color(colors.text_muted())
-                .child("Clique para focar · arraste para mover · role para aproximar")
+                .child(if self.pending && self.nodes.is_empty() {
+                    "Organizando o mapa…".to_owned()
+                } else if omitted > 0 {
+                    format!("Panorama · {omitted} decisões e regras ocultas · aproxime para vê-las")
+                } else {
+                    "Clique para focar · arraste para mover · role para aproximar".to_owned()
+                })
         });
         let summary = format!(
             "Grafo do projeto: {} componentes, {} decisões, {} regras, {} tecnologias.",
@@ -1183,8 +1373,13 @@ impl Render for GraphCanvas {
             self.nodes
                 .iter()
                 .filter(|n| n.kind == Kind::Decision)
-                .count(),
-            self.nodes.iter().filter(|n| n.kind == Kind::Rule).count(),
+                .map(|n| n.folded.max(1))
+                .sum::<usize>(),
+            self.nodes
+                .iter()
+                .filter(|n| n.kind == Kind::Rule)
+                .map(|n| n.folded.max(1))
+                .sum::<usize>(),
             self.nodes
                 .iter()
                 .filter(|n| n.kind == Kind::Technology)
@@ -1221,10 +1416,17 @@ impl Render for GraphCanvas {
                     .absolute()
                     .top(px(SpacingScale::S4))
                     .left(px(SpacingScale::S4))
-                    .right(px(SpacingScale::S4))
+                    .right(px(if self.selected.is_some() {
+                        CARD_WIDTH + SpacingScale::S4 * 2.0
+                    } else {
+                        SpacingScale::S4
+                    }))
                     .flex()
-                    .flex_col()
-                    .gap(px(SpacingScale::S2))
+                    .flex_wrap()
+                    .items_start()
+                    .justify_between()
+                    .gap_x(px(SpacingScale::S4))
+                    .gap_y(px(SpacingScale::S2))
                     .child(chips)
                     .children(hint),
             )
@@ -1265,6 +1467,11 @@ struct Scene {
     time: f32,
     /// Whether anything moves (off under reduced motion).
     motion: bool,
+    /// Set at paint: many links in view, so the cheap mode is on.
+    crowded: Cell<bool>,
+    /// Zoomed out on a big map: single decisions and rules stay out.
+    panorama: bool,
+    mode: RenderMode,
 }
 
 impl Scene {
@@ -1283,12 +1490,20 @@ impl Scene {
 
     fn paint(&self, bounds: Bounds<Pixels>, theme: &Theme, window: &mut Window, cx: &mut App) {
         window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
+            // Only what is on screen is visited: at hundreds of nodes the
+            // frame's cost follows the viewport, not the project.
+            let _probe = crate::ui::perf::Probe::start("graph-paint");
+            let live = self.on_screen(bounds);
+            let drawn = self.links_on_screen(bounds, &live);
+            self.crowded.set(
+                matches!(self.mode, RenderMode::Cheap | RenderMode::Lod)
+                    && drawn.len() > CROWDED_LINKS,
+            );
             self.paint_grid(bounds, theme, window);
-            self.paint_links(bounds, theme, window);
+            self.paint_links(bounds, theme, window, &drawn);
             // Small first so components sit on top.
-            let mut order: Vec<usize> = (0..self.nodes.len())
-                .filter(|index| self.nodes[*index].1)
-                .collect();
+            let mut order: Vec<usize> =
+                (0..self.nodes.len()).filter(|index| live[*index]).collect();
             order.sort_by_key(|index| -kind_order(self.nodes[*index].0.kind));
             for index in &order {
                 self.paint_node(bounds, *index, theme, window);
@@ -1297,6 +1512,60 @@ impl Scene {
                 self.paint_label(bounds, *index, theme, window, cx);
             }
         });
+    }
+
+    /// Which nodes are shown and inside the viewport (with a margin for
+    /// their halo and label).
+    fn on_screen(&self, bounds: Bounds<Pixels>) -> Vec<bool> {
+        let (ox, oy) = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
+        let (width, height) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+        self.nodes
+            .iter()
+            .map(|(node, shown)| {
+                if !shown || (self.panorama && leaf_hidden_in_panorama(node)) {
+                    return false;
+                }
+                if self.mode == RenderMode::Full {
+                    return true;
+                }
+                let (x, y) = self.screen(bounds, node.pos);
+                x >= ox - CULL_MARGIN
+                    && x <= ox + width + CULL_MARGIN
+                    && y >= oy - CULL_MARGIN
+                    && y <= oy + height + CULL_MARGIN
+            })
+            .collect()
+    }
+
+    /// The links whose box meets the viewport.
+    fn links_on_screen(&self, bounds: Bounds<Pixels>, live: &[bool]) -> Vec<usize> {
+        let (ox, oy) = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
+        let (width, height) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+        self.links
+            .iter()
+            .enumerate()
+            .filter(|(_, link)| {
+                if self.panorama
+                    && (leaf_hidden_in_panorama(&self.nodes[link.a].0)
+                        || leaf_hidden_in_panorama(&self.nodes[link.b].0))
+                {
+                    return false;
+                }
+                if self.mode == RenderMode::Full || live[link.a] || live[link.b] {
+                    return true;
+                }
+                // Neither end is in view; a long link can still cross it.
+                let (pa, pb) = (
+                    self.screen(bounds, self.nodes[link.a].0.pos),
+                    self.screen(bounds, self.nodes[link.b].0.pos),
+                );
+                pa.0.min(pb.0) <= ox + width
+                    && pa.0.max(pb.0) >= ox
+                    && pa.1.min(pb.1) <= oy + height
+                    && pa.1.max(pb.1) >= oy
+            })
+            .map(|(number, _)| number)
+            .collect()
     }
 
     /// A faint dot field that pans and zooms with the map.
@@ -1329,11 +1598,18 @@ impl Scene {
 
     /// Luminous hairlines: a wide faint stroke under a thin bright one, drawn
     /// in from the component outward, with signal running along them.
-    fn paint_links(&self, bounds: Bounds<Pixels>, theme: &Theme, window: &mut Window) {
+    fn paint_links(
+        &self,
+        bounds: Bounds<Pixels>,
+        theme: &Theme,
+        window: &mut Window,
+        drawn: &[usize],
+    ) {
         let colors = theme.colors;
         let signal = Hsla::from(colors.graph_component());
         let focus_center = self.focus.as_ref().map(|(center, _)| *center);
-        for (number, link) in self.links.iter().enumerate() {
+        for &number in drawn {
+            let link = &self.links[number];
             let (a, b) = (&self.nodes[link.a].0, &self.nodes[link.b].0);
             // The line grows out of the earlier of its two ends.
             let start_at = a.stagger.min(b.stagger) * 0.55;
@@ -1359,18 +1635,24 @@ impl Scene {
                 LinkKind::PartOf => (signal, 0.55, false),
                 _ => (signal, 0.45, false),
             };
+            // In a crowd, a link is one straight hairline: the glow, the
+            // curve, the dashes and the signal are what make a thousand of
+            // them heavy, and none is readable at that density.
+            let cheap = self.crowded.get() && !lit;
             let strokes: &[(f32, f32)] = if lit {
                 &[(6.0, 0.06), (3.0, 0.14), (1.4, 1.0)]
+            } else if cheap {
+                &[(1.0, core * 0.7)]
             } else {
                 &[(3.5, 0.035), (1.0, core)]
             };
             for &(width, alpha) in strokes {
                 let mut builder = PathBuilder::stroke(px(width));
-                if dashed && width < 2.0 {
+                if dashed && width < 2.0 && !cheap {
                     builder = builder.dash_array(&[px(3.0), px(4.0)]);
                 }
                 builder.move_to(point(px(start.0), px(start.1)));
-                let segments = 18;
+                let segments = if cheap { 1 } else { 18 };
                 for step in 1..=segments {
                     let t = grown * step as f32 / segments as f32;
                     let p = quad_point(start, control, end, t);
@@ -1382,7 +1664,7 @@ impl Scene {
             }
             // Signal: a short comet running along every line; faster and
             // brighter on the focused node's lines.
-            if self.motion && grown >= 1.0 && shade > 0.3 {
+            if self.motion && grown >= 1.0 && shade > 0.3 && !cheap {
                 let (speed, heads, bright) = if lit { (0.55, 2, 1.0) } else { (0.16, 1, 0.55) };
                 let phase = seed(&format!("{number}"), 7);
                 for head in 0..heads {
@@ -1430,21 +1712,25 @@ impl Scene {
         let signal = Hsla::from(colors.graph_component());
         match node.kind {
             Kind::Component => {
-                // A lens: soft bloom, dark body, bright rim, an orbit and a core.
-                circle(
-                    window,
-                    (x, y),
-                    radius + 14.0,
-                    signal.opacity(0.035 * shade),
-                    None,
-                );
-                circle(
-                    window,
-                    (x, y),
-                    radius + 7.0,
-                    signal.opacity(0.05 * shade),
-                    None,
-                );
+                // A lens: soft bloom, dark body, bright rim, an orbit and a
+                // core. In a crowd only the body, rim and core are drawn.
+                let flat = self.crowded.get();
+                if !flat {
+                    circle(
+                        window,
+                        (x, y),
+                        radius + 14.0,
+                        signal.opacity(0.035 * shade),
+                        None,
+                    );
+                    circle(
+                        window,
+                        (x, y),
+                        radius + 7.0,
+                        signal.opacity(0.05 * shade),
+                        None,
+                    );
+                }
                 circle(
                     window,
                     (x, y),
@@ -1452,20 +1738,22 @@ impl Scene {
                     ground.opacity(shade),
                     Some((signal.opacity(0.9 * shade), 1.25)),
                 );
-                circle(
-                    window,
-                    (x, y),
-                    radius + 4.5,
-                    gpui::transparent_black(),
-                    Some((signal.opacity(0.16 * shade), 1.0)),
-                );
-                circle(
-                    window,
-                    (x, y),
-                    radius * 0.34 + 1.5,
-                    signal.opacity(0.25 * shade),
-                    None,
-                );
+                if !flat {
+                    circle(
+                        window,
+                        (x, y),
+                        radius + 4.5,
+                        gpui::transparent_black(),
+                        Some((signal.opacity(0.16 * shade), 1.0)),
+                    );
+                    circle(
+                        window,
+                        (x, y),
+                        radius * 0.34 + 1.5,
+                        signal.opacity(0.25 * shade),
+                        None,
+                    );
+                }
                 circle(
                     window,
                     (x, y),
@@ -1502,14 +1790,39 @@ impl Scene {
                 } else {
                     Hsla::from(colors.graph_decision())
                 };
-                circle(
-                    window,
-                    (x, y),
-                    radius + 4.0,
-                    tint.opacity(0.08 * shade),
-                    None,
-                );
-                circle(window, (x, y), radius, tint.opacity(0.95 * shade), None);
+                if node.folded > 0 {
+                    // A group: a ring around a core, bigger the more it holds.
+                    circle(
+                        window,
+                        (x, y),
+                        radius + 5.0,
+                        tint.opacity(0.07 * shade),
+                        None,
+                    );
+                    circle(
+                        window,
+                        (x, y),
+                        radius,
+                        ground.opacity(shade),
+                        Some((tint.opacity(0.9 * shade), 1.5)),
+                    );
+                    circle(
+                        window,
+                        (x, y),
+                        radius * 0.4,
+                        tint.opacity(0.9 * shade),
+                        None,
+                    );
+                } else {
+                    circle(
+                        window,
+                        (x, y),
+                        radius + 4.0,
+                        tint.opacity(0.08 * shade),
+                        None,
+                    );
+                    circle(window, (x, y), radius, tint.opacity(0.95 * shade), None);
+                }
             }
             Kind::Rule => {
                 let tint = Hsla::from(colors.status_info());
@@ -1525,6 +1838,15 @@ impl Scene {
                     tint.opacity(0.9 * shade),
                     gpui::BorderStyle::Solid,
                 ));
+                if node.folded > 0 {
+                    circle(
+                        window,
+                        (x, y),
+                        radius * 0.4,
+                        tint.opacity(0.9 * shade),
+                        None,
+                    );
+                }
             }
         }
         let focused = self
@@ -1586,7 +1908,7 @@ impl Scene {
             .focus
             .as_ref()
             .is_some_and(|(_, set)| set.contains(&index));
-        let major = matches!(node.kind, Kind::Component | Kind::Technology);
+        let major = matches!(node.kind, Kind::Component | Kind::Technology) || node.folded > 0;
         // Small nodes name themselves only under the pointer (or when zoomed
         // far in): their neighbors are listed in the side card instead.
         let center = self
@@ -1594,7 +1916,8 @@ impl Scene {
             .as_ref()
             .is_some_and(|(center, _)| *center == index);
         let shown = if major {
-            self.camera.scale >= 0.5 || in_focus
+            let floor = if self.crowded.get() { 0.9 } else { 0.5 };
+            self.camera.scale >= floor || in_focus
         } else {
             center || self.camera.scale >= DETAIL_SCALE
         };
@@ -1667,6 +1990,16 @@ impl Scene {
             top += line_height;
         }
     }
+}
+
+/// Whether a node is left out of the panorama: a single decision or rule
+/// with nothing that must be seen (no conflict, no suggestion). Groups,
+/// components and technologies always stay.
+fn leaf_hidden_in_panorama(node: &Node) -> bool {
+    node.folded == 0
+        && matches!(node.kind, Kind::Decision | Kind::Rule)
+        && !node.conflict
+        && !node.suggested
 }
 
 fn circle(
@@ -1777,6 +2110,7 @@ fn kind_order(kind: Kind) -> i32 {
 fn build(graph: &ProjectGraph) -> (Vec<Node>, Vec<Link>) {
     // A decision or rule tied to nothing has no place on the drawing: a dot
     // floating alone reads as a glitch. It stays in the lists and counts.
+    let (dropped, crowds) = fold_crowds(graph);
     let tied: BTreeSet<&NodeRef> = graph
         .edges
         .iter()
@@ -1786,7 +2120,10 @@ fn build(graph: &ProjectGraph) -> (Vec<Node>, Vec<Link>) {
     let mut nodes: Vec<Node> = graph
         .nodes
         .iter()
-        .filter(|row| row.summary.node.kind == NodeKind::Entity || tied.contains(&row.summary.node))
+        .filter(|row| {
+            !dropped.contains(&row.summary.node)
+                && (row.summary.node.kind == NodeKind::Entity || tied.contains(&row.summary.node))
+        })
         .map(|row| {
             let summary = &row.summary;
             let kind = match summary.node.kind {
@@ -1797,20 +2134,23 @@ fn build(graph: &ProjectGraph) -> (Vec<Node>, Vec<Link>) {
                 }
                 NodeKind::Entity => Kind::Component,
             };
-            let detail = match kind {
-                Kind::Rule => rule_kind(&summary.detail).to_owned(),
-                Kind::Decision => summary.detail.clone(),
-                _ => String::new(),
+            let detail: SharedString = match kind {
+                Kind::Rule => rule_kind(&summary.detail).into(),
+                Kind::Decision => summary.detail.clone().into(),
+                _ => SharedString::default(),
             };
             Node {
                 node: summary.node.clone(),
                 kind,
-                label: summary.label.clone(),
+                label: summary.label.clone().into(),
                 detail,
+                folded: 0,
+                home: None,
                 cluster: None,
                 degree: 0,
                 weight: (0, 0),
                 conflict: false,
+                suggested: false,
                 pos: (0.0, 0.0),
                 vel: (0.0, 0.0),
                 shade: 1.0,
@@ -1818,6 +2158,42 @@ fn build(graph: &ProjectGraph) -> (Vec<Node>, Vec<Link>) {
             }
         })
         .collect();
+    for crowd in &crowds {
+        let rule = crowd.rule;
+        nodes.push(Node {
+            node: NodeRef {
+                kind: if rule {
+                    NodeKind::Claim
+                } else {
+                    NodeKind::Decision
+                },
+                id: format!(
+                    "group:{}:{}",
+                    crowd.home.id,
+                    if rule { "rules" } else { "decisions" }
+                ),
+            },
+            kind: if rule { Kind::Rule } else { Kind::Decision },
+            label: format!(
+                "+{} {}",
+                crowd.count,
+                if rule { "regras" } else { "decisões" }
+            )
+            .into(),
+            detail: "Agrupadas para manter o grafo leve. Abra o componente para ver todas.".into(),
+            folded: crowd.count,
+            home: Some(crowd.home.id.clone().into()),
+            cluster: None,
+            degree: 0,
+            weight: (0, 0),
+            conflict: false,
+            suggested: false,
+            pos: (0.0, 0.0),
+            vel: (0.0, 0.0),
+            shade: 1.0,
+            stagger: 0.0,
+        });
+    }
     let index: BTreeMap<NodeRef, usize> = nodes
         .iter()
         .enumerate()
@@ -1842,10 +2218,41 @@ fn build(graph: &ProjectGraph) -> (Vec<Node>, Vec<Link>) {
         }
         links.push(Link { a, b, kind });
     }
+    // Each group hangs from its component like the leaves it folded.
+    for crowd in &crowds {
+        let group = NodeRef {
+            kind: if crowd.rule {
+                NodeKind::Claim
+            } else {
+                NodeKind::Decision
+            },
+            id: format!(
+                "group:{}:{}",
+                crowd.home.id,
+                if crowd.rule { "rules" } else { "decisions" }
+            ),
+        };
+        if let (Some(&a), Some(&b)) = (index.get(&group), index.get(&crowd.home)) {
+            let kind = if crowd.rule {
+                LinkKind::AppliesTo
+            } else {
+                LinkKind::Affects
+            };
+            links.push(Link { a, b, kind });
+            // The folded ones still count toward what the component carries.
+            if crowd.rule {
+                nodes[b].weight.1 += crowd.count - 1;
+            } else {
+                nodes[b].weight.0 += crowd.count - 1;
+            }
+        }
+    }
     for (edge_id, edge) in &graph.suggested {
         let (Some(&a), Some(&b)) = (index.get(&edge.from), index.get(&edge.to)) else {
             continue;
         };
+        nodes[a].suggested = true;
+        nodes[b].suggested = true;
         links.push(Link {
             a,
             b,
@@ -1893,6 +2300,52 @@ fn build(graph: &ProjectGraph) -> (Vec<Node>, Vec<Link>) {
         }
     }
     (nodes, links)
+}
+
+/// Decisions or rules folded into one group node for a component.
+struct Crowd {
+    home: NodeRef,
+    rule: bool,
+    count: usize,
+}
+
+/// Finds the components with more decisions or rules than the drawing should
+/// show. Each keeps a share of [`LEAF_BUDGET`] (always the same ones, in id
+/// order) and the rest are folded: the returned set is dropped from the
+/// drawing and a [`Crowd`] stands for them.
+fn fold_crowds(graph: &ProjectGraph) -> (BTreeSet<NodeRef>, Vec<Crowd>) {
+    let mut by_home: BTreeMap<(NodeRef, bool), Vec<NodeRef>> = BTreeMap::new();
+    let mut seen = BTreeSet::new();
+    for edge in &graph.edges {
+        if !matches!(edge.kind.as_str(), "affects" | "applies_to")
+            || edge.from.kind == NodeKind::Entity
+            || edge.to.kind != NodeKind::Entity
+            || !seen.insert(edge.from.clone())
+        {
+            continue;
+        }
+        by_home
+            .entry((edge.to.clone(), edge.from.kind == NodeKind::Claim))
+            .or_default()
+            .push(edge.from.clone());
+    }
+    let cap = (LEAF_BUDGET / by_home.len().max(1)).clamp(MIN_LEAVES, MAX_LEAVES);
+    let mut dropped = BTreeSet::new();
+    let mut crowds = Vec::new();
+    for ((home, rule), mut leaves) in by_home {
+        if leaves.len() < cap + FOLD_SLACK {
+            continue;
+        }
+        leaves.sort();
+        let hidden = leaves.split_off(cap);
+        crowds.push(Crowd {
+            home,
+            rule,
+            count: hidden.len(),
+        });
+        dropped.extend(hidden);
+    }
+    (dropped, crowds)
 }
 
 fn rule_kind(literal: &str) -> &'static str {
@@ -1977,47 +2430,96 @@ fn place(nodes: &mut [Node], links: &[Link], previous: &BTreeMap<NodeRef, (f32, 
 }
 
 /// Runs the simulation to rest.
+/// How repulsion and collision between nodes are found. They differ only in
+/// cost: the benchmark in the tests (`layout_benchmark`) compares them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+enum Solver {
+    /// Every pair, every step. The reference: exact and quadratic.
+    AllPairs,
+    /// Bucketed in a grid; only neighbouring cells meet. Exact within reach.
+    Grid,
+    /// A quadtree gathers far groups into one force (Barnes-Hut); collision
+    /// still looks only at close neighbours.
+    BarnesHut,
+}
+
+/// Up to this many nodes the exact all-pairs solver is used: it is the
+/// fastest there (the tree's bookkeeping costs more than it saves) and exact.
+const EXACT_UP_TO: usize = 300;
+
+/// The solver the app lays out with, by size. The release benchmark
+/// (`layout_benchmark`, results in `docs/pesquisas/escalabilidade-renderizacao-fontes.md`)
+/// had Barnes-Hut 3 to 6 times faster than the grid from 1 000 nodes up,
+/// with the same quality; the grid was never the fastest.
+fn solver_for(count: usize) -> Solver {
+    if count <= EXACT_UP_TO {
+        Solver::AllPairs
+    } else {
+        Solver::BarnesHut
+    }
+}
+
+#[cfg(test)]
 fn settle(nodes: &mut [Node], links: &[Link], steps: usize, gentle: bool) {
+    settle_with(
+        solver_for(nodes.len()),
+        nodes,
+        links,
+        steps,
+        gentle,
+        &|| false,
+    );
+}
+
+/// Settles with `solver`, giving up early when `cancelled` says so (checked
+/// between steps: a newer layout, another project or a closed screen makes
+/// the result worthless). Returns whether it ran to the end.
+fn settle_with(
+    solver: Solver,
+    nodes: &mut [Node],
+    links: &[Link],
+    steps: usize,
+    gentle: bool,
+    cancelled: &dyn Fn() -> bool,
+) -> bool {
     let mut heat: f32 = if gentle { 0.3 } else { 1.0 };
+    // A big map gets fewer, proportionally cooler steps: the cost of a step
+    // grows with the pairs of nodes, and the picture settles all the same.
+    let planned = steps;
+    let steps = if nodes.len() > FULL_STEPS_UP_TO {
+        (steps * FULL_STEPS_UP_TO / nodes.len()).max(steps / 4)
+    } else {
+        steps
+    };
+    let cooling = 0.988_f32.powf(planned as f32 / steps.max(1) as f32);
     for _ in 0..steps {
-        tick(nodes, links, heat);
-        heat = (heat * 0.988).max(0.02);
+        if cancelled() {
+            return false;
+        }
+        tick_with(solver, nodes, links, heat);
+        heat = (heat * cooling).max(0.02);
     }
     for node in nodes.iter_mut() {
         node.vel = (0.0, 0.0);
     }
+    true
 }
 
 /// One step: repulsion, springs, island cohesion, gentle centering and
 /// collision.
 fn tick(nodes: &mut [Node], links: &[Link], heat: f32) {
+    tick_with(solver_for(nodes.len()), nodes, links, heat);
+}
+
+fn tick_with(solver: Solver, nodes: &mut [Node], links: &[Link], heat: f32) {
     let count = nodes.len();
-    for i in 0..count {
-        for j in (i + 1)..count {
-            let (dx, dy) = (
-                nodes[j].pos.0 - nodes[i].pos.0,
-                nodes[j].pos.1 - nodes[i].pos.1,
-            );
-            let mut d2 = dx * dx + dy * dy;
-            if d2 < 0.01 {
-                d2 = 0.01;
-            }
-            let distance = d2.sqrt();
-            let strength = (nodes[i].charge() + nodes[j].charge()) * 0.5 / d2 * heat;
-            let (ux, uy) = (dx / distance, dy / distance);
-            nodes[i].vel.0 -= ux * strength;
-            nodes[i].vel.1 -= uy * strength;
-            nodes[j].vel.0 += ux * strength;
-            nodes[j].vel.1 += uy * strength;
-            // Collision keeps shapes and labels from piling up.
-            let room = nodes[i].radius() + nodes[j].radius() + 14.0;
-            if distance < room {
-                let push = (room - distance) * 0.25;
-                nodes[i].pos.0 -= ux * push;
-                nodes[i].pos.1 -= uy * push;
-                nodes[j].pos.0 += ux * push;
-                nodes[j].pos.1 += uy * push;
-            }
+    match solver {
+        Solver::AllPairs => repel_all_pairs(nodes, heat),
+        Solver::Grid => repel_grid(nodes, heat),
+        Solver::BarnesHut => {
+            repel_barnes_hut(nodes, heat);
+            collide_grid(nodes);
         }
     }
     for link in links {
@@ -2038,21 +2540,53 @@ fn tick(nodes: &mut [Node], links: &[Link], heat: f32) {
     let tops: Vec<usize> = (0..count)
         .filter(|index| nodes[*index].cluster == Some(*index))
         .collect();
-    for (order, &i) in tops.iter().enumerate() {
-        for &j in tops.iter().skip(order + 1) {
-            let (dx, dy) = (
-                nodes[j].pos.0 - nodes[i].pos.0,
-                nodes[j].pos.1 - nodes[i].pos.1,
-            );
-            let distance = (dx * dx + dy * dy).sqrt().max(0.1);
-            let reach = 230.0;
-            if distance < reach {
-                let push = (reach - distance) * 0.05 * heat.max(0.2);
-                let (ux, uy) = (dx / distance, dy / distance);
-                nodes[i].vel.0 -= ux * push;
-                nodes[i].vel.1 -= uy * push;
-                nodes[j].vel.0 += ux * push;
-                nodes[j].vel.1 += uy * push;
+    let separate = |nodes: &mut [Node], i: usize, j: usize| {
+        let (dx, dy) = (
+            nodes[j].pos.0 - nodes[i].pos.0,
+            nodes[j].pos.1 - nodes[i].pos.1,
+        );
+        let distance = (dx * dx + dy * dy).sqrt().max(0.1);
+        let reach = ISLAND_REACH;
+        if distance < reach {
+            let push = (reach - distance) * 0.05 * heat.max(0.2);
+            let (ux, uy) = (dx / distance, dy / distance);
+            nodes[i].vel.0 -= ux * push;
+            nodes[i].vel.1 -= uy * push;
+            nodes[j].vel.0 += ux * push;
+            nodes[j].vel.1 += uy * push;
+        }
+    };
+    if solver == Solver::AllPairs {
+        for (order, &i) in tops.iter().enumerate() {
+            for &j in tops.iter().skip(order + 1) {
+                separate(nodes, i, j);
+            }
+        }
+    } else {
+        // Same pairs (within reach), found through a grid of the reach's size.
+        let cell = |pos: (f32, f32)| {
+            let c = |v: f32| (v / ISLAND_REACH).floor().clamp(-100_000.0, 100_000.0) as i32;
+            (c(pos.0), c(pos.1))
+        };
+        let mut grid: std::collections::HashMap<(i32, i32), Vec<usize>> =
+            std::collections::HashMap::with_capacity(tops.len());
+        for &top in &tops {
+            grid.entry(cell(nodes[top].pos)).or_default().push(top);
+        }
+        let mut near: Vec<usize> = Vec::new();
+        for &i in &tops {
+            near.clear();
+            let (cx, cy) = cell(nodes[i].pos);
+            for gx in cx - 1..=cx + 1 {
+                for gy in cy - 1..=cy + 1 {
+                    if let Some(members) = grid.get(&(gx, gy)) {
+                        near.extend(members.iter().copied().filter(|j| *j > i));
+                    }
+                }
+            }
+            near.sort_unstable();
+            for &j in &near {
+                separate(nodes, i, j);
             }
         }
     }
@@ -2069,10 +2603,323 @@ fn tick(nodes: &mut [Node], links: &[Link], heat: f32) {
         // the map reads as one picture instead of scattered parts.
         node.vel.0 -= node.pos.0 * 0.011 * heat;
         node.vel.1 -= node.pos.1 * 0.011 * heat;
+        let speed = node.vel.0.hypot(node.vel.1);
+        if speed > MAX_STEP {
+            let scale = MAX_STEP / speed;
+            node.vel.0 *= scale;
+            node.vel.1 *= scale;
+        }
         node.pos.0 += node.vel.0;
         node.pos.1 += node.vel.1;
         node.vel.0 *= 0.55;
         node.vel.1 *= 0.55;
+    }
+}
+
+/// How far apart two islands' tops are kept.
+const ISLAND_REACH: f32 = 230.0;
+
+/// The push between one pair, and the collision that keeps shapes and
+/// labels from piling up. Shared by the all-pairs and grid solvers.
+fn pair_interaction(nodes: &mut [Node], i: usize, j: usize, heat: f32) {
+    let (dx, dy) = (
+        nodes[j].pos.0 - nodes[i].pos.0,
+        nodes[j].pos.1 - nodes[i].pos.1,
+    );
+    let mut d2 = dx * dx + dy * dy;
+    if d2 < 0.01 {
+        d2 = 0.01;
+    }
+    let distance = d2.sqrt();
+    let strength = ((nodes[i].charge() + nodes[j].charge()) * 0.5 / d2 * heat).min(MAX_PUSH);
+    let (ux, uy) = (dx / distance, dy / distance);
+    nodes[i].vel.0 -= ux * strength;
+    nodes[i].vel.1 -= uy * strength;
+    nodes[j].vel.0 += ux * strength;
+    nodes[j].vel.1 += uy * strength;
+    let room = nodes[i].radius() + nodes[j].radius() + 14.0;
+    if distance < room {
+        let push = (room - distance) * 0.25;
+        nodes[i].pos.0 -= ux * push;
+        nodes[i].pos.1 -= uy * push;
+        nodes[j].pos.0 += ux * push;
+        nodes[j].pos.1 += uy * push;
+    }
+}
+
+fn repel_all_pairs(nodes: &mut [Node], heat: f32) {
+    for i in 0..nodes.len() {
+        for j in i + 1..nodes.len() {
+            pair_interaction(nodes, i, j, heat);
+        }
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+/// Repulsion fades with the square of the distance and nothing collides
+/// beyond a few dozen pixels, so pairs farther apart than REACH are not
+/// looked at: nodes are bucketed in a grid of that size and each one meets
+/// only its own and the eight surrounding cells, in index order.
+fn repel_grid(nodes: &mut [Node], heat: f32) {
+    let count = nodes.len();
+    let mut grid: std::collections::HashMap<(i32, i32), Vec<usize>> =
+        std::collections::HashMap::with_capacity(count);
+    for (index, node) in nodes.iter().enumerate() {
+        grid.entry(cell_of(node.pos)).or_default().push(index);
+    }
+    let mut near: Vec<usize> = Vec::new();
+    for i in 0..count {
+        near.clear();
+        let (cx, cy) = cell_of(nodes[i].pos);
+        for gx in cx - 1..=cx + 1 {
+            for gy in cy - 1..=cy + 1 {
+                if let Some(cell) = grid.get(&(gx, gy)) {
+                    near.extend(cell.iter().copied().filter(|j| *j > i));
+                }
+            }
+        }
+        near.sort_unstable();
+        for &j in &near {
+            pair_interaction(nodes, i, j, heat);
+        }
+    }
+}
+
+/// Side of the grid cell collision uses: the widest room two nodes can need
+/// (two big components and the margin) fits in a neighbouring cell.
+const COLLIDE_CELL: f32 = 80.0;
+
+/// Collision only, through a fine grid (the repulsion of the Barnes-Hut
+/// solver comes from the tree).
+fn collide_grid(nodes: &mut [Node]) {
+    let count = nodes.len();
+    let cell = |pos: (f32, f32)| {
+        let c = |v: f32| (v / COLLIDE_CELL).floor().clamp(-100_000.0, 100_000.0) as i32;
+        (c(pos.0), c(pos.1))
+    };
+    let mut grid: std::collections::HashMap<(i32, i32), Vec<usize>> =
+        std::collections::HashMap::with_capacity(count);
+    for (index, node) in nodes.iter().enumerate() {
+        grid.entry(cell(node.pos)).or_default().push(index);
+    }
+    let mut near: Vec<usize> = Vec::new();
+    for i in 0..count {
+        near.clear();
+        let (cx, cy) = cell(nodes[i].pos);
+        for gx in cx - 1..=cx + 1 {
+            for gy in cy - 1..=cy + 1 {
+                if let Some(members) = grid.get(&(gx, gy)) {
+                    near.extend(members.iter().copied().filter(|j| *j > i));
+                }
+            }
+        }
+        near.sort_unstable();
+        for &j in &near {
+            let (dx, dy) = (
+                nodes[j].pos.0 - nodes[i].pos.0,
+                nodes[j].pos.1 - nodes[i].pos.1,
+            );
+            let distance = (dx * dx + dy * dy).sqrt().max(0.1);
+            let room = nodes[i].radius() + nodes[j].radius() + 14.0;
+            if distance < room {
+                let (ux, uy) = (dx / distance, dy / distance);
+                let push = (room - distance) * 0.25;
+                nodes[i].pos.0 -= ux * push;
+                nodes[i].pos.1 -= uy * push;
+                nodes[j].pos.0 += ux * push;
+                nodes[j].pos.1 += uy * push;
+            }
+        }
+    }
+}
+
+/// Barnes-Hut opening angle: a group is one force when its size over its
+/// distance is under this. Higher is faster and rougher.
+const THETA: f32 = 0.9;
+
+/// One square of the quadtree.
+struct Quad {
+    /// Centre and half side.
+    cx: f32,
+    cy: f32,
+    half: f32,
+    /// Summed charge, charge-weighted centre and how many nodes it holds.
+    charge: f32,
+    com: (f32, f32),
+    count: usize,
+    /// Children (north-west, north-east, south-west, south-east), or none.
+    children: Option<[usize; 4]>,
+    /// The nodes held while it is a leaf.
+    members: Vec<usize>,
+}
+
+/// A leaf splits past this many nodes, unless it is too small to split.
+const LEAF_CAPACITY: usize = 6;
+
+fn build_quadtree(nodes: &[Node]) -> Vec<Quad> {
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for node in nodes {
+        min_x = min_x.min(node.pos.0);
+        min_y = min_y.min(node.pos.1);
+        max_x = max_x.max(node.pos.0);
+        max_y = max_y.max(node.pos.1);
+    }
+    let half = ((max_x - min_x).max(max_y - min_y) / 2.0).max(1.0) + 1.0;
+    let mut arena = vec![Quad {
+        cx: (min_x + max_x) / 2.0,
+        cy: (min_y + max_y) / 2.0,
+        half,
+        charge: 0.0,
+        com: (0.0, 0.0),
+        count: 0,
+        children: None,
+        members: Vec::new(),
+    }];
+    for (index, node) in nodes.iter().enumerate() {
+        quad_insert(&mut arena, nodes, 0, index, node.pos, 0);
+    }
+    quad_summarise(&mut arena, nodes, 0);
+    arena
+}
+
+fn quad_insert(
+    arena: &mut Vec<Quad>,
+    nodes: &[Node],
+    at: usize,
+    index: usize,
+    pos: (f32, f32),
+    depth: usize,
+) {
+    if let Some(children) = arena[at].children {
+        let child = children[quadrant(&arena[at], pos)];
+        quad_insert(arena, nodes, child, index, pos, depth + 1);
+        return;
+    }
+    arena[at].members.push(index);
+    if arena[at].members.len() <= LEAF_CAPACITY || depth >= 24 {
+        return;
+    }
+    // Split: four children, and the members move down into them.
+    let (cx, cy, half) = (arena[at].cx, arena[at].cy, arena[at].half / 2.0);
+    let first = arena.len();
+    for (dx, dy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+        arena.push(Quad {
+            cx: cx + dx * half,
+            cy: cy + dy * half,
+            half,
+            charge: 0.0,
+            com: (0.0, 0.0),
+            count: 0,
+            children: None,
+            members: Vec::new(),
+        });
+    }
+    arena[at].children = Some([first, first + 1, first + 2, first + 3]);
+    let moved = std::mem::take(&mut arena[at].members);
+    for member in moved {
+        let pos = nodes[member].pos;
+        let child = first + quadrant(&arena[at], pos);
+        quad_insert(arena, nodes, child, member, pos, depth + 1);
+    }
+}
+
+fn quadrant(quad: &Quad, pos: (f32, f32)) -> usize {
+    usize::from(pos.0 >= quad.cx) + 2 * usize::from(pos.1 >= quad.cy)
+}
+
+fn quad_summarise(arena: &mut [Quad], nodes: &[Node], at: usize) {
+    if let Some(children) = arena[at].children {
+        let (mut charge, mut x, mut y, mut count) = (0.0_f32, 0.0_f32, 0.0_f32, 0);
+        for child in children {
+            quad_summarise(arena, nodes, child);
+            let quad = &arena[child];
+            charge += quad.charge;
+            x += quad.com.0 * quad.charge;
+            y += quad.com.1 * quad.charge;
+            count += quad.count;
+        }
+        arena[at].charge = charge;
+        arena[at].count = count;
+        arena[at].com = if charge > 0.0 {
+            (x / charge, y / charge)
+        } else {
+            (arena[at].cx, arena[at].cy)
+        };
+    } else {
+        let (mut charge, mut x, mut y) = (0.0_f32, 0.0_f32, 0.0_f32);
+        for &member in &arena[at].members {
+            let node = &nodes[member];
+            let q = node.charge();
+            charge += q;
+            x += node.pos.0 * q;
+            y += node.pos.1 * q;
+        }
+        arena[at].charge = charge;
+        arena[at].count = arena[at].members.len();
+        arena[at].com = if charge > 0.0 {
+            (x / charge, y / charge)
+        } else {
+            (arena[at].cx, arena[at].cy)
+        };
+    }
+}
+
+/// Repulsion by the tree: the same law and reach as the grid solver, with
+/// groups far enough away (by [`THETA`]) counted as one body.
+fn repel_barnes_hut(nodes: &mut [Node], heat: f32) {
+    let arena = build_quadtree(nodes);
+    let mut stack: Vec<usize> = Vec::new();
+    for i in 0..nodes.len() {
+        let (px, py) = nodes[i].pos;
+        let charge = nodes[i].charge();
+        let (mut fx, mut fy) = (0.0_f32, 0.0_f32);
+        stack.clear();
+        stack.push(0);
+        while let Some(at) = stack.pop() {
+            let quad = &arena[at];
+            if quad.count == 0 {
+                continue;
+            }
+            // Out of reach altogether: the box is farther than REACH.
+            let gap_x = ((quad.cx - px).abs() - quad.half).max(0.0);
+            let gap_y = ((quad.cy - py).abs() - quad.half).max(0.0);
+            if gap_x * gap_x + gap_y * gap_y > REACH * REACH {
+                continue;
+            }
+            let leaf = quad.children.is_none();
+            if !leaf {
+                let (dx, dy) = (quad.com.0 - px, quad.com.1 - py);
+                let d2 = (dx * dx + dy * dy).max(0.01);
+                let size = quad.half * 2.0;
+                // A group is one body only when it is small for its
+                // distance and well clear of anything that could collide.
+                if size * size < THETA * THETA * d2 && d2.sqrt() > size + COLLIDE_CELL {
+                    let distance = d2.sqrt();
+                    let n = quad.count as f32;
+                    let strength = ((n * charge + quad.charge) * 0.5 / d2 * heat).min(MAX_PUSH * n);
+                    fx -= dx / distance * strength;
+                    fy -= dy / distance * strength;
+                    continue;
+                }
+                if let Some(children) = quad.children {
+                    stack.extend(children);
+                }
+                continue;
+            }
+            for &j in &quad.members {
+                if j == i {
+                    continue;
+                }
+                let (dx, dy) = (nodes[j].pos.0 - px, nodes[j].pos.1 - py);
+                let d2 = (dx * dx + dy * dy).max(0.01);
+                let distance = d2.sqrt();
+                let strength = ((charge + nodes[j].charge()) * 0.5 / d2 * heat).min(MAX_PUSH);
+                fx -= dx / distance * strength;
+                fy -= dy / distance * strength;
+            }
+        }
+        nodes[i].vel.0 += fx;
+        nodes[i].vel.1 += fy;
     }
 }
 
@@ -2094,6 +2941,25 @@ fn stagger(nodes: &mut [Node]) {
 }
 
 // ---- math -------------------------------------------------------------------
+
+/// Up to this many nodes the layout takes all its steps.
+const FULL_STEPS_UP_TO: usize = 200;
+/// The strongest push one pair of nodes can give in a step. Without it, two
+/// nodes born almost on the same point (a component with hundreds of
+/// decisions) push each other with a force that grows without bound, and
+/// the positions end up infinite.
+const MAX_PUSH: f32 = 30.0;
+/// The farthest a node moves in one step.
+const MAX_STEP: f32 = 45.0;
+/// Pairs of nodes farther apart than this do not repel each other.
+const REACH: f32 = 420.0;
+
+/// The grid cell of a position. Clamped, so a runaway position (or NaN)
+/// can neither overflow the neighbour arithmetic nor panic.
+fn cell_of(pos: (f32, f32)) -> (i32, i32) {
+    let cell = |value: f32| (value / REACH).floor().clamp(-100_000.0, 100_000.0) as i32;
+    (cell(pos.0), cell(pos.1))
+}
 
 fn lerp(from: f32, to: f32, amount: f32) -> f32 {
     from + (to - from) * amount
@@ -2227,6 +3093,106 @@ mod tests {
         }
     }
 
+    /// A long-lived project: tens of components, hundreds of decisions and
+    /// rules. The layout must stay finite and bounded (the grid ignores far
+    /// pairs, so a regression would show as nodes flying apart).
+    fn large() -> ProjectGraph {
+        let mut nodes = Vec::new();
+        let mut edges = Vec::new();
+        for c in 0..40 {
+            nodes.push(node(
+                NodeKind::Entity,
+                &format!("c{c}"),
+                &format!("modulo-{c}"),
+                "component",
+            ));
+            if c % 5 != 0 {
+                edges.push(edge(
+                    NodeRef::entity(format!("c{c}")),
+                    NodeRef::entity(format!("c{}", c - c % 5)),
+                    "part_of",
+                ));
+            }
+        }
+        for d in 0..600 {
+            nodes.push(node(
+                NodeKind::Decision,
+                &format!("d{d}"),
+                &format!("Decisão {d}"),
+                "Sim",
+            ));
+            edges.push(edge(
+                NodeRef::decision(format!("d{d}")),
+                NodeRef::entity(format!("c{}", if d % 5 < 3 { 0 } else { d % 40 })),
+                "affects",
+            ));
+        }
+        for r in 0..200 {
+            nodes.push(node(
+                NodeKind::Claim,
+                &format!("r{r}"),
+                &format!("Regra {r}"),
+                "convention",
+            ));
+            edges.push(edge(
+                NodeRef::claim(format!("r{r}")),
+                NodeRef::entity(format!("c{}", r % 40)),
+                "applies_to",
+            ));
+        }
+        ProjectGraph {
+            nodes,
+            edges,
+            suggested: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn crowded_components_fold_their_decisions_into_groups() {
+        let (nodes, links) = build(&large());
+        // 40 components, 600 decisions and 200 rules, but the drawing keeps
+        // a bounded number of nodes.
+        assert!(nodes.len() < 400, "{} nodes", nodes.len());
+        let docs = nodes.iter().position(|n| n.label == "modulo-0").unwrap();
+        let group = nodes
+            .iter()
+            .position(|n| {
+                n.folded > 0 && n.kind == Kind::Decision && n.home.as_deref() == Some("c0")
+            })
+            .expect("the crowded component has a group");
+        assert!(links.iter().any(|link| link.a == group && link.b == docs));
+        // Nothing is lost from the counts: group plus leaves is every decision.
+        let decisions: usize = nodes
+            .iter()
+            .filter(|n| n.kind == Kind::Decision)
+            .map(|n| n.folded.max(1))
+            .sum();
+        assert_eq!(decisions, 600);
+        assert!(nodes[docs].weight.0 >= 300);
+    }
+
+    #[test]
+    fn a_large_map_settles_finite_and_bounded() {
+        let (mut nodes, links) = build(&large());
+        place(&mut nodes, &links, &BTreeMap::new());
+        let started = std::time::Instant::now();
+        settle(&mut nodes, &links, SETTLE_STEPS, false);
+        eprintln!("settled {} nodes in {:?}", nodes.len(), started.elapsed());
+        for node in &nodes {
+            assert!(
+                node.pos.0.is_finite() && node.pos.1.is_finite(),
+                "{}",
+                node.label
+            );
+            assert!(
+                node.pos.0.abs() < 20_000.0 && node.pos.1.abs() < 20_000.0,
+                "{}: {:?}",
+                node.label,
+                node.pos
+            );
+        }
+    }
+
     #[test]
     fn a_refresh_keeps_known_nodes_in_place() {
         let (mut nodes, links) = build(&sample());
@@ -2244,5 +3210,222 @@ mod tests {
             let moved = ((node.pos.0 - old.0).powi(2) + (node.pos.1 - old.1).powi(2)).sqrt();
             assert!(moved < 40.0, "{} moved {moved}", node.label);
         }
+    }
+
+    // ---- layout benchmark ------------------------------------------------
+
+    /// A synthetic map straight at the layout level (no `build`): islands of
+    /// `size` nodes, a component and its decisions.
+    fn islands(total: usize, size: usize) -> (Vec<Node>, Vec<Link>) {
+        let mut nodes: Vec<Node> = Vec::with_capacity(total);
+        let mut links = Vec::new();
+        let mut head = 0;
+        for n in 0..total {
+            let first = n % size == 0;
+            if first {
+                head = n;
+            }
+            nodes.push(Node {
+                node: NodeRef {
+                    kind: if first {
+                        NodeKind::Entity
+                    } else {
+                        NodeKind::Decision
+                    },
+                    id: format!("n{n}"),
+                },
+                kind: if first {
+                    Kind::Component
+                } else {
+                    Kind::Decision
+                },
+                label: format!("n{n}").into(),
+                detail: SharedString::default(),
+                folded: 0,
+                home: None,
+                cluster: Some(head),
+                degree: 0,
+                weight: (0, 0),
+                conflict: false,
+                suggested: false,
+                pos: (0.0, 0.0),
+                vel: (0.0, 0.0),
+                shade: 1.0,
+                stagger: 0.0,
+            });
+            if !first {
+                links.push(Link {
+                    a: n,
+                    b: head,
+                    kind: LinkKind::Affects,
+                });
+            }
+        }
+        for link in &links {
+            nodes[link.a].degree += 1;
+            nodes[link.b].degree += 1;
+        }
+        (nodes, links)
+    }
+
+    /// One component with every other node hanging from it: the worst case
+    /// for a grid, since everything sits within reach of everything.
+    fn hub(total: usize) -> (Vec<Node>, Vec<Link>) {
+        islands(total, total)
+    }
+
+    /// Quality numbers of a finished layout: pairs of shapes overlapping,
+    /// how far links are from their rest length (mean of length / rest),
+    /// and the radius that holds the picture.
+    fn quality(nodes: &[Node], links: &[Link]) -> (usize, f32, f32) {
+        let mut grid: std::collections::HashMap<(i32, i32), Vec<usize>> =
+            std::collections::HashMap::new();
+        let cell = |pos: (f32, f32)| ((pos.0 / 80.0).floor() as i32, (pos.1 / 80.0).floor() as i32);
+        for (index, node) in nodes.iter().enumerate() {
+            grid.entry(cell(node.pos)).or_default().push(index);
+        }
+        let mut overlaps = 0;
+        for (i, a) in nodes.iter().enumerate() {
+            let (cx, cy) = cell(a.pos);
+            for gx in cx - 1..=cx + 1 {
+                for gy in cy - 1..=cy + 1 {
+                    for &j in grid
+                        .get(&(gx, gy))
+                        .into_iter()
+                        .flatten()
+                        .filter(|j| **j > i)
+                    {
+                        let b = &nodes[j];
+                        let gap =
+                            ((a.pos.0 - b.pos.0).powi(2) + (a.pos.1 - b.pos.1).powi(2)).sqrt();
+                        if gap < a.radius() + b.radius() {
+                            overlaps += 1;
+                        }
+                    }
+                }
+            }
+        }
+        let ratio = links
+            .iter()
+            .map(|link| {
+                let (a, b) = (&nodes[link.a], &nodes[link.b]);
+                ((a.pos.0 - b.pos.0).powi(2) + (a.pos.1 - b.pos.1).powi(2)).sqrt() / link.rest()
+            })
+            .sum::<f32>()
+            / links.len().max(1) as f32;
+        let extent = nodes
+            .iter()
+            .map(|node| node.pos.0.hypot(node.pos.1))
+            .fold(0.0_f32, f32::max);
+        (overlaps, ratio, extent)
+    }
+
+    /// Compares the solvers on the same maps. Slow and meant for a release
+    /// build, so it is ignored by default:
+    ///
+    /// `cargo test --release -p desktop-gpui --lib layout_benchmark -- --ignored --nocapture`
+    #[test]
+    #[ignore = "benchmark: run in release with --ignored --nocapture"]
+    fn layout_benchmark() {
+        let sizes = [250_usize, 1_000, 2_500, 5_000, 10_000];
+        println!("solver,map,nodes,links,ms,overlaps,link_ratio,extent");
+        for (map, make) in [
+            (
+                "ilhas",
+                (|n| islands(n, 25)) as fn(usize) -> (Vec<Node>, Vec<Link>),
+            ),
+            ("hub", hub as fn(usize) -> (Vec<Node>, Vec<Link>)),
+        ] {
+            for &total in &sizes {
+                for solver in [Solver::AllPairs, Solver::Grid, Solver::BarnesHut] {
+                    // The reference is quadratic: past a point it only costs time.
+                    let limit = match (solver, map) {
+                        (Solver::AllPairs, "hub") => 2_500,
+                        (Solver::AllPairs, _) => 5_000,
+                        (Solver::Grid, "hub") => 5_000,
+                        _ => usize::MAX,
+                    };
+                    if total > limit {
+                        continue;
+                    }
+                    let mut times = Vec::new();
+                    let mut last = None;
+                    for _ in 0..2 {
+                        let (mut nodes, links) = make(total);
+                        place(&mut nodes, &links, &BTreeMap::new());
+                        let started = std::time::Instant::now();
+                        settle_with(solver, &mut nodes, &links, SETTLE_STEPS, false, &|| false);
+                        times.push(started.elapsed().as_secs_f64() * 1000.0);
+                        last = Some((nodes, links));
+                    }
+                    times.sort_by(f64::total_cmp);
+                    let (nodes, links) = last.expect("ran");
+                    let (overlaps, ratio, extent) = quality(&nodes, &links);
+                    println!(
+                        "{solver:?},{map},{total},{},{:.1},{overlaps},{ratio:.2},{extent:.0}",
+                        links.len(),
+                        times[0]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn barnes_hut_keeps_the_layout_finite_and_comparable_to_the_grid() {
+        let (mut grid, links) = islands(1_000, 25);
+        let mut tree = grid.clone();
+        place(&mut grid, &links, &BTreeMap::new());
+        place(&mut tree, &links, &BTreeMap::new());
+        settle_with(
+            Solver::Grid,
+            &mut grid,
+            &links,
+            SETTLE_STEPS,
+            false,
+            &|| false,
+        );
+        settle_with(
+            Solver::BarnesHut,
+            &mut tree,
+            &links,
+            SETTLE_STEPS,
+            false,
+            &|| false,
+        );
+        for node in &tree {
+            assert!(node.pos.0.is_finite() && node.pos.1.is_finite());
+            assert!(node.pos.0.abs() < 50_000.0 && node.pos.1.abs() < 50_000.0);
+        }
+        let (grid_overlaps, grid_ratio, _) = quality(&grid, &links);
+        let (tree_overlaps, tree_ratio, _) = quality(&tree, &links);
+        assert!(
+            tree_ratio < grid_ratio * 1.5 + 0.5,
+            "links stretched: tree {tree_ratio}, grid {grid_ratio}"
+        );
+        assert!(
+            tree_overlaps <= grid_overlaps + 50,
+            "overlaps: tree {tree_overlaps}, grid {grid_overlaps}"
+        );
+    }
+
+    #[test]
+    fn a_cancelled_layout_stops_between_steps() {
+        let (mut nodes, links) = islands(500, 25);
+        place(&mut nodes, &links, &BTreeMap::new());
+        let steps = std::cell::Cell::new(0);
+        let finished = settle_with(
+            Solver::Grid,
+            &mut nodes,
+            &links,
+            SETTLE_STEPS,
+            false,
+            &|| {
+                steps.set(steps.get() + 1);
+                steps.get() > 3
+            },
+        );
+        assert!(!finished);
+        assert_eq!(steps.get(), 4);
     }
 }

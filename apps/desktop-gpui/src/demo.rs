@@ -166,6 +166,14 @@ pub(crate) fn store() -> Result<SqliteStore, Box<dyn std::error::Error>> {
                     "Nunca registrar credenciais em arquivos de configuração ou logs.".into();
                 store.insert_candidates(&[rule])?;
             }
+            if index == 0 && std::env::var_os("XEMNAS_DEMO_CALIBRATION").is_some() {
+                seed_decided(&store, &candidate)?;
+            }
+            if index == 0 && project == "demo-xemnas" {
+                if let Ok(state) = std::env::var("XEMNAS_DEMO_APPROVAL") {
+                    seed_approval(&store, &candidate, &state)?;
+                }
+            }
             candidate.id = format!("confirmed-{}", candidate.id);
             candidate.dedup_hash = format!("confirmed-{}", candidate.dedup_hash);
             store.insert_candidates(&[candidate.clone()])?;
@@ -197,7 +205,142 @@ pub(crate) fn store() -> Result<SqliteStore, Box<dyn std::error::Error>> {
         }
     }
     seed_map(&store)?;
+    if let Some(scale) = std::env::var("XEMNAS_DEMO_SCALE")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+    {
+        seed_scale(&store, scale)?;
+    }
     Ok(store)
+}
+
+/// Measurement only (`XEMNAS_DEMO_SCALE=N`): `n` more decisions, `n / 4`
+/// components and `n / 3` rules on the demo project, most of them tied to
+/// one component named "docs", so the screens can be timed on a project the
+/// size of a real, long-lived one.
+fn seed_scale(store: &SqliteStore, n: usize) -> Result<(), Box<dyn std::error::Error>> {
+    use application::claims::{Claims, NewClaim};
+    use application::graph::{KnowledgeGraph, LinkRequest, NewEntity};
+    use domain::claims::ClaimKind;
+    use domain::entities::{EdgeKind, EntityKind, NodeKind};
+
+    const PROJECT: &str = "demo-xemnas";
+    let graph = KnowledgeGraph::new(store.clone());
+    let mut components = Vec::new();
+    let names = std::iter::once("docs".to_owned()).chain((0..n / 4).map(|i| format!("modulo-{i}")));
+    for name in names {
+        let entity = graph.create_entity(NewEntity {
+            project_id: PROJECT.into(),
+            kind: Some(EntityKind::Component),
+            patterns: vec![format!("crates/{name}/**")],
+            description: format!("Componente {name}, para medir o mapa em escala."),
+            name,
+            ..NewEntity::default()
+        })?;
+        components.push(entity.entity_id);
+    }
+    for index in 0..n {
+        let capture = format!("scale-capture-{index}");
+        let stamp = format!("2026-09-{:02}T{:02}:00:00Z", 1 + index % 28, index % 24);
+        store.insert_capture(&CaptureWrite {
+            receipt: CaptureReceiptRecord {
+                capture_id: capture.clone(),
+                idempotency_key: capture.clone(),
+                canonical_path: "C:/Projects/xemnas".into(),
+                received_at: stamp.clone(),
+                artifact_count: 1,
+            },
+            artifacts: vec![CaptureArtifactRecord {
+                capture_id: capture.clone(),
+                artifact_id: "source".into(),
+                kind: "diff_hunk".into(),
+                content: format!("fn item_{index}() {{}}"),
+                metadata: r#"{"file":"src/lib.rs","language":"rust","start_line":1}"#.into(),
+                fingerprint: format!("{:064x}", 10_000 + index),
+            }],
+            job: JobRecord {
+                id: format!("job-{capture}"),
+                kind: ANALYZE_CAPTURE_KIND.into(),
+                payload: capture.clone(),
+                state: JobState::Completed,
+                idempotent: true,
+                attempts: 1,
+                last_error: None,
+                created_at: stamp.clone(),
+                updated_at: stamp.clone(),
+            },
+            checkpoint: CaptureCheckpointRecord {
+                adapter: "demo".into(),
+                adapter_version: "0.1.0".into(),
+                session_id: format!("session-{capture}"),
+                message_id: capture.clone(),
+                capture_id: capture.clone(),
+                observed_at: stamp.clone(),
+                updated_at: stamp.clone(),
+            },
+        })?;
+        let candidate = DecisionCandidateRecord {
+            id: format!("scale-candidate-{index}"),
+            project_id: PROJECT.into(),
+            capture_id: capture,
+            status: "pending".into(),
+            question: format!("Decisão {index}: como tratar o caso {index} do módulo?"),
+            choice: format!("Tratar o caso {index} de forma explícita e testada."),
+            rationale: format!("Motivo da decisão {index}, com contexto para ocupar espaço."),
+            signals: "[\"public_contract\"]".into(),
+            confidence: 0.8,
+            confidence_reason: "Medição.".into(),
+            evidence_refs: "[\"source\"]".into(),
+            diff_summary: "{\"files\":[\"src/lib.rs\"],\"artifacts\":1}".into(),
+            dedup_hash: format!("scale-{index}"),
+            created_at: stamp.clone(),
+            updated_at: stamp,
+            kind: "decision".into(),
+            significance: 1.0,
+            criteria: "[]".into(),
+            qualifiers: "[]".into(),
+        };
+        store.insert_candidates(std::slice::from_ref(&candidate))?;
+        let promoted =
+            application::inbox::Inbox::new(store.clone()).confirm(&candidate.id, None)?;
+        // Most decisions land on "docs", the rest spread over the others.
+        let target = if index % 5 < 3 {
+            &components[0]
+        } else {
+            &components[index % components.len()]
+        };
+        graph.link(LinkRequest {
+            kind: EdgeKind::Affects,
+            source_kind: NodeKind::Decision,
+            source_id: promoted.decision_id,
+            entity_id: target.clone(),
+        })?;
+    }
+    let claims = Claims::new(store.clone());
+    for index in 0..n / 3 {
+        let claim = claims.create(NewClaim {
+            project_id: PROJECT.into(),
+            kind: ClaimKind::Convention,
+            statement: format!("Regra {index}: toda mudança do caso {index} tem teste."),
+            valid_from: Some("2026-09-01".into()),
+            valid_until: None,
+            source_decision_id: None,
+            source_version: None,
+            qualifiers: Vec::new(),
+        })?;
+        let target = if index % 5 < 3 {
+            &components[0]
+        } else {
+            &components[index % components.len()]
+        };
+        graph.link(LinkRequest {
+            kind: EdgeKind::AppliesTo,
+            source_kind: NodeKind::Claim,
+            source_id: claim.claim_id,
+            entity_id: target.clone(),
+        })?;
+    }
+    Ok(())
 }
 
 /// A project map for the demo: components with parts, technologies, rules,
@@ -589,6 +732,7 @@ fn seed_map(store: &SqliteStore) -> Result<(), Box<dyn std::error::Error>> {
         text: text.into(),
         entity_id: ids.get(entity).cloned(),
         entity_name: ids.get(entity).map(|_| entity.to_owned()),
+        via: None,
         citations,
     };
     store.save_overview(&ProjectOverview {
@@ -597,6 +741,7 @@ fn seed_map(store: &SqliteStore) -> Result<(), Box<dyn std::error::Error>> {
         decisions: decisions.len(),
         rules: rules.len(),
         documents: documents.len(),
+        architecture: stress_architecture().unwrap_or_default(),
         summary: vec![
             OverviewParagraph {
                 text: "O xemnas guarda localmente as decisões de engenharia tiradas das \
@@ -850,6 +995,242 @@ impl application::knowledge_review::KnowledgeReviewApi for SampleKnowledgeReview
         });
         Ok(report)
     }
+}
+
+/// Forty-five decided candidates whose confidence mostly predicts what was
+/// kept, to see the calibration card filled: `XEMNAS_DEMO_CALIBRATION=1`.
+fn seed_decided(
+    store: &SqliteStore,
+    template: &DecisionCandidateRecord,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for at in 0..45_usize {
+        let confidence = 0.3 + at as f64 * 0.015;
+        let kept = if confidence < 0.5 {
+            at % 6 == 0
+        } else if confidence < 0.7 {
+            at % 2 == 0
+        } else {
+            at % 8 != 0
+        };
+        let mut candidate = template.clone();
+        candidate.id = format!("decided-{at}");
+        candidate.dedup_hash = format!("decided-{at}");
+        candidate.status = if kept { "accepted" } else { "dismissed" }.into();
+        candidate.confidence = confidence;
+        store.insert_candidates(&[candidate])?;
+    }
+    Ok(())
+}
+
+/// The automatic review switched on, with what it did, to see its switch,
+/// its ledger and its marks: `XEMNAS_DEMO_APPROVAL=on`. Two candidates wait
+/// for the person with the reason the AI gave, two things were accepted (one
+/// by the rules, one by the AI) and one candidate was discarded.
+fn seed_approval(
+    store: &SqliteStore,
+    template: &DecisionCandidateRecord,
+    state: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use application::auto_approval::{ApprovalStore, By, Entry, ItemKind, Mode, Verdict};
+    if state != "on" {
+        return Ok(());
+    }
+    let record = |id: &str, status: &str, confidence: f64, question: &str| {
+        let mut candidate = template.clone();
+        candidate.dedup_hash = id.to_owned();
+        candidate.id = id.to_owned();
+        candidate.status = status.into();
+        candidate.confidence = confidence;
+        candidate.question = question.into();
+        candidate
+    };
+    store.set_approval_mode(Mode::Automatic, "2026-09-29T09:00:00Z")?;
+    let entry =
+        |id: &str, verdict: Verdict, by: By, title: &str, reason: &str, result: Option<&str>| {
+            Entry {
+                kind: ItemKind::Candidate,
+                item_id: id.to_owned(),
+                project_id: template.project_id.clone(),
+                verdict,
+                by,
+                reason: reason.to_owned(),
+                title: title.to_owned(),
+                result_id: result.map(str::to_owned),
+                created_at: "2026-09-29T14:00:00Z".to_owned(),
+                undone_at: None,
+            }
+        };
+    let rows = [
+        (
+            record(
+                "left-0",
+                "pending",
+                0.7,
+                "Como limitar o tamanho de cada captura?",
+            ),
+            entry(
+                "left-0",
+                Verdict::NeedsHuman,
+                By::Ai,
+                "Como limitar o tamanho de cada captura?",
+                "muda o que os agentes recebem e não há fonte clara do limite",
+                None,
+            ),
+        ),
+        (
+            record(
+                "left-1",
+                "pending",
+                0.65,
+                "Onde registrar o motivo de uma rejeição?",
+            ),
+            entry(
+                "left-1",
+                Verdict::NeedsHuman,
+                By::Ai,
+                "Onde registrar o motivo de uma rejeição?",
+                "pode conflitar com a decisão sobre histórico de revisões",
+                None,
+            ),
+        ),
+        (
+            record(
+                "done-rules",
+                "accepted",
+                0.95,
+                "Como nomear os arquivos de exportação?",
+            ),
+            entry(
+                "done-rules",
+                Verdict::Accepted,
+                By::Rules,
+                "Como nomear os arquivos de exportação?",
+                "alta confiança, com fonte e sem parecido registrado",
+                Some("decision-auto-0"),
+            ),
+        ),
+        (
+            record(
+                "done-ai",
+                "accepted",
+                0.72,
+                "Quando reenviar uma captura recusada?",
+            ),
+            entry(
+                "done-ai",
+                Verdict::Accepted,
+                By::Ai,
+                "Quando reenviar uma captura recusada?",
+                "correta e útil, apoiada pela fonte citada",
+                Some("decision-auto-1"),
+            ),
+        ),
+        (
+            record(
+                "gone",
+                "dismissed",
+                0.9,
+                "Como garantir uma única decisão por captura (de novo)?",
+            ),
+            entry(
+                "gone",
+                Verdict::Discarded,
+                By::Rules,
+                "Como garantir uma única decisão por captura (de novo)?",
+                "repete uma decisão já registrada",
+                None,
+            ),
+        ),
+    ];
+    for (candidate, ledger) in rows {
+        store.insert_candidates(&[candidate])?;
+        store.record_review(&ledger)?;
+    }
+    Ok(())
+}
+
+/// A crowded architecture (12 containers, skips, back edges, a cycle) for
+/// checking the diagram at scale: `XEMNAS_DEMO_ARCH=large`.
+fn stress_architecture() -> Option<application::architecture::Architecture> {
+    use application::architecture::{Architecture, Container, Interaction, StepRef};
+    std::env::var("XEMNAS_DEMO_ARCH")
+        .ok()
+        .filter(|v| v == "large")?;
+    let names = [
+        ("app", "Interface do desktop", "GPUI"),
+        ("api", "API local de capturas", "axum · JSON"),
+        ("jobs", "Fila de análise", "SQLite"),
+        ("ai", "Provedor de IA", "HTTP · JSON"),
+        ("store", "Armazenamento das decisões", "SQLite · FTS5"),
+        ("queue", "Fila de entregas", ""),
+        ("search", "Busca do contexto", "FTS5"),
+        ("mail", "Avisos", ""),
+        ("auth", "Cofre de credenciais", "Windows DPAPI"),
+        ("cache", "Cache de leitura", ""),
+        ("admin", "", ""),
+        ("docs", "Documentação indexada", "Markdown"),
+    ];
+    let link = |from: &str, to: &str, flow: usize, step: usize| Interaction {
+        from: from.into(),
+        to: to.into(),
+        steps: vec![StepRef {
+            flow,
+            step,
+            title: format!("{from} para {to}"),
+            via: step.is_multiple_of(2).then(|| "HTTP/JSON".to_owned()),
+        }],
+    };
+    let mut architecture = Architecture {
+        containers: names
+            .iter()
+            .enumerate()
+            .map(|(at, (id, role, tech))| Container {
+                entity_id: (*id).into(),
+                name: (*id).into(),
+                role: (*role).into(),
+                technologies: if tech.is_empty() {
+                    vec![]
+                } else {
+                    vec![(*tech).into()]
+                },
+                parts: at % 5,
+                decisions: 2 + at,
+                conflicts: usize::from(at == 4),
+                flows: vec![0, 1],
+            })
+            .collect(),
+        interactions: vec![
+            link("app", "api", 0, 0),
+            link("api", "jobs", 0, 1),
+            link("jobs", "ai", 0, 2),
+            link("ai", "store", 0, 3),
+            link("api", "auth", 1, 0),
+            link("auth", "store", 1, 1),
+            link("api", "store", 1, 2),
+            link("store", "app", 1, 3),
+            link("jobs", "queue", 0, 4),
+            link("queue", "jobs", 0, 5),
+            link("queue", "mail", 0, 6),
+            link("api", "search", 1, 4),
+            link("search", "store", 1, 5),
+        ],
+        hidden: 3,
+    };
+    // A part is in the flows whose steps touch it.
+    for container in &mut architecture.containers {
+        let mut flows: Vec<usize> = architecture
+            .interactions
+            .iter()
+            .filter(|interaction| {
+                interaction.from == container.entity_id || interaction.to == container.entity_id
+            })
+            .flat_map(|interaction| interaction.steps.iter().map(|step| step.flow))
+            .collect();
+        flows.sort_unstable();
+        flows.dedup();
+        container.flows = flows;
+    }
+    Some(architecture)
 }
 
 #[cfg(test)]

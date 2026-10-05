@@ -35,6 +35,8 @@ use application::injection::{
 use application::projects::ProjectRepository;
 use application::relations::RelationStore;
 use domain::claims::ClaimKind;
+use std::collections::BTreeMap;
+
 use gpui::prelude::*;
 use gpui::{
     div, px, AnyElement, Context, Div, Entity, EventEmitter, Render, Role, Subscription, Toggled,
@@ -45,8 +47,9 @@ use super::format::{calendar_date, clock, day_heading, plural, short_date, thous
 use crate::ui::controls::{action_button, button_foreground, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
-    count_chip, count_up, empty_panel, error_banner, index_rail, index_row, radio_list, radio_row,
-    reading_page, section_header, section_label, skeleton_list, status_pill, toast, TOAST_DURATION,
+    count_chip, count_up, empty_panel, error_banner, index_rail, index_row, meter, radio_list,
+    radio_row, reading_page, ring, section_header, section_label, share, skeleton_list, sparkline,
+    status_pill, toast, TOAST_DURATION,
 };
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme};
@@ -132,49 +135,114 @@ enum Section {
     Mode,
 }
 
-impl Section {
+/// The four entries of the index. The pages inside a group are reached by a
+/// switch at the top of the page, so the index stays at four (a person holds
+/// about four things at a glance) while every page is still two presses away.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Group {
+    Overview,
+    Sources,
+    Deliveries,
+    Settings,
+}
+
+impl Group {
+    const ALL: [Self; 4] = [
+        Self::Overview,
+        Self::Sources,
+        Self::Deliveries,
+        Self::Settings,
+    ];
+
     fn label(self) -> &'static str {
         match self {
-            Self::KnowledgeReview => "Revisar conhecimento",
             Self::Overview => "Visão geral",
+            Self::Sources => "Fontes",
             Self::Deliveries => "Entregas",
-            Self::Test => "Testar uma tarefa",
-            Self::Decisions => "Decisões em vigor",
-            Self::Rules => "Regras",
-            Self::Documents => "Documentação",
-            Self::Mode => "Modo de entrega",
+            Self::Settings => "Ajustes",
         }
     }
 
     fn glyph(self) -> IconName {
         match self {
-            Self::KnowledgeReview => IconName::Layers,
             Self::Overview => IconName::Gauge,
+            Self::Sources => IconName::Book,
             Self::Deliveries => IconName::Clock,
-            Self::Test => IconName::Flask,
-            Self::Decisions => IconName::Decision,
-            Self::Rules => IconName::Shield,
-            Self::Documents => IconName::Book,
-            Self::Mode => IconName::Settings,
+            Self::Settings => IconName::Settings,
         }
     }
 
     fn id(self) -> &'static str {
         match self {
-            Self::KnowledgeReview => "context-nav-knowledge-review",
             Self::Overview => "context-nav-overview",
+            Self::Sources => "context-nav-sources",
             Self::Deliveries => "context-nav-deliveries",
-            Self::Test => "context-nav-test",
-            Self::Decisions => "context-nav-decisions",
-            Self::Rules => "context-nav-rules",
-            Self::Documents => "context-nav-documents",
-            Self::Mode => "context-nav-mode",
+            Self::Settings => "context-nav-mode",
+        }
+    }
+
+    /// The pages of the group, in the order of its switch.
+    fn members(self) -> &'static [Section] {
+        match self {
+            Self::Overview => &[Section::Overview],
+            Self::Sources => &[
+                Section::Decisions,
+                Section::Rules,
+                Section::Documents,
+                Section::KnowledgeReview,
+            ],
+            Self::Deliveries => &[Section::Deliveries, Section::Test],
+            Self::Settings => &[Section::Mode],
+        }
+    }
+}
+
+impl Section {
+    /// The index entry this page belongs to.
+    fn group(self) -> Group {
+        match self {
+            Self::Overview => Group::Overview,
+            Self::Decisions | Self::Rules | Self::Documents | Self::KnowledgeReview => {
+                Group::Sources
+            }
+            Self::Deliveries | Self::Test => Group::Deliveries,
+            Self::Mode => Group::Settings,
+        }
+    }
+
+    /// The id of the page's tab on the group's switch.
+    fn tab_id(self) -> &'static str {
+        match self {
+            Self::Decisions => "context-tab-decisions",
+            Self::Rules => "context-tab-rules",
+            Self::Documents => "context-tab-documents",
+            Self::KnowledgeReview => "context-tab-knowledge-review",
+            Self::Deliveries => "context-tab-deliveries",
+            Self::Test => "context-tab-test",
+            Self::Overview => "context-tab-overview",
+            Self::Mode => "context-tab-mode",
+        }
+    }
+
+    /// The word on the group's switch.
+    fn tab(self) -> &'static str {
+        match self {
+            Self::Decisions => "Decisões",
+            Self::Rules => "Regras",
+            Self::Documents => "Documentação",
+            Self::KnowledgeReview => "Revisar com IA",
+            Self::Deliveries => "Histórico",
+            Self::Test => "Testar uma tarefa",
+            Self::Overview => "Visão geral",
+            Self::Mode => "Modo de entrega",
         }
     }
 }
 
 /// Documents listed per kind before "e mais N".
 const DOCUMENTS_SHOWN: usize = 8;
+/// Rules of each kind built first, and how many "Mostrar mais" adds (twice).
+const RULES_PAGE: usize = 10;
 
 /// How many decisions in force the screen lists.
 const IN_FORCE_LIMIT: usize = 50;
@@ -212,6 +280,10 @@ pub struct ContextScreen<S: ContextStores> {
     task: Entity<SearchField>,
     claim_kind: ClaimKind,
     confirm_retire: Option<String>,
+    /// Rules built per kind (by kind index); the rest waits behind
+    /// "Mostrar mais": every scroll step rebuilds the page, so what is
+    /// built is what scrolls.
+    shown_rules: BTreeMap<usize, usize>,
     pack: Option<ContextPack>,
     error: Option<String>,
     notice: Option<String>,
@@ -219,6 +291,8 @@ pub struct ContextScreen<S: ContextStores> {
     /// Demo-only: scroll to the end once loaded (`--open context:end`).
     scroll_to_end: bool,
     section: Section,
+    /// The page last open in each index group, by group id.
+    last_in_group: BTreeMap<&'static str, Section>,
     /// The delivery whose items are open in the history.
     open_delivery: Option<String>,
     focus: std::collections::BTreeMap<&'static str, gpui::FocusHandle>,
@@ -257,6 +331,7 @@ impl<S: ContextStores> ContextScreen<S> {
             self.leave_review(cx);
         }
         self.section = section;
+        self.last_in_group.insert(section.group().id(), section);
         self.scroll.set_offset(gpui::point(px(0.0), px(0.0)));
         cx.notify();
     }
@@ -318,12 +393,14 @@ impl<S: ContextStores> ContextScreen<S> {
             task,
             claim_kind: ClaimKind::Convention,
             confirm_retire: None,
+            shown_rules: BTreeMap::new(),
             pack: None,
             error: None,
             notice: None,
             scroll: gpui::ScrollHandle::new(),
             scroll_to_end: false,
             section: Section::Overview,
+            last_in_group: BTreeMap::new(),
             open_delivery: None,
             focus: std::collections::BTreeMap::new(),
             _subscriptions: subscriptions,
@@ -964,19 +1041,48 @@ impl<S: ContextStores> ContextScreen<S> {
                 .flex_col()
                 .gap(px(SpacingScale::S4))
                 .children(groups.map(|(kind, items)| {
+                    let total = items.len();
+                    let shown = self
+                        .shown_rules
+                        .get(&(kind as usize))
+                        .copied()
+                        .unwrap_or(RULES_PAGE);
+                    let hidden = total.saturating_sub(shown);
                     div()
                         .flex()
                         .flex_col()
                         .gap(px(SpacingScale::S1))
                         .child(
                             section_header(theme, kind_plural(kind))
-                                .child(count_chip(theme, items.len().to_string())),
+                                .child(count_chip(theme, total.to_string())),
                         )
                         .children(
                             items
                                 .into_iter()
+                                .take(shown)
                                 .map(|claim| self.claim_row(theme, claim, cx)),
                         )
+                        .when(hidden > 0, |group| {
+                            group.child(
+                                div().flex().child(
+                                    action_button(
+                                        theme,
+                                        ("context-rules-more", kind as usize),
+                                        ButtonKind::Ghost,
+                                        true,
+                                    )
+                                    .aria_label(format!("Mostrar mais {hidden} regras"))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        *this
+                                            .shown_rules
+                                            .entry(kind as usize)
+                                            .or_insert(RULES_PAGE) += 2 * RULES_PAGE;
+                                        cx.notify();
+                                    }))
+                                    .child(format!("Mostrar mais {hidden}")),
+                                ),
+                            )
+                        })
                 }))
                 .into_any_element()
         };
@@ -1421,63 +1527,49 @@ impl<S: ContextStores> ContextScreen<S> {
                 snapshot.deliveries.len(),
             )
         });
-        let groups: [(&str, &[Section]); 3] = [
-            (
-                "Agente",
-                &[Section::Overview, Section::Deliveries, Section::Test],
-            ),
-            (
-                "Fontes",
-                &[Section::Decisions, Section::Rules, Section::Documents],
-            ),
-            ("Ajustes", &[Section::KnowledgeReview, Section::Mode]),
-        ];
         let mut list = div()
             .flex()
             .flex_col()
             .gap(px(2.0))
-            .px(px(SpacingScale::S2));
-        for (label, sections) in groups {
+            .px(px(SpacingScale::S2))
+            .pt(px(SpacingScale::S4));
+        for group in Group::ALL {
+            // Only the deliveries carry a count: the others are lists whose
+            // size says nothing about whether something needs attention.
+            let badge = counts
+                .map(|(_, _, _, deliveries)| deliveries)
+                .filter(|count| group == Group::Deliveries && *count > 0)
+                .map(|count| count.to_string());
+            // A group opens on the page the person last used in it.
+            let section = if self.section.group() == group {
+                self.section
+            } else {
+                self.last_in_group
+                    .get(group.id())
+                    .copied()
+                    .unwrap_or(group.members()[0])
+            };
+            let focus = self.focus_for(group.id(), cx);
             list = list.child(
-                div()
-                    .px(px(SpacingScale::S3))
-                    .pt(px(SpacingScale::S4))
-                    .pb(px(SpacingScale::S1))
-                    .child(section_label(theme, label)),
+                index_row(
+                    theme,
+                    group.id(),
+                    self.section.group() == group,
+                    group.glyph(),
+                    group.label(),
+                    badge,
+                )
+                .track_focus(&focus)
+                .on_click(cx.listener(move |this, _, _, cx| this.go(section, cx)))
+                .on_key_down(cx.listener(
+                    move |this, event: &gpui::KeyDownEvent, _, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                            this.go(section, cx);
+                            cx.stop_propagation();
+                        }
+                    },
+                )),
             );
-            for &section in sections {
-                let badge = counts
-                    .and_then(|(decisions, rules, documents, deliveries)| match section {
-                        Section::Decisions => Some(decisions),
-                        Section::Rules => Some(rules),
-                        Section::Documents => Some(documents),
-                        Section::Deliveries => Some(deliveries),
-                        _ => None,
-                    })
-                    .filter(|count| *count > 0)
-                    .map(|count| count.to_string());
-                let focus = self.focus_for(section.id(), cx);
-                list = list.child(
-                    index_row(
-                        theme,
-                        section.id(),
-                        self.section == section,
-                        section.glyph(),
-                        section.label(),
-                        badge,
-                    )
-                    .track_focus(&focus)
-                    .on_click(cx.listener(move |this, _, _, cx| this.go(section, cx)))
-                    .on_key_down(cx.listener(
-                        move |this, event: &gpui::KeyDownEvent, _, cx| {
-                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                this.go(section, cx);
-                                cx.stop_propagation();
-                            }
-                        },
-                    )),
-                );
-            }
         }
         let foot = self.snapshot.as_ref().map(|snapshot| {
             let mode = snapshot.settings.mode;
@@ -1519,6 +1611,50 @@ impl<S: ContextStores> ContextScreen<S> {
                     .child(list),
             )
             .children(foot)
+    }
+
+    /// The switch between the pages of the open group ("Decisões | Regras |
+    /// Documentação | Revisar com IA"); a group of one page has none.
+    fn render_switch(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Option<Div> {
+        let members = self.section.group().members();
+        if members.len() < 2 {
+            return None;
+        }
+        let mut track = crate::ui::patterns::segmented(theme)
+            .id("context-switch")
+            .role(Role::RadioGroup);
+        for &section in members {
+            let focus = self.focus_for(section.tab_id(), cx);
+            track = track.child(
+                crate::ui::patterns::segment_label(
+                    theme,
+                    section.tab_id(),
+                    section.tab(),
+                    self.section == section,
+                )
+                .track_focus(&focus)
+                .on_click(cx.listener(move |this, _, _, cx| this.go(section, cx)))
+                .on_key_down(cx.listener(
+                    move |this, event: &gpui::KeyDownEvent, _, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                            this.go(section, cx);
+                            cx.stop_propagation();
+                        }
+                    },
+                )),
+            );
+        }
+        Some(
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .px(px(SpacingScale::S4))
+                .py(px(SpacingScale::S2))
+                .border_b_1()
+                .border_color(theme.colors.hairline_divider())
+                .child(track),
+        )
     }
 
     /// The page of the selected section.
@@ -1726,7 +1862,12 @@ impl<S: ContextStores> ContextScreen<S> {
             .to_string();
         let summary = DeliverySummary::since(deliveries, &since);
         let measured = summary.deliveries - summary.sent;
-        let figure = |value: usize, label: &'static str, detail: String, first: bool| {
+        let (per_day, sessions_per_day) = daily(deliveries, 7);
+        let figure = |value: usize,
+                      label: &'static str,
+                      detail: String,
+                      first: bool,
+                      form: Option<gpui::AnyElement>| {
             div()
                 .flex_1()
                 .min_w(px(0.0))
@@ -1740,11 +1881,20 @@ impl<S: ContextStores> ContextScreen<S> {
                         .border_l_1()
                         .border_color(colors.hairline_divider())
                 })
-                .child(count_up(
-                    label,
-                    value,
-                    text_style(div(), TypeScale::HEADING_1).text_color(colors.text_primary()),
-                ))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap(px(SpacingScale::S2))
+                        .child(count_up(
+                            label,
+                            value,
+                            text_style(div(), TypeScale::HEADING_1)
+                                .text_color(colors.text_primary()),
+                        ))
+                        .children(form),
+                )
                 .child(
                     text_style(div(), TypeScale::LABEL)
                         .text_color(colors.text_secondary())
@@ -1767,24 +1917,51 @@ impl<S: ContextStores> ContextScreen<S> {
                 "Entregas",
                 format!("{} enviadas · {measured} medidas", summary.sent),
                 true,
+                Some(sparkline(&per_day, 56.0, 22.0, colors.accent_default()).into_any_element()),
             ))
             .child(figure(
                 summary.sessions,
                 "Sessões do agente",
                 "conversas que receberam".to_owned(),
                 false,
+                Some(
+                    sparkline(&sessions_per_day, 56.0, 22.0, colors.status_info())
+                        .into_any_element(),
+                ),
             ))
             .child(figure(
                 summary.average_tokens(),
                 "Tokens por bloco",
                 format!("média · limite {budget}"),
                 false,
+                Some(
+                    ring(
+                        theme,
+                        share(summary.average_tokens(), budget),
+                        26.0,
+                        colors.status_info(),
+                    )
+                    .into_any_element(),
+                ),
             ))
             .child(figure(
                 summary.omitted,
                 "Fora do orçamento",
                 "itens que não couberam".to_owned(),
                 false,
+                Some(
+                    ring(
+                        theme,
+                        share(summary.omitted, summary.items + summary.omitted),
+                        26.0,
+                        if summary.omitted > 0 {
+                            colors.status_warning()
+                        } else {
+                            colors.status_success()
+                        },
+                    )
+                    .into_any_element(),
+                ),
             ));
 
         // The latest deliveries.
@@ -2049,20 +2226,7 @@ impl<S: ContextStores> ContextScreen<S> {
                             .text_color(colors.text_muted())
                             .child(format!("{} / {budget} tokens", delivery.tokens)),
                     )
-                    .child(
-                        div()
-                            .h(px(3.0))
-                            .w_full()
-                            .rounded_full()
-                            .bg(colors.surface())
-                            .child(
-                                div()
-                                    .h_full()
-                                    .w(gpui::relative(fill))
-                                    .rounded_full()
-                                    .bg(tint),
-                            ),
-                    ),
+                    .child(meter(theme, fill, tint)),
             )
             .when(expandable, |row| {
                 row.child(icon(
@@ -2217,15 +2381,28 @@ fn empty_deliveries(mode: ContextMode) -> &'static str {
 
 impl<S: ContextStores> Render for ContextScreen<S> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _probe = crate::ui::perf::Probe::start("context");
         let theme = Theme::current(cx);
         let rail = self.render_rail(&theme, cx);
+        let switch = self.render_switch(&theme, cx);
         if self.section == Section::KnowledgeReview {
-            return div()
-                .size_full()
-                .relative()
-                .flex()
-                .child(rail)
-                .child(self.review.clone());
+            return div().size_full().relative().flex().child(rail).child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .children(switch)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h(px(0.0))
+                            .flex()
+                            .flex_col()
+                            .child(self.review.clone()),
+                    ),
+            );
         }
         if self.snapshot.is_none() && !self.busy && self.error.is_none() && self.project.is_some() {
             self.refresh(cx);
@@ -2282,6 +2459,7 @@ impl<S: ContextStores> Render for ContextScreen<S> {
                             .role(Role::Alert)
                             .children(retry)
                     }))
+                    .children(switch)
                     .child(div().flex_1().min_h(px(0.0)).flex().flex_col().child(body)),
             )
             .children(
@@ -2424,9 +2602,65 @@ fn kind_icon(kind: ClaimKind) -> IconName {
     }
 }
 
+/// Deliveries and distinct sessions per day over the last `days` days, oldest
+/// first (days with none count 0), for the trend beside the figures.
+fn daily(deliveries: &[Delivery], days: usize) -> (Vec<f32>, Vec<f32>) {
+    let today = chrono::Utc::now().date_naive();
+    let mut counts = vec![0.0_f32; days];
+    let mut sessions: Vec<std::collections::BTreeSet<&str>> = vec![Default::default(); days];
+    for delivery in deliveries {
+        let Some(day) = delivery
+            .created_at
+            .get(..10)
+            .and_then(|day| chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d").ok())
+        else {
+            continue;
+        };
+        let ago = (today - day).num_days();
+        if (0..days as i64).contains(&ago) {
+            let at = days - 1 - ago as usize;
+            counts[at] += 1.0;
+            sessions[at].insert(delivery.session_id.as_str());
+        }
+    }
+    (
+        counts,
+        sessions.iter().map(|set| set.len() as f32).collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{claim_failure, kind_label, kind_plural};
+    use super::{claim_failure, daily, kind_label, kind_plural};
+    use application::injection::{Delivery, InjectionMode};
+
+    fn delivery(days_ago: i64, session: &str) -> Delivery {
+        Delivery {
+            injection_id: format!("i-{days_ago}-{session}"),
+            session_id: session.into(),
+            mode: InjectionMode::Shadow,
+            tokens: 10,
+            omitted: 0,
+            created_at: (chrono::Utc::now() - chrono::Duration::days(days_ago))
+                .format("%Y-%m-%dT%H:%M:%SZ")
+                .to_string(),
+            items: vec![],
+        }
+    }
+
+    #[test]
+    fn deliveries_are_counted_per_day_oldest_first() {
+        let list = [
+            delivery(0, "a"),
+            delivery(0, "b"),
+            delivery(0, "a"),
+            delivery(2, "a"),
+            delivery(30, "c"),
+        ];
+        let (per_day, sessions) = daily(&list, 7);
+        assert_eq!(per_day, vec![0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 3.0]);
+        assert_eq!(sessions, vec![0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 2.0]);
+    }
     use domain::claims::ClaimKind;
 
     #[test]

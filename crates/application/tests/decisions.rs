@@ -275,6 +275,55 @@ fn list_keyset_pagination_has_no_overlap() {
 }
 
 #[test]
+fn listing_given_ids_keeps_their_order_pages_and_skips_missing() {
+    let rows = (0..4)
+        .map(|index| decision(&format!("d-{index}"), "2026-01-01T00:00:00Z"))
+        .collect();
+    let decisions = Decisions::new(FakeDecisions::with(rows));
+    let ids: Vec<String> = ["d-3", "gone", "d-0", "d-2"]
+        .iter()
+        .map(|id| id.to_string())
+        .collect();
+
+    let first = decisions.list_ids(&ids, None, 2).expect("first");
+    let order: Vec<&str> = first
+        .decisions
+        .iter()
+        .map(|row| row.decision_id.as_str())
+        .collect();
+    assert_eq!(order, vec!["d-3"], "a missing id is skipped, not replaced");
+    let second = decisions
+        .list_ids(&ids, first.next_cursor.as_deref(), 2)
+        .expect("second");
+    let order: Vec<&str> = second
+        .decisions
+        .iter()
+        .map(|row| row.decision_id.as_str())
+        .collect();
+    assert_eq!(order, vec!["d-0", "d-2"]);
+    assert_eq!(second.next_cursor, None);
+
+    assert!(decisions
+        .list_ids(&[], None, 2)
+        .expect("empty")
+        .decisions
+        .is_empty());
+    assert!(matches!(
+        decisions.list_ids(&ids, Some("x"), 2),
+        Err(DecisionsError::InvalidFilter(_))
+    ));
+    assert!(matches!(
+        decisions.list_ids(&ids, None, 0),
+        Err(DecisionsError::InvalidFilter(_))
+    ));
+    assert!(decisions
+        .list_ids(&ids, Some("99"), 2)
+        .expect("past the end")
+        .decisions
+        .is_empty());
+}
+
+#[test]
 fn search_sanitizes_operators_and_ignores_unindexed_fields() {
     assert_eq!(
         sanitize_match_query("alpha* AND beta").as_deref(),

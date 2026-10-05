@@ -86,63 +86,79 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     },
     Migration {
         version: 21,
-        sql: include_str!("migrations/0021_knowledge_qualifiers.sql"),
+        sql: include_str!("migrations/0021_create_auto_approval.sql"),
     },
     Migration {
         version: 22,
-        sql: include_str!("migrations/0022_assessment_destination.sql"),
+        sql: include_str!("migrations/0022_create_auto_reviews.sql"),
     },
     Migration {
         version: 23,
-        sql: include_str!("migrations/0023_claim_source_snapshot.sql"),
+        sql: include_str!("migrations/0023_add_job_run_after.sql"),
     },
     Migration {
         version: 24,
-        sql: include_str!("migrations/0024_claim_source_version.sql"),
+        sql: include_str!("migrations/0024_create_job_settings.sql"),
     },
     Migration {
         version: 25,
-        sql: include_str!("migrations/0025_descriptive_observations.sql"),
+        sql: include_str!("migrations/0025_knowledge_qualifiers.sql"),
     },
     Migration {
         version: 26,
-        sql: include_str!("migrations/0026_observation_deliveries.sql"),
+        sql: include_str!("migrations/0026_assessment_destination.sql"),
     },
     Migration {
         version: 27,
-        sql: include_str!("migrations/0027_observation_semantic_cache.sql"),
+        sql: include_str!("migrations/0027_claim_source_snapshot.sql"),
     },
     Migration {
         version: 28,
-        sql: include_str!("migrations/0028_context_routing.sql"),
+        sql: include_str!("migrations/0028_claim_source_version.sql"),
     },
     Migration {
         version: 29,
-        sql: include_str!("migrations/0029_context_routing_ownership.sql"),
+        sql: include_str!("migrations/0029_descriptive_observations.sql"),
     },
     Migration {
         version: 30,
-        sql: include_str!("migrations/0030_review_exception.sql"),
+        sql: include_str!("migrations/0030_observation_deliveries.sql"),
     },
     Migration {
         version: 31,
-        sql: include_str!("migrations/0031_candidate_nature.sql"),
+        sql: include_str!("migrations/0031_observation_semantic_cache.sql"),
     },
     Migration {
         version: 32,
-        sql: include_str!("migrations/0032_review_targets.sql"),
+        sql: include_str!("migrations/0032_context_routing.sql"),
     },
     Migration {
         version: 33,
-        sql: include_str!("migrations/0033_incremental_review.sql"),
+        sql: include_str!("migrations/0033_context_routing_ownership.sql"),
     },
     Migration {
         version: 34,
-        sql: include_str!("migrations/0034_capture_episode.sql"),
+        sql: include_str!("migrations/0034_review_exception.sql"),
     },
     Migration {
         version: 35,
-        sql: include_str!("migrations/0035_repair_assessment_destination.sql"),
+        sql: include_str!("migrations/0035_candidate_nature.sql"),
+    },
+    Migration {
+        version: 36,
+        sql: include_str!("migrations/0036_review_targets.sql"),
+    },
+    Migration {
+        version: 37,
+        sql: include_str!("migrations/0037_incremental_review.sql"),
+    },
+    Migration {
+        version: 38,
+        sql: include_str!("migrations/0038_capture_episode.sql"),
+    },
+    Migration {
+        version: 39,
+        sql: include_str!("migrations/0039_repair_assessment_destination.sql"),
     },
 ];
 
@@ -263,7 +279,7 @@ fn apply_migrations(connection: &Connection, migrations: &[Migration]) -> rusqli
         }
 
         transaction.execute_batch(migration.sql)?;
-        if migration.version == 35 {
+        if migration.version == 39 {
             repair_assessment_destination(&transaction)?;
         }
         transaction.execute(
@@ -303,7 +319,7 @@ fn repair_assessment_destination(connection: &Connection) -> rusqlite::Result<()
     ] {
         if !columns.iter().any(|column| column == required) {
             return Err(rusqlite::Error::InvalidColumnName(format!(
-                "migration 35: assessments schema mismatch: missing {required}"
+                "migration 39: assessments schema mismatch: missing {required}"
             )));
         }
     }

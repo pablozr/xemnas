@@ -169,6 +169,23 @@ fn an_overview_cites_the_records_and_knows_when_it_is_stale() {
     assert_eq!(stored.overview, view.overview);
     assert_eq!(stored.new_decisions, 0);
 
+    // The page carries the decision, tied to the container it affects, and
+    // the rule.
+    let knowledge = overviews
+        .knowledge("p1", &view.overview.architecture)
+        .expect("knowledge");
+    assert_eq!(knowledge.decisions.len(), 1);
+    assert_eq!(knowledge.decisions[0].label, d);
+    assert_eq!(knowledge.decisions[0].choice, "SQLite");
+    assert_eq!(knowledge.decisions[0].containers, vec![storage.clone()]);
+    assert_eq!(knowledge.rules[0].label, r);
+    let page = overviews.page("p1", "xemnas").expect("page");
+    assert!(page.contains(&format!("\"label\":\"{d}\"")));
+    assert!(
+        !page.contains("App local com banco embutido."),
+        "no summary"
+    );
+
     // Decisions confirmed later make it stale (confirmation time is after
     // the generation second).
     std::thread::sleep(std::time::Duration::from_millis(1_100));

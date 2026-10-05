@@ -139,7 +139,7 @@ fn migration_0006_applies_on_fresh_and_upgraded_databases() {
         assert!(index_exists(&connection, "idx_assessments_started_at"));
         connection
             .execute_batch(
-                "DROP TABLE assessments; DELETE FROM schema_migrations WHERE version IN (6, 22);",
+                "DROP TABLE assessments; DELETE FROM schema_migrations WHERE version IN (6, 26);",
             )
             .expect("simulate version 5");
     }
@@ -176,8 +176,8 @@ fn migration_0006_applies_on_fresh_and_upgraded_databases() {
             |row| row.get(0),
         )
         .expect("count distinct");
-    assert_eq!(versions, 34);
-    assert_eq!(distinct, 34);
+    assert_eq!(versions, 38);
+    assert_eq!(distinct, 38);
 
     let _ = std::fs::remove_dir_all(&root);
 }

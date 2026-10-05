@@ -256,6 +256,16 @@ impl InboxStore for FakeInbox {
             updated_at,
         )
     }
+
+    fn reopen_one(&self, id: &str, updated_at: &str) -> Result<bool, InboxError> {
+        self.apply(
+            id,
+            &[CandidateStatus::Dismissed],
+            CandidateStatus::Pending,
+            None,
+            updated_at,
+        )
+    }
 }
 
 impl FakeInbox {
@@ -474,6 +484,31 @@ fn confirm_is_not_repeatable_and_creates_one_decision() {
         "invalid_state"
     );
     assert_eq!(fake.decision_count(), 1, "confirmation is idempotent");
+}
+
+#[test]
+fn a_rejection_can_be_undone_but_only_a_rejection() {
+    let fake = FakeInbox::with(vec![
+        stored("a", "2026-01-01T00:00:00Z", CandidateStatus::Pending),
+        stored("b", "2026-01-02T00:00:00Z", CandidateStatus::Accepted),
+    ]);
+    let inbox = Inbox::new(fake.clone());
+    inbox.reject("a").expect("reject");
+    assert_eq!(fake.status_of("a"), Some(CandidateStatus::Dismissed));
+    inbox.reopen("a").expect("undo the rejection");
+    assert_eq!(fake.status_of("a"), Some(CandidateStatus::Pending));
+    assert_eq!(
+        inbox.reopen("a").expect_err("already pending").code(),
+        "invalid_state"
+    );
+    assert_eq!(
+        inbox.reopen("b").expect_err("an accepted one stays").code(),
+        "invalid_state"
+    );
+    assert_eq!(
+        inbox.reopen("zzz").expect_err("unknown").code(),
+        "not_found"
+    );
 }
 
 #[test]

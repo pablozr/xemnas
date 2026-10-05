@@ -12,9 +12,9 @@ fn original_28_upgrades_preserving_cache_and_erasing_unowned_work() {
     // Reconstruct the original v28 schema, keeping every v1-v27 dependency.
     db.execute_batch("DROP TABLE context_routing_entries;")
         .unwrap();
-    db.execute_batch(include_str!("../src/migrations/0028_context_routing.sql"))
+    db.execute_batch(include_str!("../src/migrations/0032_context_routing.sql"))
         .unwrap();
-    db.execute("DELETE FROM schema_migrations WHERE version=29", [])
+    db.execute("DELETE FROM schema_migrations WHERE version=33", [])
         .unwrap();
     db.execute_batch("INSERT INTO context_routing_entries
         (key,project_id,snapshot,generation,profile_hash,request_json,result_json,state,created_at,expires_at)
@@ -74,7 +74,7 @@ fn original_28_upgrades_preserving_cache_and_erasing_unowned_work() {
             r.get(0)
         })
         .unwrap();
-    assert_eq!(version, 29);
+    assert_eq!(version, 39);
     // Fresh and upgraded databases have exactly the same ownership contract.
     let fresh = support::open("routing-fresh-29", &["p1"]);
     let fresh_db = Connection::open(fresh.root.join("app.db")).unwrap();

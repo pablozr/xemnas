@@ -224,6 +224,18 @@ fn table_count(connection: &rusqlite::Connection, table: &str) -> i64 {
         .expect("count")
 }
 
+/// Capture-analysis jobs only: registering a project also schedules a local
+/// refresh of its descriptive observations, which these tests do not check.
+fn capture_jobs(connection: &rusqlite::Connection) -> i64 {
+    connection
+        .query_row(
+            "SELECT COUNT(*) FROM jobs WHERE kind = 'analyze_capture'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count capture jobs")
+}
+
 /// Reads `(message_id, capture_id, observed_at)` for an adapter session.
 fn checkpoint_row(
     connection: &rusqlite::Connection,
@@ -413,10 +425,14 @@ fn valid_capture_is_persisted_and_scheduled() {
     let connection = rusqlite::Connection::open(&database).expect("open raw connection");
     assert_eq!(table_count(&connection, "capture_receipts"), 1);
     assert_eq!(table_count(&connection, "capture_artifacts"), 4);
-    assert_eq!(table_count(&connection, "jobs"), 1);
+    assert_eq!(capture_jobs(&connection), 1);
 
     let job_kind: String = connection
-        .query_row("SELECT kind FROM jobs", [], |row| row.get(0))
+        .query_row(
+            "SELECT kind FROM jobs WHERE kind <> 'refresh_observations'",
+            [],
+            |row| row.get(0),
+        )
         .expect("job kind");
     assert_eq!(job_kind, ANALYZE_CAPTURE_KIND);
 
@@ -489,7 +505,7 @@ fn replay_returns_200_without_duplicating() {
     let connection = rusqlite::Connection::open(&database).expect("open raw connection");
     assert_eq!(table_count(&connection, "capture_receipts"), 1);
     assert_eq!(table_count(&connection, "capture_artifacts"), 4);
-    assert_eq!(table_count(&connection, "jobs"), 1);
+    assert_eq!(capture_jobs(&connection), 1);
     assert_eq!(table_count(&connection, "adapter_checkpoints"), 1);
     let checkpoint = checkpoint_row(&connection, "session-synthetic-complete")
         .expect("checkpoint remains after replay");
@@ -756,7 +772,7 @@ fn duplicate_artifact_id_is_conflict_and_rolls_back() {
     let connection = rusqlite::Connection::open(&database).expect("open raw connection");
     assert_eq!(table_count(&connection, "capture_receipts"), 0);
     assert_eq!(table_count(&connection, "capture_artifacts"), 0);
-    assert_eq!(table_count(&connection, "jobs"), 0);
+    assert_eq!(capture_jobs(&connection), 0);
 
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -996,7 +1012,7 @@ fn project_removed_between_check_and_insert_is_forbidden() {
     let connection = rusqlite::Connection::open(&database).expect("open raw connection");
     assert_eq!(table_count(&connection, "capture_receipts"), 0);
     assert_eq!(table_count(&connection, "capture_artifacts"), 0);
-    assert_eq!(table_count(&connection, "jobs"), 0);
+    assert_eq!(capture_jobs(&connection), 0);
 
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -1120,7 +1136,7 @@ fn tampered_fingerprint_is_unprocessable_and_not_persisted() {
     let connection = rusqlite::Connection::open(&database).expect("open raw connection");
     assert_eq!(table_count(&connection, "capture_receipts"), 0);
     assert_eq!(table_count(&connection, "capture_artifacts"), 0);
-    assert_eq!(table_count(&connection, "jobs"), 0);
+    assert_eq!(capture_jobs(&connection), 0);
     assert_eq!(table_count(&connection, "adapter_checkpoints"), 0);
 
     let _ = std::fs::remove_dir_all(&root);
@@ -1171,7 +1187,7 @@ fn same_declared_fingerprint_for_different_contents_is_unprocessable() {
     let connection = rusqlite::Connection::open(&database).expect("open raw connection");
     assert_eq!(table_count(&connection, "capture_receipts"), 0);
     assert_eq!(table_count(&connection, "capture_artifacts"), 0);
-    assert_eq!(table_count(&connection, "jobs"), 0);
+    assert_eq!(capture_jobs(&connection), 0);
 
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -1201,7 +1217,7 @@ fn outbox_drain_imports_without_duplicating() {
     let connection = rusqlite::Connection::open(&database).expect("open raw connection");
     assert_eq!(table_count(&connection, "capture_receipts"), 1);
     assert_eq!(table_count(&connection, "capture_artifacts"), 4);
-    assert_eq!(table_count(&connection, "jobs"), 1);
+    assert_eq!(capture_jobs(&connection), 1);
     assert_eq!(table_count(&connection, "adapter_checkpoints"), 1);
 
     std::fs::copy(
@@ -1213,7 +1229,7 @@ fn outbox_drain_imports_without_duplicating() {
     assert_eq!(replay.accepted, 1);
     assert_eq!(table_count(&connection, "capture_receipts"), 1);
     assert_eq!(table_count(&connection, "capture_artifacts"), 4);
-    assert_eq!(table_count(&connection, "jobs"), 1);
+    assert_eq!(capture_jobs(&connection), 1);
     assert_eq!(table_count(&connection, "adapter_checkpoints"), 1);
 
     let _ = std::fs::remove_dir_all(&root);

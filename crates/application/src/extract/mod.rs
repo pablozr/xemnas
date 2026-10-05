@@ -209,6 +209,17 @@ pub enum ExtractError {
     /// The extractor answered, but a proposal broke the candidate contract
     /// (empty field, confidence out of range, unknown evidence ref, ...).
     Validation(String),
+    /// The provider asked to slow down (HTTP 429); the job is requeued.
+    RateLimited {
+        /// Wait the provider asked for (`Retry-After`), if it said.
+        retry_after: Option<std::time::Duration>,
+    },
+    /// The provider timed out or failed transiently on every attempt of
+    /// this call; the job is requeued with backoff, never dropped.
+    Unavailable {
+        /// Attempts made within this call.
+        attempts: u32,
+    },
 }
 
 impl std::fmt::Display for ExtractError {
@@ -217,6 +228,14 @@ impl std::fmt::Display for ExtractError {
             Self::Storage(message) => write!(formatter, "falha de armazenamento: {message}"),
             Self::Extractor(message) => write!(formatter, "falha do extrator: {message}"),
             Self::Validation(message) => write!(formatter, "proposta inválida: {message}"),
+            Self::RateLimited { .. } => {
+                formatter.write_str("o provedor de IA pediu uma pausa; a análise volta para a fila")
+            }
+            Self::Unavailable { attempts } => write!(
+                formatter,
+                "o provedor de IA não respondeu após {attempts} tentativa(s); \
+                 a análise volta para a fila"
+            ),
         }
     }
 }
@@ -230,6 +249,25 @@ impl ExtractError {
             Self::Storage(_) => "storage",
             Self::Extractor(_) => "extractor",
             Self::Validation(_) => "validation",
+            Self::RateLimited { .. } => "rate_limited",
+            Self::Unavailable { .. } => "unavailable",
+        }
+    }
+
+    /// Whether the job should go back to the queue instead of failing.
+    pub fn is_deferred(&self) -> bool {
+        matches!(self, Self::RateLimited { .. } | Self::Unavailable { .. })
+    }
+
+    /// The job outcome for this error: requeue for provider pauses and
+    /// timeouts, failure otherwise.
+    pub fn job_failure(&self) -> crate::jobs::JobFailure {
+        match self {
+            Self::RateLimited { retry_after } => crate::jobs::JobFailure::Deferred {
+                retry_after: *retry_after,
+            },
+            Self::Unavailable { .. } => crate::jobs::JobFailure::Deferred { retry_after: None },
+            _ => crate::jobs::JobFailure::Failed,
         }
     }
 }
@@ -349,6 +387,8 @@ where
         .unwrap_or_default();
     let proposals = match extractor.extract_with(&evidence, &signals, &background) {
         Ok(proposals) => proposals,
+        // A deferred call is retried by the job; it is not a lost analysis.
+        Err(error) if error.is_deferred() => return Err(error),
         Err(error) => {
             record_assessment(
                 store,

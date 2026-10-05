@@ -11,7 +11,17 @@
 
 use std::time::Duration;
 
-use gpui::{px, rgb, Pixels, Rgba};
+use gpui::{hsla, px, rgb, Hsla, Pixels, Rgba};
+
+/// White at `alpha`: the light edge of a surface (highlights, rims).
+pub fn white(alpha: f32) -> Hsla {
+    hsla(0.0, 0.0, 1.0, alpha)
+}
+
+/// Black at `alpha`: shadows and veils, the same in every palette.
+pub fn black(alpha: f32) -> Hsla {
+    hsla(0.0, 0.0, 0.0, alpha)
+}
 
 /// A colour as written in the design system: `0xRRGGBB` plus an alpha.
 ///

@@ -8,11 +8,12 @@
 
 use std::path::PathBuf;
 
+use application::calibration::{Verdict, MIN_DECIDED, PREDICTS_AT};
 use application::diagnostics::{
     Diagnostics, DiagnosticsDocument, DiagnosticsStore, Distribution, JobDiagnostic,
 };
 use application::export::{write_pack, ExportFormat, PackDocument};
-use application::jobs::{JobRepository, Jobs};
+use application::jobs::{JobRepository, JobSettingsStore, JobSummary, Jobs, Lane};
 use application::profile::{ProfileStore, SecretStore};
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Context, Div, Render, Role, Window};
@@ -21,7 +22,10 @@ use super::parts::{card, card_body, card_footer, stat_tile};
 use crate::screens::format::{date_time, plural};
 use crate::ui::controls::{action_button, ButtonKind};
 use crate::ui::icons::{icon, IconName};
-use crate::ui::patterns::{error_banner, skeleton_list, status_pill, toast, TOAST_DURATION};
+use crate::ui::patterns::{
+    error_banner, meter, segment_label, segmented, skeleton_list, status_pill, toast,
+    TOAST_DURATION,
+};
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{RadiusScale, SpacingScale, TypeScale};
 
@@ -33,6 +37,12 @@ pub trait DiagnosticsBackend: Send + 'static {
     fn reprocess(&self, job_id: &str) -> Result<(), String>;
     /// Cancels a queued job.
     fn cancel(&self, job_id: &str) -> Result<(), String>;
+    /// Queued, running and failed jobs per lane.
+    fn lanes(&self) -> Result<Vec<(Lane, JobSummary)>, String>;
+    /// "Análises em paralelo" as saved.
+    fn parallel(&self) -> Result<u8, String>;
+    /// Saves "análises em paralelo"; it applies on the next start.
+    fn set_parallel(&self, value: u8) -> Result<(), String>;
 }
 
 /// The diagnostics and jobs use cases over one store.
@@ -50,7 +60,7 @@ impl<S, P, K> DiagnosticsService<S, P, K> {
 
 impl<S, P, K> DiagnosticsBackend for DiagnosticsService<S, P, K>
 where
-    S: DiagnosticsStore + JobRepository + Send + 'static,
+    S: DiagnosticsStore + JobRepository + JobSettingsStore + Send + 'static,
     P: ProfileStore + Send + 'static,
     K: SecretStore + Send + 'static,
 {
@@ -72,10 +82,45 @@ where
             "Não foi possível cancelar a tarefa; ela pode já ter começado.".to_owned()
         })
     }
+    fn lanes(&self) -> Result<Vec<(Lane, JobSummary)>, String> {
+        self.jobs.lane_summaries().map_err(|error| {
+            tracing::error!(error = %error, operation = "job_lanes", "lane counts failed");
+            "Não foi possível contar as filas de análise.".to_owned()
+        })
+    }
+    fn parallel(&self) -> Result<u8, String> {
+        self.jobs.parallel_analyses().map_err(|error| {
+            tracing::error!(error = %error, operation = "job_parallel", "read failed");
+            "Não foi possível ler as análises em paralelo.".to_owned()
+        })
+    }
+    fn set_parallel(&self, value: u8) -> Result<(), String> {
+        self.jobs.set_parallel_analyses(value).map_err(|error| {
+            tracing::error!(error = %error, operation = "job_parallel", "save failed");
+            "Não foi possível salvar as análises em paralelo.".to_owned()
+        })
+    }
+}
+
+/// What one refresh reads: the document, the lanes and the setting.
+struct Snapshot {
+    document: DiagnosticsDocument,
+    lanes: Vec<(Lane, JobSummary)>,
+    parallel: u8,
+}
+
+impl Snapshot {
+    fn read(backend: &dyn DiagnosticsBackend) -> Result<Box<Self>, String> {
+        Ok(Box::new(Self {
+            document: backend.document()?,
+            lanes: backend.lanes()?,
+            parallel: backend.parallel()?,
+        }))
+    }
 }
 
 enum Outcome {
-    Loaded(Result<Box<DiagnosticsDocument>, String>),
+    Loaded(Result<Box<Snapshot>, String>),
     Changed(Result<&'static str, String>),
     Saved(Result<Option<PathBuf>, String>),
 }
@@ -85,6 +130,8 @@ pub struct DiagnosticsPanel {
     backend: Option<Box<dyn DiagnosticsBackend>>,
     busy: bool,
     document: Option<DiagnosticsDocument>,
+    lanes: Vec<(Lane, JobSummary)>,
+    parallel: Option<u8>,
     error: Option<String>,
     notice: Option<String>,
     progress_read: Option<crate::screens::inbox::ProgressRead>,
@@ -104,6 +151,8 @@ impl DiagnosticsPanel {
             backend: Some(backend),
             busy: false,
             document: None,
+            lanes: Vec::new(),
+            parallel: None,
             error: None,
             notice: None,
             progress_read: None,
@@ -120,10 +169,7 @@ impl DiagnosticsPanel {
     /// Reloads the document; called each time the section opens.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         self.poll_progress(cx);
-        self.run(
-            |backend| Outcome::Loaded(backend.document().map(Box::new)),
-            cx,
-        );
+        self.run(|backend| Outcome::Loaded(Snapshot::read(backend)), cx);
     }
 
     /// Installs bounded application reads and authorized capture retry.
@@ -237,7 +283,16 @@ impl DiagnosticsPanel {
                 this.backend = Some(backend);
                 this.busy = false;
                 match outcome {
-                    Outcome::Loaded(Ok(document)) => this.document = Some(*document),
+                    Outcome::Loaded(Ok(snapshot)) => {
+                        let Snapshot {
+                            document,
+                            lanes,
+                            parallel,
+                        } = *snapshot;
+                        this.document = Some(document);
+                        this.lanes = lanes;
+                        this.parallel = Some(parallel);
+                    }
                     Outcome::Changed(Ok(message)) => {
                         this.show_notice(message.to_owned(), cx);
                         this.refresh(cx);
@@ -377,6 +432,130 @@ impl DiagnosticsPanel {
             )
     }
 
+    /// Whether the extractor's confidence predicts what is accepted: the
+    /// gate for any automatic approval (docs/pesquisas/exibicao-e-aprovacao.md).
+    fn render_calibration(theme: &Theme, document: &DiagnosticsDocument) -> Div {
+        let calibration = &document.metrics.calibration;
+        let colors = theme.colors;
+        let (tone, verdict) = match calibration.verdict {
+            Verdict::TooFew => (
+                colors.text_muted(),
+                format!(
+                    concat!(
+                        "Ainda não dá para saber: {} de {} decisões, e é preciso ter aceitado ",
+                        "e descartado pelo menos uma."
+                    ),
+                    calibration.decided, MIN_DECIDED
+                ),
+            ),
+            Verdict::NoSignal => (
+                colors.status_danger(),
+                concat!(
+                    "A confiança não separa o que você aceita do que descarta. ",
+                    "Aprovação automática não deve se apoiar nela."
+                )
+                .to_owned(),
+            ),
+            Verdict::Weak => (
+                colors.status_warning(),
+                concat!(
+                    "A confiança separa um pouco o que você aceita, mas não o bastante ",
+                    "para aprovar sozinha."
+                )
+                .to_owned(),
+            ),
+            Verdict::Predicts => (
+                colors.status_success(),
+                concat!(
+                    "A confiança prevê o que você aceita: ",
+                    "dá para apoiar aprovação automática nela."
+                )
+                .to_owned(),
+            ),
+        };
+        let rows = calibration
+            .bins
+            .iter()
+            .filter(|bin| bin.total > 0)
+            .map(|bin| {
+                let share = bin.kept_share().unwrap_or(0.0) as f32;
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(SpacingScale::S3))
+                    .child(
+                        text_style(div(), TypeScale::META)
+                            .w(px(72.0))
+                            .flex_none()
+                            .font_family(Theme::font_mono())
+                            .text_color(colors.text_secondary())
+                            .child(format!("{:.0}–{:.0}%", bin.from * 100.0, bin.to * 100.0)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .child(meter(theme, share, colors.accent_default())),
+                    )
+                    .child(
+                        text_style(div(), TypeScale::META)
+                            .w(px(150.0))
+                            .flex_none()
+                            .text_color(colors.text_muted())
+                            .child(format!(
+                                "{:.0}% mantidas · {}",
+                                share * 100.0,
+                                plural(bin.total as usize, "decisão", "decisões")
+                            )),
+                    )
+            });
+        card(
+            theme,
+            "A confiança da extração presta?",
+            "Entre os candidatos que você já decidiu: quanto da faixa de confiança foi aceito.",
+        )
+        .child(
+            card_body()
+                .gap(px(SpacingScale::S3))
+                .child(
+                    div()
+                        .flex()
+                        .items_start()
+                        .gap(px(SpacingScale::S3))
+                        .child(
+                            div()
+                                .mt(px(5.0))
+                                .size(px(6.0))
+                                .flex_none()
+                                .rounded_full()
+                                .bg(tone),
+                        )
+                        .child(
+                            text_style(div(), TypeScale::BODY_SMALL)
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .text_color(colors.text_primary())
+                                .child(verdict),
+                        ),
+                )
+                .children(rows)
+                .children(calibration.confidence_separation.map(|value| {
+                    text_style(div(), TypeScale::META)
+                        .text_color(colors.text_muted())
+                        .child(format!(
+                            concat!(
+                                "Separação {:.2} (0,50 é acaso; {:.2} ou mais prevê) · ",
+                                "{} aceitas, {} editadas, {} descartadas"
+                            ),
+                            value,
+                            PREDICTS_AT,
+                            calibration.accepted,
+                            calibration.edited,
+                            calibration.dismissed
+                        ))
+                })),
+        )
+    }
+
     fn render_losses(theme: &Theme, document: &DiagnosticsDocument) -> Div {
         let losses = &document.metrics.losses;
         let colors = theme.colors;
@@ -446,6 +625,114 @@ impl DiagnosticsPanel {
                                 )
                         }),
                 ),
+        )
+    }
+
+    /// Per-lane counts and the "análises em paralelo" choice.
+    fn render_lanes(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
+        let colors = theme.colors;
+        let rows = self
+            .lanes
+            .iter()
+            .enumerate()
+            .map(|(index, (lane, summary))| {
+                let (label, hint) = lane_label(*lane);
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(SpacingScale::S3))
+                    .py(px(SpacingScale::S2))
+                    .when(index > 0, |row| {
+                        row.border_t_1().border_color(colors.hairline_divider())
+                    })
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child(text_style(div(), TypeScale::ROW_TITLE).child(label))
+                            .child(
+                                text_style(div(), TypeScale::META)
+                                    .text_color(colors.text_muted())
+                                    .child(hint),
+                            ),
+                    )
+                    .child(
+                        text_style(div(), TypeScale::META)
+                            .flex_none()
+                            .text_color(if summary.failed > 0 {
+                                colors.status_danger()
+                            } else {
+                                colors.text_secondary()
+                            })
+                            .child(format!(
+                                "{} na fila · {} executando · {} com falha",
+                                summary.queued, summary.running, summary.failed
+                            )),
+                    )
+            });
+        let mut track = segmented(theme)
+            .id("diagnostics-parallel")
+            .role(Role::RadioGroup)
+            .aria_label("Análises em paralelo");
+        for (value, label) in [(1u8, "1"), (2, "2"), (3, "3"), (4, "4")] {
+            let selected = self.parallel == Some(value);
+            track = track.child(
+                segment_label(
+                    theme,
+                    ("diagnostics-parallel", value as usize),
+                    label,
+                    selected,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if this.busy || this.parallel == Some(value) {
+                        return;
+                    }
+                    this.run(
+                        move |backend| {
+                            Outcome::Changed(
+                                backend
+                                    .set_parallel(value)
+                                    .map(|()| "Salvo. Vale no próximo início do app."),
+                            )
+                        },
+                        cx,
+                    );
+                })),
+            );
+        }
+        card(
+            theme,
+            "Filas de análise",
+            "Sessões recentes, documentação e sugestões andam em filas separadas.",
+        )
+        .child(card_body().gap(px(0.0)).children(rows))
+        .child(
+            card_footer(theme)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.0))
+                        .child(
+                            text_style(div(), TypeScale::LABEL)
+                                .text_color(colors.text_secondary())
+                                .child("Análises em paralelo"),
+                        )
+                        .child(
+                            text_style(div(), TypeScale::META)
+                                .text_color(colors.text_muted())
+                                .child(
+                                    "Chamadas ao provedor de IA ao mesmo tempo. \
+                                     Vale no próximo início do app.",
+                                ),
+                        ),
+                )
+                .child(track),
         )
     }
 
@@ -631,6 +918,7 @@ impl Render for DiagnosticsPanel {
             None if self.error.is_none() => skeleton_list(&theme, "diagnostics-skeleton", 4),
             None => div().into_any_element(),
             Some(document) => {
+                let lanes = self.render_lanes(&theme, cx);
                 let jobs = self.render_jobs(&theme, &document.recent_jobs, cx);
                 let about = self.render_about(&theme, &document, cx);
                 div()
@@ -638,7 +926,9 @@ impl Render for DiagnosticsPanel {
                     .flex_col()
                     .gap(px(SpacingScale::S5))
                     .child(Self::render_metrics(&theme, &document))
+                    .child(Self::render_calibration(&theme, &document))
                     .child(Self::render_losses(&theme, &document))
+                    .child(lanes)
                     .child(jobs)
                     .child(about)
                     .into_any_element()
@@ -829,9 +1119,24 @@ fn job_state(theme: &Theme, state: &str) -> (gpui::Rgba, &'static str) {
     }
 }
 
+/// Name and purpose of a lane, in product language.
+fn lane_label(lane: Lane) -> (&'static str, &'static str) {
+    match lane {
+        Lane::Now => (
+            "Sessões recentes",
+            "Capturas das sessões de agentes; passam na frente.",
+        ),
+        Lane::Documents => ("Documentação", "Documentos importados dos projetos."),
+        Lane::Suggestions => ("Sugestões", "Relações e regras sugeridas após adotar."),
+    }
+}
+
 fn job_kind(kind: &str) -> String {
     match kind {
         application::jobs::ANALYZE_CAPTURE_KIND => "Análise de captura".into(),
+        application::jobs::ANALYZE_DOCUMENT_KIND => "Análise de documento".into(),
+        application::relation_suggestions::RELATION_JOB_KIND => "Relações sugeridas".into(),
+        application::claim_suggestions::CLAIM_JOB_KIND => "Regras sugeridas".into(),
         other => other.replace('_', " "),
     }
 }

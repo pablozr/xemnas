@@ -1,4 +1,4 @@
-//! Regression for an already-recorded historical migration 22 without its columns.
+//! Regression for an already-recorded historical migration 26 without its columns.
 use application::extract::{AssessmentOutcome, AssessmentRecord, AssessmentStore};
 use rusqlite::Connection;
 use storage_sqlite::SqliteStore;
@@ -41,10 +41,10 @@ fn verify_historical_22(concurrent: bool) {
         for file in files {
             let name = file.file_name().unwrap().to_str().unwrap();
             let version: i64 = name[..4].parse().unwrap();
-            if version > 22 {
+            if version > 26 {
                 continue;
             }
-            if version != 22 {
+            if version != 26 {
                 connection
                     .execute_batch(&std::fs::read_to_string(&file).unwrap())
                     .unwrap();
@@ -58,7 +58,8 @@ fn verify_historical_22(concurrent: bool) {
         }
         connection.execute_batch(
             "INSERT INTO capture_receipts VALUES ('capture', 'key', 'C:/synthetic', '2026-01-01', 0);
-             INSERT INTO jobs VALUES ('job', 'analyze_capture', 'capture', 'failed', 1, 3,
+             INSERT INTO jobs (id, kind, payload, state, idempotent, attempts, last_error,
+                created_at, updated_at) VALUES ('job', 'analyze_capture', 'capture', 'failed', 1, 3,
                 'CaptureAnalysisFailed', '2026-01-01', '2026-01-02');
              INSERT INTO assessments VALUES ('legacy', 'capture', 'job', 'profile', 'adapter',
                 'historical-model', 'historical-policy', NULL, 'hash', 'start', 'finish',
@@ -69,7 +70,7 @@ fn verify_historical_22(concurrent: bool) {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(maximum, 22);
+        assert_eq!(maximum, 26);
     }
     let store = if concurrent {
         let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
@@ -168,8 +169,8 @@ fn verify_historical_22(concurrent: bool) {
     );
     let audit: (String, i64) = connection
         .query_row(
-            "SELECT (SELECT applied_at FROM schema_migrations WHERE version=22),
-                (SELECT COUNT(*) FROM schema_migrations WHERE version=35)",
+            "SELECT (SELECT applied_at FROM schema_migrations WHERE version=26),
+                (SELECT COUNT(*) FROM schema_migrations WHERE version=39)",
             [],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )

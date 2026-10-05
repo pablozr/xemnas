@@ -58,7 +58,7 @@ fn purged_blocked_refresh_does_not_stop_worker_or_recreate_data() {
     );
     let (event_tx, event_rx) = mpsc::channel();
     jobs.observe_with(move |event| event_tx.send(event).expect("receive worker event"));
-    let worker = jobs.spawn_worker();
+    let worker = jobs.spawn_workers(1);
     entered_rx
         .recv_timeout(Duration::from_secs(10))
         .expect("A refresh blocked");

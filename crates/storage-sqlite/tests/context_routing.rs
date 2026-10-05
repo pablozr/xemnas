@@ -225,7 +225,7 @@ fn original28_completed_cache_is_rekeyed_on_actual_lookup_without_another_call()
     raw.execute_batch(
         "DROP INDEX context_routing_owner;
         ALTER TABLE context_routing_entries DROP COLUMN owner_job_id;
-        DELETE FROM schema_migrations WHERE version=29;",
+        DELETE FROM schema_migrations WHERE version=33;",
     )
     .unwrap();
     let reopened = storage_sqlite::SqliteStore::open(test.root.join("app.db")).unwrap();
@@ -631,7 +631,7 @@ fn query_does_not_wait_for_provider_and_purge_does_not_stop_remote_worker() {
     jobs.observe_with(move |event| {
         events_tx.send(event).unwrap();
     });
-    let worker = jobs.spawn_worker();
+    let worker = jobs.spawn_workers(1);
     entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
     // This synchronous query completes while provider work is still held at the barrier.
     assert_eq!(packs.build_pack(request()).unwrap(), before);

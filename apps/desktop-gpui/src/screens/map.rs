@@ -8,6 +8,7 @@
 //! generation discards answers that arrive after the user switched projects.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use application::claim_suggestions::{ClaimSuggestionStore, ClaimSuggestionView, ClaimSuggestions};
 use application::claims::{ClaimStore, Claims};
@@ -26,8 +27,9 @@ use domain::entities::{EdgeKind, EntityKind, NodeKind};
 use domain::relations::RelationKind;
 use gpui::prelude::*;
 use gpui::{
-    canvas, div, point, px, AnyElement, Context, Div, Entity, EventEmitter, FocusHandle, Hsla,
-    PathBuilder, Pixels, Render, Role, SharedString, Stateful, Subscription, Toggled, Window,
+    canvas, div, list, point, px, AnyElement, Context, Div, Entity, EventEmitter, FocusHandle,
+    Hsla, ListAlignment, ListState, PathBuilder, Pixels, Render, Role, SharedString, Stateful,
+    Subscription, Toggled, Window,
 };
 
 use super::context::OpenDecision;
@@ -35,10 +37,11 @@ use super::format::{calendar_date, clipped, clock, day_heading, plural, short_da
 use super::graph::{GraphCanvas, GraphEvent};
 use crate::ui::controls::{action_button, icon_action, ButtonKind};
 use crate::ui::icons::{icon, IconName};
+use crate::ui::list::{reveal_footer, scroll_thumb, ScrollMemory};
 use crate::ui::patterns::{
-    count_chip, empty_panel, error_banner, mark_selected, panel_title, reading_page,
-    section_header, section_label, segment, segmented, skeleton_list, tag, toast, READING_WIDTH,
-    TOAST_DURATION,
+    count_chip, empty_panel, error_banner, mark_selected, panel_title, reading_page, rich_sentence,
+    section_header, section_label, segment, segmented, skeleton_list, suggestion_card,
+    suggestion_section, tag, toast, READING_WIDTH, TOAST_DURATION,
 };
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme};
@@ -94,6 +97,15 @@ const PICK_LIMIT: usize = 100;
 const RECENT_FILES: usize = 6;
 /// Days an entity counts as recently active on the overview.
 const RECENT_DAYS: i64 = 14;
+/// Rows a long list builds first, and how many more "Mostrar mais" adds
+/// (twice this).
+const LIST_PAGE: usize = 12;
+/// Parts a component block lists before counting the rest.
+const PART_CHIPS: usize = 6;
+/// Most rows a "show all" builds at once; beyond it only pages are offered.
+const MOST_AT_ONCE: usize = 200;
+/// Timeline events built first.
+const TIMELINE_PAGE: usize = 30;
 /// Nodes per side of the neighborhood diagram.
 const MAX_SIDE: usize = 6;
 /// Height of a neighborhood node.
@@ -135,16 +147,16 @@ enum Layout {
 }
 
 struct MapData {
-    map: ProjectMap,
+    map: Arc<ProjectMap>,
     graph: ProjectGraph,
     /// Relations between decisions waiting for confirmation.
-    relations: Vec<RelationSuggestionView>,
+    relations: Arc<Vec<RelationSuggestionView>>,
     /// Context derived from decisions, waiting for confirmation.
-    derived: Vec<ClaimSuggestionView>,
+    derived: Arc<Vec<ClaimSuggestionView>>,
     /// Components created from the declared workspace on this load.
     assembled: usize,
-    suggestions: Vec<Suggestion>,
-    proposals: SuggestionReport,
+    suggestions: Arc<Vec<Suggestion>>,
+    proposals: Arc<SuggestionReport>,
     /// Files the latest decisions changed: quick picks for the file lens.
     recent_files: Vec<String>,
 }
@@ -172,9 +184,10 @@ pub struct MapScreen<S: MapStores> {
     busy: bool,
     data: Option<MapData>,
     view: View,
-    detail: Option<(EntityDetail, Vec<TimelineEvent>)>,
-    timeline: Option<Vec<TimelineEvent>>,
-    lens: Option<FileLens>,
+    /// Shared snapshots: a render takes a pointer, never a copy of the lists.
+    detail: Option<Arc<(EntityDetail, Vec<TimelineEvent>)>>,
+    timeline: Option<Arc<Vec<TimelineEvent>>>,
+    lens: Option<Arc<FileLens>>,
     picker: Option<Picker>,
     form_kind: EntityKind,
     name: Entity<SearchField>,
@@ -187,6 +200,27 @@ pub struct MapScreen<S: MapStores> {
     error: Option<String>,
     notice: Option<String>,
     focus: BTreeMap<String, FocusHandle>,
+    /// How many rows of each long list are shown (by list key); the rest
+    /// waits behind "Mostrar mais". Every scroll step rebuilds the view, so
+    /// what is built is what scrolls: a long list is built a page at a time.
+    shown: BTreeMap<String, usize>,
+    /// The index's rows (views, headings, entities) and the virtual list
+    /// that shows only those in view; the rows are rebuilt when their shape
+    /// changes.
+    index_rows: Vec<IndexRow>,
+    /// Shown inside the Revisão: only the suggestions page, no index.
+    embedded: bool,
+    index_list: ListState,
+    index_scroll: ScrollMemory,
+    /// The Blocos layout: what it reads from the map, its rows and the
+    /// virtual list that builds only those in view.
+    overview_index: Option<Arc<OverviewIndex>>,
+    overview_rows: Vec<OverviewRow>,
+    overview_list: ListState,
+    overview_scroll: ScrollMemory,
+    /// Whether the graph holds older data than the map: its layout is made
+    /// when the Grafo layout is first shown.
+    graph_stale: bool,
     /// Demo-only view to open once the map loads (`--open map:<view>`).
     route: Option<String>,
     layout: Layout,
@@ -196,7 +230,12 @@ pub struct MapScreen<S: MapStores> {
     _subscriptions: Vec<Subscription>,
 }
 
+/// Asks the shell to open the queue of suggested ties (the Revisão), where
+/// the map's suggestions are reviewed beside the candidates.
+pub struct OpenSuggestions;
+
 impl<S: MapStores> EventEmitter<OpenDecision> for MapScreen<S> {}
+impl<S: MapStores> EventEmitter<OpenSuggestions> for MapScreen<S> {}
 
 impl<S: MapStores> MapScreen<S> {
     /// Mounts the screen; nothing is read until a project is set.
@@ -224,6 +263,12 @@ impl<S: MapStores> MapScreen<S> {
         subscriptions.push(cx.subscribe(&graph, |this, _, event: &GraphEvent, cx| {
             this.on_graph(event, cx)
         }));
+        let index_scroll = ScrollMemory::default();
+        let index_list = ListState::new(0, ListAlignment::Top, px(480.0));
+        index_scroll.attach(&index_list);
+        let overview_scroll = ScrollMemory::default();
+        let overview_list = ListState::new(0, ListAlignment::Top, px(640.0));
+        overview_scroll.attach(&overview_list);
         Self {
             backend: Some(services),
             project: None,
@@ -246,6 +291,16 @@ impl<S: MapStores> MapScreen<S> {
             error: None,
             notice: None,
             focus: BTreeMap::new(),
+            shown: BTreeMap::new(),
+            index_rows: Vec::new(),
+            embedded: false,
+            index_list,
+            index_scroll,
+            overview_index: None,
+            overview_rows: Vec::new(),
+            overview_list,
+            overview_scroll,
+            graph_stale: true,
             route: None,
             layout: Layout::Blocks,
             graph,
@@ -275,6 +330,13 @@ impl<S: MapStores> MapScreen<S> {
 
     /// Hands fresh data to the graph; a new project plays the entrance.
     fn fill_graph(&mut self, cx: &mut Context<Self>) {
+        // The graph's layout is costly and only the Grafo layout shows it:
+        // in Blocos it waits, and is made when the person opens it.
+        if self.layout != Layout::Graph {
+            self.graph_stale = true;
+            return;
+        }
+        self.graph_stale = false;
         let Some(data) = self.data.as_ref() else {
             return;
         };
@@ -287,7 +349,39 @@ impl<S: MapStores> MapScreen<S> {
 
     fn set_layout(&mut self, layout: Layout, cx: &mut Context<Self>) {
         self.layout = layout;
+        if layout == Layout::Graph && self.graph_stale {
+            self.fill_graph(cx);
+        }
         cx.notify();
+    }
+
+    /// Shows only the suggestions page (inside the Revisão) or the map
+    /// again. The Revisão is where suggestions are reviewed; the map's own
+    /// index no longer lists them.
+    pub fn set_embedded(&mut self, embedded: bool, cx: &mut Context<Self>) {
+        if self.embedded == embedded {
+            return;
+        }
+        self.embedded = embedded;
+        self.view = if embedded {
+            View::Suggestions
+        } else {
+            View::Overview
+        };
+        cx.notify();
+    }
+
+    /// Suggestions waiting for a person: ties between decisions and map
+    /// items, derived context, and components or technologies the project
+    /// declares that the map does not have yet.
+    pub fn pending_suggestions(&self) -> usize {
+        self.data.as_ref().map_or(0, |data| {
+            data.suggestions.len()
+                + data.relations.len()
+                + data.derived.len()
+                + data.proposals.components.len()
+                + data.proposals.technologies.len()
+        })
     }
 
     /// Opens `timeline`, `suggestions`, `file` or `entity:<name>` once the
@@ -309,7 +403,6 @@ impl<S: MapStores> MapScreen<S> {
                 self.graph
                     .update(cx, |canvas, cx| canvas.select_named(&name, cx));
             }
-            "suggestions" => self.open_view(View::Suggestions, cx),
             "file" => self.open_view(View::File, cx),
             other => {
                 let name = other.strip_prefix("entity:").unwrap_or(other);
@@ -339,7 +432,12 @@ impl<S: MapStores> MapScreen<S> {
         self.timeline = None;
         self.lens = None;
         self.picker = None;
-        self.view = View::Overview;
+        self.view = if self.embedded {
+            View::Suggestions
+        } else {
+            View::Overview
+        };
+        self.shown.clear();
         self.error = None;
         self.notice = None;
         self.refresh(cx);
@@ -410,13 +508,13 @@ impl<S: MapStores> MapScreen<S> {
                     if self.entity(&id).is_some() {
                         self.open_entity(id, cx);
                     } else {
-                        self.view = View::Suggestions;
+                        self.view = View::Overview;
                     }
                 }
             }
-            Outcome::Detail(Ok(detail)) => self.detail = Some(*detail),
-            Outcome::Timeline(Ok(events)) => self.timeline = Some(events),
-            Outcome::Lens(Ok(lens)) => self.lens = Some(*lens),
+            Outcome::Detail(Ok(detail)) => self.detail = Some(Arc::new(*detail)),
+            Outcome::Timeline(Ok(events)) => self.timeline = Some(Arc::new(events)),
+            Outcome::Lens(Ok(lens)) => self.lens = Some(Arc::new(*lens)),
             Outcome::Picker(Ok(picker)) => {
                 self.filter.update(cx, |field, cx| field.set_value("", cx));
                 self.picker = Some(picker);
@@ -440,7 +538,7 @@ impl<S: MapStores> MapScreen<S> {
                             if self.entity(&id).is_some() {
                                 self.open_entity(id, cx);
                             } else {
-                                self.view = View::Suggestions;
+                                self.view = View::Overview;
                             }
                         }
                     }
@@ -490,12 +588,13 @@ impl<S: MapStores> MapScreen<S> {
             return;
         };
         self.view = View::Entity(id.clone());
+        self.shown.clear();
         self.picker = None;
         self.confirm_retire = false;
         if self
             .detail
             .as_ref()
-            .is_none_or(|(detail, _)| detail.entity.entity_id != id)
+            .is_none_or(|snapshot| snapshot.0.entity.entity_id != id)
         {
             self.detail = None;
         }
@@ -521,6 +620,7 @@ impl<S: MapStores> MapScreen<S> {
     }
 
     fn open_view(&mut self, view: View, cx: &mut Context<Self>) {
+        self.shown.clear();
         self.picker = None;
         self.confirm_retire = false;
         match &view {
@@ -755,7 +855,8 @@ impl<S: MapStores> MapScreen<S> {
         let linked: Vec<String> = self
             .detail
             .as_ref()
-            .map(|(detail, _)| {
+            .map(|snapshot| {
+                let detail = &snapshot.0;
                 detail
                     .decisions
                     .iter()
@@ -931,6 +1032,53 @@ impl<S: MapStores> MapScreen<S> {
 
     // ---- small builders -------------------------------------------------
 
+    /// Rows of list `key` to build now; `first` is the opening page.
+    fn limit(&self, key: &str, first: usize) -> usize {
+        self.shown.get(key).copied().unwrap_or(first)
+    }
+
+    /// The footer under a list cut after some rows: how far along it is, a
+    /// button for the next two pages and, while what is left is small
+    /// enough to build at once, one for all of it.
+    fn more_row(
+        &mut self,
+        key: &'static str,
+        first: usize,
+        remaining: usize,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let theme = Theme::current(cx);
+        let shown = self.limit(key, first);
+        let step = (2 * first).min(remaining);
+        let more = self.button(
+            format!("map-more-{key}"),
+            ButtonKind::Ghost,
+            true,
+            format!("Mostrar mais {step}"),
+            move |this, cx| {
+                let shown = this.limit(key, first);
+                this.shown
+                    .insert(key.to_owned(), shown.saturating_add(2 * first));
+                cx.notify();
+            },
+            cx,
+        );
+        let all = (remaining > step && remaining <= MOST_AT_ONCE).then(|| {
+            self.button(
+                format!("map-all-{key}"),
+                ButtonKind::Ghost,
+                true,
+                format!("Mostrar todas ({remaining})"),
+                move |this, cx| {
+                    this.shown.insert(key.to_owned(), usize::MAX);
+                    cx.notify();
+                },
+                cx,
+            )
+        });
+        reveal_footer(&theme, shown, shown + remaining, Some(more), all)
+    }
+
     fn focus_for(&mut self, id: &str, cx: &mut Context<Self>) -> FocusHandle {
         self.focus
             .entry(id.to_owned())
@@ -1017,6 +1165,9 @@ impl<S: MapStores> MapScreen<S> {
 
     // ---- index ----------------------------------------------------------
 
+    /// The index as a virtual list: only the rows in view are built, so a
+    /// project with thousands of components scrolls as lightly as one with
+    /// ten.
     fn render_index(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Div {
         let colors = theme.colors;
         let Some(data) = self.data.as_ref() else {
@@ -1026,14 +1177,14 @@ impl<S: MapStores> MapScreen<S> {
                 6,
             )));
         };
-        let pending = data.suggestions.len()
-            + data.relations.len()
-            + data.derived.len()
-            + data.proposals.components.len()
-            + data.proposals.technologies.len();
-        let entities: Vec<MapEntity> = data.map.entities.clone();
+        let count = data.map.entities.len();
         let as_of = data.map.as_of.clone();
-        let count = entities.len();
+        let rows = index_rows(&data.map.entities);
+        if rows != self.index_rows {
+            let old = self.index_rows.len();
+            self.index_list.splice(0..old, rows.len());
+            self.index_rows = rows;
+        }
         let new_focus = self.focus_for("map-new", cx);
         let new_button = icon_action(theme, "map-new", "Novo componente ou tecnologia")
             .track_focus(&new_focus)
@@ -1047,126 +1198,11 @@ impl<S: MapStores> MapScreen<S> {
             }))
             .child(icon(IconName::Plus, 14.0, colors.text_secondary()));
 
-        let fixed = [
-            (View::Overview, IconName::Graph, "Visão geral", None),
-            (
-                View::Suggestions,
-                IconName::Lightbulb,
-                "Sugestões",
-                (pending > 0).then(|| pending.to_string()),
-            ),
-            (View::File, IconName::File, "Lente de arquivo", None),
-            (View::Timeline, IconName::Clock, "Linha do tempo", None),
-        ];
-        let mut rows: Vec<AnyElement> = Vec::new();
-        for (view, glyph, label, badge) in fixed {
-            let selected = self.view == view;
-            let id = format!("map-view-{label}");
-            let target = view.clone();
-            let row = self
-                .row(
-                    id,
-                    selected,
-                    label,
-                    move |this, cx| this.open_view(target.clone(), cx),
-                    cx,
-                )
-                .child(icon(
-                    glyph,
-                    16.0,
-                    if selected {
-                        colors.text_primary()
-                    } else {
-                        colors.text_muted()
-                    },
-                ))
-                .child(
-                    text_style(div(), TypeScale::ROW_TITLE)
-                        .flex_1()
-                        .text_color(if selected {
-                            colors.text_primary()
-                        } else {
-                            colors.text_secondary()
-                        })
-                        .child(label),
-                )
-                .children(badge.map(|badge| count_chip(theme, badge)));
-            rows.push(row.into_any_element());
-        }
-
-        for kind in EntityKind::ALL {
-            let group: Vec<&MapEntity> = entities
-                .iter()
-                .filter(|row| row.entity.kind == kind)
-                .collect();
-            rows.push(
-                div()
-                    .px(px(SpacingScale::S3))
-                    .pt(px(SpacingScale::S4))
-                    .pb(px(SpacingScale::S1))
-                    .child(section_label(theme, kind_plural(kind)))
-                    .into_any_element(),
-            );
-            if group.is_empty() {
-                rows.push(
-                    text_style(div(), TypeScale::BODY_SMALL)
-                        .px(px(SpacingScale::S3))
-                        .text_color(colors.text_muted())
-                        .child(match kind {
-                            EntityKind::Component => "Nenhum ainda. Crie um ou veja as sugestões.",
-                            EntityKind::Technology => "Nenhuma ainda.",
-                        })
-                        .into_any_element(),
-                );
-            }
-            for row in group {
-                let id = row.entity.entity_id.clone();
-                let selected = self.view == View::Entity(id.clone());
-                let meta = weight(row);
-                let target = id.clone();
-                let element = self
-                    .row(
-                        format!("map-entity-{id}"),
-                        selected,
-                        &row.entity.name,
-                        move |this, cx| this.open_entity(target.clone(), cx),
-                        cx,
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .flex()
-                            .flex_col()
-                            .child(
-                                text_style(div(), TypeScale::ROW_TITLE)
-                                    .truncate()
-                                    .text_color(if selected {
-                                        colors.text_primary()
-                                    } else {
-                                        colors.text_secondary()
-                                    })
-                                    .child(row.entity.name.clone()),
-                            )
-                            .child(
-                                text_style(div(), TypeScale::META)
-                                    .truncate()
-                                    .text_color(colors.text_muted())
-                                    .child(meta),
-                            ),
-                    )
-                    .when(row.conflicts > 0, |element| {
-                        element.child(
-                            div()
-                                .size(px(6.0))
-                                .flex_none()
-                                .rounded_full()
-                                .bg(colors.status_warning()),
-                        )
-                    });
-                rows.push(element.into_any_element());
-            }
-        }
+        let rows = list(
+            self.index_list.clone(),
+            cx.processor(|this, ix: usize, _, cx| this.index_item(ix, cx)),
+        )
+        .size_full();
 
         index_frame(theme)
             .child(
@@ -1185,15 +1221,13 @@ impl<S: MapStores> MapScreen<S> {
             .child(
                 div()
                     .id("map-index")
+                    .relative()
                     .flex_1()
                     .min_h(px(0.0))
-                    .overflow_y_scroll()
                     .px(px(SpacingScale::S2))
                     .pb(px(SpacingScale::S3))
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.0))
-                    .children(rows),
+                    .child(rows)
+                    .child(scroll_thumb(theme, &self.index_list, &self.index_scroll)),
             )
             .child(
                 text_style(div(), TypeScale::META)
@@ -1211,6 +1245,139 @@ impl<S: MapStores> MapScreen<S> {
             )
     }
 
+    /// One row of the index, built when the list asks for it.
+    fn index_item(&mut self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::current(cx);
+        let Some(&row) = self.index_rows.get(ix) else {
+            return div().into_any_element();
+        };
+        let element = match row {
+            IndexRow::View(position) => self.view_row(&theme, position, cx).into_any_element(),
+            IndexRow::Heading(kind) => div()
+                .px(px(SpacingScale::S3))
+                .pt(px(SpacingScale::S4))
+                .pb(px(SpacingScale::S1))
+                .child(section_label(&theme, kind_plural(kind)))
+                .into_any_element(),
+            IndexRow::Nothing(kind) => text_style(div(), TypeScale::BODY_SMALL)
+                .px(px(SpacingScale::S3))
+                .text_color(theme.colors.text_muted())
+                .child(match kind {
+                    EntityKind::Component => "Nenhum ainda. Crie um ou veja as sugestões.",
+                    EntityKind::Technology => "Nenhuma ainda.",
+                })
+                .into_any_element(),
+            IndexRow::Entity(position) => {
+                let Some(entity) = self
+                    .data
+                    .as_ref()
+                    .and_then(|data| data.map.entities.get(position))
+                    .cloned()
+                else {
+                    return div().into_any_element();
+                };
+                self.entity_row(&theme, &entity, cx).into_any_element()
+            }
+        };
+        div().w_full().pb(px(2.0)).child(element).into_any_element()
+    }
+
+    /// One of the fixed views at the top of the index.
+    fn view_row(
+        &mut self,
+        theme: &Theme,
+        position: usize,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let colors = theme.colors;
+        let (view, glyph, label, badge): (View, IconName, &str, Option<String>) = match position {
+            0 => (View::Overview, IconName::Graph, "Visão geral", None),
+            1 => (View::File, IconName::File, "Lente de arquivo", None),
+            _ => (View::Timeline, IconName::Clock, "Linha do tempo", None),
+        };
+        let selected = self.view == view;
+        self.row(
+            format!("map-view-{label}"),
+            selected,
+            label,
+            move |this, cx| this.open_view(view.clone(), cx),
+            cx,
+        )
+        .child(icon(
+            glyph,
+            16.0,
+            if selected {
+                colors.text_primary()
+            } else {
+                colors.text_muted()
+            },
+        ))
+        .child(
+            text_style(div(), TypeScale::ROW_TITLE)
+                .flex_1()
+                .text_color(if selected {
+                    colors.text_primary()
+                } else {
+                    colors.text_secondary()
+                })
+                .child(label),
+        )
+        .children(badge.map(|badge| count_chip(theme, badge)))
+    }
+
+    /// A component or technology of the index.
+    fn entity_row(
+        &mut self,
+        theme: &Theme,
+        row: &MapEntity,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let colors = theme.colors;
+        let id = row.entity.entity_id.clone();
+        let selected = self.view == View::Entity(id.clone());
+        let meta = weight(row);
+        let target = id.clone();
+        self.row(
+            format!("map-entity-{id}"),
+            selected,
+            &row.entity.name,
+            move |this, cx| this.open_entity(target.clone(), cx),
+            cx,
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .flex()
+                .flex_col()
+                .child(
+                    text_style(div(), TypeScale::ROW_TITLE)
+                        .truncate()
+                        .text_color(if selected {
+                            colors.text_primary()
+                        } else {
+                            colors.text_secondary()
+                        })
+                        .child(row.entity.name.clone()),
+                )
+                .child(
+                    text_style(div(), TypeScale::META)
+                        .truncate()
+                        .text_color(colors.text_muted())
+                        .child(meta),
+                ),
+        )
+        .when(row.conflicts > 0, |element| {
+            element.child(
+                div()
+                    .size(px(6.0))
+                    .flex_none()
+                    .rounded_full()
+                    .bg(colors.status_warning()),
+            )
+        })
+    }
+
     // ---- reading column -------------------------------------------------
 
     fn render_suggestions(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
@@ -1218,11 +1385,11 @@ impl<S: MapStores> MapScreen<S> {
         let Some(data) = self.data.as_ref() else {
             return div().into_any_element();
         };
-        let suggestions = data.suggestions.clone();
-        let relations = data.relations.clone();
-        let derived = data.derived.clone();
-        let components = data.proposals.components.clone();
-        let technologies = data.proposals.technologies.clone();
+        let suggestions = Arc::clone(&data.suggestions);
+        let relations = Arc::clone(&data.relations);
+        let derived = Arc::clone(&data.derived);
+        let proposals = Arc::clone(&data.proposals);
+        let (components, technologies) = (&proposals.components, &proposals.technologies);
         if suggestions.is_empty()
             && relations.is_empty()
             && derived.is_empty()
@@ -1251,7 +1418,8 @@ impl<S: MapStores> MapScreen<S> {
             ));
         if !relations.is_empty() {
             let mut list = div().flex().flex_col();
-            for (index, suggestion) in relations.iter().enumerate() {
+            let shown = relations.len().min(self.limit("sug-relations", LIST_PAGE));
+            for (index, suggestion) in relations.iter().take(shown).enumerate() {
                 let record = &suggestion.record;
                 let confirm_id = record.suggestion_id.clone();
                 let reject_id = record.suggestion_id.clone();
@@ -1288,77 +1456,73 @@ impl<S: MapStores> MapScreen<S> {
                     RelationKind::ConflictsWith => "conflita com",
                     RelationKind::Supersedes => "substitui",
                 };
-                list = list.child(
+                let (sentence, effect) = relation_wording(
+                    record.kind,
+                    &suggestion.from_question,
+                    &suggestion.to_question,
+                );
+                let lead = div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S2))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(SpacingScale::S2))
+                            .child(
+                                tag(theme, verb)
+                                    .when(record.kind == RelationKind::ConflictsWith, |tag| {
+                                        tag.text_color(colors.status_warning())
+                                    }),
+                            )
+                            .child(
+                                text_style(div(), TypeScale::META)
+                                    .text_color(colors.text_muted())
+                                    .child("entre duas decisões"),
+                            ),
+                    )
+                    .child(rich_sentence(theme, &sentence, TypeScale::BODY))
+                    .when(!record.reason.is_empty(), |lead| {
+                        lead.child(
+                            text_style(div(), TypeScale::BODY_SMALL)
+                                .text_color(colors.text_muted())
+                                .child(format!("Por quê: {}", record.reason)),
+                        )
+                    });
+                list = list.child(suggestion_card(
+                    theme,
+                    lead,
+                    Some(record.quote.clone()),
+                    &effect,
                     div()
                         .flex()
-                        .items_start()
-                        .flex_col()
-                        .w_full()
-                        .gap(px(SpacingScale::S3))
-                        .py(px(SpacingScale::S3))
-                        .when(index > 0, |row| {
-                            row.border_t_1().border_color(colors.hairline_divider())
-                        })
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(0.0))
-                                .flex()
-                                .flex_col()
-                                .gap(px(SpacingScale::S1))
-                                .child(
-                                    text_style(div(), TypeScale::ROW_TITLE)
-                                        .child(suggestion.from_question.clone()),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(SpacingScale::S2))
-                                        .child(tag(theme, verb).when(
-                                            record.kind == RelationKind::ConflictsWith,
-                                            |tag| tag.text_color(colors.status_warning()),
-                                        ))
-                                        .child(
-                                            text_style(div(), TypeScale::BODY_SMALL)
-                                                .flex_1()
-                                                .min_w(px(0.0))
-                                                .text_color(colors.text_secondary())
-                                                .child(suggestion.to_question.clone()),
-                                        ),
-                                )
-                                .child(
-                                    text_style(div(), TypeScale::BODY_SMALL)
-                                        .mt(px(SpacingScale::S1))
-                                        .pl(px(SpacingScale::S3))
-                                        .border_l_2()
-                                        .border_color(colors.hairline_divider())
-                                        .text_color(colors.text_secondary())
-                                        .child(format!("“{}”", record.quote)),
-                                )
-                                .when(!record.reason.is_empty(), |column| {
-                                    column.child(
-                                        text_style(div(), TypeScale::META)
-                                            .text_color(colors.text_muted())
-                                            .child(record.reason.clone()),
-                                    )
-                                }),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_wrap()
-                                .gap(px(SpacingScale::S2))
-                                .child(reject)
-                                .child(confirm),
-                        ),
-                );
+                        .gap(px(SpacingScale::S2))
+                        .child(reject)
+                        .child(confirm),
+                ));
             }
-            column = column.child(section(theme, "Relações entre decisões", list));
+            if relations.len() > shown {
+                list = list.child(self.more_row(
+                    "sug-relations",
+                    LIST_PAGE,
+                    relations.len() - shown,
+                    cx,
+                ));
+            }
+            column = column.child(suggestion_section(
+                theme,
+                "Relações entre decisões",
+                "Ao ler as decisões confirmadas, o xemnas notou que algumas se apoiam, \
+                 substituem ou contradizem outras. Cada cartão diz quais duas decisões, \
+                 qual é a relação e o trecho em que ela aparece.",
+                list,
+            ));
         }
         if !derived.is_empty() {
             let mut list = div().flex().flex_col();
-            for (index, suggestion) in derived.iter().enumerate() {
+            let shown = derived.len().min(self.limit("sug-context", LIST_PAGE));
+            for (index, suggestion) in derived.iter().take(shown).enumerate() {
                 let record = &suggestion.record;
                 let confirm_id = record.suggestion_id.clone();
                 let reject_id = record.suggestion_id.clone();
@@ -1437,71 +1601,79 @@ impl<S: MapStores> MapScreen<S> {
                             .join(", ")
                     )
                 };
-                list = list.child(
+                let kind_name = claim_label(record.kind.as_str());
+                let lead = div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S2))
+                    .child(rich_sentence(
+                        theme,
+                        &[
+                            ("Da decisão".to_owned(), false),
+                            (format!("“{}”", suggestion.decision_question), true),
+                            (
+                                format!(
+                                    "o xemnas tirou {} {}:",
+                                    claim_article(record.kind.as_str()),
+                                    kind_name.to_lowercase()
+                                ),
+                                false,
+                            ),
+                        ],
+                        TypeScale::BODY_SMALL,
+                    ))
+                    .child(
+                        div()
+                            .flex()
+                            .items_start()
+                            .gap(px(SpacingScale::S2))
+                            .child(tag(theme, kind_name))
+                            .child(
+                                text_style(div(), TypeScale::BODY)
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .text_color(colors.text_primary())
+                                    .child(record.statement.clone()),
+                            ),
+                    )
+                    .child(qualification);
+                let effect = format!(
+                    "vira {} {} do projeto ({}) e o agente passa a recebê-{} no contexto.",
+                    claim_article(record.kind.as_str()),
+                    kind_name.to_lowercase(),
+                    scope.to_lowercase(),
+                    claim_pronoun(record.kind.as_str()),
+                );
+                list = list.child(suggestion_card(
+                    theme,
+                    lead,
+                    Some(record.quote.clone()),
+                    &effect,
                     div()
                         .flex()
-                        .items_start()
-                        .flex_col()
-                        .w_full()
-                        .gap(px(SpacingScale::S3))
-                        .py(px(SpacingScale::S3))
-                        .when(index > 0, |row| {
-                            row.border_t_1().border_color(colors.hairline_divider())
-                        })
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(0.0))
-                                .flex()
-                                .flex_col()
-                                .gap(px(SpacingScale::S1))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(SpacingScale::S2))
-                                        .child(tag(theme, claim_label(record.kind.as_str())))
-                                        .child(
-                                            text_style(div(), TypeScale::ROW_TITLE)
-                                                .flex_1()
-                                                .min_w(px(0.0))
-                                                .child(record.statement.clone()),
-                                        ),
-                                )
-                                .child(
-                                    text_style(div(), TypeScale::META)
-                                        .text_color(colors.text_muted())
-                                        .child(format!(
-                                            "Da decisão: {} · {scope}",
-                                            suggestion.decision_question
-                                        )),
-                                )
-                                .child(qualification)
-                                .child(
-                                    text_style(div(), TypeScale::BODY_SMALL)
-                                        .mt(px(SpacingScale::S1))
-                                        .pl(px(SpacingScale::S3))
-                                        .border_l_2()
-                                        .border_color(colors.hairline_divider())
-                                        .text_color(colors.text_secondary())
-                                        .child(format!("“{}”", record.quote)),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_wrap()
-                                .gap(px(SpacingScale::S2))
-                                .child(reject)
-                                .child(confirm),
-                        ),
-                );
+                        .gap(px(SpacingScale::S2))
+                        .child(reject)
+                        .child(confirm),
+                ));
             }
-            column = column.child(section(theme, "Contexto sugerido", list));
+            if derived.len() > shown {
+                list =
+                    list.child(self.more_row("sug-context", LIST_PAGE, derived.len() - shown, cx));
+            }
+            column = column.child(suggestion_section(
+                theme,
+                "Contexto sugerido",
+                "Regras, premissas e restrições que parecem valer para o projeto, tiradas do \
+                 texto de decisões já confirmadas. Confirmar transforma a frase em uma regra \
+                 do projeto (aba Contexto); rejeitar descarta a frase e ela não volta.",
+                list,
+            ));
         }
         if !suggestions.is_empty() {
             let mut list = div().flex().flex_col();
-            for (index, suggestion) in suggestions.iter().enumerate() {
+            let shown = suggestions.len().min(self.limit("sug-links", LIST_PAGE));
+            for (index, suggestion) in suggestions.iter().take(shown).enumerate() {
                 let confirm_id = suggestion.edge_id.clone();
                 let reject_id = suggestion.edge_id.clone();
                 let confirm = self.button(
@@ -1530,47 +1702,19 @@ impl<S: MapStores> MapScreen<S> {
                     },
                     cx,
                 );
-                list = list.child(
+                let (sentence, effect) = link_wording(suggestion);
+                let lead = rich_sentence(theme, &sentence, TypeScale::BODY);
+                list = list.child(suggestion_card(
+                    theme,
+                    lead,
+                    None,
+                    &effect,
                     div()
                         .flex()
-                        .flex_col()
-                        .items_start()
-                        .gap(px(SpacingScale::S3))
-                        .py(px(SpacingScale::S3))
-                        .when(index > 0, |row| {
-                            row.border_t_1().border_color(colors.hairline_divider())
-                        })
-                        .child(
-                            div()
-                                .w_full()
-                                .min_w(px(0.0))
-                                .flex()
-                                .flex_col()
-                                .gap(px(SpacingScale::S1))
-                                .child(
-                                    text_style(div(), TypeScale::ROW_TITLE)
-                                        .child(suggestion.source.label.clone()),
-                                )
-                                .child(
-                                    text_style(div(), TypeScale::BODY_SMALL)
-                                        .text_color(colors.text_muted())
-                                        .child(format!(
-                                            "{} {} · por {}",
-                                            edge_verb(suggestion.kind),
-                                            suggestion.entity.label,
-                                            suggestion.reason
-                                        )),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_wrap()
-                                .gap(px(SpacingScale::S2))
-                                .child(reject)
-                                .child(confirm),
-                        ),
-                );
+                        .gap(px(SpacingScale::S2))
+                        .child(reject)
+                        .child(confirm),
+                ));
             }
             // Several ties from the same evidence are usually confirmed
             // together; one action takes them all.
@@ -1603,6 +1747,16 @@ impl<S: MapStores> MapScreen<S> {
                     .flex_col()
                     .gap(px(SpacingScale::S3))
                     .child(section_header(theme, "Vínculos sugeridos").children(all))
+                    .child(
+                        text_style(div(), TypeScale::BODY_SMALL)
+                            .text_color(colors.text_muted())
+                            .child(
+                                "Decisões e regras que tocaram arquivos ou dependências ligados a \
+                                 um componente ou tecnologia do Mapa. Confirmar liga os dois: a \
+                                 decisão aparece na página do componente e acompanha quem edita \
+                                 aqueles arquivos.",
+                            ),
+                    )
                     .child(list),
             );
         }
@@ -1658,66 +1812,39 @@ impl<S: MapStores> MapScreen<S> {
                     },
                     cx,
                 );
-                list = list.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(SpacingScale::S3))
-                        .py(px(SpacingScale::S3))
-                        .when(index > 0, |row| {
-                            row.border_t_1().border_color(colors.hairline_divider())
-                        })
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(0.0))
-                                .flex()
-                                .flex_col()
-                                .gap(px(SpacingScale::S1))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(SpacingScale::S2))
-                                        .child(tag(
-                                            theme,
-                                            match kind {
-                                                EntityKind::Component => "Componente",
-                                                EntityKind::Technology => "Tecnologia",
-                                            },
-                                        ))
-                                        .child(text_style(div(), TypeScale::ROW_TITLE).child(name)),
-                                )
-                                .child(
-                                    text_style(div(), TypeScale::META)
-                                        .text_color(colors.text_muted())
-                                        .child(match (pattern, declared) {
-                                            (Some(pattern), Some(source)) => format!(
-                                                "{pattern} · declarado no {}",
-                                                source.label()
-                                            ),
-                                            (Some(pattern), None) => {
-                                                format!(
-                                                    "{pattern} · {}",
-                                                    plural(decisions, "decisão", "decisões")
-                                                )
-                                            }
-                                            (None, _) => format!(
-                                                "dependência adicionada em {}",
-                                                plural(decisions, "decisão", "decisões")
-                                            ),
-                                        }),
-                                )
-                                .when(!description.is_empty(), |column| {
-                                    column.child(
-                                        text_style(div(), TypeScale::META)
-                                            .text_color(colors.text_muted())
-                                            .child(description.clone()),
-                                    )
-                                }),
+                let (sentence, effect) =
+                    item_wording(kind, &name, pattern.as_deref(), declared, decisions);
+                let lead = div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S2))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(SpacingScale::S2))
+                            .child(tag(theme, kind_label(kind)))
+                            .child(
+                                text_style(div(), TypeScale::ROW_TITLE)
+                                    .text_color(colors.text_primary())
+                                    .child(name.clone()),
+                            ),
+                    )
+                    .child(rich_sentence(theme, &sentence, TypeScale::BODY))
+                    .when(!description.is_empty(), |lead| {
+                        lead.child(
+                            text_style(div(), TypeScale::BODY_SMALL)
+                                .text_color(colors.text_muted())
+                                .child(description.clone()),
                         )
-                        .child(create),
-                );
+                    });
+                list = list.child(suggestion_card(
+                    theme,
+                    lead,
+                    None,
+                    &effect,
+                    div().flex().child(create),
+                ));
             }
             // Declared members can be taken together.
             let declared: Vec<NewEntity> = components
@@ -1768,10 +1895,10 @@ impl<S: MapStores> MapScreen<S> {
 
     fn render_entity(&mut self, id: &str, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let colors = theme.colors;
-        let Some((detail, events)) = self
+        let Some(snapshot) = self
             .detail
             .clone()
-            .filter(|(detail, _)| detail.entity.entity_id == id)
+            .filter(|snapshot| snapshot.0.entity.entity_id == id)
         else {
             return reading_page(
                 "map-entity-loading",
@@ -1779,6 +1906,7 @@ impl<S: MapStores> MapScreen<S> {
             )
             .into_any_element();
         };
+        let (detail, events) = (&snapshot.0, &snapshot.1);
         let entity = detail.entity.clone();
         let component = entity.kind == EntityKind::Component;
         let busy = self.busy;
@@ -1851,7 +1979,7 @@ impl<S: MapStores> MapScreen<S> {
             }, cx);
             let confirm = self.button("map-retire-confirm", ButtonKind::Secondary, !busy, "Aposentar item", move |this, cx| {
                 let id = retire_id.clone();
-                this.view = View::Suggestions;
+                this.view = View::Overview;
                 this.mutate(cx, "Item aposentado; a história continua.", move |backend| backend.graph.retire_entity(&id).map(|_| None));
             }, cx);
             div()
@@ -1915,7 +2043,7 @@ impl<S: MapStores> MapScreen<S> {
                 .children(picker),
         );
 
-        let diagram = self.neighborhood_diagram(theme, &detail, cx);
+        let diagram = self.neighborhood_diagram(theme, detail, cx);
         column = column.child(section(theme, "Vizinhança", diagram));
         let decisions = self.node_list(
             theme,
@@ -1991,12 +2119,18 @@ impl<S: MapStores> MapScreen<S> {
                 impact,
             ));
         }
-        column = column.child(section(
+        let (timeline, hidden) = timeline_list(
             theme,
-            "Linha do tempo",
-            timeline_list(theme, &events),
-        ));
-        reading_page("map-entity", column).into_any_element()
+            events,
+            self.limit("map-entity-timeline", TIMELINE_PAGE),
+        );
+        let timeline = if hidden > 0 {
+            timeline.child(self.more_row("map-entity-timeline", TIMELINE_PAGE, hidden, cx))
+        } else {
+            timeline
+        };
+        column = column.child(section(theme, "Linha do tempo", timeline));
+        reading_page(format!("map-entity-{id}"), column).into_any_element()
     }
 
     fn render_picker(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Option<Div> {
@@ -2094,7 +2228,7 @@ impl<S: MapStores> MapScreen<S> {
     fn node_list(
         &mut self,
         theme: &Theme,
-        prefix: &str,
+        prefix: &'static str,
         rows: &[NodeSummary],
         decisions: bool,
         empty: &'static str,
@@ -2109,7 +2243,9 @@ impl<S: MapStores> MapScreen<S> {
                     .child(empty),
             );
         }
-        for (index, row) in rows.iter().enumerate() {
+        let key = prefix;
+        let shown = rows.len().min(self.limit(key, LIST_PAGE));
+        for (index, row) in rows.iter().take(shown).enumerate() {
             let id = row.node.id.clone();
             let body = div()
                 .flex_1()
@@ -2153,6 +2289,9 @@ impl<S: MapStores> MapScreen<S> {
                         .child(body),
                 );
             }
+        }
+        if rows.len() > shown {
+            list = list.child(self.more_row(key, LIST_PAGE, rows.len() - shown, cx));
         }
         list
     }
@@ -2309,13 +2448,20 @@ impl<S: MapStores> MapScreen<S> {
         reading_page("map-file", column).into_any_element()
     }
 
-    fn render_timeline(&mut self, theme: &Theme) -> AnyElement {
+    fn render_timeline(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let Some(events) = self.timeline.clone() else {
             return reading_page(
                 "map-timeline-loading",
                 skeleton_list(theme, "map-timeline-skeleton", 6),
             )
             .into_any_element();
+        };
+        let (timeline, hidden) =
+            timeline_list(theme, &events, self.limit("map-timeline", TIMELINE_PAGE));
+        let timeline = if hidden > 0 {
+            timeline.child(self.more_row("map-timeline", TIMELINE_PAGE, hidden, cx))
+        } else {
+            timeline
         };
         let column = div()
             .flex()
@@ -2326,7 +2472,7 @@ impl<S: MapStores> MapScreen<S> {
                 "Linha do tempo",
                 "O que passou a valer e o que deixou de valer no projeto, do mais recente ao mais antigo.",
             ))
-            .child(timeline_list(theme, &events));
+            .child(timeline);
         reading_page("map-timeline", column).into_any_element()
     }
 
@@ -2354,7 +2500,7 @@ impl<S: MapStores> MapScreen<S> {
             true,
             "Cancelar",
             move |this, cx| {
-                let view = back.clone().map_or(View::Suggestions, View::Entity);
+                let view = back.clone().map_or(View::Overview, View::Entity);
                 this.open_view(view, cx)
             },
             cx,
@@ -2550,19 +2696,18 @@ impl<S: MapStores> MapScreen<S> {
     }
 
     fn render_overview(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let colors = theme.colors;
         let Some(data) = self.data.as_ref() else {
             return div().into_any_element();
         };
-        let entities = data.map.entities.clone();
-        let part_of = data.map.part_of.clone();
+        let map = Arc::clone(&data.map);
+        let entities = &map.entities;
         if entities.is_empty() {
             let open = self.button(
                 "map-overview-suggestions",
                 ButtonKind::Primary,
                 true,
                 "Ver sugestões",
-                |this, cx| this.open_view(View::Suggestions, cx),
+                |_, cx| cx.emit(OpenSuggestions),
                 cx,
             );
             return reading_page(
@@ -2583,107 +2728,162 @@ impl<S: MapStores> MapScreen<S> {
         if self.layout == Layout::Graph {
             return self.render_graph(theme, cx);
         }
-        let recent_since = (chrono::Utc::now() - chrono::Duration::days(RECENT_DAYS))
-            .format("%Y-%m-%dT%H:%M:%SZ")
-            .to_string();
-        let parent_of: BTreeMap<String, String> = part_of.into_iter().collect();
-        let tops: Vec<MapEntity> = entities
-            .iter()
-            .filter(|row| {
-                row.entity.kind == EntityKind::Component
-                    && !parent_of.contains_key(&row.entity.entity_id)
-            })
-            .cloned()
-            .collect();
-        let technologies: Vec<MapEntity> = entities
-            .iter()
-            .filter(|row| row.entity.kind == EntityKind::Technology)
-            .cloned()
-            .collect();
-
-        let mut grid = div().flex().flex_col().gap(px(SpacingScale::S3));
-        for pair in tops.chunks(2) {
-            // Blocks on one line share a height; weight is in the text.
-            let mut line = div().flex().gap(px(SpacingScale::S3)).items_stretch();
-            for row in pair {
-                let parts: Vec<MapEntity> = entities
-                    .iter()
-                    .filter(|part| {
-                        parent_of.get(&part.entity.entity_id) == Some(&row.entity.entity_id)
-                    })
-                    .cloned()
-                    .collect();
-                let block = self.component_block(theme, row, &parts, &recent_since, cx);
-                line = line.child(div().flex_1().min_w(px(0.0)).flex().child(block.flex_1()));
-            }
-            if pair.len() == 1 {
-                line = line.child(div().flex_1());
-            }
-            grid = grid.child(line);
+        // What the Blocos layout needs from the map, found once per map (not
+        // per row, per frame): which entities are roots, technologies, and
+        // each block's parts.
+        if self
+            .overview_index
+            .as_ref()
+            .is_none_or(|index| !Arc::ptr_eq(&index.map, &map))
+        {
+            self.overview_index = Some(Arc::new(OverviewIndex::new(Arc::clone(&map))));
         }
-
-        let mut chips = div().flex().flex_wrap().gap(px(SpacingScale::S2));
-        for row in &technologies {
-            let id = row.entity.entity_id.clone();
-            let chip = self
-                .row(
-                    format!("map-tech-{id}"),
-                    false,
-                    &row.entity.name,
-                    move |this, cx| this.open_entity(id.clone(), cx),
-                    cx,
-                )
-                .border_1()
-                .border_color(colors.glass_border_card())
-                .bg(colors.glass_fill_card())
-                .child(icon(IconName::Cpu, 14.0, colors.text_muted()))
-                .child(text_style(div(), TypeScale::ROW_TITLE).child(row.entity.name.clone()))
-                .child(
-                    text_style(div(), TypeScale::META)
-                        .text_color(colors.text_muted())
-                        .child(row.decisions.to_string()),
-                );
-            chips = chips.child(chip);
+        let rows = overview_rows(self.overview_index.as_deref().expect("index just built"));
+        if rows != self.overview_rows {
+            let old = self.overview_rows.len();
+            self.overview_list.splice(0..old, rows.len());
+            self.overview_rows = rows;
         }
+        let list = list(
+            self.overview_list.clone(),
+            cx.processor(|this, ix: usize, _, cx| this.overview_item(ix, cx)),
+        )
+        .size_full();
+        div()
+            .id("map-overview")
+            .relative()
+            .flex_1()
+            .min_h(px(0.0))
+            .child(list)
+            .child(scroll_thumb(
+                theme,
+                &self.overview_list,
+                &self.overview_scroll,
+            ))
+            .into_any_element()
+    }
 
-        let conflicted = tops.iter().any(|row| row.conflicts > 0);
-
-        let switch = self.layout_switch(theme, cx);
-        let mut column = div()
-            .flex()
-            .flex_col()
-            .gap(px(SpacingScale::S8))
-            .child(
+    /// One row of the Blocos layout, built when the virtual list asks.
+    fn overview_item(&mut self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::current(cx);
+        let colors = theme.colors;
+        let (Some(&row), Some(index)) = (self.overview_rows.get(ix), self.overview_index.clone())
+        else {
+            return div().into_any_element();
+        };
+        let map = Arc::clone(&index.map);
+        let last = ix + 1 == self.overview_rows.len();
+        let element = match row {
+            OverviewRow::Header => {
+                let switch = self.layout_switch(&theme, cx);
                 div()
                     .flex()
                     .items_start()
                     .gap(px(SpacingScale::S4))
                     .child(div().flex_1().min_w(px(0.0)).child(page_header(
-                        theme,
+                        &theme,
                         "Mapa do projeto",
                         "A arquitetura desenhada pelas decisões confirmadas. Abra um bloco para ver o que vale ali.",
                     )))
-                    .child(switch),
+                    .child(switch)
+                    .into_any_element()
+            }
+            OverviewRow::Label(label) => div()
+                .pt(px(SpacingScale::S8))
+                .pb(px(SpacingScale::S3))
+                .child(section_label(&theme, label))
+                .into_any_element(),
+            OverviewRow::Blocks(first) => {
+                let recent_since = (chrono::Utc::now() - chrono::Duration::days(RECENT_DAYS))
+                    .format("%Y-%m-%dT%H:%M:%SZ")
+                    .to_string();
+                let pair = &index.tops[first..(first + 2).min(index.tops.len())];
+                // Blocks on one line share a height; weight is in the text.
+                let mut line = div()
+                    .flex()
+                    .gap(px(SpacingScale::S3))
+                    .items_stretch()
+                    .pb(px(SpacingScale::S3));
+                for &top in pair {
+                    let entity = &map.entities[top];
+                    let parts: Vec<&MapEntity> = index
+                        .parts
+                        .get(entity.entity.entity_id.as_str())
+                        .map(|parts| parts.iter().map(|&at| &map.entities[at]).collect())
+                        .unwrap_or_default();
+                    let block = self.component_block(&theme, entity, &parts, &recent_since, cx);
+                    line = line.child(div().flex_1().min_w(px(0.0)).flex().child(block.flex_1()));
+                }
+                if pair.len() == 1 {
+                    line = line.child(div().flex_1());
+                }
+                line.into_any_element()
+            }
+            OverviewRow::Technologies(first) => {
+                let mut chips = div()
+                    .flex()
+                    .flex_wrap()
+                    .gap(px(SpacingScale::S2))
+                    .pb(px(SpacingScale::S2));
+                for &at in
+                    &index.technologies[first..(first + TECH_ROW).min(index.technologies.len())]
+                {
+                    let row = &map.entities[at];
+                    let id = row.entity.entity_id.clone();
+                    chips = chips.child(
+                        self.row(
+                            format!("map-tech-{id}"),
+                            false,
+                            &row.entity.name,
+                            move |this, cx| this.open_entity(id.clone(), cx),
+                            cx,
+                        )
+                        .border_1()
+                        .border_color(colors.glass_border_card())
+                        .bg(colors.glass_fill_card())
+                        .child(icon(IconName::Cpu, 14.0, colors.text_muted()))
+                        .child(
+                            text_style(div(), TypeScale::ROW_TITLE).child(row.entity.name.clone()),
+                        )
+                        .child(
+                            text_style(div(), TypeScale::META)
+                                .text_color(colors.text_muted())
+                                .child(row.decisions.to_string()),
+                        ),
+                    );
+                }
+                chips.into_any_element()
+            }
+            OverviewRow::Conflict => div()
+                .pt(px(SpacingScale::S6))
+                .child(legend_item(
+                    &theme,
+                    status_dot(colors.status_warning()),
+                    "decisões em conflito",
+                ))
+                .into_any_element(),
+        };
+        // The reading column, centred; the page's own padding at the ends.
+        div()
+            .w_full()
+            .px(px(SpacingScale::S8))
+            .when(ix == 0, |row| row.pt(px(SpacingScale::S8)))
+            .when(last, |row| row.pb(px(SpacingScale::S8)))
+            .child(
+                div()
+                    .w_full()
+                    .max_w(px(READING_WIDTH))
+                    .mx_auto()
+                    .child(element),
             )
-            .child(section(theme, "Componentes", grid));
-        if !technologies.is_empty() {
-            column = column.child(section(theme, "Tecnologias", chips));
-        }
-        if conflicted {
-            column = column.child(legend_item(
-                theme,
-                status_dot(colors.status_warning()),
-                "decisões em conflito",
-            ));
-        }
-        reading_page("map-overview", column).into_any_element()
+            .into_any_element()
     }
 
     fn component_block(
         &mut self,
         theme: &Theme,
         row: &MapEntity,
-        parts: &[MapEntity],
+        parts: &[&MapEntity],
         recent_since: &str,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
@@ -2702,7 +2902,7 @@ impl<S: MapStores> MapScreen<S> {
             .filter(|_| recent)
             .map(|at| format!("mudou em {}", short_date(at)));
         let mut parts_row = div().flex().flex_wrap().gap(px(SpacingScale::S2));
-        for part in parts {
+        for part in parts.iter().take(PART_CHIPS) {
             let part_id = part.entity.entity_id.clone();
             parts_row = parts_row.child(
                 self.row(
@@ -2720,6 +2920,17 @@ impl<S: MapStores> MapScreen<S> {
                         .text_color(colors.text_muted())
                         .child(part.decisions.to_string()),
                 ),
+            );
+        }
+        // A block shows a handful of parts and counts the rest: the list of
+        // all of them lives on the component's page.
+        if parts.len() > PART_CHIPS {
+            parts_row = parts_row.child(
+                text_style(div(), TypeScale::META)
+                    .px(px(SpacingScale::S2))
+                    .py(px(SpacingScale::S2))
+                    .text_color(colors.text_muted())
+                    .child(format!("+{} partes", parts.len() - PART_CHIPS)),
             );
         }
         div()
@@ -3060,8 +3271,9 @@ fn legend_item(theme: &Theme, mark: Div, label: &str) -> Div {
 
 impl<S: MapStores> Render for MapScreen<S> {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _probe = crate::ui::perf::Probe::start("map");
         let theme = Theme::current(cx);
-        let index = self.render_index(&theme, cx);
+        let index = (!self.embedded).then(|| self.render_index(&theme, cx));
         let body: AnyElement = if self.data.is_none() {
             if self.error.is_some() {
                 empty_panel(
@@ -3083,7 +3295,7 @@ impl<S: MapStores> Render for MapScreen<S> {
                 View::Overview => self.render_overview(&theme, cx),
                 View::Suggestions => self.render_suggestions(&theme, cx),
                 View::File => self.render_file(&theme, cx),
-                View::Timeline => self.render_timeline(&theme),
+                View::Timeline => self.render_timeline(&theme, cx),
                 View::Entity(id) => self.render_entity(&id, &theme, cx),
                 View::Form(editing) => self.render_form(editing, &theme, cx),
             }
@@ -3098,7 +3310,7 @@ impl<S: MapStores> Render for MapScreen<S> {
             .size_full()
             .relative()
             .flex()
-            .child(index)
+            .children(index)
             .child(
                 div()
                     .flex_1()
@@ -3189,13 +3401,13 @@ fn load<S: MapStores>(backend: &MapServices<S>, project: &str) -> Result<MapData
             )
         })?;
     Ok(MapData {
-        map,
+        map: Arc::new(map),
         graph,
-        relations,
-        derived,
+        relations: Arc::new(relations),
+        derived: Arc::new(derived),
         assembled,
-        suggestions,
-        proposals,
+        suggestions: Arc::new(suggestions),
+        proposals: Arc::new(proposals),
         recent_files,
     })
 }
@@ -3236,6 +3448,123 @@ fn today() -> String {
     chrono::Utc::now().format("%Y-%m-%d").to_string()
 }
 
+/// A row of the index, by what it points at; rows become elements only
+/// when they scroll into view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IndexRow {
+    /// One of the three fixed views.
+    View(usize),
+    /// The heading of a kind.
+    Heading(EntityKind),
+    /// What a kind with no entities says.
+    Nothing(EntityKind),
+    /// The entity at this position of the map.
+    Entity(usize),
+}
+
+/// The index's rows for these entities: the views, then each kind with its
+/// entities in order.
+fn index_rows(entities: &[MapEntity]) -> Vec<IndexRow> {
+    let mut rows: Vec<IndexRow> = (0..3).map(IndexRow::View).collect();
+    for kind in EntityKind::ALL {
+        rows.push(IndexRow::Heading(kind));
+        let before = rows.len();
+        rows.extend(
+            entities
+                .iter()
+                .enumerate()
+                .filter(|(_, row)| row.entity.kind == kind)
+                .map(|(position, _)| IndexRow::Entity(position)),
+        );
+        if rows.len() == before {
+            rows.push(IndexRow::Nothing(kind));
+        }
+    }
+    rows
+}
+
+/// Technology chips per row of the Blocos layout.
+const TECH_ROW: usize = 4;
+
+/// A row of the Blocos layout, by key; rows become elements only when they
+/// scroll into view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OverviewRow {
+    /// Title, subtitle and the layout switch.
+    Header,
+    /// A section heading.
+    Label(&'static str),
+    /// Two component blocks, starting at this position in the roots.
+    Blocks(usize),
+    /// A row of technology chips, starting at this position.
+    Technologies(usize),
+    /// The legend for conflicts, when there are any.
+    Conflict,
+}
+
+/// What the Blocos layout reads from a map, indexed once per map.
+struct OverviewIndex {
+    map: Arc<ProjectMap>,
+    /// Positions (in the map's entities) of the top-level components.
+    tops: Vec<usize>,
+    /// Positions of the technologies.
+    technologies: Vec<usize>,
+    /// Positions of each component's parts, by the component's id.
+    parts: BTreeMap<String, Vec<usize>>,
+    /// Whether any top-level component has a conflict.
+    conflicted: bool,
+}
+
+impl OverviewIndex {
+    fn new(map: Arc<ProjectMap>) -> Self {
+        let parent_of: BTreeMap<&str, &str> = map
+            .part_of
+            .iter()
+            .map(|(part, parent)| (part.as_str(), parent.as_str()))
+            .collect();
+        let mut tops = Vec::new();
+        let mut technologies = Vec::new();
+        let mut parts: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (at, row) in map.entities.iter().enumerate() {
+            let id = row.entity.entity_id.as_str();
+            if let Some(parent) = parent_of.get(id) {
+                parts.entry((*parent).to_owned()).or_default().push(at);
+            }
+            match row.entity.kind {
+                EntityKind::Technology => technologies.push(at),
+                EntityKind::Component if !parent_of.contains_key(id) => tops.push(at),
+                EntityKind::Component => {}
+            }
+        }
+        let conflicted = tops.iter().any(|&at| map.entities[at].conflicts > 0);
+        Self {
+            map,
+            tops,
+            technologies,
+            parts,
+            conflicted,
+        }
+    }
+}
+
+/// The rows of the Blocos layout for an index.
+fn overview_rows(index: &OverviewIndex) -> Vec<OverviewRow> {
+    let mut rows = vec![OverviewRow::Header, OverviewRow::Label("Componentes")];
+    rows.extend((0..index.tops.len()).step_by(2).map(OverviewRow::Blocks));
+    if !index.technologies.is_empty() {
+        rows.push(OverviewRow::Label("Tecnologias"));
+        rows.extend(
+            (0..index.technologies.len())
+                .step_by(TECH_ROW)
+                .map(OverviewRow::Technologies),
+        );
+    }
+    if index.conflicted {
+        rows.push(OverviewRow::Conflict);
+    }
+    rows
+}
+
 fn index_frame(theme: &Theme) -> Div {
     crate::ui::patterns::index_rail(theme)
 }
@@ -3274,18 +3603,23 @@ const MARKER: f32 = 22.0;
 /// with one marker per kind (Primer Timeline anatomy). Decisions and rules
 /// are full items; map upkeep (items created, links confirmed) collapses
 /// into one condensed line per run so it never drowns what changed.
-fn timeline_list(theme: &Theme, events: &[TimelineEvent]) -> Div {
+fn timeline_list(theme: &Theme, events: &[TimelineEvent], limit: usize) -> (Div, usize) {
     let colors = theme.colors;
     let mut list = div().flex().flex_col();
     if events.is_empty() {
-        return list.child(
-            text_style(div(), TypeScale::BODY_SMALL)
-                .text_color(colors.text_muted())
-                .child("Nada aconteceu aqui ainda."),
+        return (
+            list.child(
+                text_style(div(), TypeScale::BODY_SMALL)
+                    .text_color(colors.text_muted())
+                    .child("Nada aconteceu aqui ainda."),
+            ),
+            0,
         );
     }
     let mut ordered: Vec<&TimelineEvent> = events.iter().collect();
     ordered.sort_by(|left, right| right.at.cmp(&left.at));
+    let hidden = ordered.len().saturating_sub(limit);
+    ordered.truncate(limit);
 
     // Day → runs of events (a run is one full event or consecutive upkeep
     // of the same kind).
@@ -3345,7 +3679,7 @@ fn timeline_list(theme: &Theme, events: &[TimelineEvent]) -> Div {
             ));
         }
     }
-    list
+    (list, hidden)
 }
 
 /// The day an event belongs to; rule validity is a calendar date.
@@ -3574,12 +3908,208 @@ fn weight(row: &MapEntity) -> String {
     parts.join(" · ")
 }
 
-fn edge_verb(kind: EdgeKind) -> &'static str {
+/// "a" or "o" for a kind of rule, as the Portuguese sentence needs it.
+fn claim_article(kind: &str) -> &'static str {
     match kind {
-        EdgeKind::Affects => "afeta",
-        EdgeKind::Uses => "usa",
-        EdgeKind::AppliesTo => "vale para",
-        EdgeKind::PartOf => "faz parte de",
+        "assumption" => "uma",
+        "constraint" => "uma",
+        "goal" => "um",
+        "convention" => "uma",
+        _ => "uma",
+    }
+}
+
+/// The pronoun that goes with [`claim_article`] ("recebê-la", "recebê-lo").
+fn claim_pronoun(kind: &str) -> &'static str {
+    match claim_article(kind) {
+        "um" => "lo",
+        _ => "la",
+    }
+}
+
+/// A quoted name in the strong face.
+fn named(text: &str) -> (String, bool) {
+    (format!("“{}”", clipped(text, 90)), true)
+}
+
+fn plain(text: &str) -> (String, bool) {
+    (text.to_owned(), false)
+}
+
+/// What a relation between two decisions says in a sentence, and what
+/// confirming it changes.
+fn relation_wording(kind: RelationKind, from: &str, to: &str) -> (Vec<(String, bool)>, String) {
+    match kind {
+        RelationKind::DependsOn => (
+            vec![
+                plain("A decisão"),
+                named(from),
+                plain("depende da decisão"),
+                named(to),
+                plain("só faz sentido porque a segunda foi tomada."),
+            ],
+            "a relação fica registrada na seção Relações das duas decisões, e quem ler a \
+             primeira vê de qual outra ela depende."
+                .to_owned(),
+        ),
+        RelationKind::ConflictsWith => (
+            vec![
+                plain("A decisão"),
+                named(from),
+                plain("parece contradizer a decisão"),
+                named(to),
+                plain("."),
+            ],
+            "a contradição fica registrada nas duas decisões; resolva substituindo uma delas."
+                .to_owned(),
+        ),
+        RelationKind::Supersedes => (
+            vec![
+                plain("A decisão"),
+                named(from),
+                plain("parece ter substituído a decisão"),
+                named(to),
+                plain("."),
+            ],
+            "a substituição fica registrada na seção Relações das duas decisões.".to_owned(),
+        ),
+    }
+}
+
+/// What a suggested tie says in a sentence (by what it ties and why), and
+/// what confirming it changes.
+fn link_wording(suggestion: &Suggestion) -> (Vec<(String, bool)>, String) {
+    let source = &suggestion.source.label;
+    let target = &suggestion.entity.label;
+    let rule = suggestion.source.node.kind == NodeKind::Claim;
+    let what = if rule { "A regra" } else { "A decisão" };
+    if let Some(quote) = application::graph::mention_quote(&suggestion.reason) {
+        let (kind, owner) = (
+            if suggestion.kind == EdgeKind::Uses {
+                "tecnologia usada"
+            } else {
+                "parte afetada"
+            },
+            if rule { "regra" } else { "decisão" },
+        );
+        return (
+            vec![
+                plain(what),
+                named(source),
+                plain("cita"),
+                named(target),
+                plain("no próprio texto:"),
+                (format!("“{quote}”"), true),
+                plain("."),
+            ],
+            format!(
+                "{target} passa a constar como {kind} por essa {owner} no Mapa. A ligação veio \
+                 só do texto; confira o trecho antes de confirmar."
+            ),
+        );
+    }
+    match suggestion.kind {
+        EdgeKind::Uses => (
+            vec![
+                plain(what),
+                named(source),
+                plain("adicionou a dependência"),
+                (suggestion.reason.clone(), true),
+                plain("que é a tecnologia"),
+                named(target),
+                plain("do Mapa."),
+            ],
+            format!(
+                "{target} passa a constar como tecnologia usada por essa decisão, na página dela e \
+                 na do Mapa."
+            ),
+        ),
+        _ if rule => (
+            vec![
+                plain(what),
+                named(source),
+                plain("se aplica a mudanças em"),
+                (suggestion.reason.clone(), true),
+                plain(", arquivo que pertence ao componente"),
+                named(target),
+                plain("."),
+            ],
+            format!(
+                "a regra passa a valer em {target} e é entregue ao agente quando ele edita \
+                 arquivos desse componente."
+            ),
+        ),
+        _ => (
+            vec![
+                plain(what),
+                named(source),
+                plain("mexeu em"),
+                (suggestion.reason.clone(), true),
+                plain(", arquivo que pertence ao componente"),
+                named(target),
+                plain("."),
+            ],
+            format!(
+                "a decisão passa a valer para {target}: aparece na página do componente e é \
+                 entregue ao agente quando ele edita arquivos dele."
+            ),
+        ),
+    }
+}
+
+/// What a proposed component or technology says in a sentence, and what
+/// creating it changes.
+fn item_wording(
+    kind: EntityKind,
+    name: &str,
+    pattern: Option<&str>,
+    declared: Option<application::graph::WorkspaceKind>,
+    decisions: usize,
+) -> (Vec<(String, bool)>, String) {
+    match (kind, pattern, declared) {
+        (EntityKind::Component, Some(pattern), Some(source)) => (
+            vec![
+                plain("O"),
+                plain(source.label()),
+                plain("declara a parte"),
+                named(name),
+                plain("("),
+                (pattern.to_owned(), true),
+                plain("), mas ela ainda não está no Mapa."),
+            ],
+            "o componente entra no Mapa e as decisões que mexeram nesses arquivos passam a \
+             poder ser ligadas a ele."
+                .to_owned(),
+        ),
+        (EntityKind::Component, pattern, _) => (
+            vec![
+                plain(&format!(
+                    "{} {} mexeu{} em arquivos de",
+                    if decisions == 1 { "Uma" } else { "Várias" },
+                    if decisions == 1 { "decisão" } else { "decisões" },
+                    if decisions == 1 { "" } else { "ram" },
+                )),
+                (pattern.unwrap_or(name).to_owned(), true),
+                plain("que nenhum componente do Mapa cobre."),
+            ],
+            format!(
+                "o componente {name} entra no Mapa e {} ligada{} a ele.",
+                plural(decisions, "decisão fica", "decisões ficam"),
+                if decisions == 1 { "" } else { "s" },
+            ),
+        ),
+        (EntityKind::Technology, ..) => (
+            vec![
+                plain(&format!(
+                    "A dependência {name} foi adicionada em {}, mas ainda não é uma tecnologia do Mapa.",
+                    plural(decisions, "decisão", "decisões")
+                )),
+            ],
+            format!(
+                "{name} entra no Mapa como tecnologia e as decisões que a usam passam a estar \
+                 ligadas a ela."
+            ),
+        ),
     }
 }
 

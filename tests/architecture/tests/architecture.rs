@@ -419,12 +419,7 @@ fn color_literal_violations(file: &Path, source: &str) -> Vec<String> {
 
         let mut flagged_constructor = false;
         for constructor in ["rgb(", "rgba(", "rgb8(", "rgba8(", "hsl(", "hsla(", "hsba("] {
-            if line.match_indices(constructor).any(|(position, _)| {
-                line[..position]
-                    .chars()
-                    .next_back()
-                    .is_none_or(|ch| !(ch.is_alphanumeric() || ch == '_'))
-            }) {
+            if builds_color(line, constructor) {
                 flagged_constructor = true;
                 violations.push(format!(
                     "ARCH-001: {}:{} builds a color with `{constructor}`; colors belong in ui/tokens.rs",
@@ -471,6 +466,18 @@ fn color_constructors_require_identifier_boundaries() {
         let source = format!("image.to_rgb8(); {qualified}{name}(value)");
         assert_eq!(color_literal_violations(file, &source).len(), 1, "{source}");
     }
+}
+
+/// Whether `line` calls the color function `constructor` (`rgb(`), as
+/// opposed to a longer name or a method that happens to end the same way
+/// (`image.to_rgb8()` converts pixels; it builds no color).
+fn builds_color(line: &str, constructor: &str) -> bool {
+    line.match_indices(constructor).any(|(at, _)| {
+        line[..at]
+            .chars()
+            .next_back()
+            .is_none_or(|before| !(before.is_alphanumeric() || before == '_' || before == '.'))
+    })
 }
 
 /// Strips a trailing `//` comment, but only when it is outside a string (an

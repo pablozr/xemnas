@@ -10,6 +10,8 @@ use application::projects::{ProjectRecord, ProjectRepository};
 use rusqlite::{params, Connection, OptionalExtension};
 use storage_sqlite::SqliteStore;
 
+mod rewind;
+
 /// Canonical path the seeded project and every `CaptureWrite` share.
 const PROJECT_LOCATION: &str = "C:/synthetic/project";
 
@@ -155,7 +157,7 @@ fn fresh_database_applies_capture_migration() {
         )
         .expect("count distinct migrations");
     assert_eq!(versions, distinct);
-    assert_eq!(versions, 28);
+    assert_eq!(versions, 38);
 
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -168,37 +170,7 @@ fn upgrade_reapplies_the_missing_migrations() {
     {
         let _ = SqliteStore::open(&database).expect("open store");
         let connection = Connection::open(&database).expect("open raw connection");
-        connection
-            .execute_batch(
-                "DROP TABLE context_routing_entries; \
-                  DROP TABLE observation_deliveries; \
-                 DROP TABLE observation_records; \
-                 DROP TABLE observation_sources; \
-                 DROP TABLE observation_refresh; \
-                 DROP TABLE claim_suggestions; \
-                 DROP TABLE relation_suggestions; \
-                 DROP TABLE project_documents; \
-                 DROP TABLE project_overviews; \
-                 DROP TABLE entity_edges; \
-                 DROP TABLE entity_patterns; \
-                 DROP TABLE entity_aliases; \
-                 DROP TABLE entities; \
-                 DROP TABLE project_context_settings; \
-                 DROP TABLE context_injection_items; \
-                 DROP TABLE context_injections; \
-                 DROP TABLE claims_fts; \
-                 DROP TABLE context_claims; \
-                 DROP TABLE decision_relations; \
-                 DROP TABLE decisions_fts; \
-                 DROP TABLE evidence_links; \
-                 DROP TABLE decision_revisions; \
-                 DROP TABLE engineering_decisions; \
-                 DROP TABLE decision_candidates; \
-                 DROP TABLE assessments; \
-                 DROP TABLE adapter_checkpoints; \
-                 DELETE FROM schema_migrations WHERE version >= 4;",
-            )
-            .expect("simulate an older version");
+        rewind::rewind(&connection, 3);
     }
 
     SqliteStore::open(&database).expect("open store and migrate");
@@ -218,10 +190,10 @@ fn upgrade_reapplies_the_missing_migrations() {
         )
         .expect("count distinct migrations");
     assert_eq!(
-        versions, 28,
-        "0004, 0005, 0006 and 0008 to 0029 must be re-applied on upgrade"
+        versions, 38,
+        "0004, 0005, 0006 and 0008 to 0039 must be re-applied on upgrade"
     );
-    assert_eq!(distinct, 28);
+    assert_eq!(distinct, 38);
 
     let _ = std::fs::remove_dir_all(&root);
 }

@@ -116,10 +116,10 @@ fn upgrade_33_to_34_preserves_legacy_artifacts_without_reconstructing_identity()
     let test = support::open("episode-upgrade", &["legacy"]);
     let db = rusqlite::Connection::open(test.root.join("app.db")).unwrap();
     // Remove subsequent markers from this disposable fixture to obtain v33.
-    // Keep existing assessment columns: migration 35 must handle them idempotently.
+    // Keep existing assessment columns: migration 39 must handle them idempotently.
     db.execute_batch(
         "DROP TABLE capture_episode_sources;
-        DELETE FROM schema_migrations WHERE version IN (34, 35);",
+        DELETE FROM schema_migrations WHERE version IN (38, 39);",
     )
     .unwrap();
     db.execute(
@@ -137,7 +137,7 @@ fn upgrade_33_to_34_preserves_legacy_artifacts_without_reconstructing_identity()
         db.query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r
             .get::<_, i64>(0))
             .unwrap(),
-        33
+        37
     );
     let upgraded = storage_sqlite::SqliteStore::open(test.root.join("app.db")).unwrap();
     let rows = upgraded.capture_episodes("legacy", None, 0).unwrap();
@@ -165,7 +165,7 @@ fn upgrade_33_to_34_preserves_legacy_artifacts_without_reconstructing_identity()
         db.query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r
             .get::<_, i64>(0))
             .unwrap(),
-        35
+        39
     );
 }
 

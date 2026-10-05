@@ -50,6 +50,9 @@ struct Clock {
     leases: HashMap<EntityId, Lease>,
     tick: u64,
     running: bool,
+    /// Whether the window has the focus; nothing moves on its own while it
+    /// does not (the loops park and nothing is repainted for them).
+    active: bool,
 }
 
 impl Global for Clock {}
@@ -61,8 +64,27 @@ impl Default for Clock {
             leases: HashMap::new(),
             tick: 0,
             running: false,
+            active: true,
         }
     }
+}
+
+/// Tells the clock whether the window has the focus. Losing it parks every
+/// loop; regaining it repaints once so the views take their leases again.
+pub fn set_window_active(active: bool, cx: &mut App) {
+    let clock = cx.default_global::<Clock>();
+    if clock.active == active {
+        return;
+    }
+    clock.active = active;
+    if active {
+        cx.refresh_windows();
+    }
+}
+
+/// Whether the window has the focus (true until told otherwise).
+pub fn window_active(cx: &App) -> bool {
+    cx.try_global::<Clock>().is_none_or(|clock| clock.active)
 }
 
 /// Phase in `[0, 1)` of a loop lasting `period`, shared by every view so
@@ -105,6 +127,9 @@ fn lease(view: EntityId, rate: Rate, cx: &mut App) {
             let clock = cx.default_global::<Clock>();
             let now = Instant::now();
             clock.leases.retain(|_, lease| lease.until > now);
+            if !clock.active {
+                clock.leases.clear();
+            }
             if clock.leases.is_empty() {
                 clock.running = false;
                 return true;
