@@ -77,7 +77,8 @@ pub enum Elapsed {
     Days,
 }
 
-/// `17 min`, `2 h`, `3 d` and their equivalents.
+/// `17 min`, `2 h`, `3 d` and their equivalents; Japanese, Chinese and
+/// Korean say "ago", since a bare `3日` reads as a day of the month.
 pub fn elapsed(value: i64, unit: Elapsed) -> String {
     let [minutes, hours, days] = match current() {
         Language::English | Language::Portuguese | Language::Spanish | Language::Italian => {
@@ -85,9 +86,9 @@ pub fn elapsed(value: i64, unit: Elapsed) -> String {
         }
         Language::French => [" min", " h", " j"],
         Language::German => [" Min.", " Std.", " T."],
-        Language::Japanese => ["分", "時間", "日"],
-        Language::Chinese => ["分钟", "小时", "天"],
-        Language::Korean => ["분", "시간", "일"],
+        Language::Japanese => ["分前", "時間前", "日前"],
+        Language::Chinese => ["分钟前", "小时前", "天前"],
+        Language::Korean => ["분 전", "시간 전", "일 전"],
         Language::Russian => [" мин", " ч", " д"],
     };
     let suffix = match unit {
