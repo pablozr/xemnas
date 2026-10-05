@@ -271,10 +271,13 @@ mod tests {
     /// The map of a small project and labelled decision texts: which parts
     /// each text is really about. Negatives use the same words in other
     /// senses, so precision measures what a wrong link would cost.
-    fn corpus() -> (
+    /// Labelled map parts and texts with the parts each one is about.
+    type Corpus = (
         Vec<(&'static str, EntityRecord)>,
         Vec<(&'static str, Vec<&'static str>)>,
-    ) {
+    );
+
+    fn corpus() -> Corpus {
         let map = vec![
             (
                 "storage",
