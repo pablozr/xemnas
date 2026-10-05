@@ -368,15 +368,13 @@ where
             .filter(|claim| claim.is_valid_at(&as_of))
             .map(|claim| (claim.claim_id.as_str(), claim))
             .collect();
-        let matched_claims: BTreeSet<&str> = ranked_claims
+        let coverage = |text: &str| task_words.covered_by(&meaningful_words(text));
+        let claim_coverage: BTreeMap<&str, usize> = ranked_claims
             .iter()
-            .map(String::as_str)
-            .filter(|id| {
-                valid.get(id).is_some_and(|claim| {
-                    self.exploratory
-                        || linked_claims.contains(*id)
-                        || covers_task(&task_words, &claim.statement)
-                })
+            .filter(|id| !linked_claims.contains(*id))
+            .filter_map(|id| {
+                let claim = valid.get(id.as_str())?;
+                Some((id.as_str(), coverage(&claim.statement)))
             })
             .collect();
 
@@ -402,18 +400,49 @@ where
         } else {
             self.store.decision_search_terms(&request.project_id)?
         };
+        let decision_coverage: BTreeMap<String, usize> = in_force_decisions
+            .iter()
+            .filter(|decision| !linked_decisions.contains(&decision.decision_id))
+            .map(|decision| {
+                let text = match search_terms.get(&decision.decision_id) {
+                    Some(terms) => format!("{} {terms}", decision_text(decision)),
+                    None => decision_text(decision),
+                };
+                (decision.decision_id.clone(), coverage(&text))
+            })
+            .collect();
+        // What only words in common found must cover enough of the task, and
+        // when the best match covers [`CLEAR_LEAD`] concepts or more, as much
+        // as it does: "paginar respostas da API local" keeps the decision
+        // about paginating (4 concepts) and drops the one about caching API
+        // responses (2), a near miss of the same vocabulary.
+        let needed = task_words.len().clamp(1, 2);
+        let best = decision_coverage
+            .values()
+            .chain(claim_coverage.values())
+            .copied()
+            .max()
+            .unwrap_or(0);
+        let floor = if best >= CLEAR_LEAD { best } else { needed };
+        let lexical_ok = |covered: usize| !task_words.is_empty() && covered >= floor;
+        let matched_claims: BTreeSet<&str> = ranked_claims
+            .iter()
+            .map(String::as_str)
+            .filter(|id| {
+                valid.contains_key(id)
+                    && (self.exploratory
+                        || linked_claims.contains(*id)
+                        || claim_coverage.get(id).is_some_and(|c| lexical_ok(*c)))
+            })
+            .collect();
+
         let mut decisions = Vec::new();
         for decision in in_force_decisions {
             if !self.exploratory
-                && !speaks(&decision)
-                && !search_terms
+                && !linked_decisions.contains(&decision.decision_id)
+                && !decision_coverage
                     .get(&decision.decision_id)
-                    .is_some_and(|terms| {
-                        covers_task(
-                            &task_words,
-                            &format!("{} {terms}", decision_text(&decision)),
-                        )
-                    })
+                    .is_some_and(|c| lexical_ok(*c))
             {
                 continue;
             }
@@ -754,6 +783,9 @@ fn meaningful_words(text: &str) -> BTreeSet<String> {
 /// to be about it: at least two of its meaningful words (the only one when
 /// the task has one). One shared word ("cache", "terminal") is how unrelated
 /// decisions of the same project got in.
+/// Concepts a lexical match must cover before it sets the bar for the rest.
+const CLEAR_LEAD: usize = 4;
+
 fn covers_task(task_words: &TaskTerms, text: &str) -> bool {
     if task_words.is_empty() {
         return false;

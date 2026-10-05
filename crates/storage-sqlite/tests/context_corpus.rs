@@ -445,8 +445,11 @@ fn report_context_corpus() {
 /// The last-resort rule was chosen after seeing which families regressed.
 /// Synonyms of the task are one concept and a word of the text answers for
 /// one concept ("mudar" no longer covers both "trocar" and "mudar"): 0.79 /
-/// 0.95 / 1, holdout 0.80 / 0.89 / 0.
-const PRECISION_FLOOR: f64 = 0.78;
+/// 0.95 / 1, holdout 0.80 / 0.89 / 0. Relative coverage (when the best
+/// lexical match covers 4 concepts or more, the others must match it):
+/// 0.83 / 0.95 / 1, holdout 0.92 / 0.89 / 0. A bar from 3 concepts gave
+/// 0.88 but recall 0.92 (same holdout), so 4 was kept.
+const PRECISION_FLOOR: f64 = 0.82;
 const RECALL_FLOOR: f64 = 0.95;
 const CONTAMINATED_CASES_CEILING: usize = 1;
 /// Generous on purpose: this runs on a developer's machine beside other work.

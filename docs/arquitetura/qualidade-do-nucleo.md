@@ -19,7 +19,7 @@ Control bloqueia o hash (o comportamento é o mesmo; só o hash muda) e imprime 
 
 | Portão | Onde | Mede | Piso ou teto | Linha de base (05/10/2026) |
 | --- | --- | --- | --- | --- |
-| Seleção de contexto | `storage-sqlite/tests/context_corpus.rs` (`context_quality_gate`), corpus v3: 29 famílias, 87 consultas, um terço em holdout | precisão, cobertura e casos negativos contaminados do bloco entregue, no geral e por divisão; p95 de `build_pack` | precisão ≥ 0,75; cobertura ≥ 0,95; contaminados ≤ 1; p95 ≤ 20 ms | linha de base 0,23 / 0,76 / 9 de 24; com cobertura mínima de termos: 0,63 / 0,58 / 1; com foco do grafo: 0,70 / 0,58 / 1; com ponte PT/EN: 0,75 / 0,91 / 1; com termos de busca como último recurso: 0,76; 0,95; 1 de 24; holdout 0,73 / 0,89 / 0 de 9; 2 ms |
+| Seleção de contexto | `storage-sqlite/tests/context_corpus.rs` (`context_quality_gate`), corpus v3: 29 famílias, 87 consultas, um terço em holdout | precisão, cobertura e casos negativos contaminados do bloco entregue, no geral e por divisão; p95 de `build_pack` | precisão ≥ 0,82; cobertura ≥ 0,95; contaminados ≤ 1; p95 ≤ 20 ms | linha de base 0,23 / 0,76 / 9 de 24; com cobertura mínima de termos: 0,63 / 0,58 / 1; com foco do grafo: 0,70 / 0,58 / 1; com ponte PT/EN: 0,75 / 0,91 / 1; com termos de busca como último recurso: 0,76 / 0,95 / 1; com sinônimos como um conceito e cobertura relativa: 0,83 (63/76); 0,95 (63/66); 1 de 24; holdout 0,92 / 0,89 / 0 de 9; 2 ms |
 | Ligações por menção | `application/src/graph/mention.rs` (`mention_quality_gate`, `mention_matching_scales_to_a_large_project`) | precisão e cobertura em textos rotulados (com negativos de mesmo vocabulário); tempo para 2.000 decisões × 60 partes | precisão ≥ 0,92; cobertura = 1,0; ≤ 3 s | 0,93 (13/14); 1,0; 1,5 s |
 | Revisão automática | `storage-sqlite/tests/auto_approval.rs` | regras só aceitam com confiança calibrada; uma chamada por lote; limites diários; desfazer | todos passam | 8/8 |
 | Triagem automática | `application/src/auto_approval.rs` (testes de unidade) | repetição descartada, sem calibração nada aceito pelas regras | todos passam | 9/9 |
@@ -44,7 +44,9 @@ Control bloqueia o hash (o comportamento é o mesmo; só o hash muda) e imprime 
 Com o corpus v3 (distratores do mesmo vocabulário, consultas em inglês e tarefas guiadas
 por arquivo), a precisão do contexto partiu de 0,23. Cobertura mínima de termos, foco do
 grafo, a ponte PT/EN e os termos de busca gerados na adoção (só como último recurso) a
-levaram a 0,76, com cobertura de 0,95. Falta a meta de 0,85 de precisão: o ruído restante
-vem de consultas com distrator do mesmo vocabulário. Os termos são gerados uma vez por um
+levaram a 0,76; contar sinônimos da tarefa como um conceito e exigir que um quase-acerto
+cubra tanto quanto o melhor resultado, a 0,83, com cobertura de 0,95 (holdout 0,92 / 0,89).
+Falta pouco para a meta de 0,85: o ruído restante são distratores que empatam em cobertura
+com o item certo ("sem tocar no cache da API", "provedor de IA"). Os termos são gerados uma vez por um
 modelo real e versionados como fixture (`context_corpus_terms.json`); regenerar exige a
 autorização do usuário, porque chama o provedor. O plano está em [precisão do contexto](../pesquisas/precisao-do-contexto.md).

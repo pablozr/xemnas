@@ -19,7 +19,9 @@ glossário bilíngue de vocabulário geral de software; a busca de texto pede o 
 prefixo. Precisão 0,75, cobertura 0,91 (desenvolvimento 1,0), holdout 0,70 / 0,78 / 0.
 As terminações verbais vieram de um caso do holdout. Falta a meta de precisão. Antes do passo 5
 (embeddings), as opções sem modelo estão em [busca além do léxico](busca-alem-do-lexico.md);
-a expansão do documento na adoção, como último recurso, levou a 0,76 / 0,95. A medição usa o portão de
+a expansão do documento na adoção, como último recurso, levou a 0,76 / 0,95. Sinônimos da
+tarefa como um só conceito e cobertura relativa ao melhor resultado (a partir de 4
+conceitos): 0,83 / 0,95, holdout 0,92 / 0,89. A medição usa o portão de
 [qualidade do núcleo](../arquitetura/qualidade-do-nucleo.md).
 
 Complementa [medir a eficácia do contexto](medir-eficacia-do-contexto.md) (se o contexto
