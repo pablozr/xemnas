@@ -4,6 +4,7 @@ use super::{
     decision_editor::{DecisionEditor, RevisionEvent},
     evidence::{self, SourceLines},
 };
+use crate::i18n::decisions as text;
 use crate::ui::controls::{action_button, button_foreground, icon_action, ButtonKind};
 use crate::ui::{
     glass::focus_ring,
@@ -202,7 +203,7 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
         let search = cx.new(|cx| {
             let mut field = SearchField::new(cx);
             field.set_width(240.0);
-            field.set_context("Buscar nas decisões", cx);
+            field.set_context(text::search_context(), cx);
             field
         });
         let subscription = cx.subscribe(&search, |this, _, event: &SearchChanged, cx| {
@@ -326,7 +327,7 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
                                 question: other
                                     .as_ref()
                                     .map(|detail| detail.summary.question.clone())
-                                    .unwrap_or_else(|| "Decisão indisponível".into()),
+                                    .unwrap_or_else(|| text::unavailable_decision().into()),
                                 superseded: other.is_some_and(|detail| {
                                     detail.summary.status == DecisionStatus::Superseded
                                 }),
@@ -360,8 +361,9 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
         self.parts = None;
         self.part = None;
         self.close_part_menu(cx);
-        self.search
-            .update(cx, |field, cx| field.set_context("Buscar nas decisões", cx));
+        self.search.update(cx, |field, cx| {
+            field.set_context(text::search_context(), cx)
+        });
         self.refresh(cx);
     }
     /// The part the index is narrowed to, when its parts are loaded.
@@ -506,7 +508,7 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
                         }
                     }
                 };
-                let failed = || "Não foi possível carregar as decisões.".to_owned();
+                let failed = || text::load_failed().to_owned();
                 let page = match (part, &parts) {
                     (Some(part), Some(parts)) => backend
                         .decisions
@@ -565,48 +567,133 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
         }
         let generation = self.generation;
         cx.notify();
-        cx.spawn(async move|this,cx|{
-            let (backend,outcome)=cx.background_executor().spawn(async move{let outcome=operation(&backend);(backend,outcome)}).await;
-            let _=this.update(cx,|this,cx|{
-                this.backend=Some(backend);this.busy=false;
-                if let Some(editor)=&this.editor{editor.update(cx,|editor,cx|editor.set_busy(false,cx));}
-                if generation!=this.generation{this.refresh(cx);cx.notify();return;}
-                match outcome{
-                    Outcome::Page(Ok(page),append,parts)=>{
-                        this.parts=parts;
-                        if this.pending_route.is_some(){
+        cx.spawn(async move |this, cx| {
+            let (backend, outcome) = cx
+                .background_executor()
+                .spawn(async move {
+                    let outcome = operation(&backend);
+                    (backend, outcome)
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.backend = Some(backend);
+                this.busy = false;
+                if let Some(editor) = &this.editor {
+                    editor.update(cx, |editor, cx| editor.set_busy(false, cx));
+                }
+                if generation != this.generation {
+                    this.refresh(cx);
+                    cx.notify();
+                    return;
+                }
+                match outcome {
+                    Outcome::Page(Ok(page), append, parts) => {
+                        this.parts = parts;
+                        if this.pending_route.is_some() {
                             this.apply_route(cx);
-                            if generation!=this.generation{cx.notify();return;}
+                            if generation != this.generation {
+                                cx.notify();
+                                return;
+                            }
                         }
-                        this.loaded=true;if !append{this.rows.clear();}
-                        for row in page.decisions{if let Some(old)=this.rows.iter_mut().find(|old|old.decision_id==row.decision_id){*old=row;}else{this.rows.push(row);}}
-                        this.cursor=page.next_cursor;
-                        let next=this.selected.clone().filter(|id|this.rows.iter().any(|row|row.decision_id==*id)).or_else(||this.rows.first().map(|row|row.decision_id.clone()));
-                        if !append{if let Some(id)=next{this.select(id,cx);}else{this.clear_document();}}
+                        this.loaded = true;
+                        if !append {
+                            this.rows.clear();
+                        }
+                        for row in page.decisions {
+                            if let Some(old) = this
+                                .rows
+                                .iter_mut()
+                                .find(|old| old.decision_id == row.decision_id)
+                            {
+                                *old = row;
+                            } else {
+                                this.rows.push(row);
+                            }
+                        }
+                        this.cursor = page.next_cursor;
+                        let next = this
+                            .selected
+                            .clone()
+                            .filter(|id| this.rows.iter().any(|row| row.decision_id == *id))
+                            .or_else(|| this.rows.first().map(|row| row.decision_id.clone()));
+                        if !append {
+                            if let Some(id) = next {
+                                this.select(id, cx);
+                            } else {
+                                this.clear_document();
+                            }
+                        }
                     }
-                    Outcome::Search(Ok(hits))=>{this.hits=hits;this.loaded=true;if let Some(hit)=this.hits.first(){this.select(hit.decision_id.clone(),cx);}else{this.clear_document();}}
-                    Outcome::Detail(Ok((detail,sources)))=>{this.install(detail,sources);this.load_links(cx);}
-                    Outcome::Links(id,links)=>{if this.selected.as_deref()==Some(id.as_str()){this.links=Some(links);}}
-                    Outcome::Linked(Ok(message))=>{this.relating=None;this.notice=Some(message.into());this.refresh(cx);}
-                    Outcome::Linked(Err(error))=>this.error=Some(error),
-                    Outcome::Revised(Ok((detail,sources)))=>{for row in &mut this.rows{if row.decision_id==detail.summary.decision_id{*row=detail.summary.clone();}}
-                        this.editor=None;this.editor_subscription=None;this.restore_focus=true;this.install(detail,sources);this.load_links(cx);this.notice=Some("Nova versão salva. Histórico preservado.".into());}
-                    Outcome::Preview(Ok(document))=>{this.preview=Some(document);this.overwrite=None;}
-                    Outcome::Saved(Ok(Some(path)),_)=>{this.preview=None;this.overwrite=None;this.restore_focus=true;this.notice=Some(format!("Exportado para {path}"));}
-                    Outcome::Saved(Ok(None),_)=>{},
-                    Outcome::Saved(Err(ExportError::DestinationExists),path)=>{this.overwrite=path;},
-                    Outcome::Saved(Err(_),_)=>this.error=Some("Não foi possível salvar o arquivo. Escolha outro destino e tente novamente.".into()),
-                    Outcome::Page(Err(error),_,parts)=>{
-                        this.parts=parts;this.loaded=true;this.error=Some(error);
+                    Outcome::Search(Ok(hits)) => {
+                        this.hits = hits;
+                        this.loaded = true;
+                        if let Some(hit) = this.hits.first() {
+                            this.select(hit.decision_id.clone(), cx);
+                        } else {
+                            this.clear_document();
+                        }
                     }
-                    Outcome::Search(Err(error))|Outcome::Detail(Err(error))
-                    |Outcome::Revised(Err(error))|Outcome::Preview(Err(error))=>{
-                        this.loaded=true;this.error=Some(error);
+                    Outcome::Detail(Ok((detail, sources))) => {
+                        this.install(detail, sources);
+                        this.load_links(cx);
+                    }
+                    Outcome::Links(id, links) => {
+                        if this.selected.as_deref() == Some(id.as_str()) {
+                            this.links = Some(links);
+                        }
+                    }
+                    Outcome::Linked(Ok(message)) => {
+                        this.relating = None;
+                        this.notice = Some(message.into());
+                        this.refresh(cx);
+                    }
+                    Outcome::Linked(Err(error)) => this.error = Some(error),
+                    Outcome::Revised(Ok((detail, sources))) => {
+                        for row in &mut this.rows {
+                            if row.decision_id == detail.summary.decision_id {
+                                *row = detail.summary.clone();
+                            }
+                        }
+                        this.editor = None;
+                        this.editor_subscription = None;
+                        this.restore_focus = true;
+                        this.install(detail, sources);
+                        this.load_links(cx);
+                        this.notice = Some(text::revision_saved().into());
+                    }
+                    Outcome::Preview(Ok(document)) => {
+                        this.preview = Some(document);
+                        this.overwrite = None;
+                    }
+                    Outcome::Saved(Ok(Some(path)), _) => {
+                        this.preview = None;
+                        this.overwrite = None;
+                        this.restore_focus = true;
+                        this.notice = Some(text::exported(&path));
+                    }
+                    Outcome::Saved(Ok(None), _) => {}
+                    Outcome::Saved(Err(ExportError::DestinationExists), path) => {
+                        this.overwrite = path;
+                    }
+                    Outcome::Saved(Err(_), _) => this.error = Some(text::save_file_failed().into()),
+                    Outcome::Page(Err(error), _, parts) => {
+                        this.parts = parts;
+                        this.loaded = true;
+                        this.error = Some(error);
+                    }
+                    Outcome::Search(Err(error))
+                    | Outcome::Detail(Err(error))
+                    | Outcome::Revised(Err(error))
+                    | Outcome::Preview(Err(error)) => {
+                        this.loaded = true;
+                        this.error = Some(error);
                     }
                 }
                 cx.notify();
             });
-        }).detach();
+        })
+        .detach();
     }
     /// Loaded decisions for the command palette: id and question.
     pub fn palette_rows(&self) -> Vec<(String, String)> {
@@ -696,7 +783,7 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
                     .and_then(|source| source.artifact.as_ref())
                 {
                     cx.write_to_clipboard(ClipboardItem::new_string(artifact.content.clone()));
-                    self.notice = Some("Trecho copiado.".into());
+                    self.notice = Some(text::excerpt_copied().into());
                 }
             }
             Action::Relate(kind) => self.relating = kind,
@@ -712,12 +799,12 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
                     Outcome::Linked(linked.map(|_| relation_notice(kind)).map_err(|error| {
                         match error {
                             application::decisions::DecisionsError::InvalidRelation(reason) => {
-                                format!("Relação não permitida: {reason}.")
+                                text::relation_not_allowed(&reason)
                             }
                             application::decisions::DecisionsError::Conflict => {
-                                "Uma das decisões mudou de estado. A lista foi atualizada.".into()
+                                text::relation_conflict().into()
                             }
-                            _ => "Não foi possível registrar a relação.".into(),
+                            _ => text::relation_failed().into(),
                         }
                     }))
                 });
@@ -757,7 +844,7 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
                             backend
                                 .export
                                 .preview(&id, format)
-                                .map_err(|_| "Não foi possível preparar a exportação.".into()),
+                                .map_err(|_| text::export_prepare_failed().into()),
                         )
                     });
                 }
@@ -782,11 +869,13 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
                     };
                     let destination = chosen.or_else(|| {
                         rfd::FileDialog::new()
-                            .set_title("Exportar decisão")
-                            .add_filter("Documento", &[extension])
+                            .set_title(text::export_dialog_title())
+                            .add_filter(text::export_dialog_filter(), &[extension])
                             .set_file_name(format!(
-                                "decisao-{}.{}",
-                                document.decision_id, extension
+                                "{}-{}.{}",
+                                text::export_file_prefix(),
+                                document.decision_id,
+                                extension
                             ))
                             .save_file()
                     });
@@ -814,14 +903,41 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
                 let expected = detail.summary.version;
                 let editor = cx.new(|cx| DecisionEditor::new(&detail, cx));
                 window.focus(&editor.read(cx).initial_focus(cx), cx);
-                self.editor_subscription=Some(cx.subscribe(&editor,move|this,_,event:&RevisionEvent,cx|{
-                    if this.busy{return;}match event{
-                        RevisionEvent::Cancel=>{this.editor=None;this.editor_subscription=None;this.restore_focus=true;},
-                        RevisionEvent::Save(edits)=>{let id=id.clone();let project=project.clone();let edits=edits.clone();this.run(cx,move|backend|{
-                            let result=backend.decisions.revise_version(&id,expected,edits).map_err(|_|"Não foi possível salvar. A decisão pode ter recebido outra versão; cancele e atualize antes de tentar novamente.".to_owned()).and_then(|_|load_document(&backend.decisions,&id,project.as_deref()));Outcome::Revised(result)
-                        });}
-                    }cx.notify();
-                }));
+                self.editor_subscription = Some(cx.subscribe(
+                    &editor,
+                    move |this, _, event: &RevisionEvent, cx| {
+                        if this.busy {
+                            return;
+                        }
+                        match event {
+                            RevisionEvent::Cancel => {
+                                this.editor = None;
+                                this.editor_subscription = None;
+                                this.restore_focus = true;
+                            }
+                            RevisionEvent::Save(edits) => {
+                                let id = id.clone();
+                                let project = project.clone();
+                                let edits = edits.clone();
+                                this.run(cx, move |backend| {
+                                    let result = backend
+                                        .decisions
+                                        .revise_version(&id, expected, edits)
+                                        .map_err(|_| text::revise_failed().to_owned())
+                                        .and_then(|_| {
+                                            load_document(
+                                                &backend.decisions,
+                                                &id,
+                                                project.as_deref(),
+                                            )
+                                        });
+                                    Outcome::Revised(result)
+                                });
+                            }
+                        }
+                        cx.notify();
+                    },
+                ));
                 self.editor = Some(editor);
             }
         }
@@ -883,11 +999,11 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
             Action::Filter => Some(IconName::Filter),
             Action::PartMenu => Some(IconName::Component),
             Action::Part(None) => Some(IconName::Close),
-            Action::Relate(Some(_)) if label == "Relacionar" => Some(IconName::Plus),
+            Action::Relate(Some(_)) if id == "relate-open" => Some(IconName::Plus),
             Action::ExpandSource => Some(IconName::Expand),
             Action::Revise => Some(IconName::Edit),
             Action::CopySource => Some(IconName::Copy),
-            Action::Export(_) if label == "Exportar…" => Some(IconName::Export),
+            Action::Export(_) if id == "export-open" => Some(IconName::Export),
             _ => None,
         };
         let glyph_icon = glyph.map(|glyph| icon(glyph, 14.0, foreground));
@@ -959,13 +1075,13 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
         let filter = self.button(
             "decision-filter".into(),
             if searching {
-                "Todos os estados · busca".into()
+                text::filter_all_searching().into()
             } else if self.part.is_some() {
-                "Em vigor · parte".into()
+                text::filter_part().into()
             } else if self.all_statuses {
-                "Todos os estados".into()
+                text::filter_all().into()
             } else {
-                "Confirmadas".into()
+                text::filter_confirmed().into()
             },
             Action::Filter,
             self.all_statuses && self.part.is_none(),
@@ -1030,7 +1146,7 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
                             .flex()
                             .items_center()
                             .gap(px(SpacingScale::S2))
-                            .child(panel_title(&t, "Índice"))
+                            .child(panel_title(&t, text::index_title()))
                             .child(count_chip(&t, count.to_string())),
                     )
                     .when(self.editor.is_none() && self.preview.is_none(), |header| {
@@ -1047,7 +1163,7 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
                         header.child(
                             text_style(div(), TypeScale::BODY_SMALL)
                                 .text_color(t.colors.text_muted())
-                                .child("Conclua ou cancele para navegar no índice."),
+                                .child(text::index_locked()),
                         )
                     }),
             )
@@ -1070,20 +1186,13 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
                     .border_color(t.colors.hairline_divider())
                     .text_color(t.colors.text_muted())
                     .child(if self.busy {
-                        "Carregando…".into()
+                        text::loading().into()
                     } else if searching {
-                        format!(
-                            "{count} {} em pergunta, escolha e justificativa",
-                            if count == 1 {
-                                "resultado"
-                            } else {
-                                "resultados"
-                            }
-                        )
+                        text::results_summary(count)
                     } else if let Some(part) = self.active_part() {
-                        format!("{count} de {} em vigor · {}", part.decisions, part.name)
+                        text::part_summary(count, part.decisions, &part.name)
                     } else {
-                        format!("{count} carregadas · ordem de confirmação")
+                        text::loaded_summary(count)
                     }),
             )
             .into_any_element()
@@ -1097,7 +1206,7 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
         let active = self.active_part().cloned();
         let label = match &active {
             Some(part) => format!("{} · {}", part.name, part.decisions),
-            None => "Todas as partes".to_owned(),
+            None => text::all_parts().to_owned(),
         };
         let trigger = self.button(
             "decision-part".into(),
@@ -1115,10 +1224,10 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
             icon_action(
                 &t,
                 "decision-part-clear",
-                &format!("Mostrar todas as partes, sair de {}", part.name),
+                &text::clear_part_aria(&part.name),
             )
             .track_focus(&focus)
-            .tooltip(tooltip("Mostrar todas as partes", Some("Esc")))
+            .tooltip(tooltip(text::show_all_parts(), Some("Esc")))
             .on_click(cx.listener(|this, _, window, cx| this.act(Action::Part(None), window, cx)))
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 if matches!(event.keystroke.key.as_str(), "enter" | "space") {
@@ -1152,7 +1261,7 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
         self.part_menu.get()?;
         let exit = self.part_menu.exit_progress();
         let options: Vec<(Option<String>, String, Option<usize>)> =
-            std::iter::once((None, "Todas as partes".to_owned(), None))
+            std::iter::once((None, text::all_parts().to_owned(), None))
                 .chain(parts.parts.iter().map(|part| {
                     (
                         Some(part.entity_id.clone()),
@@ -1165,12 +1274,11 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
             .iter()
             .map(|(id, _, _)| part_focus_key(id.as_deref()))
             .collect();
-        let mut menu = menu_panel(t, "decision-part-menu", "Decisões por parte").on_mouse_down_out(
-            cx.listener(|this, _, _, cx| {
+        let mut menu = menu_panel(t, "decision-part-menu", text::parts_menu_label())
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                 this.close_part_menu(cx);
                 cx.notify();
-            }),
-        );
+            }));
         for (index, (id, name, count)) in options.into_iter().enumerate() {
             let focus = self
                 .focus
@@ -1227,10 +1335,7 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
                     .px(px(SpacingScale::S2))
                     .py(px(SpacingScale::S2))
                     .text_color(t.colors.text_muted())
-                    .child(
-                        "O Mapa ainda não tem partes. Cada componente de topo do Mapa vira \
-                         uma parte aqui.",
-                    ),
+                    .child(text::no_parts_hint()),
             );
         }
         let menu = div().child(menu);
@@ -1308,7 +1413,7 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
             IndexItem::More => self
                 .button(
                     "more-decisions".into(),
-                    "Carregar mais".into(),
+                    text::load_more().into(),
                     Action::More,
                     false,
                     cx,
@@ -1319,14 +1424,10 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
                 .p(px(SpacingScale::S3))
                 .text_color(t.colors.text_muted())
                 .child(match (self.query.trim().is_empty(), self.active_part()) {
-                    (true, Some(part)) => {
-                        format!("Nenhuma decisão em vigor sobre {}.", part.name)
-                    }
-                    (true, None) => "As decisões confirmadas aparecerão aqui.".to_owned(),
-                    (false, Some(part)) => {
-                        format!("Nenhum resultado em {}. Tente outra palavra.", part.name)
-                    }
-                    (false, None) => "Nenhum resultado. Tente outra palavra.".to_owned(),
+                    (true, Some(part)) => text::empty_index_part(&part.name),
+                    (true, None) => text::empty_index().to_owned(),
+                    (false, Some(part)) => text::empty_search_part(&part.name),
+                    (false, None) => text::empty_search().to_owned(),
                 })
                 .into_any_element(),
         }
@@ -1396,7 +1497,7 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
                     )
                     .child(div().flex_1())
                     .when(status != DecisionStatus::Accepted, |line| {
-                        line.child(status_pill(t, t.colors.text_muted(), "Substituída"))
+                        line.child(status_pill(t, t.colors.text_muted(), text::superseded()))
                     })
                     .children(version.map(|version| count_chip(t, format!("v{version}"))))
             }))
@@ -1424,30 +1525,20 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
                 let searching = !self.query.trim().is_empty();
                 let clear = self.button(
                     "part-empty-clear".into(),
-                    "Mostrar todas as partes".into(),
+                    text::show_all_parts().into(),
                     Action::Part(None),
                     false,
                     cx,
                 );
                 let (title, body) = if searching {
                     (
-                        format!("Nenhuma decisão de {name} com essa busca"),
-                        format!(
-                            "A busca cobre pergunta, escolha e justificativa das decisões em \
-                             vigor sobre {name}. Tente outra palavra ou todas as partes."
-                        ),
+                        text::part_search_empty_title(&name),
+                        text::part_search_empty_body(&name),
                     )
                 } else {
-                    (
-                        format!("Nada decidido sobre {name} ainda"),
-                        format!(
-                            "Uma decisão aparece aqui quando está ligada a {name}, ou a uma \
-                             parte dela, no Mapa. Confirme as ligações sugeridas na Revisão \
-                             ou vincule uma decisão na página do componente."
-                        ),
-                    )
+                    (text::part_empty_title(&name), text::part_empty_body(&name))
                 };
-                return empty_panel(&t, IconName::Component, "Parte", &title, &body)
+                return empty_panel(&t, IconName::Component, text::part_kicker(), &title, &body)
                     .min_h(px(420.0))
                     .child(div().pt(px(SpacingScale::S2)).child(clear))
                     .into_any_element();
@@ -1456,17 +1547,17 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
                 crate::ui::patterns::empty_panel_mascot(
                     &t,
                     crate::screens::assistant::portrait(),
-                    "Decisões",
-                    "Decisões que permanecem",
-                    "Confirme uma escolha na Revisão para preservar o documento, suas evidências e seu histórico aqui.",
+                    text::empty_kicker(),
+                    text::empty_title(),
+                    text::empty_body(),
                 )
             } else {
                 empty_panel(
                     &t,
                     IconName::Search,
-                    "Busca",
-                    "Nenhuma decisão encontrada",
-                    "A busca cobre pergunta, escolha e justificativa deste projeto. Tente outra palavra.",
+                    text::search_kicker(),
+                    text::search_empty_title(),
+                    text::search_empty_body(),
                 )
             }
             .min_h(px(420.0))
@@ -1475,7 +1566,7 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
         if self.history {
             let back = self.button(
                 "document-back".into(),
-                "Voltar ao documento".into(),
+                text::back_to_document().into(),
                 Action::Document,
                 false,
                 cx,
@@ -1488,8 +1579,12 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
                 .flex_col()
                 .gap(px(SpacingScale::S4))
                 .child(div().flex().child(back))
-                .child(text_style(div(), TypeScale::HEADING_1).child("Histórico de versões"))
-                .child(text_style(div(),TypeScale::BODY_SMALL).text_color(t.colors.text_muted()).child("Cada versão conserva o documento completo. Abra uma versão para ler seu conteúdo."));
+                .child(text_style(div(), TypeScale::HEADING_1).child(text::history_title()))
+                .child(
+                    text_style(div(), TypeScale::BODY_SMALL)
+                        .text_color(t.colors.text_muted())
+                        .child(text::history_hint()),
+                );
             for revision in &detail.revisions {
                 history = history.child(
                     div()
@@ -1499,16 +1594,18 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
                         .rounded(t.radius.surface())
                         .child(self.button(
                             format!("version-{}", revision.version),
-                            format!(
-                                "v{} · {}{}",
-                                revision.version,
-                                short_date(&revision.created_at),
-                                if revision.version == detail.summary.version {
-                                    " · atual"
-                                } else {
-                                    ""
-                                }
-                            ),
+                            if revision.version == detail.summary.version {
+                                text::version_line_current(
+                                    revision.version,
+                                    &short_date(&revision.created_at),
+                                )
+                            } else {
+                                format!(
+                                    "v{} · {}",
+                                    revision.version,
+                                    short_date(&revision.created_at)
+                                )
+                            },
                             Action::Version(revision.version),
                             false,
                             cx,
@@ -1550,14 +1647,7 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
         let revisions = detail.revisions.len();
         let history_link = self.button(
             "history-open".into(),
-            format!(
-                "{} · {revisions}",
-                if revisions == 1 {
-                    "Versão"
-                } else {
-                    "Versões"
-                }
-            ),
+            text::history_label(revisions),
             Action::History,
             false,
             cx,
@@ -1566,14 +1656,14 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
             vec![
                 self.button(
                     "export-open".into(),
-                    "Exportar…".into(),
+                    text::export_open().into(),
                     Action::Export(ExportFormat::Markdown),
                     false,
                     cx,
                 ),
                 self.button(
                     "revise-open".into(),
-                    "Revisar".into(),
+                    text::revise().into(),
                     Action::Revise,
                     true,
                     cx,
@@ -1582,18 +1672,24 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
         } else {
             vec![self.button(
                 "current-version".into(),
-                "Voltar à versão atual".into(),
+                text::back_to_current().into(),
                 Action::Document,
                 false,
                 cx,
             )]
         };
         let badge = if detail.summary.status == DecisionStatus::Accepted {
-            status_pill(&t, t.colors.status_success(), "Confirmada")
+            status_pill(&t, t.colors.status_success(), text::confirmed_badge())
         } else {
-            status_pill(&t, t.colors.text_muted(), "Substituída")
+            status_pill(&t, t.colors.text_muted(), text::superseded())
         };
-        let mut document=div().w_full().max_w(px(READING_WIDTH)).mx_auto().flex().flex_col().gap(px(SpacingScale::S6))
+        let mut document = div()
+            .w_full()
+            .max_w(px(READING_WIDTH))
+            .mx_auto()
+            .flex()
+            .flex_col()
+            .gap(px(SpacingScale::S6))
             .child(
                 div()
                     .flex()
@@ -1621,15 +1717,39 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
                         .py(px(SpacingScale::S2))
                         .rounded(t.radius.control())
                         .bg(t.colors.selection())
-                        .child("Versão histórica, somente leitura. Revisar e exportar usam a versão atual."),
+                        .child(text::historical_note()),
                 )
             })
             .child(reading_title(&detail.summary.question))
-            .child(div().flex().flex_col().gap(px(SpacingScale::S2)).border_l_2().border_color(t.colors.accent_hover()).pl(px(SpacingScale::S4))
-                .child(section_label(&t,"Escolha confirmada").text_color(t.colors.accent_hover()))
-                .child(text_style(div(),TypeScale::HEADING_2).child(detail.summary.choice.clone())))
-            .child(div().flex().flex_col().gap(px(SpacingScale::S2)).child(section_label(&t,"Justificativa"))
-                .child(text_style(div(),TypeScale::BODY).text_color(t.colors.text_secondary()).child(detail.rationale.clone())));
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S2))
+                    .border_l_2()
+                    .border_color(t.colors.accent_hover())
+                    .pl(px(SpacingScale::S4))
+                    .child(
+                        section_label(&t, text::confirmed_choice())
+                            .text_color(t.colors.accent_hover()),
+                    )
+                    .child(
+                        text_style(div(), TypeScale::HEADING_2)
+                            .child(detail.summary.choice.clone()),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S2))
+                    .child(section_label(&t, text::label_rationale()))
+                    .child(
+                        text_style(div(), TypeScale::BODY)
+                            .text_color(t.colors.text_secondary())
+                            .child(detail.rationale.clone()),
+                    ),
+            );
         document = document.child(super::review_editor::qualifier_reading(
             &t,
             &detail.qualifiers,
@@ -1643,10 +1763,10 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
             .border_color(t.colors.hairline_divider())
             .pt(px(SpacingScale::S5));
         for (index, (label, items)) in [
-            ("Escopo", &detail.scope),
-            ("Premissas", &detail.assumptions),
-            ("Consequências", &detail.consequences),
-            ("Reconsiderar quando", &detail.reconsider_when),
+            (text::label_scope(), &detail.scope),
+            (text::label_assumptions(), &detail.assumptions),
+            (text::label_consequences(), &detail.consequences),
+            (text::label_reconsider_when(), &detail.reconsider_when),
         ]
         .into_iter()
         .enumerate()
@@ -1670,7 +1790,7 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
                             .pl(px(SpacingScale::S8))
                             .pb(px(SpacingScale::S2))
                             .text_color(t.colors.text_muted())
-                            .child("Nenhum item registrado."),
+                            .child(text::no_items()),
                     );
                 } else {
                     section = section.children(items.iter().map(|item| {
@@ -1693,7 +1813,7 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
                     .flex()
                     .flex_col()
                     .gap(px(SpacingScale::S3))
-                    .child(section_header(&t, "Contexto da decisão"))
+                    .child(section_header(&t, text::context_title()))
                     .child(context.border_t_0().pt(px(0.0))),
             )
             .child(self.evidence(cx))
@@ -1711,15 +1831,15 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
                         .flex()
                         .items_center()
                         .gap(px(SpacingScale::S2))
-                        .child(section_label(&t, "Origem")),
+                        .child(section_label(&t, text::origin())),
                 )
                 .child(
                     text_style(div(), TypeScale::META)
                         .text_color(t.colors.text_secondary())
                         .child(if detail.provenance.capture_id.is_some() {
-                            "Confirmada na Revisão a partir de uma conversa capturada."
+                            text::origin_captured()
                         } else {
-                            "Confirmada na Revisão; a captura de origem não foi registrada."
+                            text::origin_uncaptured()
                         }),
                 )
                 .child(
@@ -1741,13 +1861,13 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
         let open = (accepted && self.relating.is_none()).then(|| {
             self.button(
                 "relate-open".into(),
-                "Relacionar".into(),
+                text::relate().into(),
                 Action::Relate(Some(RelationKind::DependsOn)),
                 false,
                 cx,
             )
         });
-        let header = section_header(&t, "Relações")
+        let header = section_header(&t, text::relations())
             .when(!links.is_empty(), |row| {
                 row.child(count_chip(&t, links.len().to_string()))
             })
@@ -1765,10 +1885,9 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
                 text_style(div(), TypeScale::BODY_SMALL)
                     .text_color(colors.text_muted())
                     .child(if accepted {
-                        "Sem relações. Ligue esta decisão às que ela substitui, das quais \
-                         depende ou com que conflita."
+                        text::no_relations_accepted()
                     } else {
-                        "Sem relações registradas."
+                        text::no_relations()
                     }),
             );
         }
@@ -1814,7 +1933,7 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
                             .child(link.question.clone()),
                     )
                     .when(link.superseded, |row| {
-                        row.child(status_pill(&t, colors.text_muted(), "Substituída"))
+                        row.child(status_pill(&t, colors.text_muted(), text::superseded()))
                     })
                     .child(icon(IconName::ChevronRight, 14.0, colors.text_muted()))
                     .into_any_element()
@@ -1849,26 +1968,26 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
             .map(|row| (row.decision_id.clone(), row.question.clone()))
             .collect();
         let hint = match kind {
-            RelationKind::DependsOn => "Esta decisão só vale enquanto a escolhida valer.",
-            RelationKind::ConflictsWith => {
-                "As duas não podem valer juntas; a relação aparece nas duas."
-            }
-            RelationKind::Supersedes => {
-                "A escolhida passa a Substituída, sai do contexto do agente e fica no histórico."
-            }
+            RelationKind::DependsOn => text::hint_depends(),
+            RelationKind::ConflictsWith => text::hint_conflicts(),
+            RelationKind::Supersedes => text::hint_supersedes(),
         };
         let mut chips: Vec<AnyElement> = Vec::new();
         for (option, id, label) in [
-            (RelationKind::DependsOn, "relate-kind-depends", "Depende de"),
+            (
+                RelationKind::DependsOn,
+                "relate-kind-depends",
+                text::rel_depends_on(),
+            ),
             (
                 RelationKind::ConflictsWith,
                 "relate-kind-conflicts",
-                "Conflita com",
+                text::rel_conflicts(),
             ),
             (
                 RelationKind::Supersedes,
                 "relate-kind-supersedes",
-                "Substitui",
+                text::rel_supersedes(),
             ),
         ] {
             chips.push(self.button(
@@ -1881,7 +2000,7 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
         }
         let cancel = self.button(
             "relate-cancel".into(),
-            "Cancelar".into(),
+            text::cancel().into(),
             Action::Relate(None),
             false,
             cx,
@@ -1889,7 +2008,7 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
         let list = if candidates.is_empty() {
             text_style(div(), TypeScale::BODY_SMALL)
                 .text_color(colors.text_secondary())
-                .child("Nenhuma outra decisão em vigor carregada para relacionar.")
+                .child(text::no_candidates())
                 .into_any_element()
         } else {
             div()
@@ -1916,7 +2035,7 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
                                 .hover(move |style| style.bg(colors.glass_fill_medium()))
                                 .active(move |style| style.bg(colors.glass_fill_strong()))
                                 .role(Role::Button)
-                                .aria_label(format!("Relacionar com: {question}"))
+                                .aria_label(text::relate_with_aria(&question))
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.act(Action::Link(id.clone()), window, cx)
                                 }))
@@ -1952,7 +2071,7 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
                     .gap(px(SpacingScale::S1))
                     .id("relate-kinds")
                     .role(Role::RadioGroup)
-                    .aria_label("Tipo de relação")
+                    .aria_label(text::relation_kind_aria())
                     .children(chips)
                     .child(div().flex_1())
                     .child(cancel),
@@ -1967,13 +2086,8 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
     }
     fn evidence(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let t = Theme::current(cx);
-        let header = section_header(&t, "Evidências").child(count_chip(
-            &t,
-            match self.sources.len() {
-                1 => "1 fonte".to_string(),
-                n => format!("{n} fontes"),
-            },
-        ));
+        let header = section_header(&t, text::evidences())
+            .child(count_chip(&t, text::sources_count(self.sources.len())));
         let panel = div()
             .flex()
             .flex_col()
@@ -1984,7 +2098,7 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
                 .child(
                     text_style(div(), TypeScale::BODY_SMALL)
                         .text_color(t.colors.text_muted())
-                        .child("Nenhuma fonte vinculada."),
+                        .child(text::no_sources()),
                 )
                 .into_any_element();
         }
@@ -2036,7 +2150,7 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
             .and_then(|source| source.artifact.clone());
         let copy = self.button(
             "copy-source".into(),
-            "Copiar trecho".into(),
+            text::copy_excerpt().into(),
             Action::CopySource,
             false,
             cx,
@@ -2044,9 +2158,9 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
         let expand = self.button(
             "expand-source".into(),
             if self.expanded {
-                "Recolher".into()
+                text::collapse().into()
             } else {
-                "Ampliar leitura".into()
+                text::expand_reading().into()
             },
             Action::ExpandSource,
             self.expanded,
@@ -2075,7 +2189,7 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
                     text_style(div(), TypeScale::BODY_SMALL)
                         .p(px(SpacingScale::S5))
                         .text_color(t.colors.text_muted())
-                        .child("Fonte indisponível. O vínculo de proveniência foi preservado."),
+                        .child(text::source_unavailable()),
                 );
             }
         }
@@ -2098,11 +2212,11 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
                 .child(
                     text_style(div(), TypeScale::HEADING_3)
                         .flex_1()
-                        .child("Prévia da exportação"),
+                        .child(text::export_preview_title()),
                 )
                 .child(self.button(
                     "export-close".into(),
-                    "Cancelar".into(),
+                    text::cancel().into(),
                     Action::CloseExport,
                     false,
                     cx,
@@ -2133,14 +2247,11 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
                     text_style(div(), TypeScale::META)
                         .flex_1()
                         .text_color(t.colors.text_muted())
-                        .child(format!(
-                            "{} bytes · conteúdo exato da versão atual",
-                            document.bytes
-                        )),
+                        .child(text::export_size(document.bytes)),
                 )
                 .child(self.button(
                     "export-save".into(),
-                    "Escolher destino…".into(),
+                    text::choose_destination().into(),
                     Action::SaveExport(false),
                     true,
                     cx,
@@ -2154,14 +2265,11 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
                     .child(
                         text_style(div(), TypeScale::BODY_SMALL)
                             .mb(px(SpacingScale::S2))
-                            .child(format!(
-                                "O arquivo {} já existe. Substituir seu conteúdo?",
-                                path.display()
-                            )),
+                            .child(text::overwrite_prompt(&path.display().to_string())),
                     )
                     .child(self.button(
                         "export-overwrite".into(),
-                        "Substituir arquivo".into(),
+                        text::overwrite_button().into(),
                         Action::SaveExport(true),
                         true,
                         cx,
@@ -2173,7 +2281,8 @@ impl<S: DecisionsStores + Send + 'static> DecisionsScreen<S> {
             kind: "export_document".into(),
             content: document.content,
             metadata: format!(
-                "{{\"file\":\"decisao.{}\"}}",
+                "{{\"file\":\"{}.{}\"}}",
+                text::export_file_prefix(),
                 if json { "json" } else { "md" }
             ),
         };
@@ -2265,7 +2374,7 @@ impl<S: DecisionsStores + Send + 'static> Render for DecisionsScreen<S> {
                 |bar| {
                     bar.child(self.button(
                         "decisions-retry".into(),
-                        "Tentar novamente".into(),
+                        text::retry().into(),
                         Action::Retry,
                         false,
                         cx,
@@ -2342,48 +2451,34 @@ fn load_document<S: DecisionStore + InboxStore>(
 ) -> Result<(DecisionDetail, Vec<DecisionSource>), String> {
     let detail = decisions
         .detail(id)
-        .map_err(|_| "Não foi possível abrir esta decisão.".to_owned())?;
+        .map_err(|_| text::open_failed().to_owned())?;
     if Some(detail.summary.project_id.as_str()) != project {
-        return Err("Esta decisão não pertence ao projeto selecionado.".into());
+        return Err(text::not_in_project().into());
     }
     let sources = decisions
         .sources(&detail)
-        .map_err(|_| "Não foi possível carregar as fontes desta decisão.".to_owned())?;
+        .map_err(|_| text::sources_failed().to_owned())?;
     Ok((detail, sources))
 }
 fn month_label(value: &str) -> String {
-    let months = [
-        "Janeiro",
-        "Fevereiro",
-        "Março",
-        "Abril",
-        "Maio",
-        "Junho",
-        "Julho",
-        "Agosto",
-        "Setembro",
-        "Outubro",
-        "Novembro",
-        "Dezembro",
-    ];
     use chrono::Datelike;
     match chrono::DateTime::parse_from_rfc3339(value) {
         Ok(date) => {
             let date = date.with_timezone(&chrono::Local);
-            format!("{} {}", months[date.month0() as usize], date.year())
+            text::month_year(date.month0(), date.year())
         }
-        Err(_) => "Data não registrada".into(),
+        Err(_) => text::date_unregistered().into(),
     }
 }
 
 /// How a relation reads from the open decision.
 fn relation_label(kind: RelationKind, direction: RelationDirection) -> &'static str {
     match (kind, direction) {
-        (RelationKind::Supersedes, RelationDirection::Outgoing) => "Substitui",
-        (RelationKind::Supersedes, RelationDirection::Incoming) => "Substituída por",
-        (RelationKind::DependsOn, RelationDirection::Outgoing) => "Depende de",
-        (RelationKind::DependsOn, RelationDirection::Incoming) => "É base de",
-        (RelationKind::ConflictsWith, _) => "Conflita com",
+        (RelationKind::Supersedes, RelationDirection::Outgoing) => text::rel_supersedes(),
+        (RelationKind::Supersedes, RelationDirection::Incoming) => text::rel_superseded_by(),
+        (RelationKind::DependsOn, RelationDirection::Outgoing) => text::rel_depends_on(),
+        (RelationKind::DependsOn, RelationDirection::Incoming) => text::rel_basis_of(),
+        (RelationKind::ConflictsWith, _) => text::rel_conflicts(),
     }
 }
 
@@ -2397,8 +2492,8 @@ fn relation_color(theme: &Theme, kind: RelationKind) -> gpui::Rgba {
 
 fn relation_notice(kind: RelationKind) -> &'static str {
     match kind {
-        RelationKind::Supersedes => "Decisão substituída. A anterior segue no histórico.",
-        RelationKind::DependsOn => "Dependência registrada.",
-        RelationKind::ConflictsWith => "Conflito registrado nas duas decisões.",
+        RelationKind::Supersedes => text::notice_superseded(),
+        RelationKind::DependsOn => text::notice_depends(),
+        RelationKind::ConflictsWith => text::notice_conflict(),
     }
 }
