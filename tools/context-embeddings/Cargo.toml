@@ -10,6 +10,10 @@ publish = false
 [dependencies]
 model2vec-rs = { version = "=0.3.0", default-features = false, features = ["local-only", "fancy-regex"] }
 serde_json = "1"
+candle-core = "=0.11.0"
+candle-nn = "=0.11.0"
+candle-transformers = "=0.11.0"
+tokenizers = "0.22"
 
 # Smart App Control blocked these build scripts and proc-macros on the
 # author's machine; a different codegen-units only changes their hash.

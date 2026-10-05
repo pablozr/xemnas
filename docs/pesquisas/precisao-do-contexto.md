@@ -26,7 +26,8 @@ nela, tanto quanto o melhor resultado): 0,94 / 0,95 / 0 contaminados, holdout 0,
 Corpus v4, escrito às cegas e selado: 0,58 / 0,62 / 4 de 21. Os ganhos depois da ponte
 PT/EN eram, na maior parte, ajuste ao v3; o próximo passo se decide pelo v4 e pelo dogfood. Passo 5 em
 [embeddings no contexto](embeddings-no-contexto.md): o modelo estático `potion` como veto
-levou o v4 a 0,67 / 0,60 / 4, abaixo do aceite, e não entra.
+levou o v4 a 0,67 / 0,60 / 4 e o `multilingual-e5-small` a 0,60 / 0,60 / 4, abaixo do
+aceite; nenhum entra.
 Ganho provavelmente otimista: falta um corpus v4 com holdout novo. A medição usa o portão de
 [qualidade do núcleo](../arquitetura/qualidade-do-nucleo.md).
 

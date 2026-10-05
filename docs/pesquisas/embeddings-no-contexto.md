@@ -3,9 +3,9 @@
 **Data:** 05/10/2026.
 **Pergunta:** um modelo de embeddings local, barato o bastante para rodar a cada prompt,
 tira a seleção de contexto do teto lexical medido no corpus v4?
-**Status:** Aberta. `potion-multilingual-128M` medido e reprovado no v4 (0,67 / 0,60 / 4 de 21,
-aceite 0,70 / 0,70); o `multilingual-e5-small` é o próximo, pendente de autorização para o
-download. Continua o passo 5 de [precisão do contexto](precisao-do-contexto.md).
+**Status:** Aberta. Os dois modelos foram reprovados no v4 como veto e resgate sobre a busca
+lexical: `potion-multilingual-128M` 0,67 / 0,60 / 4 de 21 e `multilingual-e5-small` 0,60 /
+0,60 / 4 (aceite 0,70 / 0,70). Nenhum entra; a decisão seguinte é do usuário. Continua o passo 5 de [precisão do contexto](precisao-do-contexto.md).
 
 ## Ponto de partida
 
@@ -72,7 +72,7 @@ própria e é opcional: sem modelo, a seleção é a de hoje.
 ## Resultado do `potion-multilingual-128M` (05/10/2026)
 
 Gerador em `tools/context-embeddings` (crate fora do workspace; `model2vec-rs` 0.3.0 sem
-recursos nativos). Fixture `storage-sqlite/tests/fixtures/context_corpus_vectors.json`:
+recursos nativos). Fixture `storage-sqlite/tests/fixtures/context_corpus_vectors_potion.json`:
 29 itens (pergunta e escolha de cada decisão, enunciado de cada claim) e as 159 tarefas,
 vetores normalizados guardados como `i8`, 110 KB. A geração é determinística (mesmo hash
 em duas execuções). A simulação aplica o veto e o resgate sobre a seleção lexical de hoje,
@@ -103,9 +103,40 @@ um piso absoluto que os cortasse custaria cobertura já no v3. Nenhuma variante 
 aceite; o modelo estático não entra. O resultado confirma o risco anotado nos candidatos:
 sem atenção, o vetor é quase uma média de palavras e repete as falhas do léxico.
 
-## Próximo passo
+## Resultado do `multilingual-e5-small` (05/10/2026)
 
-Medir o `multilingual-e5-small` do mesmo jeito (mesmo fixture, mesmas variantes escolhidas
-pelo v3, v4 lido uma vez). Rodar sem DLL nativa pede Candle (Rust puro) em vez do ONNX
-Runtime. O download (`model.safetensors` de cerca de 470 MB, tokenizador e configuração,
-do Hugging Face `intfloat/multilingual-e5-small`) depende de autorização do usuário.
+O mesmo gerador roda o BERT pelo Candle (Rust puro, sem DLL), com média dos tokens e os
+prefixos "query: " e "passage: " do modelo. Fixture `context_corpus_vectors_e5.json`,
+158 KB, 384 dimensões.
+
+- **Custo:** vetor de uma tarefa em 25 ms no p50 e 55 ms no p95 (release, CPU, uma
+  execução), 200 vezes o `potion`; carga em 1,1 s, pico de 1,15 GB.
+- **Sinal:** no v3 a decisão exigida fica em primeiro lugar com muito mais frequência que
+  no `potion`, mas as similaridades se comprimem entre 0,78 e 0,93: negativos chegam a
+  0,87 e um piso absoluto não separa nada. O que separa é a folga entre o primeiro e o
+  segundo item: nenhum negativo do v3 passa de 0,03.
+- **Escolhidas só pelo v3:** veto a 0,97 da melhor similaridade (v3 0,95 / 0,95 / 0) e
+  resgate pela folga de 0,04 sem piso (nunca disparou no v3), e os dois juntos.
+
+| Variante | v3 | v4 selado |
+| --- | --- | --- |
+| Só lexical (hoje) | 0,94 / 0,95 / 0 de 24 | 0,58 / 0,62 / 4 de 21 |
+| Veto 0,97 | 0,95 / 0,95 / 0 | 0,60 / 0,60 / 4 |
+| Resgate pela folga 0,04 | 0,94 / 0,95 / 0 | 0,58 / 0,62 / 4 (nunca disparou) |
+| Veto e resgate | 0,95 / 0,95 / 0 | 0,60 / 0,60 / 4 |
+
+## O que os dois resultados dizem
+
+- **O v3 não serve mais para ajustar.** Com 0,94 / 0,95, quase toda variante empata nele;
+  os limiares escolhidos ali não carregam informação para o v4.
+- **O desenho limita mais que o modelo.** O resgate só age quando a busca lexical não acha
+  nada, e nos dois corpora ela quase sempre acha algo, certo ou errado; o veto só tira, e
+  com um único candidato não tira nada. Os quatro negativos contaminados do v4 passam pelos
+  dois modelos.
+- **Custo:** o `potion` cabe no orçamento por prompt, mas pesa na memória; o e5 custa 25 a
+  55 ms por prompt.
+
+Caminhos possíveis, a decidir: (1) um corpus de ajuste novo, escrito às cegas como o v4,
+para calibrar sem tocar o v4; (2) a fusão por Reciprocal Rank Fusion, em que o vetor também
+pode trocar o item lexical, calibrada nesse corpus novo; (3) esperar o dogfood com tarefas
+reais antes de investir mais em embeddings.
