@@ -96,6 +96,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 23,
         sql: include_str!("migrations/0023_add_job_run_after.sql"),
     },
+    Migration {
+        version: 24,
+        sql: include_str!("migrations/0024_create_job_settings.sql"),
+    },
 ];
 
 /// A single embedded schema migration.

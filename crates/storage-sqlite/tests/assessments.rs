@@ -155,8 +155,8 @@ fn migration_0006_applies_on_fresh_and_upgraded_databases() {
             |row| row.get(0),
         )
         .expect("count distinct");
-    assert_eq!(versions, 22);
-    assert_eq!(distinct, 22);
+    assert_eq!(versions, 23);
+    assert_eq!(distinct, 23);
 
     let _ = std::fs::remove_dir_all(&root);
 }

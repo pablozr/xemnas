@@ -1,7 +1,8 @@
 //! SQLite implementation of the Job persistence port.
 
 use application::jobs::{
-    JobError, JobRecord, JobRepository, JobState, RecoveryReport, INTERRUPTED_NON_IDEMPOTENT,
+    JobError, JobRecord, JobRepository, JobSettingsStore, JobState, RecoveryReport,
+    INTERRUPTED_NON_IDEMPOTENT,
 };
 use rusqlite::{params, params_from_iter, OptionalExtension, Row};
 
@@ -207,5 +208,43 @@ impl JobRepository for SqliteStore {
 
         transaction.commit().map_err(storage_error)?;
         Ok(RecoveryReport { requeued, failed })
+    }
+}
+
+impl JobSettingsStore for SqliteStore {
+    fn parallel_analyses(&self) -> Result<Option<u8>, JobError> {
+        let value: Option<i64> = self
+            .lock()
+            .query_row(
+                "SELECT parallel_analyses FROM job_settings WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(storage_error)?;
+        Ok(value.and_then(|value| u8::try_from(value).ok()))
+    }
+
+    fn set_parallel_analyses(&self, value: u8) -> Result<(), JobError> {
+        self.lock()
+            .execute(
+                &format!(
+                    "INSERT INTO job_settings (id, parallel_analyses, updated_at) \
+                     VALUES (1, ?1, {TOUCH_UPDATED_AT}) \
+                     ON CONFLICT(id) DO UPDATE SET \
+                     parallel_analyses = excluded.parallel_analyses, \
+                     updated_at = excluded.updated_at"
+                ),
+                [i64::from(value)],
+            )
+            .map(|_| ())
+            .map_err(|error| match error {
+                rusqlite::Error::SqliteFailure(failure, _)
+                    if failure.code == rusqlite::ErrorCode::ConstraintViolation =>
+                {
+                    JobError::InvalidSetting
+                }
+                other => storage_error(other),
+            })
     }
 }

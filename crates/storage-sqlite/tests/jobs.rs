@@ -534,3 +534,18 @@ fn a_deferred_job_is_not_claimable_until_its_time() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn parallel_analyses_defaults_to_two_and_persists_within_range() {
+    let (store, root) = store_in("parallel");
+    let jobs = Jobs::new(store.clone());
+    assert_eq!(jobs.parallel_analyses().expect("read"), 2);
+    jobs.set_parallel_analyses(4).expect("save");
+    let reopened = Jobs::new(SqliteStore::open(root.join("app.db")).expect("reopen"));
+    assert_eq!(reopened.parallel_analyses().expect("read"), 4);
+    assert_eq!(jobs.set_parallel_analyses(0), Err(JobError::InvalidSetting));
+    assert_eq!(jobs.set_parallel_analyses(5), Err(JobError::InvalidSetting));
+    assert_eq!(jobs.parallel_analyses().expect("read"), 4);
+
+    let _ = std::fs::remove_dir_all(&root);
+}

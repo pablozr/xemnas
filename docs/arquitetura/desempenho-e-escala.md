@@ -70,6 +70,12 @@ atrase a análise da sessão que o desenvolvedor acabou de encerrar.
   erro com a mensagem do plano, porque esperar não resolve.
 - Ao fechar o app, `limiter.close()` libera quem espera vaga (o job volta à
   fila) antes de `stop`/`join` dos workers.
+- **Análises em paralelo** (1 a 4, padrão 2) fica na tabela `job_settings`
+  (uma linha, como `approval_settings`), lida na partida: define o N do
+  limitador e os workers por fila (`Lane::workers`: até 2 em `now` e
+  `documents`, 1 em `suggestions`). Mudar vale no próximo início. Não fica no
+  perfil de IA porque o formulário de IA regrava o perfil inteiro e o
+  consentimento é amarrado a ele; `context_settings` é por projeto.
 
 ## Orçamentos
 

@@ -216,6 +216,8 @@ pub enum JobError {
     },
     /// The job kind has no registered handler, so it cannot be enqueued.
     UnknownKind(String),
+    /// A job setting outside its allowed range.
+    InvalidSetting,
 }
 
 impl std::fmt::Display for JobError {
@@ -230,6 +232,7 @@ impl std::fmt::Display for JobError {
                 to.as_str()
             ),
             Self::UnknownKind(kind) => write!(formatter, "tipo de job desconhecido: {kind}"),
+            Self::InvalidSetting => formatter.write_str("análises em paralelo vão de 1 a 4"),
         }
     }
 }
@@ -426,6 +429,15 @@ pub trait JobRepository {
     /// Requeues interrupted idempotent jobs and fails interrupted
     /// non-idempotent ones.
     fn recover_interrupted(&self) -> Result<RecoveryReport, JobError>;
+}
+
+/// Port that persists the global job settings.
+pub trait JobSettingsStore {
+    /// Provider calls at once chosen by the person, if any.
+    fn parallel_analyses(&self) -> Result<Option<u8>, JobError>;
+
+    /// Persists the provider calls at once.
+    fn set_parallel_analyses(&self, value: u8) -> Result<(), JobError>;
 }
 
 /// Jobs use cases over a [`JobRepository`].
@@ -695,6 +707,26 @@ impl<R: JobRepository> Jobs<R> {
         } else {
             Err(JobError::InvalidTransition { from, to })
         }
+    }
+}
+
+impl<R: JobSettingsStore> Jobs<R> {
+    /// "Análises em paralelo": provider calls at once, read at startup. A
+    /// missing or out-of-range value reads as the default.
+    pub fn parallel_analyses(&self) -> Result<u8, JobError> {
+        Ok(self
+            .repository
+            .parallel_analyses()?
+            .filter(|value| crate::limiter::PARALLEL_RANGE.contains(value))
+            .unwrap_or(crate::limiter::DEFAULT_PARALLEL))
+    }
+
+    /// Saves "análises em paralelo"; it takes effect on the next start.
+    pub fn set_parallel_analyses(&self, value: u8) -> Result<(), JobError> {
+        if !crate::limiter::PARALLEL_RANGE.contains(&value) {
+            return Err(JobError::InvalidSetting);
+        }
+        self.repository.set_parallel_analyses(value)
     }
 }
 
@@ -1480,6 +1512,18 @@ mod tests {
                 .expect("enqueue");
         }
         let handle = jobs.spawn_workers(2);
+        let saturated = Instant::now() + Duration::from_secs(5);
+        while repository
+            .list()
+            .expect("list")
+            .iter()
+            .filter(|job| job.state == JobState::Running)
+            .count()
+            < 2
+        {
+            assert!(Instant::now() < saturated, "document workers never started");
+            std::thread::sleep(Duration::from_millis(2));
+        }
         let session = jobs
             .enqueue(ANALYZE_CAPTURE_KIND, "s", true)
             .expect("enqueue");

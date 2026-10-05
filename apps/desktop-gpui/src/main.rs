@@ -124,7 +124,10 @@ fn main() {
 
     let mut jobs = application::jobs::Jobs::new(store.clone());
     // Every job lane shares one cap on concurrent provider calls.
-    let parallel = application::limiter::DEFAULT_PARALLEL;
+    // "Análises em paralelo" is read once here; a change applies on restart.
+    let parallel = jobs
+        .parallel_analyses()
+        .unwrap_or(application::limiter::DEFAULT_PARALLEL);
     let limiter = application::limiter::ProviderLimiter::new(usize::from(parallel));
 
     // AI settings: the profile file is seeded with the offline default so the
