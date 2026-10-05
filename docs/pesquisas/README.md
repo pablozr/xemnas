@@ -8,8 +8,9 @@ planos de `docs/roadmap/`.
 
 | Documento | Assunto | Status |
 | --- | --- | --- |
-| [precisao-do-contexto.md](precisao-do-contexto.md) | Precisão do bloco entregue ao agente: evidência, diagnóstico, dez técnicas por custo, medição e plano | Em implementação. Passos 1 a 4 feitos: precisão 0,23 → 0,75, cobertura 0,91; com termos de busca, cobertura relativa e oração principal, 0,94 / 0,95; falta validar num corpus v4 |
+| [precisao-do-contexto.md](precisao-do-contexto.md) | Precisão do bloco entregue ao agente: evidência, diagnóstico, dez técnicas por custo, medição e plano | Em implementação. v3: 0,94 / 0,95; corpus v4 às cegas: 0,58 / 0,62; próximo passo, embeddings |
 | [busca-alem-do-lexico.md](busca-alem-do-lexico.md) | Depois da ponte PT/EN e antes dos embeddings: sementes pela menção, expansão do documento na extração, PageRank no grafo e o que fica de fora | Em implementação. Termos de busca como último recurso: 0,76 / 0,95 |
+| [embeddings-no-contexto.md](embeddings-no-contexto.md) | Modelo estático local (Model2Vec) como veto e resgate na seleção de contexto, medido no v4 selado | Aberta. Desenho e protocolo; download do modelo pendente de autorização |
 | [direcao-memoria-contexto-baixo-atrito.md](direcao-memoria-contexto-baixo-atrito.md) | Direção aprovada: memória descritiva/normativa, context router, baixo custo e revisão por exceção | Aberta. Algoritmos e metas pendentes; política normativa vigente preservada |
 | [ideias-para-ciclo-avaliacao-real.md](ideias-para-ciclo-avaliacao-real.md) | Sete incrementos com fontes primárias, casos contrastivos, qualificadores, admissão de contexto e experimentos | Aberta. Pesquisa documental; experimentos e implementação não executados |
 | [melhorias-apos-avaliacao-real.md](melhorias-apos-avaliacao-real.md) | Dezessete melhorias priorizadas, evidências, critérios e sequência após pesquisas e retestes no ripgrep | Aberta. Proposta consolidada; implementação e hipóteses de valor pendentes |
