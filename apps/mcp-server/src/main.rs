@@ -1,4 +1,5 @@
 //! `xemnas-mcp`: started by the agent; stdout carries only the protocol.
+//! `xemnas-mcp hook prompt|stop` handles Claude Code hook events instead.
 
 use std::io::{BufRead, Write};
 
@@ -6,6 +7,11 @@ use xemnas_mcp::backend::HttpBackend;
 use xemnas_mcp::protocol::{handle, parse_error};
 
 fn main() {
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if arguments.first().map(String::as_str) == Some("hook") {
+        xemnas_mcp::hook::run(arguments.get(1).map(String::as_str).unwrap_or_default());
+        return;
+    }
     let directory = project_directory();
     let backend = HttpBackend::new(application::AppPaths::from_env().runtime_dir, directory);
     let stdin = std::io::stdin();

@@ -71,7 +71,7 @@ O backend monta um **Context Pack** para uma tarefa: decisões vigentes e premis
 
 ## MCP para agentes (somente leitura)
 
-`xemnas-mcp` é um servidor MCP sobre stdio com três ferramentas: `get_decision` (abre a decisão pela referência `D:xxxx` que aparece no bloco injetado), `search_context` (busca decisões vigentes e regras do projeto; aceita `path` de um arquivo envolvido) e `file_context` (o que o mapa do projeto liga a um arquivo, ADR-0005). Ele consulta o app aberto pela API local e nunca altera nada. Compilação e configuração no OpenCode e no Claude Code: [MCP de leitura](../roadmap/fase-5/01-mcp-leitura.md).
+`xemnas-mcp` é um servidor MCP sobre stdio com três ferramentas: `get_decision` (abre a decisão pela referência `D:xxxx` que aparece no bloco injetado), `search_context` (busca decisões vigentes e regras do projeto; aceita `path` de um arquivo envolvido) e `file_context` (o que o mapa do projeto liga a um arquivo, ADR-0005). Ele consulta o app aberto pela API local e nunca altera nada. Compilação e configuração no OpenCode e no Claude Code: [MCP de leitura](../roadmap/fase-5/01-mcp-leitura.md). O mesmo binário traz os hooks do Claude Code `hook prompt` (injeta contexto) e `hook stop` (captura os turnos, com outbox se o app estiver fechado), descritos nessa página.
 
 ## Privacidade
 

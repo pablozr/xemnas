@@ -4,7 +4,7 @@ mod support;
 use application::{
     analysis::ExtractorFactory,
     claims::{Claims, NewClaim},
-    context::{ContextPacks, ContextProvider, ContextRequest},
+    context::{ContextPack, ContextPacks, ContextProvider, ContextRequest},
     context_routing::{JudgeContextAmbiguity, RoutingLookup, CONTEXT_ROUTING_KIND},
     extract::{
         CandidateExtractor, CandidateProposal, DecisionEvidence, ExtractError, RelevanceSignal,
@@ -130,6 +130,13 @@ fn settings() -> (AiSettings<Profiles, Secrets>, Profiles, Arc<AtomicUsize>) {
         secrets,
     )
 }
+/// Drops `as_of`, the build's clock: two builds moments apart may straddle a
+/// second and must still compare equal.
+fn untimed(mut pack: ContextPack) -> ContextPack {
+    pack.as_of.clear();
+    pack
+}
+
 fn request() -> ContextRequest {
     ContextRequest {
         project_id: "p1".into(),
@@ -219,7 +226,7 @@ fn original28_completed_cache_is_rekeyed_on_actual_lookup_without_another_call()
     JudgeContextAmbiguity::new(test.store.clone(), settings, f.clone())
         .run(&routing_job(&test))
         .unwrap();
-    let expected = packs.build_pack(request()).unwrap();
+    let expected = untimed(packs.build_pack(request()).unwrap());
     // Original v28 completed rows have only the generation-based key, no payload.
     raw.execute(
         "UPDATE context_routing_entries SET key=?1,owner_job_id=NULL",
@@ -254,7 +261,7 @@ fn original28_completed_cache_is_rekeyed_on_actual_lookup_without_another_call()
         .query_row("SELECT key FROM context_routing_entries", [], |r| r.get(0))
         .unwrap();
     assert_eq!(stored, legacy);
-    assert_eq!(upgraded.build_pack(request()).unwrap(), expected);
+    assert_eq!(untimed(upgraded.build_pack(request()).unwrap()), expected);
     let stored: String = raw
         .query_row("SELECT key FROM context_routing_entries", [], |r| r.get(0))
         .unwrap();
@@ -288,7 +295,7 @@ fn identical_refresh_reuses_cache_and_expired_key_renews() {
     let f = factory("valid", None);
     let judge = JudgeContextAmbiguity::new(test.store.clone(), settings, f.clone());
     judge.run(&routing_job(&test)).unwrap();
-    let cached = packs.build_pack(request()).unwrap();
+    let cached = untimed(packs.build_pack(request()).unwrap());
     let raw = Connection::open(test.root.join("app.db")).unwrap();
     raw.execute(
         "UPDATE observation_refresh SET generation=generation+1,dirty=1",
@@ -298,7 +305,7 @@ fn identical_refresh_reuses_cache_and_expired_key_renews() {
     assert_eq!(packs.build_pack(request()).unwrap().decisions.len(), 2);
     raw.execute("UPDATE observation_refresh SET dirty=0", [])
         .unwrap();
-    assert_eq!(packs.build_pack(request()).unwrap(), cached);
+    assert_eq!(untimed(packs.build_pack(request()).unwrap()), cached);
     assert_eq!(
         count(&test, "SELECT COUNT(*) FROM context_routing_entries"),
         1
@@ -318,7 +325,7 @@ fn identical_refresh_reuses_cache_and_expired_key_renews() {
     );
     judge.run(&routing_job(&test)).unwrap();
     assert_eq!(f.calls.load(Ordering::SeqCst), 2);
-    assert_eq!(packs.build_pack(request()).unwrap(), cached);
+    assert_eq!(untimed(packs.build_pack(request()).unwrap()), cached);
 }
 
 #[test]
@@ -388,10 +395,12 @@ fn first_lookup_baseline_then_worker_filters_only_weak_and_erases_content() {
         Arc::new(settings.clone()),
     ));
     let packs = ContextPacks::new(test.store.clone()).with_routing(Some(router));
-    let baseline = ContextPacks::new(test.store.clone())
-        .build_pack(request())
-        .unwrap();
-    assert_eq!(packs.build_pack(request()).unwrap(), baseline);
+    let baseline = untimed(
+        ContextPacks::new(test.store.clone())
+            .build_pack(request())
+            .unwrap(),
+    );
+    assert_eq!(untimed(packs.build_pack(request()).unwrap()), baseline);
     assert_eq!(
         secrets.load(Ordering::SeqCst),
         0,
@@ -401,7 +410,7 @@ fn first_lookup_baseline_then_worker_filters_only_weak_and_erases_content() {
         count(&test, "SELECT COUNT(*) FROM context_routing_entries"),
         1
     );
-    assert_eq!(packs.build_pack(request()).unwrap(), baseline);
+    assert_eq!(untimed(packs.build_pack(request()).unwrap()), baseline);
     assert_eq!(
         count(
             &test,
@@ -413,7 +422,7 @@ fn first_lookup_baseline_then_worker_filters_only_weak_and_erases_content() {
     JudgeContextAmbiguity::new(test.store.clone(), settings, factory.clone())
         .run(&routing_job(&test))
         .unwrap();
-    let cached = packs.build_pack(request()).unwrap();
+    let cached = untimed(packs.build_pack(request()).unwrap());
     assert_eq!(cached.decisions.len(), baseline.decisions.len() - 1);
     assert!(cached.claims.iter().any(|c| c.claim_id == pinned));
     assert_eq!(cached.observations, baseline.observations);
@@ -461,12 +470,16 @@ fn strict_failures_and_all_irrelevant_fall_back_without_repair() {
         let packs = ContextPacks::new(test.store.clone()).with_routing(Some(Arc::new(
             RoutingLookup::new(Arc::new(test.store.clone()), Arc::new(settings.clone())),
         )));
-        let before = packs.build_pack(request()).unwrap();
+        let before = untimed(packs.build_pack(request()).unwrap());
         let factory = factory(mode, None);
         JudgeContextAmbiguity::new(test.store.clone(), settings, factory.clone())
             .run(&routing_job(&test))
             .unwrap();
-        assert_eq!(packs.build_pack(request()).unwrap(), before, "{mode}");
+        assert_eq!(
+            untimed(packs.build_pack(request()).unwrap()),
+            before,
+            "{mode}"
+        );
         assert_eq!(factory.calls.load(Ordering::SeqCst), 1);
         assert_eq!(count(&test,"SELECT COUNT(*) FROM context_routing_entries WHERE result_json IS NOT NULL OR request_json IS NOT NULL"),0);
     }
@@ -519,7 +532,7 @@ fn changes_during_provider_block_publication_and_revoke_blocks_consumption() {
         let packs = ContextPacks::new(test.store.clone()).with_routing(Some(Arc::new(
             RoutingLookup::new(Arc::new(test.store.clone()), Arc::new(settings.clone())),
         )));
-        let before = packs.build_pack(request()).unwrap();
+        let before = untimed(packs.build_pack(request()).unwrap());
         let store = test.store.clone();
         let path = test.root.join("app.db");
         let profiles = profiles.clone();
@@ -565,10 +578,7 @@ fn changes_during_provider_block_publication_and_revoke_blocks_consumption() {
             .unwrap();
         assert_eq!(count(&test,"SELECT COUNT(*) FROM context_routing_entries WHERE result_json IS NOT NULL OR request_json IS NOT NULL"),0, "{mutation}");
         if mutation == "profile" {
-            // `as_of` is the build's clock and may cross a second boundary.
-            let mut after = packs.build_pack(request()).unwrap();
-            after.as_of = before.as_of.clone();
-            assert_eq!(after, before);
+            assert_eq!(untimed(packs.build_pack(request()).unwrap()), before);
         }
     }
 }
@@ -583,7 +593,7 @@ fn cached_result_does_not_bypass_revocation_and_reopen_deduplicates() {
         Arc::new(settings.clone()),
     ));
     let packs = ContextPacks::new(test.store.clone()).with_routing(Some(router));
-    let before = packs.build_pack(request()).unwrap();
+    let before = untimed(packs.build_pack(request()).unwrap());
     let reopened = storage_sqlite::SqliteStore::open(test.root.join("app.db")).unwrap();
     let other = ContextPacks::new(reopened.clone()).with_routing(Some(Arc::new(
         RoutingLookup::new(Arc::new(reopened.clone()), Arc::new(settings.clone())),
@@ -598,7 +608,7 @@ fn cached_result_does_not_bypass_revocation_and_reopen_deduplicates() {
         .unwrap();
     assert_eq!(packs.build_pack(request()).unwrap().decisions.len(), 1);
     profiles.0.lock().unwrap().external_calls_enabled = false;
-    assert_eq!(packs.build_pack(request()).unwrap(), before);
+    assert_eq!(untimed(packs.build_pack(request()).unwrap()), before);
 }
 
 #[test]
@@ -611,7 +621,7 @@ fn query_does_not_wait_for_provider_and_purge_does_not_stop_remote_worker() {
     let packs = ContextPacks::new(test.store.clone()).with_routing(Some(Arc::new(
         RoutingLookup::new(Arc::new(test.store.clone()), Arc::new(settings.clone())),
     )));
-    let before = packs.build_pack(request()).unwrap();
+    let before = untimed(packs.build_pack(request()).unwrap());
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let release = Mutex::new(release_rx);
@@ -641,7 +651,7 @@ fn query_does_not_wait_for_provider_and_purge_does_not_stop_remote_worker() {
     let worker = jobs.spawn_workers(1);
     entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
     // This synchronous query completes while provider work is still held at the barrier.
-    assert_eq!(packs.build_pack(request()).unwrap(), before);
+    assert_eq!(untimed(packs.build_pack(request()).unwrap()), before);
     application::projects::ProjectRepository::purge(&test.store, "p1").unwrap();
     jobs.enqueue(CONTEXT_ROUTING_KIND, "p2", false).unwrap();
     release_tx.send(()).unwrap();
@@ -758,10 +768,12 @@ fn pending_daily_cooldown_and_input_limits_are_persisted() {
     let packs = ContextPacks::new(fresh.store.clone()).with_routing(Some(Arc::new(
         RoutingLookup::new(Arc::new(fresh.store.clone()), Arc::new(settings)),
     )));
-    let baseline = ContextPacks::new(fresh.store.clone())
-        .build_pack(request())
-        .unwrap();
-    assert_eq!(packs.build_pack(request()).unwrap(), baseline);
+    let baseline = untimed(
+        ContextPacks::new(fresh.store.clone())
+            .build_pack(request())
+            .unwrap(),
+    );
+    assert_eq!(untimed(packs.build_pack(request()).unwrap()), baseline);
     assert_eq!(
         count(&fresh, "SELECT COUNT(*) FROM context_routing_entries"),
         0,
@@ -778,7 +790,7 @@ fn cached_claim_changes_new_items_and_dirty_generation_invalidate() {
         let packs = ContextPacks::new(test.store.clone()).with_routing(Some(Arc::new(
             RoutingLookup::new(Arc::new(test.store.clone()), Arc::new(settings.clone())),
         )));
-        let before = packs.build_pack(request()).unwrap();
+        let before = untimed(packs.build_pack(request()).unwrap());
         JudgeContextAmbiguity::new(test.store.clone(), settings, factory("valid", None))
             .run(&routing_job(&test))
             .unwrap();
@@ -810,6 +822,10 @@ fn cached_claim_changes_new_items_and_dirty_generation_invalidate() {
             }
             _ => unreachable!(),
         }
-        assert_eq!(packs.build_pack(request()).unwrap(), before, "{mutation}");
+        assert_eq!(
+            untimed(packs.build_pack(request()).unwrap()),
+            before,
+            "{mutation}"
+        );
     }
 }

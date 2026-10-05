@@ -249,7 +249,10 @@ fn an_edit_brings_what_the_map_ties_to_the_file_once_per_session() {
     let unrelated = injection.prepare(edit("web/app.ts")).expect("unrelated");
     assert_eq!(unrelated.block, None, "no map tie, nothing injected");
 
-    let absolute = format!("{path}/crates/storage/src/db.rs");
+    // From the canonical location: CI temp dirs come as 8.3 short names
+    // (`RUNNER~1`), which never prefix the project's canonical long path.
+    let root = canonicalize_location(&path).expect("canonical");
+    let absolute = format!("{root}/crates/storage/src/db.rs");
     let first = injection.prepare(edit(&absolute)).expect("first edit");
     let block = first.block.expect("block on the first edit");
     assert!(block.contains("Qual banco usar? → SQLite"));

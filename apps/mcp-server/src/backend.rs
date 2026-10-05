@@ -84,7 +84,7 @@ impl Backend for HttpBackend {
 }
 
 /// Port and token of the running app, or `None` when it is closed.
-fn endpoint(runtime_dir: &Path) -> Option<(u16, String)> {
+pub(crate) fn endpoint(runtime_dir: &Path) -> Option<(u16, String)> {
     let discovery: Value =
         serde_json::from_str(&std::fs::read_to_string(runtime_dir.join("discovery.json")).ok()?)
             .ok()?;

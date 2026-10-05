@@ -52,6 +52,30 @@ Claude Code:
 claude mcp add xemnas -- C:/caminho/para/xemnas-mcp.exe
 ```
 
+## Hooks do Claude Code
+
+O mesmo binário atende dois hooks do Claude Code (injeção e captura), sem processo residente. Todos terminam com código 0 e não imprimem nada em caso de erro (no máximo uma linha sanitizada no stderr, sem texto de prompt ou conteúdo):
+
+- `xemnas-mcp hook prompt` (`UserPromptSubmit`): lê o JSON do evento, chama `POST /v1/context` (timeout de 300 ms; app fechado sai em silêncio) com o prompt e até 8 arquivos recentes (`Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `Read`, lidos só do fim do transcript) e imprime `hookSpecificOutput.additionalContext` quando há contexto.
+- `xemnas-mcp hook stop` (`Stop`): lê o transcript de forma incremental e envia um Capture Envelope por turno fechado a `POST /v1/captures` (`Idempotency-Key`, timeout de 2 s). Com o app fechado ou erro 5xx grava em `outbox/pending`. Até 20 turnos por execução. O ponto de retomada fica em `<dados>/adapter/claude-code/<sessão>.json` (um arquivo por sessão; o id vira `[A-Za-z0-9-]`, o resto `_`, até 128 caracteres): o deslocamento do início do último prompt capturado e seu uuid; o Stop seguinte relê só esse turno e os novos. Se o app responder 403 (diretório que não é projeto registrado), os turnos são passados por cima, sem outbox e sem novas chamadas naquela execução.
+
+`~/.claude/settings.json` (os hooks rodam junto com os que já existirem; acrescente aos arrays):
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "C:/caminho/para/xemnas-mcp.exe hook prompt", "timeout": 5 }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "C:/caminho/para/xemnas-mcp.exe hook stop", "timeout": 15 }] }
+    ]
+  }
+}
+```
+
+Código em `apps/mcp-server/src/hook/`; testes em `src/hook/*` e `tests/hook.rs` (inclui latência do `hook prompt` e leitura só do fim do transcript no segundo Stop).
+
 ## Evidências
 
 - `apps/mcp-server`: testes do protocolo com backend falso e do binário real por stdio contra uma API local falsa (sessão completa, token enviado, app fechado).
