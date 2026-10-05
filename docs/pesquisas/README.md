@@ -8,6 +8,7 @@ planos de `docs/roadmap/`.
 
 | Documento | Assunto | Status |
 | --- | --- | --- |
+| [precisao-do-contexto.md](precisao-do-contexto.md) | Precisão do bloco entregue ao agente: evidência, diagnóstico, dez técnicas por custo, medição e plano | Aberta. Pesquisa e plano; nada implementado |
 | [direcao-memoria-contexto-baixo-atrito.md](direcao-memoria-contexto-baixo-atrito.md) | Direção aprovada: memória descritiva/normativa, context router, baixo custo e revisão por exceção | Aberta. Algoritmos e metas pendentes; política normativa vigente preservada |
 | [ideias-para-ciclo-avaliacao-real.md](ideias-para-ciclo-avaliacao-real.md) | Sete incrementos com fontes primárias, casos contrastivos, qualificadores, admissão de contexto e experimentos | Aberta. Pesquisa documental; experimentos e implementação não executados |
 | [melhorias-apos-avaliacao-real.md](melhorias-apos-avaliacao-real.md) | Dezessete melhorias priorizadas, evidências, critérios e sequência após pesquisas e retestes no ripgrep | Aberta. Proposta consolidada; implementação e hipóteses de valor pendentes |
