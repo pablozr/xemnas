@@ -19,13 +19,11 @@ use gpui::{App, Global, Image, ImageFormat};
 use crate::i18n::common as t;
 use crate::ui::appearance::{self, Level, Wallpaper};
 
-/// A shipped background: id, title and the full and thumbnail images.
+/// A shipped background: id and the full and thumbnail images; its name is
+/// [`Builtin::title`], in the interface language.
 pub struct Builtin {
     /// Stable id saved in the preference.
     pub id: &'static str,
-    /// Name in English. The picker shows [`Builtin::title`], which follows
-    /// the interface language.
-    pub title: &'static str,
     /// The 2560×1440 JPEG.
     full: &'static [u8],
     /// The 320×180 JPEG for the picker.
@@ -33,10 +31,9 @@ pub struct Builtin {
 }
 
 macro_rules! builtin {
-    ($id:literal, $title:literal) => {
+    ($id:literal) => {
         Builtin {
             id: $id,
-            title: $title,
             full: include_bytes!(concat!("../../assets/wallpapers/", $id, ".jpg")),
             thumb: include_bytes!(concat!("../../assets/wallpapers/", $id, "-thumb.jpg")),
         }
@@ -46,10 +43,10 @@ macro_rules! builtin {
 /// The backgrounds shipped with the app, inspired by the Organization's
 /// world (original images rendered by `tools/wallpapers/render.py`).
 pub const BUILTINS: [Builtin; 4] = [
-    builtin!("never", "The city that never existed"),
-    builtin!("castle", "The castle"),
-    builtin!("thirteen", "Where nothing gathers"),
-    builtin!("chain", "Chain"),
+    builtin!("never"),
+    builtin!("castle"),
+    builtin!("thirteen"),
+    builtin!("chain"),
 ];
 
 impl Builtin {

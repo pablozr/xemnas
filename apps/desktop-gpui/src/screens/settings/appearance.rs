@@ -124,7 +124,7 @@ impl AppearancePanel {
             grid = grid.child(Self::tile(
                 theme,
                 ["wallpaper-0", "wallpaper-1", "wallpaper-2", "wallpaper-3"][index],
-                builtin.title.into(),
+                builtin.title().into(),
                 img(self.thumbnails[index].clone())
                     .size_full()
                     .object_fit(ObjectFit::Cover)
