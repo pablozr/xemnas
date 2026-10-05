@@ -93,6 +93,8 @@ impl CandidateExtractor for Scripted {
             .iter()
             .all(|artifact| artifact.kind == "document"));
         Ok(vec![CandidateProposal {
+            nature: application::review_exception::CandidateNature::Unknown,
+            qualifiers: Vec::new(),
             question: "Onde guardar os dados?".into(),
             choice: "Em SQLite.".into(),
             rationale: "Um arquivo local, sem servidor.".into(),

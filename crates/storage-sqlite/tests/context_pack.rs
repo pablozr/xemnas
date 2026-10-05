@@ -29,6 +29,8 @@ fn claim(
 ) -> String {
     Claims::new(test.store.clone())
         .create(NewClaim {
+            source_version: None,
+            qualifiers: Vec::new(),
             project_id: "p1".to_string(),
             kind,
             statement: statement.to_string(),
@@ -181,8 +183,8 @@ fn budget_limits_the_selection_and_counts_what_was_left_out() {
             ..request("versionar API")
         })
         .expect("pack");
-    assert_eq!(pack.decisions.len(), 2);
-    assert_eq!(pack.omitted, 1);
+    assert_eq!(pack.decisions.len(), 1);
+    assert_eq!(pack.omitted, 2);
     assert!(pack.used_chars <= 700);
 }
 

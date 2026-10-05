@@ -6,6 +6,15 @@ use rusqlite::params;
 use crate::store::SqliteStore;
 
 impl ContextStore for SqliteStore {
+    fn observations_dirty(&self, project_id: &str) -> Result<bool, ContextError> {
+        self.lock()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM observation_refresh WHERE project_id=?1 AND dirty=1)",
+                [project_id],
+                |row| row.get(0),
+            )
+            .map_err(storage_error)
+    }
     fn rank_decisions(
         &self,
         project_id: &str,

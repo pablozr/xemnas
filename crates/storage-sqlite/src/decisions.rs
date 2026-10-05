@@ -13,7 +13,7 @@ use crate::store::SqliteStore;
 pub(crate) const DECISION_COLUMNS: &str =
     "d.decision_id, d.candidate_id, d.project_id, p.location, \
      d.capture_id, d.status, d.question, d.choice, d.rationale, d.assumptions, d.reconsider_when, \
-     d.scope, d.consequences, d.version, d.created_at, d.confirmed_at, d.updated_at";
+     d.scope, d.consequences, d.version, d.created_at, d.confirmed_at, d.updated_at, d.qualifiers";
 
 /// Join that attaches the project location.
 const DECISION_FROM: &str = "FROM engineering_decisions d JOIN projects p ON p.id = d.project_id";
@@ -37,6 +37,7 @@ pub(crate) fn map_row(row: &Row<'_>) -> rusqlite::Result<StoredDecision> {
         )
     })?;
     Ok(StoredDecision {
+        qualifiers: row.get(17)?,
         decision_id: row.get(0)?,
         candidate_id: row.get(1)?,
         project_id: row.get(2)?,
@@ -108,13 +109,14 @@ impl DecisionStore for SqliteStore {
         let mut statement = connection
             .prepare(
                 "SELECT version, created_at, question, choice, rationale, assumptions, \
-                 reconsider_when, scope, consequences FROM decision_revisions \
+                 reconsider_when, scope, consequences, qualifiers FROM decision_revisions \
                  WHERE decision_id = ?1 ORDER BY version DESC",
             )
             .map_err(storage_error)?;
         let rows = statement
             .query_map([id], |row| {
                 Ok(DecisionRevisionRow {
+                    qualifiers: row.get(9)?,
                     version: row.get(0)?,
                     created_at: row.get(1)?,
                     question: row.get(2)?,
@@ -214,7 +216,7 @@ impl DecisionStore for SqliteStore {
                 "UPDATE engineering_decisions \
                  SET question = ?2, choice = ?3, rationale = ?4, assumptions = ?5, \
                      reconsider_when = ?6, scope = ?7, consequences = ?8, version = ?9, \
-                     updated_at = ?10 \
+                      updated_at = ?10, qualifiers = ?12 \
                  WHERE decision_id = ?1 AND version = ?11",
                 params![
                     id,
@@ -228,6 +230,7 @@ impl DecisionStore for SqliteStore {
                     version,
                     updated_at,
                     version - 1,
+                    content.qualifiers,
                 ],
             )
             .map_err(storage_error)?;
@@ -239,8 +242,8 @@ impl DecisionStore for SqliteStore {
             .execute(
                 "INSERT INTO decision_revisions \
                  (decision_id, version, question, choice, rationale, assumptions, reconsider_when, \
-                  scope, consequences, created_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                  scope, consequences, created_at, qualifiers) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 params![
                     id,
                     version,
@@ -252,6 +255,7 @@ impl DecisionStore for SqliteStore {
                     content.scope,
                     content.consequences,
                     updated_at,
+                    content.qualifiers,
                 ],
             )
             .map_err(storage_error)?;

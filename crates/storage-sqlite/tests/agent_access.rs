@@ -26,6 +26,47 @@ fn register_directory(test: &support::TestStore) -> String {
 }
 
 #[test]
+fn claim_scope_is_exposed_and_malformed_scope_fails_closed() {
+    let test = support::open("agent-inherited-scope", &["p1"]);
+    let path = register_directory(&test);
+    let id = support::decision(&test.store, "p1", "scoped", "Question", "Choice");
+    application::decisions::Decisions::new(test.store.clone())
+        .revise(
+            &id,
+            application::decisions::DecisionEdits {
+                scope: Some(vec!["only offline".into()]),
+                ..application::decisions::DecisionEdits::default()
+            },
+        )
+        .unwrap();
+    let claim = Claims::new(test.store.clone())
+        .create(NewClaim {
+            project_id: "p1".into(),
+            kind: ClaimKind::Constraint,
+            statement: "Rule".into(),
+            valid_from: None,
+            valid_until: None,
+            source_decision_id: Some(id.clone()),
+            source_version: Some(2),
+            qualifiers: Vec::new(),
+        })
+        .unwrap();
+    let access = AgentAccess::new(test.store.clone());
+    assert!(access
+        .decision(&path, &id)
+        .unwrap()
+        .contains("only offline"));
+    Connection::open(test.root.join("app.db"))
+        .unwrap()
+        .execute(
+            "UPDATE context_claims SET inherited_scope='invalid' WHERE claim_id=?1",
+            [claim.claim_id],
+        )
+        .unwrap();
+    assert!(access.decision(&path, &id).is_err());
+}
+
+#[test]
 fn a_short_reference_opens_the_full_decision_with_its_links() {
     let test = support::open("agent-decision", &["p1"]);
     let path = register_directory(&test);
@@ -39,6 +80,8 @@ fn a_short_reference_opens_the_full_decision_with_its_links() {
         .expect("depends");
     Claims::new(test.store.clone())
         .create(NewClaim {
+            source_version: None,
+            qualifiers: Vec::new(),
             project_id: "p1".to_string(),
             kind: ClaimKind::Constraint,
             statement: "Sem servidor".to_string(),

@@ -43,105 +43,9 @@ impl ReviewStore for SqliteStore {
         let tx = connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Deferred)
             .map_err(error)?;
-        if tx
-            .query_row("SELECT id FROM projects WHERE id=?1", [id], |r| {
-                r.get::<_, String>(0)
-            })
-            .optional()
-            .map_err(error)?
-            .is_none()
-        {
-            return Ok(None);
-        }
-        let decisions = rows(
-            &tx,
-            &format!(
-                "SELECT {} FROM engineering_decisions d \
-            JOIN projects p ON p.id=d.project_id WHERE d.project_id=?1 ORDER BY d.decision_id",
-                decisions::DECISION_COLUMNS
-            ),
-            id,
-            decisions::map_row,
-        )?;
-        let claims = rows(
-            &tx,
-            &format!(
-                "SELECT {} FROM context_claims WHERE project_id=?1 \
-            ORDER BY claim_id",
-                claims::CLAIM_COLUMNS
-            ),
-            id,
-            claims::map_row,
-        )?;
-        // Either endpoint: cross-project corruption must not disappear behind a source-only join.
-        let relations = rows(&tx,"SELECT r.from_decision_id,r.to_decision_id,r.kind,r.created_at \
-            FROM decision_relations r WHERE r.from_decision_id IN \
-            (SELECT decision_id FROM engineering_decisions WHERE project_id=?1) OR \
-            r.to_decision_id IN (SELECT decision_id FROM engineering_decisions WHERE project_id=?1) \
-            ORDER BY r.from_decision_id,r.to_decision_id,r.kind",id,|r| Ok(RelationRow {
-                from:r.get(0)?,to:r.get(1)?,kind:r.get(2)?,created_at:r.get(3)? }))?;
-        let mut entities = rows(
-            &tx,
-            &format!(
-                "SELECT {} FROM entities WHERE project_id=?1 \
-            ORDER BY entity_id",
-                graph::ENTITY_COLUMNS
-            ),
-            id,
-            graph::map_entity,
-        )?;
-        for entity in &mut entities {
-            graph::load_lists(&tx, entity)
-                .map_err(|_| ReviewError::Storage("listas de entidade".into()))?;
-        }
-        let edges = rows(
-            &tx,
-            &format!(
-                "SELECT {} FROM entity_edges WHERE project_id=?1 \
-            ORDER BY edge_id",
-                graph::EDGE_COLUMNS
-            ),
-            id,
-            graph::map_edge,
-        )?;
-        let relation_suggestions = rows(&tx,"SELECT suggestion_id,project_id,from_id,to_id,kind, \
-            quote,reason,created_at FROM relation_suggestions WHERE project_id=?1 AND outcome IS NULL \
-            ORDER BY suggestion_id",id,|r| {
-            let kind: String = r.get(4)?;
-            Ok(RelationSuggestionRecord { suggestion_id:r.get(0)?,project_id:r.get(1)?,
-                from_id:r.get(2)?,to_id:r.get(3)?,kind:RelationKind::parse(&kind).ok_or_else(invalid_kind)?,
-                quote:r.get(5)?,reason:r.get(6)?,created_at:r.get(7)? })
-        })?;
-        let claim_suggestions = rows(
-            &tx,
-            "SELECT suggestion_id,project_id,decision_id,kind,statement, \
-            quote,created_at FROM claim_suggestions WHERE project_id=?1 AND outcome IS NULL \
-            ORDER BY suggestion_id",
-            id,
-            |r| {
-                let kind: String = r.get(3)?;
-                Ok(ClaimSuggestionRecord {
-                    suggestion_id: r.get(0)?,
-                    project_id: r.get(1)?,
-                    decision_id: r.get(2)?,
-                    kind: ClaimKind::parse(&kind).ok_or_else(invalid_kind)?,
-                    statement: r.get(4)?,
-                    quote: r.get(5)?,
-                    created_at: r.get(6)?,
-                })
-            },
-        )?;
+        let snapshot = snapshot_on(&tx, id)?;
         tx.commit().map_err(error)?;
-        Ok(Some(ReviewSnapshot {
-            project_id: id.into(),
-            decisions,
-            claims,
-            relations,
-            entities,
-            edges,
-            relation_suggestions,
-            claim_suggestions,
-        }))
+        Ok(snapshot)
     }
     fn search_review_decisions(
         &self,
@@ -167,4 +71,111 @@ impl ReviewStore for SqliteStore {
             .map_err(error);
         result
     }
+}
+
+pub(crate) fn snapshot_on(
+    tx: &Connection,
+    id: &str,
+) -> Result<Option<ReviewSnapshot>, ReviewError> {
+    if tx
+        .query_row("SELECT id FROM projects WHERE id=?1", [id], |r| {
+            r.get::<_, String>(0)
+        })
+        .optional()
+        .map_err(error)?
+        .is_none()
+    {
+        return Ok(None);
+    }
+    let decisions = rows(
+        tx,
+        &format!(
+            "SELECT {} FROM engineering_decisions d \
+            JOIN projects p ON p.id=d.project_id WHERE d.project_id=?1 ORDER BY d.decision_id",
+            decisions::DECISION_COLUMNS
+        ),
+        id,
+        decisions::map_row,
+    )?;
+    let claims = rows(
+        tx,
+        &format!(
+            "SELECT {} FROM context_claims WHERE project_id=?1 \
+            ORDER BY claim_id",
+            claims::CLAIM_COLUMNS
+        ),
+        id,
+        claims::map_row,
+    )?;
+    // Either endpoint: cross-project corruption must not disappear behind a source-only join.
+    let relations = rows(tx,"SELECT r.from_decision_id,r.to_decision_id,r.kind,r.created_at \
+            FROM decision_relations r WHERE r.from_decision_id IN \
+            (SELECT decision_id FROM engineering_decisions WHERE project_id=?1) OR \
+            r.to_decision_id IN (SELECT decision_id FROM engineering_decisions WHERE project_id=?1) \
+            ORDER BY r.from_decision_id,r.to_decision_id,r.kind",id,|r| Ok(RelationRow {
+                from:r.get(0)?,to:r.get(1)?,kind:r.get(2)?,created_at:r.get(3)? }))?;
+    let mut entities = rows(
+        tx,
+        &format!(
+            "SELECT {} FROM entities WHERE project_id=?1 \
+            ORDER BY entity_id",
+            graph::ENTITY_COLUMNS
+        ),
+        id,
+        graph::map_entity,
+    )?;
+    for entity in &mut entities {
+        graph::load_lists(tx, entity)
+            .map_err(|_| ReviewError::Storage("listas de entidade".into()))?;
+    }
+    let edges = rows(
+        tx,
+        &format!(
+            "SELECT {} FROM entity_edges WHERE project_id=?1 \
+            ORDER BY edge_id",
+            graph::EDGE_COLUMNS
+        ),
+        id,
+        graph::map_edge,
+    )?;
+    let relation_suggestions = rows(tx,"SELECT suggestion_id,project_id,from_id,to_id,kind, \
+            quote,reason,created_at FROM relation_suggestions WHERE project_id=?1 AND outcome IS NULL \
+            ORDER BY suggestion_id",id,|r| {
+            let kind: String = r.get(4)?;
+            Ok(RelationSuggestionRecord { suggestion_id:r.get(0)?,project_id:r.get(1)?,
+                from_id:r.get(2)?,to_id:r.get(3)?,kind:RelationKind::parse(&kind).ok_or_else(invalid_kind)?,
+                quote:r.get(5)?,reason:r.get(6)?,created_at:r.get(7)? })
+        })?;
+    let claim_suggestions = rows(
+            tx,
+            "SELECT suggestion_id,project_id,decision_id,kind,statement, \
+            quote,created_at,qualifiers,source_version,inherited_scope FROM claim_suggestions WHERE project_id=?1 AND outcome IS NULL \
+            ORDER BY suggestion_id",
+            id,
+            |r| {
+                let kind: String = r.get(3)?;
+                Ok(ClaimSuggestionRecord {
+                    source_version: r.get(8)?,
+                    inherited_scope: r.get(9)?,
+                    qualifiers: r.get(7)?,
+                    suggestion_id: r.get(0)?,
+                    project_id: r.get(1)?,
+                    decision_id: r.get(2)?,
+                    kind: ClaimKind::parse(&kind).ok_or_else(invalid_kind)?,
+                    statement: r.get(4)?,
+                    quote: r.get(5)?,
+                    created_at: r.get(6)?,
+                })
+            },
+        )?;
+    Ok(Some(ReviewSnapshot {
+        project_id: id.into(),
+        decisions,
+        claims,
+        relations,
+        entities,
+        edges,
+        relation_suggestions,
+        claim_suggestions,
+    }))
 }

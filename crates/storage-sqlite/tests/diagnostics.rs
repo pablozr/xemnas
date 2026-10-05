@@ -110,6 +110,7 @@ fn artifact(capture_id: &str, artifact_id: &str, content: &str, seed: u8) -> Cap
 
 fn candidate(id: &str) -> DecisionCandidateRecord {
     DecisionCandidateRecord {
+        qualifiers: "[]".into(),
         id: id.to_string(),
         project_id: "project-1".to_string(),
         capture_id: "capture-1".to_string(),
@@ -187,6 +188,7 @@ fn exported_diagnostics_never_carry_content_markers() {
         .adjust(
             "cand-1",
             CandidateEdits {
+                qualifiers: Vec::new(),
                 question: "Adotar o índice?".to_string(),
                 choice: "Sim".to_string(),
                 rationale: format!("{MARKER_RATIONALE} justificativa"),
@@ -253,7 +255,7 @@ fn exported_diagnostics_never_carry_content_markers() {
         );
     }
 
-    assert_eq!(document.schema.migrations_version, 20);
+    assert_eq!(document.schema.migrations_version, 29);
     assert!(
         json.contains("\"metrics\""),
         "the metrics section is part of the sanitized sweep"

@@ -19,6 +19,9 @@ fn snapshot_keeps_raw_pending_and_full_state_is_unchanged() {
     let now = "2026-01-01T00:00:00Z";
     t.store
         .insert_claim_suggestion(&ClaimSuggestionRecord {
+            source_version: Some(1),
+            inherited_scope: "[]".into(),
+            qualifiers: "[]".into(),
             suggestion_id: "pending-claim".into(),
             project_id: "p".into(),
             decision_id: old.clone(),
@@ -42,6 +45,8 @@ fn snapshot_keeps_raw_pending_and_full_state_is_unchanged() {
         .unwrap();
     Claims::new(t.store.clone())
         .create(NewClaim {
+            source_version: None,
+            qualifiers: Vec::new(),
             project_id: "p".into(),
             kind: ClaimKind::Constraint,
             statement: "Preservar histórico".into(),

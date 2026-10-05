@@ -1358,6 +1358,8 @@ fn seed_convention(store: &SqliteStore, location: &str) {
             valid_from: Some("2020-01-01".to_string()),
             valid_until: None,
             source_decision_id: None,
+            source_version: None,
+            qualifiers: Vec::new(),
         })
         .expect("seed claim");
 }
@@ -1598,6 +1600,7 @@ fn confirmed_decision(store: &SqliteStore, server: &RunningApi, location: &str) 
             updated_at: "2026-01-02T00:00:00Z".to_string(),
             kind: "decision".to_string(),
             significance: 1.0,
+            qualifiers: "[]".to_string(),
             criteria: "[]".to_string(),
         }])
         .expect("candidate");

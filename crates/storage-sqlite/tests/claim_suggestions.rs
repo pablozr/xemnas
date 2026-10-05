@@ -25,6 +25,75 @@ use domain::entities::{EdgeKind, EntityKind, NodeKind};
 
 struct Profiles(RefCell<AiProfile>);
 
+#[test]
+fn original_source_version_blocks_stale_generation_and_confirmation() {
+    use application::claim_suggestions::{ClaimSuggestionRecord, ClaimSuggestionStore};
+    use application::claims::ClaimStore;
+    use application::decisions::{DecisionEdits, Decisions};
+    let test = support::open("stale-suggestion-source", &["p1"]);
+    let id = support::decision(&test.store, "p1", "source", "Question", "Choice");
+    let record = ClaimSuggestionRecord {
+        suggestion_id: "suggestion".into(),
+        project_id: "p1".into(),
+        decision_id: id.clone(),
+        kind: ClaimKind::Constraint,
+        statement: "Rule".into(),
+        quote: "Choice".into(),
+        created_at: "2026-01-01T00:00:00Z".into(),
+        qualifiers: "[]".into(),
+        inherited_scope: "[]".into(),
+        source_version: Some(1),
+    };
+    assert!(test.store.insert_claim_suggestion(&record).unwrap());
+    Decisions::new(test.store.clone())
+        .revise(
+            &id,
+            DecisionEdits {
+                choice: Some("Changed choice".into()),
+                ..DecisionEdits::default()
+            },
+        )
+        .unwrap();
+    assert!(ClaimSuggestions::new(test.store.clone())
+        .confirm("suggestion")
+        .is_err());
+    assert!(test.store.project_claims("p1").unwrap().is_empty());
+    let mut stale = record;
+    stale.suggestion_id = "stale-generation".into();
+    assert!(!test.store.insert_claim_suggestion(&stale).unwrap());
+    stale.source_version = None;
+    assert!(!test.store.insert_claim_suggestion(&stale).unwrap());
+    stale.source_version = Some(2);
+    assert!(test.store.insert_claim_suggestion(&stale).unwrap());
+    assert_eq!(
+        test.store
+            .pending_claim_suggestion("suggestion")
+            .unwrap()
+            .unwrap()
+            .source_version,
+        Some(2)
+    );
+    test.store
+        .resolve_claim_suggestion("suggestion", "rejected", "2026-02-01T00:00:00Z")
+        .unwrap();
+    Decisions::new(test.store.clone())
+        .revise(
+            &id,
+            DecisionEdits {
+                rationale: Some("another revision".into()),
+                ..DecisionEdits::default()
+            },
+        )
+        .unwrap();
+    stale.source_version = Some(3);
+    assert!(!test.store.insert_claim_suggestion(&stale).unwrap());
+    assert!(test
+        .store
+        .pending_claim_suggestion("suggestion")
+        .unwrap()
+        .is_none());
+}
+
 impl ProfileStore for Profiles {
     fn load(&self) -> Result<Option<AiProfile>, ProfileError> {
         Ok(Some(self.0.borrow().clone()))

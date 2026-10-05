@@ -309,6 +309,7 @@ impl FakeInbox {
 
 fn stored(id: &str, created_at: &str, status: CandidateStatus) -> StoredCandidate {
     StoredCandidate {
+        qualifiers: "[]".into(),
         id: id.to_string(),
         project_id: "project-1".to_string(),
         project_location: "C:/synthetic/project".to_string(),
@@ -336,6 +337,7 @@ fn stored(id: &str, created_at: &str, status: CandidateStatus) -> StoredCandidat
 
 fn edits(question: &str, choice: &str, rationale: &str) -> CandidateEdits {
     CandidateEdits {
+        qualifiers: Vec::new(),
         question: question.to_string(),
         choice: choice.to_string(),
         rationale: rationale.to_string(),

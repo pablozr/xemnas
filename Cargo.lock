@@ -195,6 +195,8 @@ dependencies = [
  "integration-contracts",
  "serde",
  "serde_json",
+ "sha2",
+ "toml 0.8.23",
  "url",
  "uuid",
 ]
@@ -5586,6 +5588,7 @@ dependencies = [
  "application",
  "domain",
  "rusqlite",
+ "serde_json",
 ]
 
 [[package]]

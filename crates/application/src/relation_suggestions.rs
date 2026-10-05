@@ -458,23 +458,23 @@ where
             Ok(None) if !profile.credential_required() => String::new(),
             _ => return Ok(0),
         };
-        let Ok(model) = self.factory.external(&profile, secret) else {
+        let Ok(model) = self.factory.authorized(&profile, secret, &self.settings) else {
             return Ok(0);
         };
         let mut user = format!(
             "## New decision D:{}\nQuestion: {}\nChoice: {}\nWhy: {}\n\n## Earlier decisions\n",
             short_ref(&new.decision_id),
-            new.question,
-            new.choice,
-            new.rationale.chars().take(600).collect::<String>()
+            crate::external::protected_text(&new.question),
+            crate::external::protected_text(&new.choice),
+            crate::external::limited_text(&new.rationale, 600)
         );
         for decision in &earlier {
             user.push_str(&format!(
                 "- D:{} Question: {} Choice: {} Why: {}\n",
                 short_ref(&decision.decision_id),
-                decision.question,
-                decision.choice,
-                decision.rationale.chars().take(400).collect::<String>()
+                crate::external::protected_text(&decision.question),
+                crate::external::protected_text(&decision.choice),
+                crate::external::limited_text(&decision.rationale, 400)
             ));
         }
         let answer = model
@@ -536,6 +536,7 @@ mod tests {
 
     fn decision(id: &str, question: &str, choice: &str, rationale: &str) -> StoredDecision {
         StoredDecision {
+            qualifiers: "[]".into(),
             decision_id: id.into(),
             candidate_id: format!("c-{id}"),
             project_id: "p".into(),

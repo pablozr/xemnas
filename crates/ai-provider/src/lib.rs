@@ -29,7 +29,8 @@ use serde_json::json;
 /// Maximum bytes read from a provider response.
 pub(crate) const MAX_RESPONSE_BYTES: usize = 512 * 1024;
 
-/// Maximum bytes of user content sent in one request.
+/// Aggregate extraction prompt budget, distinct from the per-artifact profile cap.
+/// The assembled prompt is bounded in characters; bytes are used for early stopping.
 const MAX_INPUT_BYTES: usize = 64 * 1024;
 
 /// Maximum characters accepted in a single model field.
@@ -49,6 +50,10 @@ pub(crate) const SYSTEM_PROMPT: &str = "You read one turn of a coding session (t
 message, the assistant's answer, tool summaries and code diffs) and propose what is worth \
 remembering about the project, for a human to confirm later. Most turns contain nothing: an \
 empty list is the common, correct answer.\n\
+Set nature to description (a descriptive assertion), inference (an unverified explanation), \
+normative (a proposed constraint or choice requiring human review), or unknown. This is \
+classification only, never authority or approval. Never turn source user_text into authenticated \
+human approval. Do not invent observation identities or verified facts.\n\
 Classify each item with kind: \"decision\" = an architectural choice between real \
 alternatives (structure, data model, persistence, public contracts, dependencies, security, \
 who is responsible for what); \"rule\" = an invariant or constraint the code of one part must \
@@ -79,10 +84,14 @@ to 1, how sure you are that it was actually decided (not merely discussed); \
 confidence_reason: one sentence. evidence_refs: copy the ids exactly as written after \
 \"### artifact\". diff_summary: files touched and number of artifacts (the app recomputes \
 both).\n\
-Reply with a single JSON object only, no prose, matching exactly: \
+Keep explicit attribution, scope and validation restrictions in qualifiers, even when rationale \
+is long. Each qualifier text must be a literal excerpt from the cited artifact_id. Do not infer \
+missing qualifications; use an empty array when none are stated. \
+Reply with a single JSON object only, no prose, with optional nature as specified above: \
 {\"proposals\":[{\"kind\":\"decision|rule|detail\",\"question\":string,\"choice\":string,\
 \"rationale\":string,\"confidence\":number,\"confidence_reason\":string,\
 \"significance\":number,\"criteria\":[string],\"evidence_refs\":[string],\
+\"qualifiers\":[{\"kind\":\"attribution|scope|validation\",\"text\":string,\"artifact_id\":string}],\
 \"diff_summary\":{\"files\":[string],\"artifacts\":number}}]}. No extra fields.";
 
 /// Bounded retry policy for transient provider failures.
@@ -160,6 +169,29 @@ pub enum ProviderExtractor {
 }
 
 impl CandidateExtractor for ProviderExtractor {
+    fn extract_authorized(
+        &self,
+        input: &DecisionEvidence,
+        signals: &[RelevanceSignal],
+        background: &ExtractionBackground,
+        authorization: &dyn application::external::Authorization,
+    ) -> Result<Vec<CandidateProposal>, ExtractError> {
+        let profile = match self {
+            Self::OpenAiCompatible(e) => &e.profile,
+            Self::ChatGpt(e) => e.profile(),
+            Self::OpenCode(e) => e.profile(),
+        };
+        let user = build_user_content(profile, input, signals, background);
+        let answer = application::overview::StructuredModel::complete_authorized(
+            self,
+            SYSTEM_PROMPT,
+            &user,
+            "decision_candidates",
+            &output_schema(),
+            authorization,
+        )?;
+        parse_model_output(&answer, signals)
+    }
     fn extract(
         &self,
         input: &DecisionEvidence,
@@ -183,6 +215,24 @@ impl CandidateExtractor for ProviderExtractor {
 }
 
 impl application::overview::StructuredModel for ProviderExtractor {
+    fn complete_authorized(
+        &self,
+        system: &str,
+        user: &str,
+        name: &str,
+        schema: &serde_json::Value,
+        authorization: &dyn application::external::Authorization,
+    ) -> Result<String, ExtractError> {
+        match self {
+            Self::OpenAiCompatible(e) => {
+                e.complete_checked(system, user, name, schema, Some(authorization))
+            }
+            Self::ChatGpt(e) => e.complete_checked(system, user, name, schema, Some(authorization)),
+            Self::OpenCode(e) => {
+                e.complete_checked(system, user, name, schema, Some(authorization))
+            }
+        }
+    }
     fn complete(
         &self,
         system: &str,
@@ -288,6 +338,28 @@ impl OpenAiCompatibleExtractor {
     }
 }
 
+impl application::overview::StructuredModel for OpenAiCompatibleExtractor {
+    fn complete(
+        &self,
+        system: &str,
+        user: &str,
+        name: &str,
+        schema: &serde_json::Value,
+    ) -> Result<String, ExtractError> {
+        OpenAiCompatibleExtractor::complete(self, system, user, name, schema)
+    }
+    fn complete_authorized(
+        &self,
+        system: &str,
+        user: &str,
+        name: &str,
+        schema: &serde_json::Value,
+        authorization: &dyn application::external::Authorization,
+    ) -> Result<String, ExtractError> {
+        self.complete_checked(system, user, name, schema, Some(authorization))
+    }
+}
+
 impl CandidateExtractor for OpenAiCompatibleExtractor {
     fn extract(
         &self,
@@ -324,6 +396,17 @@ impl OpenAiCompatibleExtractor {
         _schema_name: &str,
         _schema: &serde_json::Value,
     ) -> Result<String, ExtractError> {
+        self.complete_checked(system, user, _schema_name, _schema, None)
+    }
+
+    pub(crate) fn complete_checked(
+        &self,
+        system: &str,
+        user: &str,
+        _schema_name: &str,
+        _schema: &serde_json::Value,
+        authorization: Option<&dyn application::external::Authorization>,
+    ) -> Result<String, ExtractError> {
         if let Err(reason) = consent_status(&self.profile) {
             return Err(ExtractError::Extractor(format!(
                 "chamadas externas bloqueadas: {reason}"
@@ -347,6 +430,9 @@ impl OpenAiCompatibleExtractor {
         });
         let mut attempt = 1u32;
         loop {
+            if let Some(authorization) = authorization {
+                authorization.check()?;
+            }
             match self.attempt(&url, &body) {
                 Attempt::Success(text) => return Ok(text),
                 Attempt::Fatal(error) => return Err(error),
@@ -455,11 +541,25 @@ pub(crate) fn output_schema() -> serde_json::Value {
                     "type": "object",
                     "additionalProperties": false,
                     "required": [
-                        "kind", "question", "choice", "rationale", "confidence",
-                        "confidence_reason", "significance", "criteria",
+                        "nature", "kind", "question", "choice", "rationale", "confidence",
+                        "confidence_reason", "significance", "criteria", "qualifiers",
                         "evidence_refs", "diff_summary"
                     ],
                     "properties": {
+                        "nature": {"type": "string", "enum": ["description", "inference", "normative", "unknown"]},
+                        "qualifiers": {
+                            "type": "array", "maxItems": application::qualifiers::MAX_QUALIFIERS,
+                            "items": {
+                                "type": "object", "additionalProperties": false,
+                                "required": ["kind", "text", "artifact_id"],
+                                "properties": {
+                                    "kind": {"type": "string", "enum": ["attribution", "scope", "validation"]},
+                                    "text": {"type": "string", "minLength": 1,
+                                        "maxLength": application::qualifiers::MAX_QUALIFIER_CHARS},
+                                    "artifact_id": {"type": "string", "minLength": 1, "maxLength": 256}
+                                }
+                            }
+                        },
                         "kind": { "type": "string", "enum": ["decision", "rule", "detail"] },
                         "question": { "type": "string" },
                         "choice": { "type": "string" },
@@ -532,23 +632,25 @@ pub(crate) fn build_user_content(
         }
         text.push_str(&format!("## {title}\n"));
         for line in lines.iter().take(MAX_BACKGROUND_LINES) {
-            text.push_str(&format!("- {}\n", truncate_content(line, 300)));
+            text.push_str(&format!("- {}\n", application::external::limited_text(line, 300)));
         }
         text.push('\n');
     }
     let labels: Vec<&str> = signals.iter().map(RelevanceSignal::as_str).collect();
     text.push_str(&format!("Relevance signals: {}\n", labels.join(", ")));
     for artifact in &input.artifacts {
-        let content = truncate_content(&artifact.content, profile.max_input_chars);
+        let content =
+            application::external::limited_text(&artifact.content, profile.max_input_chars);
         let header = if artifact.kind == "document" {
             let metadata: serde_json::Value =
                 serde_json::from_str(&artifact.metadata).unwrap_or_default();
             let field = |name: &str| {
-                metadata
-                    .get(name)
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default()
-                    .to_string()
+                application::external::protected_text(
+                    metadata
+                        .get(name)
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default(),
+                )
             };
             format!(
                 "document: {}, {}, \"{}\"",
@@ -599,6 +701,10 @@ struct ModelEnvelope {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ModelProposal {
+    #[serde(default)]
+    nature: application::review_exception::CandidateNature,
+    #[serde(default)]
+    qualifiers: Vec<application::qualifiers::KnowledgeQualifier>,
     question: String,
     choice: String,
     rationale: String,
@@ -668,6 +774,8 @@ impl ModelEnvelope {
                 ExtractError::Extractor("resposta do provedor inválida".to_string())
             })?;
             proposals.push(CandidateProposal {
+                nature: proposal.nature,
+                qualifiers: proposal.qualifiers,
                 question: proposal.question,
                 choice: proposal.choice,
                 rationale: proposal.rationale,
@@ -747,6 +855,17 @@ impl SecretStore for KeyringSecretStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strict_output_schema_requires_every_proposal_property() {
+        let schema = output_schema();
+        let item = &schema["properties"]["proposals"]["items"];
+        let required = item["required"].as_array().expect("required");
+        for key in item["properties"].as_object().expect("properties").keys() {
+            assert!(required.iter().any(|value| value.as_str() == Some(key)));
+        }
+        assert_eq!(item["additionalProperties"], false);
+    }
 
     #[test]
     fn reads_kind_significance_and_known_criteria() {

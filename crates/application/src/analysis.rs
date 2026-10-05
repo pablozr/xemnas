@@ -14,6 +14,23 @@ pub trait ExtractorFactory {
     /// Extractor produced by this factory.
     type Extractor: CandidateExtractor;
 
+    /// Builds an extractor tied to live settings for the duration of this operation.
+    fn authorized<'a, P: ProfileStore, K: SecretStore>(
+        &self,
+        profile: &'a AiProfile,
+        secret: String,
+        settings: &'a AiSettings<P, K>,
+    ) -> Result<crate::external::AuthorizedExtractor<'a, Self::Extractor, P, K>, ExtractError> {
+        let extractor = self.external(profile, secret.clone())?;
+        Ok(crate::external::AuthorizedExtractor {
+            extractor,
+            settings,
+            profile,
+            secret,
+            rotation: std::cell::RefCell::new(None),
+        })
+    }
+
     /// Builds the extractor; an error means the profile configuration is invalid.
     fn external(
         &self,
@@ -70,14 +87,18 @@ where
         capture_id: &str,
         job_id: Option<String>,
     ) -> Result<AnalysisOutcome, ExtractError> {
+        let attempt = self.store.assessment_attempt(job_id.as_deref())?;
         let Ok(profile) = self.settings.load_or_seed() else {
+            let mut unavailable = RunContext::unavailable(job_id);
+            unavailable.attempt = attempt;
             return self.setup_failed(
                 capture_id,
-                &RunContext::unavailable(job_id),
+                &unavailable,
                 ProviderSetupError::ProfileUnavailable,
             );
         };
-        let context = RunContext::for_profile(&profile, job_id);
+        let mut context = RunContext::for_profile(&profile, job_id);
+        context.attempt = attempt;
 
         match choose_extractor(Some(&profile)) {
             ExtractorChoice::OfflineFake => {
@@ -108,7 +129,7 @@ where
                         )
                     }
                 };
-                match self.factory.external(&profile, secret) {
+                match self.factory.authorized(&profile, secret, &self.settings) {
                     Ok(extractor) => self.extract(&extractor, capture_id, &context),
                     Err(_) => {
                         self.setup_failed(capture_id, &context, ProviderSetupError::InvalidConfig)

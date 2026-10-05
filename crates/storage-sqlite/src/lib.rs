@@ -3,10 +3,13 @@
 
 mod agent;
 mod assessments;
+mod capture_episode;
+mod capture_progress;
 mod captures;
 mod claim_suggestions;
 mod claims;
 mod context;
+mod context_routing;
 mod context_settings;
 mod decisions;
 mod diagnostics;
@@ -18,10 +21,13 @@ mod injections;
 mod integration;
 mod jobs;
 mod knowledge_review;
+mod observation_deliveries;
+mod observations;
 mod overview;
 mod projects;
 mod relation_suggestions;
 mod relations;
+mod review_exception;
 mod store;
 
 pub use store::{default_data_dir, default_db_path, SqliteStore, StorageError};

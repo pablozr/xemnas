@@ -6,6 +6,7 @@ use crate::ui::search_field::SearchField;
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{SpacingScale, TypeScale};
 use application::inbox::CandidateEdits;
+use application::qualifiers::{KnowledgeQualifier, QualifierKind};
 use gpui::prelude::*;
 use gpui::{div, px, App, Context, Entity, EventEmitter, FocusHandle, Focusable, Render, Window};
 
@@ -21,11 +22,16 @@ pub(super) struct ReviewEditor {
     original: CandidateEdits,
     focus: [FocusHandle; 3],
     busy: bool,
+    qualifiers: QualifierFields,
+    evidence: Vec<application::inbox::ArtifactView>,
 }
 impl EventEmitter<EditorEvent> for ReviewEditor {}
 impl ReviewEditor {
     pub(super) fn initial_focus(&self, cx: &App) -> FocusHandle {
         self.fields[0].read(cx).focus_handle(cx)
+    }
+    pub(super) fn set_evidence(&mut self, evidence: Vec<application::inbox::ArtifactView>) {
+        self.evidence = evidence;
     }
     pub(super) fn new(original: CandidateEdits, cx: &mut Context<Self>) -> Self {
         let values = [&original.question, &original.choice, &original.rationale];
@@ -43,10 +49,12 @@ impl ReviewEditor {
             })
         });
         Self {
+            qualifiers: QualifierFields::new(&original.qualifiers, cx),
             fields,
             original,
             focus: std::array::from_fn(|_| cx.focus_handle().tab_stop(true)),
             busy: false,
+            evidence: Vec::new(),
         }
     }
     pub(super) fn set_busy(&mut self, busy: bool, cx: &mut Context<Self>) {
@@ -84,6 +92,7 @@ impl ReviewEditor {
                 question: values[0].clone(),
                 choice: values[1].clone(),
                 rationale: values[2].clone(),
+                qualifiers: self.qualifiers.values(cx),
             },
             index == 2,
         ));
@@ -115,6 +124,20 @@ impl Render for ReviewEditor {
             )
             .children(LABELS.into_iter().enumerate().map(|(index, label)| {
                 form_field(&theme, label, hints[index], self.fields[index].clone())
+            }))
+            .child(self.qualifiers.render(&theme))
+            .child(section_label(&theme, "Evidências para consulta"))
+            .children(self.evidence.iter().enumerate().map(|(index, artifact)| {
+                let lines = super::evidence::SourceLines::new(artifact);
+                super::evidence::frame(&theme)
+                    .child(super::evidence::caption_row(&theme, artifact, &lines))
+                    .child(super::evidence::body(
+                        artifact,
+                        format!("review-editor-evidence-{index}"),
+                        &lines,
+                        240.0,
+                        theme,
+                    ))
             }));
         let actions = ["Cancelar", "Salvar ajustes", "Salvar e confirmar"]
             .into_iter()
@@ -149,5 +172,149 @@ impl Render for ReviewEditor {
             .child(
                 action_footer(&theme, self.busy.then_some(("Salvando…", false))).children(actions),
             )
+    }
+}
+
+pub(super) fn qualifier_label(kind: QualifierKind) -> &'static str {
+    match kind {
+        QualifierKind::Attribution => "Atribuição",
+        QualifierKind::Scope => "Escopo",
+        QualifierKind::Validation => "Validação",
+    }
+}
+
+pub(super) fn qualifier_reading(theme: &Theme, items: &[KnowledgeQualifier]) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SpacingScale::S2))
+        .child(section_label(theme, "Qualificadores"))
+        .when(items.is_empty(), |column| column.child("Não informados."))
+        .children(items.iter().map(|item| {
+            text_style(div(), TypeScale::BODY).child(format!(
+                "{} · {}\n{}",
+                qualifier_label(item.kind),
+                if item.artifact_id.is_some() {
+                    "Citação da evidência"
+                } else {
+                    "Declaração do revisor · sem fonte verificada"
+                },
+                item.text
+            ))
+        }))
+}
+
+pub(super) struct QualifierFields {
+    original: Vec<KnowledgeQualifier>,
+    fields: Vec<Entity<SearchField>>,
+    additions: Vec<(QualifierKind, Entity<SearchField>)>,
+}
+
+impl QualifierFields {
+    pub(super) fn new<T: 'static>(items: &[KnowledgeQualifier], cx: &mut Context<T>) -> Self {
+        let fields = items
+            .iter()
+            .map(|item| {
+                cx.new(|cx| {
+                    let mut field = SearchField::new(cx);
+                    field.multiline(100.0);
+                    field.set_context(qualifier_label(item.kind), cx);
+                    field.set_value(&item.text, cx);
+                    field
+                })
+            })
+            .collect();
+        let additions = [
+            QualifierKind::Attribution,
+            QualifierKind::Scope,
+            QualifierKind::Validation,
+        ]
+        .into_iter()
+        .map(|kind| {
+            (
+                kind,
+                cx.new(|cx| {
+                    let mut field = SearchField::new(cx);
+                    field.multiline(100.0);
+                    field.set_context(qualifier_label(kind), cx);
+                    field
+                }),
+            )
+        })
+        .collect();
+        Self {
+            original: items.to_vec(),
+            fields,
+            additions,
+        }
+    }
+
+    pub(super) fn values(&self, cx: &App) -> Vec<KnowledgeQualifier> {
+        let mut items = Vec::new();
+        for (original, field) in self.original.iter().zip(&self.fields) {
+            if let Some(item) = edited_qualifier(original, field.read(cx).value()) {
+                items.push(item);
+            }
+        }
+        for (kind, field) in &self.additions {
+            let text = field.read(cx).value();
+            if !text.trim().is_empty() {
+                items.push(KnowledgeQualifier {
+                    kind: *kind,
+                    text: text.into(),
+                    artifact_id: None,
+                });
+            }
+        }
+        items
+    }
+
+    pub(super) fn render(&self, theme: &Theme) -> gpui::Div {
+        div().flex().flex_col().gap(px(SpacingScale::S4))
+            .child(section_label(theme, "Qualificadores"))
+            .child("Alterar uma citação a torna declaração do revisor, sem fonte verificada. Apague o texto para remover.")
+            .children(self.original.iter().zip(&self.fields).map(|(item, field)| {
+                form_field(theme, qualifier_label(item.kind), Some(if item.artifact_id.is_some() {
+                    "Citação da evidência; consulte a fonte antes de alterar."
+                } else { "Declaração do revisor · sem fonte verificada." }), field.clone())
+            }))
+            .children(self.additions.iter().map(|(kind, field)| {
+                form_field(theme, qualifier_label(*kind), Some("Adicionar declaração do revisor (opcional)."), field.clone())
+            }))
+    }
+}
+
+fn edited_qualifier(original: &KnowledgeQualifier, text: &str) -> Option<KnowledgeQualifier> {
+    if text.trim().is_empty() {
+        return None;
+    }
+    if text == original.text.replace("\r\n", "\n").replace('\r', "\n") {
+        return Some(original.clone());
+    }
+    Some(KnowledgeQualifier {
+        kind: original.kind,
+        text: text.into(),
+        artifact_id: None,
+    })
+}
+
+#[cfg(test)]
+mod qualifier_tests {
+    use super::*;
+    #[test]
+    fn editing_never_manufactures_source_support() {
+        let item = KnowledgeQualifier {
+            kind: QualifierKind::Validation,
+            text: "Teste bloqueado localmente".into(),
+            artifact_id: Some("source".into()),
+        };
+        assert_eq!(edited_qualifier(&item, &item.text), Some(item.clone()));
+        assert_eq!(
+            edited_qualifier(&item, "Simulação apenas")
+                .unwrap()
+                .artifact_id,
+            None
+        );
+        assert!(edited_qualifier(&item, " ").is_none());
     }
 }

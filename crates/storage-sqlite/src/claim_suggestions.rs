@@ -7,11 +7,15 @@ use rusqlite::{params, OptionalExtension, Row};
 
 use crate::store::SqliteStore;
 
-const COLUMNS: &str = "suggestion_id, project_id, decision_id, kind, statement, quote, created_at";
+const COLUMNS: &str =
+    "suggestion_id, project_id, decision_id, kind, statement, quote, created_at, qualifiers, source_version, inherited_scope";
 
 fn row(row: &Row<'_>) -> rusqlite::Result<(ClaimSuggestionRecord, String)> {
     Ok((
         ClaimSuggestionRecord {
+            source_version: row.get(8)?,
+            inherited_scope: row.get(9)?,
+            qualifiers: row.get(7)?,
             suggestion_id: row.get(0)?,
             project_id: row.get(1)?,
             decision_id: row.get(2)?,
@@ -39,8 +43,17 @@ impl ClaimSuggestionStore for SqliteStore {
             .lock()
             .execute(
                 "INSERT OR IGNORE INTO claim_suggestions \
-                 (suggestion_id, project_id, decision_id, kind, statement, quote, created_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                 (suggestion_id, project_id, decision_id, kind, statement, quote, created_at, qualifiers, source_version, inherited_scope) \
+                 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10
+                 WHERE EXISTS (SELECT 1 FROM engineering_decisions WHERE decision_id=?3
+                    AND project_id=?2 AND version=?9 AND qualifiers=?8 AND scope=?10)
+                 ON CONFLICT(decision_id, statement) DO UPDATE SET
+                    kind=excluded.kind, quote=excluded.quote, created_at=excluded.created_at,
+                    qualifiers=excluded.qualifiers, source_version=excluded.source_version,
+                    inherited_scope=excluded.inherited_scope
+                 WHERE claim_suggestions.outcome IS NULL AND
+                    (claim_suggestions.source_version IS NULL OR
+                     claim_suggestions.source_version != excluded.source_version)",
                 params![
                     record.suggestion_id,
                     record.project_id,
@@ -49,6 +62,9 @@ impl ClaimSuggestionStore for SqliteStore {
                     record.statement,
                     record.quote,
                     record.created_at,
+                    record.qualifiers,
+                    record.source_version,
+                    record.inherited_scope,
                 ],
             )
             .map_err(storage_error)?;

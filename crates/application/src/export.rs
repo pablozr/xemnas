@@ -93,6 +93,9 @@ impl std::error::Error for ExportError {}
 /// A decision serialized to JSON, with fixed field order.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExportedDecision {
+    /// Explicit qualifications; legacy exports default to not informed.
+    #[serde(default)]
+    pub qualifiers: Vec<crate::qualifiers::KnowledgeQualifier>,
     /// Decision identifier.
     pub decision_id: String,
     /// Candidate the decision came from.
@@ -145,6 +148,9 @@ pub struct ExportedEvidence {
 /// One revision in the JSON export.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExportedRevision {
+    /// Qualifications at the exported version.
+    #[serde(default)]
+    pub qualifiers: Vec<crate::qualifiers::KnowledgeQualifier>,
     /// Revision version.
     pub version: i64,
     /// RFC 3339 creation time.
@@ -286,6 +292,19 @@ fn render_pack_markdown(pack: &ContextPack) -> String {
         let items: Vec<String> = pack.claims.iter().map(pack_claim_markdown).collect();
         format!("## Premissas e regras\n\n{}", items.join("\n"))
     });
+    if !pack.observations.is_empty() {
+        sections.push(format!(
+            "## Observações locais — não são regras\n\n{}",
+            pack.observations
+                .iter()
+                .map(crate::injection::observation_line)
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+    if pack.observation_coverage.unknown || pack.observation_coverage.partial {
+        sections.push("Cobertura descritiva desconhecida ou parcial; observações atuais não estabelecem validade histórica.".into());
+    }
     let mut content = sections.join("\n\n");
     content.push('\n');
     content
@@ -305,6 +324,11 @@ fn pack_decision_markdown(decision: &PackDecision) -> String {
     citation.extend(list("evidências", &decision.evidence));
     citation.extend(list("depende de", &decision.depends_on));
     citation.extend(list("conflita com", &decision.conflicts_with));
+    citation.push(format!(
+        "scope: {} · qualifiers: {}",
+        serde_json::to_string(&decision.scope).expect("scope JSON"),
+        serde_json::to_string(&decision.qualifiers).expect("qualifier JSON")
+    ));
     format!(
         "### {}\n\n**Escolha:** {}\n\n{}\n\n_{}_",
         decision.question,
@@ -333,8 +357,12 @@ fn pack_claim_markdown(claim: &PackClaim) -> String {
         .map(|id| format!(" · origem: decisão `{id}`"))
         .unwrap_or_default();
     format!(
-        "- **{label}:** {} _(válida desde {}{until} · `{}`{source})_",
-        claim.statement, claim.valid_from, claim.claim_id
+        "- **{label}:** {} _(válida desde {}{until} · `{}`{source})_ qualifiers: {} scope: {}",
+        claim.statement,
+        claim.valid_from,
+        claim.claim_id,
+        serde_json::to_string(&claim.qualifiers).expect("qualifier JSON"),
+        serde_json::to_string(&claim.inherited_scope).expect("scope JSON")
     )
 }
 
@@ -442,6 +470,10 @@ fn render_markdown(detail: &DecisionDetail) -> String {
     sections.push(format!("# {}", detail.summary.question));
     sections.push(section("Escolha", &detail.summary.choice));
     sections.push(section("Justificativa", &detail.rationale));
+    sections.push(section(
+        "Qualificadores",
+        &serde_json::to_string(&detail.qualifiers).expect("qualifier JSON"),
+    ));
     sections.push(list_section("Premissas", &detail.assumptions));
     sections.push(list_section("Escopo", &detail.scope));
     sections.push(list_section("Consequências", &detail.consequences));
@@ -466,6 +498,7 @@ fn render_json(detail: &DecisionDetail) -> Result<String, ExportError> {
         question: detail.summary.question.clone(),
         choice: detail.summary.choice.clone(),
         rationale: detail.rationale.clone(),
+        qualifiers: detail.qualifiers.clone(),
         assumptions: detail.assumptions.clone(),
         reconsider_when: detail.reconsider_when.clone(),
         scope: detail.scope.clone(),
@@ -491,6 +524,7 @@ fn render_json(detail: &DecisionDetail) -> Result<String, ExportError> {
                 question: revision.question.clone(),
                 choice: revision.choice.clone(),
                 rationale: revision.rationale.clone(),
+                qualifiers: revision.qualifiers.clone(),
                 assumptions: revision.assumptions.clone(),
                 reconsider_when: revision.reconsider_when.clone(),
                 scope: revision.scope.clone(),

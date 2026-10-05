@@ -110,6 +110,8 @@ fn an_overview_cites_the_records_and_knows_when_it_is_stale() {
     let decision = support::decision(&test.store, "p1", "db", "Qual banco usar?", "SQLite");
     let claim = Claims::new(test.store.clone())
         .create(NewClaim {
+            source_version: None,
+            qualifiers: Vec::new(),
             project_id: "p1".into(),
             kind: ClaimKind::Convention,
             statement: "Erros em português".into(),

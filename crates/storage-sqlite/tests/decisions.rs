@@ -92,6 +92,7 @@ fn seed_project_and_capture(store: &SqliteStore) {
 
 fn candidate(id: &str, refs: &str) -> DecisionCandidateRecord {
     DecisionCandidateRecord {
+        qualifiers: "[]".into(),
         id: id.to_string(),
         project_id: "project-1".to_string(),
         capture_id: "capture-1".to_string(),
@@ -154,7 +155,7 @@ fn migration_0008_applies_on_fresh_and_upgraded_databases() {
             row.get(0)
         })
         .expect("count");
-    assert_eq!(versions, 19);
+    assert_eq!(versions, 28);
 
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -310,6 +311,7 @@ fn promote_rolls_back_completely_on_failure() {
         .expect("confirm first");
 
     let colliding = DecisionSeed {
+        qualifiers: "[]".into(),
         decision_id: first.decision_id.clone(),
         project_id: "project-1".to_string(),
         capture_id: Some("capture-1".to_string()),
@@ -362,6 +364,7 @@ fn revise_updates_the_index_and_keeps_the_history() {
         .revise(
             &outcome.decision_id,
             DecisionEdits {
+                qualifiers: None,
                 question: Some("gamma distinctive".to_string()),
                 ..DecisionEdits::default()
             },
@@ -429,6 +432,7 @@ fn revision_content_is_reconstructible_in_full() {
             &outcome.decision_id,
             DecisionEdits {
                 question: Some("pergunta \"nova\" — ç".to_string()),
+                qualifiers: None,
                 choice: Some("escolha ç".to_string()),
                 rationale: Some("razão \"x\"".to_string()),
                 assumptions: Some(vec!["premissa ç".to_string(), "com \"aspas\"".to_string()]),

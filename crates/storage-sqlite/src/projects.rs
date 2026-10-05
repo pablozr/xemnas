@@ -21,12 +21,26 @@ fn is_conflict(error: &rusqlite::Error) -> bool {
 
 impl ProjectRepository for SqliteStore {
     fn insert(&self, record: &ProjectRecord) -> Result<(), ProjectError> {
-        let result = self.lock().execute(
+        let mut connection = self.lock();
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let result = transaction.execute(
             "INSERT INTO projects (id, location, registered_at) VALUES (?1, ?2, ?3)",
             params![record.id, record.location, record.registered_at],
         );
         match result {
-            Ok(_) => Ok(()),
+            Ok(_) => {
+                crate::observations::schedule(
+                    &transaction,
+                    &record.id,
+                    "project_registered",
+                    &record.registered_at,
+                    true,
+                )
+                .map_err(storage_error)?;
+                transaction.commit().map_err(storage_error)
+            }
             Err(error) if is_conflict(&error) => Err(ProjectError::AlreadyRegistered),
             Err(error) => Err(storage_error(error)),
         }
@@ -115,6 +129,9 @@ impl ProjectRepository for SqliteStore {
 /// Deletes a project's rows child-first; captures cascade to artifacts,
 /// checkpoints, assessments and candidates.
 const PURGE_STATEMENTS: &[&str] = &[
+    "DELETE FROM jobs WHERE kind = 'refresh_observations' AND payload = ?1",
+    "DELETE FROM jobs WHERE kind = 'context_routing' AND payload = ?1",
+    "DELETE FROM context_routing_entries WHERE project_id = ?1",
     "DELETE FROM project_overviews WHERE project_id = ?1",
     "DELETE FROM project_documents WHERE project_id = ?1",
     "DELETE FROM relation_suggestions WHERE project_id = ?1",

@@ -409,6 +409,8 @@ fn conversation_local_detail_without_a_choice_is_not_extracted() {
 /// A proposal that passes validation, for tests that mutate one field at a time.
 fn valid_proposal(input: &DecisionEvidence, signals: &[RelevanceSignal]) -> CandidateProposal {
     CandidateProposal {
+        nature: application::review_exception::CandidateNature::Unknown,
+        qualifiers: Vec::new(),
         question: "q".to_string(),
         choice: "c".to_string(),
         rationale: "r".to_string(),
@@ -697,6 +699,8 @@ fn proposals_are_reproducible_across_runs() {
 /// A fully populated context, so the provenance columns can be checked.
 fn detailed_context() -> RunContext {
     RunContext {
+        attempt: None,
+        classification: None,
         profile_id: "profile-7".to_string(),
         adapter: "openai-compatible".to_string(),
         model: Some("gpt-test".to_string()),

@@ -5,12 +5,16 @@ use application::export::{preview_pack, write_pack, ExportError, ExportFormat};
 
 fn pack() -> ContextPack {
     ContextPack {
+        observations: Vec::new(),
+        observation_coverage: Default::default(),
         project_id: "project-1".to_string(),
         task: "adicionar cache na API".to_string(),
         as_of: "2026-09-30T00:00:00Z".to_string(),
         budget_chars: 8_000,
         used_chars: 120,
         decisions: vec![PackDecision {
+            qualifiers: Vec::new(),
+            scope: Vec::new(),
             decision_id: "d-1".to_string(),
             version: 2,
             question: "Como fazer cache da API?".to_string(),
@@ -22,6 +26,9 @@ fn pack() -> ContextPack {
             conflicts_with: Vec::new(),
         }],
         claims: vec![PackClaim {
+            source_version: None,
+            inherited_scope: Vec::new(),
+            qualifiers: Vec::new(),
             claim_id: "c-1".to_string(),
             kind: "convention".to_string(),
             statement: "Mensagens de erro em português".to_string(),

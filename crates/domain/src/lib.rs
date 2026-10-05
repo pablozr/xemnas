@@ -3,6 +3,7 @@
 
 pub mod claims;
 pub mod entities;
+pub mod observations;
 pub mod projects;
 pub mod relations;
 pub mod time;

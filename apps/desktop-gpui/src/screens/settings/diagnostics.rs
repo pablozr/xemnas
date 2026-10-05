@@ -87,6 +87,14 @@ pub struct DiagnosticsPanel {
     document: Option<DiagnosticsDocument>,
     error: Option<String>,
     notice: Option<String>,
+    progress_read: Option<crate::screens::inbox::ProgressRead>,
+    progress_retry: Option<crate::screens::inbox::ProgressRetry>,
+    project: Option<String>,
+    generation: u64,
+    progress_busy: bool,
+    progress_error: bool,
+    progress_action_error: Option<String>,
+    progress: Vec<application::capture_progress::CaptureProgress>,
 }
 
 impl DiagnosticsPanel {
@@ -98,15 +106,112 @@ impl DiagnosticsPanel {
             document: None,
             error: None,
             notice: None,
+            progress_read: None,
+            progress_retry: None,
+            project: None,
+            generation: 0,
+            progress_busy: false,
+            progress_error: false,
+            progress_action_error: None,
+            progress: Vec::new(),
         }
     }
 
     /// Reloads the document; called each time the section opens.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.poll_progress(cx);
         self.run(
             |backend| Outcome::Loaded(backend.document().map(Box::new)),
             cx,
         );
+    }
+
+    /// Installs bounded application reads and authorized capture retry.
+    pub fn set_capture_progress(
+        &mut self,
+        read: crate::screens::inbox::ProgressRead,
+        retry: crate::screens::inbox::ProgressRetry,
+    ) {
+        self.progress_read = Some(read);
+        self.progress_retry = Some(retry);
+    }
+
+    /// Invalidates old project reads without refreshing hidden diagnostics.
+    pub fn set_project(&mut self, project: Option<String>, cx: &mut Context<Self>) {
+        if project == self.project {
+            return;
+        }
+        self.project = project;
+        self.generation += 1;
+        self.progress.clear();
+        self.progress_error = false;
+        self.progress_action_error = None;
+        cx.notify();
+    }
+
+    fn poll_progress(&mut self, cx: &mut Context<Self>) {
+        if self.progress_busy {
+            return;
+        }
+        let (Some(read), Some(project)) = (self.progress_read.clone(), self.project.clone()) else {
+            return;
+        };
+        self.progress_busy = true;
+        let generation = self.generation;
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { read(&project) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.progress_busy = false;
+                if accepts_progress(generation, this.generation) {
+                    match result {
+                        Ok(rows) => {
+                            this.progress = rows;
+                            this.progress_error = false;
+                        }
+                        Err(_) => this.progress_error = true,
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn retry_capture(&mut self, job: String, cx: &mut Context<Self>) {
+        if self.progress_busy {
+            return;
+        }
+        let Some(retry) = self.progress_retry.clone() else {
+            return;
+        };
+        let retry_job = job.clone();
+        self.progress_busy = true;
+        let generation = self.generation;
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { retry(&retry_job) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.progress_busy = false;
+                if accepts_progress(generation, this.generation) {
+                    crate::screens::inbox::record_retry_result(
+                        &mut this.progress_action_error,
+                        &job,
+                        result.is_ok(),
+                    );
+                    if result.is_ok() {
+                        this.show_notice("Captura reenfileirada para análise.".into(), cx);
+                        this.poll_progress(cx);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn run(
@@ -240,7 +345,7 @@ impl DiagnosticsPanel {
                     ))
                     .child(stat_tile(
                         theme,
-                        "Tempo de revisão",
+                        "Tempo até revisão",
                         median(&metrics.review_time_ms),
                         None,
                     ))
@@ -251,6 +356,11 @@ impl DiagnosticsPanel {
                         (context.inject.blocks + context.shadow.blocks).to_string(),
                         None,
                     )),
+            )
+            .child(
+                text_style(div(), TypeScale::META)
+                    .text_color(colors.text_muted())
+                    .child("Tempo até revisão inclui a espera na fila; não mede trabalho ativo do revisor."),
             )
             .child(
                 text_style(div(), TypeScale::META)
@@ -551,11 +661,138 @@ impl Render for DiagnosticsPanel {
                     .children(retry)
             }))
             .child(content)
+            .child(self.render_progress(&theme, cx))
             .children(
                 self.notice
                     .clone()
                     .map(|notice| toast(&theme, &notice, 24.0)),
             )
+    }
+}
+
+fn accepts_progress(request: u64, current: u64) -> bool {
+    request == current
+}
+
+impl DiagnosticsPanel {
+    fn render_progress(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
+        let mut column = div().flex().flex_col().gap(px(SpacingScale::S3)).child(
+            crate::ui::patterns::section_label(theme, "Capturas do projeto selecionado"),
+        );
+        if let Some(job) = self.progress_action_error.clone() {
+            column = column.child(
+                error_banner(theme, "Não foi possível reprocessar esta captura.")
+                    .id("diagnostics-capture-action-error")
+                    .role(Role::Alert)
+                    .child(
+                        action_button(
+                            theme,
+                            "diagnostics-capture-action-retry",
+                            ButtonKind::Secondary,
+                            !self.progress_busy,
+                        )
+                        .aria_label("Tentar reprocessar novamente")
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.retry_capture(job.clone(), cx)),
+                        )
+                        .child("Tentar reprocessar"),
+                    )
+                    .child(
+                        action_button(
+                            theme,
+                            "diagnostics-capture-action-dismiss",
+                            ButtonKind::Ghost,
+                            true,
+                        )
+                        .aria_label("Dispensar erro de reprocessamento")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.progress_action_error = None;
+                            cx.notify();
+                        }))
+                        .child("Dispensar"),
+                    ),
+            );
+        }
+        if self.progress_error {
+            column = column.child(
+                error_banner(theme, "Não foi possível atualizar o destino das capturas.")
+                    .id("diagnostics-captures-error")
+                    .role(Role::Alert)
+                    .child(
+                        action_button(
+                            theme,
+                            "diagnostics-captures-retry",
+                            ButtonKind::Ghost,
+                            !self.progress_busy,
+                        )
+                        .aria_label("Atualizar capturas")
+                        .on_click(cx.listener(|this, _, _, cx| this.poll_progress(cx)))
+                        .child("Tentar novamente"),
+                    ),
+            );
+        }
+        if self.project.is_none() {
+            return column.child("Selecione um projeto para consultar suas capturas.");
+        }
+        if self.progress.is_empty() {
+            return column.child(if self.progress_busy {
+                "Carregando capturas…"
+            } else if self.progress_error {
+                "Capturas indisponíveis."
+            } else {
+                "Nenhuma captura recebida neste projeto."
+            });
+        }
+        for (index, capture) in self.progress.iter().enumerate() {
+            let mut row = div()
+                .flex()
+                .flex_col()
+                .gap(px(SpacingScale::S2))
+                .child(
+                    text_style(div(), TypeScale::BODY)
+                        .child(crate::screens::inbox::progress_copy(capture)),
+                )
+                .child(text_style(div(), TypeScale::META).child(format!(
+                        "{} · {}{} · tentativa {}",
+                        date_time(&capture.received_at),
+                        capture.source.as_deref().unwrap_or("Fonte não informada"),
+                        capture
+                            .model
+                            .as_ref()
+                            .map(|model| format!(" · {model}"))
+                            .unwrap_or_default(),
+                        capture.attempts
+                    )));
+            if capture.can_retry {
+                if let Some(job) = capture.job_id.clone() {
+                    row = row.child(
+                        action_button(
+                            theme,
+                            ("diagnostics-capture-reprocess", index),
+                            ButtonKind::Secondary,
+                            !self.progress_busy,
+                        )
+                        .aria_label("Reprocessar captura")
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.retry_capture(job.clone(), cx)),
+                        )
+                        .child("Reprocessar"),
+                    );
+                }
+            }
+            column = column.child(row);
+        }
+        column
+    }
+}
+
+#[cfg(test)]
+mod progress_tests {
+    use super::*;
+    #[test]
+    fn old_project_progress_is_not_accepted() {
+        assert!(accepts_progress(2, 2));
+        assert!(!accepts_progress(2, 3));
     }
 }
 

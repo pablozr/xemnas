@@ -106,6 +106,15 @@ impl std::error::Error for CaptureError {}
 
 /// Port that persists captures.
 pub trait CaptureRepository {
+    /// Persists immutable source coordinates with the same atomic capture write.
+    fn insert_capture_with_provenance(
+        &self,
+        write: &CaptureWrite,
+        provenance: &crate::capture_episode::CaptureProvenance,
+    ) -> Result<(), CaptureError> {
+        let _ = provenance;
+        self.insert_capture(write)
+    }
     /// Inserts the receipt, its artifacts and the analysis job atomically.
     fn insert_capture(&self, write: &CaptureWrite) -> Result<(), CaptureError>;
 
@@ -298,7 +307,19 @@ where
         idempotency_key: &str,
     ) -> Result<IngestOutcome, IngestError> {
         let write = self.build_write(envelope, idempotency_key)?;
-        match self.repository.insert_capture(&write) {
+        let source = &envelope.source;
+        let safe = crate::capture_episode::safe_coordinate;
+        let provenance = crate::capture_episode::CaptureProvenance {
+            adapter: safe(&source.adapter),
+            adapter_version: safe(&source.adapter_version),
+            session_id: safe(&source.session_id),
+            message_id: safe(&source.message_id),
+            observed_at: safe(&envelope.observed_at),
+        };
+        match self
+            .repository
+            .insert_capture_with_provenance(&write, &provenance)
+        {
             Ok(()) => Ok(IngestOutcome {
                 receipt: receipt_from(&write.receipt),
                 replayed: false,

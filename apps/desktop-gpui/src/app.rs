@@ -8,6 +8,7 @@ use application::overview::OverviewApi;
 use application::projects::{ProjectRepository, Projects};
 use application::relation_suggestions::RelationSuggestionStore;
 use application::relations::DecisionRelations;
+use application::review_exception::ReviewExceptionStore;
 use gpui::prelude::*;
 use gpui::{
     actions, deferred, div, px, AnimationExt, App, BoxShadow, Context, ElementId, Entity,
@@ -219,7 +220,12 @@ impl Destination {
 
 /// Persistent product screens with contextual search and native window controls.
 pub struct Shell<
-    R: ProjectRepository + InboxStore + DecisionStore + ContextStores + RelationSuggestionStore,
+    R: ProjectRepository
+        + InboxStore
+        + ReviewExceptionStore
+        + DecisionStore
+        + ContextStores
+        + RelationSuggestionStore,
 > {
     theme: Theme,
     focus: FocusHandle,
@@ -278,7 +284,12 @@ pub struct Shell<
 }
 
 impl<
-        R: ProjectRepository + InboxStore + DecisionStore + ContextStores + RelationSuggestionStore,
+        R: ProjectRepository
+            + InboxStore
+            + ReviewExceptionStore
+            + DecisionStore
+            + ContextStores
+            + RelationSuggestionStore,
     > Shell<R>
 {
     /// Mounts both use cases once, retaining their state across navigation.
@@ -323,6 +334,17 @@ impl<
         });
         let project_subscription = screen.as_ref().map(|screen| {
             cx.subscribe(screen, |shell, _, event: &ProjectChanged, cx| {
+                if let Some(settings) = &shell.settings {
+                    settings.update(cx, |settings, cx| {
+                        settings.set_progress_project(
+                            event
+                                .0
+                                .as_ref()
+                                .map(|project| project.id().as_str().to_owned()),
+                            cx,
+                        )
+                    });
+                }
                 if let Some(inbox) = &shell.inbox {
                     inbox.update(cx, |inbox, cx| {
                         inbox.set_project(
@@ -475,6 +497,16 @@ impl<
             let summary = cx.background_executor().spawn(async move { read() }).await;
             if this
                 .update(cx, |shell, cx| {
+                    // Counts can stay equal while individual jobs finish or start.
+                    if shell.settings_open {
+                        if let Some(settings) = &shell.settings {
+                            settings.update(cx, |settings, cx| settings.poll_visible(cx));
+                        }
+                    } else if shell.destination == Destination::Review {
+                        if let Some(inbox) = &shell.inbox {
+                            inbox.update(cx, |inbox, cx| inbox.poll_visible(cx));
+                        }
+                    }
                     if shell.activity != summary {
                         shell.activity = summary;
                         cx.notify();
@@ -487,6 +519,25 @@ impl<
             cx.background_executor().timer(ACTIVITY_POLL).await;
         })
         .detach();
+    }
+
+    /// Injects capture destination reads and backend-authorized retry actions.
+    pub fn set_capture_progress(
+        &mut self,
+        read: crate::screens::inbox::ProgressRead,
+        retry: crate::screens::inbox::ProgressRetry,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(inbox) = &self.inbox {
+            inbox.update(cx, |inbox, _| {
+                inbox.set_progress(read.clone(), retry.clone())
+            });
+        }
+        if let Some(settings) = &self.settings {
+            settings.update(cx, |settings, cx| {
+                settings.set_capture_progress(read, retry, cx)
+            });
+        }
     }
 
     /// The status line at the foot of the sidebar: whether captures arrive
@@ -1769,7 +1820,12 @@ impl<
 }
 
 impl<
-        R: ProjectRepository + InboxStore + DecisionStore + ContextStores + RelationSuggestionStore,
+        R: ProjectRepository
+            + InboxStore
+            + ReviewExceptionStore
+            + DecisionStore
+            + ContextStores
+            + RelationSuggestionStore,
     > Render for Shell<R>
 {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

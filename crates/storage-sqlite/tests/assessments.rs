@@ -104,6 +104,10 @@ fn seed_capture(store: &SqliteStore, capture_id: &str) {
 
 fn assessment(capture_id: &str) -> AssessmentRecord {
     AssessmentRecord {
+        attempt: None,
+        reason: "candidates".into(),
+        durable_count: 0,
+        detail_count: 0,
         id: format!("assessment-{capture_id}"),
         capture_id: capture_id.to_string(),
         job_id: Some(format!("job-{capture_id}")),
@@ -135,14 +139,31 @@ fn migration_0006_applies_on_fresh_and_upgraded_databases() {
         assert!(index_exists(&connection, "idx_assessments_started_at"));
         connection
             .execute_batch(
-                "DROP TABLE assessments; DELETE FROM schema_migrations WHERE version = 6;",
+                "DROP TABLE assessments; DELETE FROM schema_migrations WHERE version IN (6, 22);",
             )
             .expect("simulate version 5");
     }
 
-    SqliteStore::open(&database).expect("reopen and migrate");
+    let store = SqliteStore::open(&database).expect("reopen and migrate");
+    seed_capture(&store, "upgrade-capture");
+    let mut upgraded = assessment("upgrade-capture");
+    upgraded.attempt = Some(4);
+    upgraded.reason = "detail".into();
+    upgraded.durable_count = 2;
+    upgraded.detail_count = 3;
+    store
+        .record_assessment(&upgraded)
+        .expect("adapter writes upgraded assessment");
     let connection = Connection::open(&database).expect("open raw connection");
     assert!(table_exists(&connection, "assessments"));
+    let actual: (Option<i64>, String, i64, i64) = connection
+        .query_row(
+            "SELECT attempt,reason,durable_count,detail_count FROM assessments WHERE id=?1",
+            [&upgraded.id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(actual, (Some(4), "detail".into(), 2, 3));
     let versions: i64 = connection
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
             row.get(0)
@@ -155,8 +176,8 @@ fn migration_0006_applies_on_fresh_and_upgraded_databases() {
             |row| row.get(0),
         )
         .expect("count distinct");
-    assert_eq!(versions, 19);
-    assert_eq!(distinct, 19);
+    assert_eq!(versions, 34);
+    assert_eq!(distinct, 34);
 
     let _ = std::fs::remove_dir_all(&root);
 }

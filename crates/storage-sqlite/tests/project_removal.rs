@@ -20,6 +20,8 @@ fn populate(test: &support::TestStore, project: &str) {
         .expect("supersede");
     Claims::new(test.store.clone())
         .create(NewClaim {
+            source_version: None,
+            qualifiers: Vec::new(),
             project_id: project.to_string(),
             kind: ClaimKind::Constraint,
             statement: "Só Windows".to_string(),
@@ -108,7 +110,7 @@ fn removal_with_data_deletes_only_that_project_after_the_typed_name() {
         ("capture_receipts", 1),
         ("capture_artifacts", 1),
         ("adapter_checkpoints", 1),
-        ("jobs", 1),
+        ("jobs", 2),
     ] {
         assert_eq!(count(&connection, table), remaining, "{table}");
     }

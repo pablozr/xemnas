@@ -1171,9 +1171,6 @@ impl Render for GraphCanvas {
         let card = self.side_card(&theme, cx);
         let hint = (self.selected.is_none()).then(|| {
             text_style(div(), TypeScale::META)
-                .absolute()
-                .top(px(SpacingScale::S4 + 5.0))
-                .right(px(SpacingScale::S4))
                 .text_color(colors.text_muted())
                 .child("Clique para focar · arraste para mover · role para aproximar")
         });
@@ -1224,9 +1221,13 @@ impl Render for GraphCanvas {
                     .absolute()
                     .top(px(SpacingScale::S4))
                     .left(px(SpacingScale::S4))
-                    .child(chips),
+                    .right(px(SpacingScale::S4))
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S2))
+                    .child(chips)
+                    .children(hint),
             )
-            .children(hint)
             .child(
                 div()
                     .absolute()

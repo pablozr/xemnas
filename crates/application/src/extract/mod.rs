@@ -66,6 +66,10 @@ pub struct DecisionEvidence {
 /// A candidate proposed by an extractor, before persistence.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CandidateProposal {
+    /// Optional model classification; legacy omission is Unknown.
+    pub nature: crate::review_exception::CandidateNature,
+    /// Explicit qualifications with literal artifact support.
+    pub qualifiers: Vec<crate::qualifiers::KnowledgeQualifier>,
     /// The decision question a human should answer.
     pub question: String,
     /// The proposed choice.
@@ -155,6 +159,8 @@ pub struct ExtractionBackground {
 /// A row to persist in `decision_candidates`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DecisionCandidateRecord {
+    /// Serialized explicit qualification array.
+    pub qualifiers: String,
     /// Generated identifier (UUID v7).
     pub id: String,
     /// Project the candidate belongs to.
@@ -241,6 +247,17 @@ pub struct ExtractionReport {
 
 /// The extractor port: the domain never knows a provider (§12).
 pub trait CandidateExtractor {
+    /// Extraction with live authorization; network adapters recheck each attempt.
+    fn extract_authorized(
+        &self,
+        input: &DecisionEvidence,
+        signals: &[RelevanceSignal],
+        background: &ExtractionBackground,
+        authorization: &dyn crate::external::Authorization,
+    ) -> Result<Vec<CandidateProposal>, ExtractError> {
+        authorization.check()?;
+        self.extract_with(input, signals, background)
+    }
     /// Proposes candidates for a relevant capture.
     fn extract(
         &self,
@@ -262,6 +279,14 @@ pub trait CandidateExtractor {
 
 /// The persistence port extraction needs.
 pub trait ExtractionStore {
+    /// Persists classification alongside retained candidate evidence.
+    fn record_nature(
+        &self,
+        _dedup_hash: &str,
+        _nature: crate::review_exception::CandidateNature,
+    ) -> Result<(), ExtractError> {
+        Ok(())
+    }
     /// Loads the evidence for a capture, or `None` when it no longer exists.
     fn load_evidence(&self, capture_id: &str) -> Result<Option<DecisionEvidence>, ExtractError>;
 
@@ -292,6 +317,11 @@ where
     E: CandidateExtractor,
 {
     let started_at = now_rfc3339();
+    let mut run_context = context.clone();
+    if run_context.attempt.is_none() {
+        run_context.attempt = store.assessment_attempt(context.job_id.as_deref())?;
+    }
+    let context = &run_context;
     let Some(evidence) = store.load_evidence(capture_id)? else {
         return Err(capture_not_found());
     };
@@ -340,6 +370,14 @@ where
     // proposal that still fails validation is dropped on its own instead of
     // taking the whole batch down.
     let mut validated: Vec<(CandidateProposal, Vec<RelevanceSignal>)> = Vec::new();
+    let detail_count = proposals
+        .iter()
+        .filter(|p| p.kind == CandidateKind::Detail)
+        .count();
+    let durable_count = proposals.len() - detail_count;
+    let mut classified_context = context.clone();
+    classified_context.classification = Some((durable_count, detail_count));
+    let context = &classified_context;
     let mut rejected: Option<ExtractError> = None;
     let sole = proposals
         .iter()
@@ -377,6 +415,10 @@ where
     }
 
     let now = now_rfc3339();
+    let natures: Vec<_> = validated
+        .iter()
+        .map(|(p, signals)| (dedup_hash(capture_id, p, signals), p.nature))
+        .collect();
     let records: Vec<DecisionCandidateRecord> = validated
         .into_iter()
         .map(|(proposal, canonical)| {
@@ -386,6 +428,8 @@ where
             let evidence_refs =
                 serde_json::to_string(&proposal.evidence_refs).unwrap_or_else(|_| "[]".to_string());
             DecisionCandidateRecord {
+                qualifiers: serde_json::to_string(&proposal.qualifiers)
+                    .unwrap_or_else(|_| "[]".into()),
                 id: uuid::Uuid::now_v7().to_string(),
                 project_id: evidence.project_id.clone(),
                 capture_id: capture_id.to_string(),
@@ -410,6 +454,9 @@ where
         .collect();
 
     let inserted = store.insert_candidates(&records)?;
+    for (hash, nature) in natures {
+        store.record_nature(&hash, nature)?;
+    }
     let report = ExtractionReport {
         candidates: records.len(),
         inserted,
@@ -544,6 +591,8 @@ mod tests {
 
     fn proposal(refs: &[&str]) -> CandidateProposal {
         CandidateProposal {
+            nature: crate::review_exception::CandidateNature::Unknown,
+            qualifiers: Vec::new(),
             question: "q".into(),
             choice: "c".into(),
             rationale: "r".into(),

@@ -19,6 +19,45 @@ const MANIFEST: &str = "diff --git a/crates/storage-sqlite/Cargo.toml \
                         b/crates/storage-sqlite/Cargo.toml\n@@ -1 +1,2 @@\n \
                         [dependencies]\n+rusqlite = \"0.31\"\n";
 
+#[test]
+fn stale_reviewed_adoption_creates_neither_decision_nor_links() {
+    use application::{CandidateEdits, DecisionFilter, Decisions, Inbox};
+    let test = support::open("stale-adoption", &["p1"]);
+    entities(&test.store);
+    candidate(&test.store, "decision");
+    let inbox = Inbox::new(test.store.clone());
+    let displayed = inbox.detail("cand-adopt").expect("displayed");
+    let adoption = Adoption::new(test.store.clone());
+    let preview = adoption.preview("cand-adopt").expect("preview");
+    inbox
+        .adjust(
+            "cand-adopt",
+            CandidateEdits {
+                question: displayed.summary.question.clone(),
+                choice: "different choice".into(),
+                rationale: displayed.rationale.clone(),
+                qualifiers: displayed.qualifiers.clone(),
+            },
+        )
+        .expect("edit after display");
+    assert_eq!(
+        adoption.adopt_reviewed(&displayed, None, &preview.links, &[]),
+        Err(application::adoption::AdoptionError::Inbox(
+            application::InboxError::InvalidState
+        ))
+    );
+    assert!(Decisions::new(test.store.clone())
+        .list(&DecisionFilter::new())
+        .expect("decisions")
+        .decisions
+        .is_empty());
+    let raw = rusqlite::Connection::open(test.root.join("app.db")).expect("raw");
+    let count: i64 = raw
+        .query_row("SELECT COUNT(*) FROM entity_edges", [], |r| r.get(0))
+        .expect("edge count");
+    assert_eq!(count, 0);
+}
+
 /// A pending candidate whose evidence is one manifest hunk; it cites a file
 /// of `storage-sqlite`, one of the desktop and one nobody covers.
 fn candidate(store: &SqliteStore, kind: &str) {
@@ -64,6 +103,7 @@ fn candidate(store: &SqliteStore, kind: &str) {
         .expect("capture");
     store
         .insert_candidates(&[DecisionCandidateRecord {
+            qualifiers: "[]".into(),
             id: "cand-adopt".into(),
             project_id: "p1".into(),
             capture_id: "capture-adopt".into(),

@@ -251,6 +251,21 @@ impl OpenCodeExtractor {
         schema_name: &str,
         schema: &serde_json::Value,
     ) -> Result<String, ExtractError> {
+        self.complete_checked(system, user, schema_name, schema, None)
+    }
+
+    pub(crate) fn profile(&self) -> &AiProfile {
+        &self.profile
+    }
+
+    pub(crate) fn complete_checked(
+        &self,
+        system: &str,
+        user: &str,
+        schema_name: &str,
+        schema: &serde_json::Value,
+        authorization: Option<&dyn application::external::Authorization>,
+    ) -> Result<String, ExtractError> {
         if let Err(reason) = consent_status(&self.profile) {
             return Err(ExtractError::Extractor(format!(
                 "chamadas externas bloqueadas: {reason}"
@@ -259,6 +274,9 @@ impl OpenCodeExtractor {
         let (url, body) = self.request(system, user, schema_name, schema);
         let mut attempt = 1u32;
         loop {
+            if let Some(authorization) = authorization {
+                authorization.check()?;
+            }
             match self.attempt(&url, &body) {
                 Attempt::Success(text) => return Ok(text),
                 Attempt::Fatal(error) => return Err(error),

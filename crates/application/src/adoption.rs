@@ -93,6 +93,15 @@ pub trait AdoptionApi: Send + Sync {
         kept: &[ProposedLink],
         declined: &[ProposedLink],
     ) -> Result<AdoptOutcome, AdoptionError>;
+
+    /// Adopts only the exact displayed candidate snapshot.
+    fn adopt_reviewed(
+        &self,
+        reviewed: &crate::CandidateDetail,
+        edits: Option<CandidateEdits>,
+        kept: &[ProposedLink],
+        declined: &[ProposedLink],
+    ) -> Result<AdoptOutcome, AdoptionError>;
 }
 
 /// The adoption use case.
@@ -214,13 +223,32 @@ where
         kept: &[ProposedLink],
         declined: &[ProposedLink],
     ) -> Result<AdoptOutcome, AdoptionError> {
-        let project = Inbox::new(self.store.clone())
+        let reviewed = Inbox::new(self.store.clone())
             .detail(candidate_id)
-            .map_err(AdoptionError::Inbox)?
-            .summary
-            .project_id;
+            .map_err(AdoptionError::Inbox)?;
+        self.adopt_reviewed(&reviewed, edits, kept, declined)
+    }
+
+    /// Confirms the displayed snapshot before graph writes. Graph updates retain
+    /// the existing partial-failure boundary; they are not one atomic adoption.
+    pub fn adopt_reviewed(
+        &self,
+        reviewed: &crate::CandidateDetail,
+        edits: Option<CandidateEdits>,
+        kept: &[ProposedLink],
+        declined: &[ProposedLink],
+    ) -> Result<AdoptOutcome, AdoptionError> {
+        let preview = self.preview(&reviewed.summary.id)?;
+        if kept
+            .iter()
+            .chain(declined)
+            .any(|link| !preview.links.contains(link))
+        {
+            return Err(AdoptionError::Inbox(InboxError::InvalidState));
+        }
+        let project = reviewed.summary.project_id.clone();
         let confirmed = Inbox::new(self.store.clone())
-            .confirm(candidate_id, edits)
+            .confirm_reviewed(reviewed, edits)
             .map_err(AdoptionError::Inbox)?;
         let source_kind = if confirmed.rule {
             NodeKind::Claim
@@ -324,6 +352,15 @@ where
         + Send
         + Sync,
 {
+    fn adopt_reviewed(
+        &self,
+        reviewed: &crate::CandidateDetail,
+        edits: Option<CandidateEdits>,
+        kept: &[ProposedLink],
+        declined: &[ProposedLink],
+    ) -> Result<AdoptOutcome, AdoptionError> {
+        Adoption::adopt_reviewed(self, reviewed, edits, kept, declined)
+    }
     fn preview(&self, candidate_id: &str) -> Result<AdoptionPreview, AdoptionError> {
         Adoption::preview(self, candidate_id)
     }

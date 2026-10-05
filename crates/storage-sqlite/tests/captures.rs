@@ -155,7 +155,7 @@ fn fresh_database_applies_capture_migration() {
         )
         .expect("count distinct migrations");
     assert_eq!(versions, distinct);
-    assert!(versions >= 4, "0001..0004 must be applied, got {versions}");
+    assert_eq!(versions, 28);
 
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -170,7 +170,12 @@ fn upgrade_reapplies_the_missing_migrations() {
         let connection = Connection::open(&database).expect("open raw connection");
         connection
             .execute_batch(
-                "DROP TABLE claim_suggestions; \
+                "DROP TABLE context_routing_entries; \
+                  DROP TABLE observation_deliveries; \
+                 DROP TABLE observation_records; \
+                 DROP TABLE observation_sources; \
+                 DROP TABLE observation_refresh; \
+                 DROP TABLE claim_suggestions; \
                  DROP TABLE relation_suggestions; \
                  DROP TABLE project_documents; \
                  DROP TABLE project_overviews; \
@@ -213,10 +218,10 @@ fn upgrade_reapplies_the_missing_migrations() {
         )
         .expect("count distinct migrations");
     assert_eq!(
-        versions, 19,
-        "0004, 0005, 0006 and 0008 to 0020 must be re-applied on upgrade"
+        versions, 28,
+        "0004, 0005, 0006 and 0008 to 0029 must be re-applied on upgrade"
     );
-    assert_eq!(distinct, 19);
+    assert_eq!(distinct, 28);
 
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -250,6 +255,11 @@ fn duplicate_artifact_id_rolls_the_whole_capture_back() {
     let database = root.join("app.db");
     let store = SqliteStore::open(&database).expect("open store");
     seed_project(&store);
+    let connection = Connection::open(&database).expect("open raw connection");
+    let jobs_before: Vec<JobRecord> = {
+        use application::jobs::JobRepository;
+        JobRepository::list(&store).expect("snapshot existing jobs")
+    };
 
     let result = store.insert_capture(&write(
         "capture-duplicate",
@@ -261,10 +271,15 @@ fn duplicate_artifact_id_rolls_the_whole_capture_back() {
     ));
     assert_eq!(result, Err(CaptureError::DuplicateArtifact));
 
-    let connection = Connection::open(&database).expect("open raw connection");
     assert_eq!(row_count(&connection, "capture_receipts"), 0);
     assert_eq!(row_count(&connection, "capture_artifacts"), 0);
-    assert_eq!(row_count(&connection, "jobs"), 0);
+    {
+        use application::jobs::JobRepository;
+        assert_eq!(
+            JobRepository::list(&store).expect("jobs after rollback"),
+            jobs_before
+        );
+    }
 
     let _ = std::fs::remove_dir_all(&root);
 }

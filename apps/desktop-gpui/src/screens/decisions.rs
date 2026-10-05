@@ -1012,6 +1012,7 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
                 detail.rationale = revision.rationale.clone();
                 detail.assumptions = revision.assumptions.clone();
                 detail.scope = revision.scope.clone();
+                detail.qualifiers = revision.qualifiers.clone();
                 detail.consequences = revision.consequences.clone();
                 detail.reconsider_when = revision.reconsider_when.clone();
                 detail.summary.version = revision.version;
@@ -1102,6 +1103,10 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> DecisionsSc
                 .child(text_style(div(),TypeScale::HEADING_2).child(detail.summary.choice.clone())))
             .child(div().flex().flex_col().gap(px(SpacingScale::S2)).child(section_label(&t,"Justificativa"))
                 .child(text_style(div(),TypeScale::BODY).text_color(t.colors.text_secondary()).child(detail.rationale.clone())));
+        document = document.child(super::review_editor::qualifier_reading(
+            &t,
+            &detail.qualifiers,
+        ));
         // One disclosure per row: opening one never reflows the others.
         let mut context = div()
             .flex()
@@ -1675,7 +1680,13 @@ impl<S: DecisionStore + InboxStore + RelationStore + Send + 'static> Render for 
             field.set_width(if compact { 208.0 } else { 256.0 })
         });
         let content = if let Some(editor) = &self.editor {
-            editor.clone().into_any_element()
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(div().flex_1().min_h(px(0.0)).child(editor.clone()))
+                .child(self.evidence(cx))
+                .into_any_element()
         } else if self.preview.is_some() {
             self.export_preview(
                 (f32::from(window.viewport_size().height) - 450.0).max(140.0),

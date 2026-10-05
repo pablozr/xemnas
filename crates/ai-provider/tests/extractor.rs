@@ -17,6 +17,101 @@ use application::profile::{build_preview, grant_consent, AiProfile, ProfileKind,
 /// Injectable sleep used to keep the retry tests deterministic.
 type SleepFn = Arc<dyn Fn(Duration) + Send + Sync>;
 
+#[derive(Clone)]
+struct LiveProfile(Arc<Mutex<AiProfile>>);
+
+impl application::profile::ProfileStore for LiveProfile {
+    fn load(&self) -> Result<Option<AiProfile>, application::profile::ProfileError> {
+        Ok(Some(self.0.lock().unwrap().clone()))
+    }
+    fn save(&self, profile: &AiProfile) -> Result<(), application::profile::ProfileError> {
+        *self.0.lock().unwrap() = profile.clone();
+        Ok(())
+    }
+}
+
+struct EmptySecrets;
+impl SecretStore for EmptySecrets {
+    fn get_secret(&self, _: &str) -> Result<Option<String>, application::profile::ProfileError> {
+        Ok(None)
+    }
+    fn set_secret(&self, _: &str, _: &str) -> Result<(), application::profile::ProfileError> {
+        Ok(())
+    }
+    fn delete_secret(&self, _: &str) -> Result<(), application::profile::ProfileError> {
+        Ok(())
+    }
+}
+
+#[test]
+fn live_revocation_destination_or_model_change_blocks_retry_without_retargeting() {
+    use application::overview::StructuredModel;
+    for change in 0..3 {
+        let server = start_server("HTTP/1.1 503 Service Unavailable", b"{}".to_vec());
+        let profile = granted_profile(server.port, 8192);
+        let live = LiveProfile(Arc::new(Mutex::new(profile.clone())));
+        let settings = application::profile::AiSettings::new(live.clone(), EmptySecrets);
+        let changed = live.clone();
+        let extractor = OpenAiCompatibleExtractor::new(&profile, String::new())
+            .unwrap()
+            .with_sleep(Arc::new(move |_| {
+                let mut current = changed.0.lock().unwrap();
+                if change != 0 {
+                    if change == 1 {
+                        current.endpoint = Some("http://127.0.0.1:1/v1".into());
+                    } else {
+                        current.model = "changed-model".into();
+                    }
+                    let preview = build_preview(&current);
+                    *current =
+                        grant_consent(&current, &preview, "2026-02-01T00:00:00Z", true).unwrap();
+                } else {
+                    *current = application::profile::revoke_consent(&current);
+                }
+            }));
+        let authorization = application::external::SettingsAuthorization {
+            rotation: &std::cell::RefCell::new(None),
+            settings: &settings,
+            profile: &profile,
+            secret: "",
+        };
+        assert!(extractor
+            .complete_authorized(
+                "system",
+                "user",
+                "test",
+                &serde_json::json!({}),
+                &authorization
+            )
+            .is_err());
+        assert_eq!(server.requests.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[test]
+fn edited_background_and_document_json_are_protected_in_loopback_payload() {
+    let server = start_server("HTTP/1.1 200 OK", chat_body("{\"proposals\":[]}"));
+    let profile = granted_profile(server.port, 8192);
+    let extractor = OpenAiCompatibleExtractor::new(&profile, String::new()).unwrap();
+    let mut input = evidence(r#"["ação\nAPI_KEY = synthetic-private-value"]"#);
+    input.artifacts[0].kind = "document".into();
+    input.artifacts[0].metadata = serde_json::json!({
+        "file": "sk-synthetic123456", "title": "API_KEY = synthetic-private-value",
+        "doc_kind": "adr"
+    })
+    .to_string();
+    let background = application::extract::ExtractionBackground {
+        known: vec!["API_KEY = synthetic-private-value".into()],
+        confirmed: vec!["sk-synthetic123456".into()],
+        rejected: vec![r#"["API_KEY = synthetic-private-value"]"#.into()],
+    };
+    extractor.extract_with(&input, &[], &background).unwrap();
+    let payload = server.last_request.lock().unwrap();
+    assert!(!payload.contains("synthetic-private-value"));
+    assert!(!payload.contains("sk-synthetic123456"));
+    assert!(payload.contains("[REDACTED]"));
+}
+
 /// Minimal loopback server that answers every request with a fixed response.
 struct MockServer {
     port: u16,

@@ -1,7 +1,13 @@
 //! Native review surface backed by the Inbox application port.
 //! Storage runs in the background; technical failures never reach the view.
 
+use application::capture_progress::{AssessmentReason, CaptureProgress, CaptureState};
 use std::sync::Arc;
+
+/// Project-scoped, bounded capture destination read supplied by application.
+pub type ProgressRead = Arc<dyn Fn(&str) -> Result<Vec<CaptureProgress>, String> + Send + Sync>;
+/// Reprocessing action that applies backend job authorization.
+pub type ProgressRetry = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 
 use application::adoption::{AdoptionApi, AdoptionError, AdoptionPreview, ProposedLink};
 use application::extract::{CandidateKind, MIN_SIGNIFICANCE};
@@ -9,6 +15,7 @@ use application::inbox::{
     CandidateDetail, CandidateEdits, CandidateStatus, CandidateSummary, Inbox, InboxError,
     InboxFilter, InboxPage, InboxStore,
 };
+use application::review_exception::{ReviewExceptionStore, ReviewGroup, ReviewMetrics};
 use domain::entities::{EdgeKind, EntityKind};
 use gpui::prelude::*;
 use gpui::{
@@ -32,9 +39,36 @@ use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{SpacingScale, TypeScale};
 
 enum Outcome {
+    Group(Result<(ReviewGroup, ReviewMetrics), InboxError>, usize),
+    Member(Result<Box<CandidateDetail>, InboxError>, String),
+    Live(Result<(InboxPage, usize, usize), InboxError>),
     Page(Result<(InboxPage, usize, usize), InboxError>, bool),
     Detail(Result<Box<CandidateDetail>, InboxError>),
     Action(Result<(), InboxError>, &'static str),
+}
+
+fn evidence_detail<'a>(
+    representative: &'a CandidateDetail,
+    member: Option<&'a CandidateDetail>,
+) -> &'a CandidateDetail {
+    member.unwrap_or(representative)
+}
+
+fn has_more_members(offset: usize, loaded: usize, total: usize) -> bool {
+    loaded > 0 && offset.saturating_add(loaded) < total
+}
+
+#[cfg(test)]
+mod group_tests {
+    use super::has_more_members;
+
+    #[test]
+    fn pagination_is_bounded_and_empty_pages_do_not_loop() {
+        assert!(has_more_members(0, 20, 800));
+        assert!(!has_more_members(780, 20, 800));
+        assert!(!has_more_members(20, 0, 800));
+        assert!(!has_more_members(usize::MAX, 20, 800));
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -46,7 +80,7 @@ enum ReviewAction {
 }
 
 /// A paginated candidate list and its source-reading pane.
-pub struct InboxScreen<S: InboxStore + Send + 'static> {
+pub struct InboxScreen<S: InboxStore + ReviewExceptionStore + Send + 'static> {
     /// Row under the pointer, driving the hover spring.
     hovered: Option<String>,
     inbox: Option<Inbox<S>>,
@@ -54,6 +88,15 @@ pub struct InboxScreen<S: InboxStore + Send + 'static> {
     cursor: Option<String>,
     selected: Option<String>,
     detail: Option<CandidateDetail>,
+    group: Option<ReviewGroup>,
+    review_metrics: Option<ReviewMetrics>,
+    group_offset: usize,
+    group_error: bool,
+    member: Option<CandidateDetail>,
+    member_id: Option<String>,
+    member_error: bool,
+    member_focus: Vec<FocusHandle>,
+    group_focus: [FocusHandle; 3],
     query: String,
     busy: bool,
     loaded: bool,
@@ -84,6 +127,12 @@ pub struct InboxScreen<S: InboxStore + Send + 'static> {
     adoption: Option<Arc<dyn AdoptionApi>>,
     /// The ties the selected candidate's evidence points to, each kept or not.
     links: Option<MapLinks>,
+    progress_read: Option<ProgressRead>,
+    progress_retry: Option<ProgressRetry>,
+    progress: Vec<CaptureProgress>,
+    progress_busy: bool,
+    progress_error: bool,
+    progress_action_error: Option<String>,
 }
 
 /// The "No mapa" section of one candidate.
@@ -94,7 +143,263 @@ struct MapLinks {
     focus: Vec<FocusHandle>,
 }
 
-impl<S: InboxStore + Send + 'static> InboxScreen<S> {
+impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
+    fn clear_group(&mut self) {
+        self.group = None;
+        self.review_metrics = None;
+        self.group_offset = 0;
+        self.group_error = false;
+        self.member = None;
+        self.member_id = None;
+        self.member_error = false;
+        self.member_focus.clear();
+    }
+
+    fn set_sources(&mut self, detail: &CandidateDetail, cx: &mut Context<Self>) {
+        self.source_index = 0;
+        self.source_lines = detail
+            .artifacts
+            .iter()
+            .map(evidence::SourceLines::new)
+            .collect();
+        self.source_focus = detail
+            .artifacts
+            .iter()
+            .map(|_| cx.focus_handle().tab_stop(true))
+            .collect();
+    }
+
+    fn load_group(&mut self, offset: usize, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        let Some(id) = self.selected.clone() else {
+            return;
+        };
+        self.group_error = false;
+        let Some(project) = self.project_id.clone() else {
+            return;
+        };
+        self.run(cx, move |inbox| {
+            Outcome::Group(
+                (|| {
+                    Ok((
+                        inbox.group_detail(&id, offset, 20)?,
+                        inbox.review_metrics(&project)?,
+                    ))
+                })(),
+                offset,
+            )
+        });
+    }
+
+    fn load_member(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        self.member_id = Some(id.clone());
+        self.member = None;
+        self.member_error = false;
+        self.run(cx, move |inbox| {
+            Outcome::Member(inbox.detail(&id).map(Box::new), id)
+        });
+    }
+
+    fn group_section(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let mut section = div()
+            .flex()
+            .flex_col()
+            .gap(px(SpacingScale::S3))
+            .child(section_header(theme, "Ocorrências"));
+        if self.group_error {
+            section = section
+                .child(error_banner(
+                    theme,
+                    "Não foi possível carregar as ocorrências.",
+                ))
+                .child(
+                    action_button(theme, "retry-group", ButtonKind::Secondary, !self.busy)
+                        .aria_label("Tentar novamente")
+                        .child("Tentar novamente")
+                        .track_focus(&self.group_focus[0])
+                        .on_click(
+                            cx.listener(|this, _, _, cx| this.load_group(this.group_offset, cx)),
+                        )
+                        .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                this.load_group(this.group_offset, cx);
+                                cx.stop_propagation();
+                            }
+                        })),
+                );
+        } else if let Some(group) = &self.group {
+            section = section.child(
+                text_style(div(), TypeScale::BODY_SMALL)
+                    .child(format!("{} ocorrências reunidas", group.occurrence_count)),
+            );
+            if let Some(metrics) = &self.review_metrics {
+                section = section.child(
+                    text_style(div(), TypeScale::META)
+                        .text_color(theme.colors.text_muted())
+                        .child(format!(
+                            "{} ocorrências pendentes · {} oportunidades potenciais de revisão",
+                            metrics.pending_occurrences, metrics.potential_review_opportunities
+                        )),
+                );
+            }
+            if group.members.is_empty() {
+                section = section.child("Nenhuma ocorrência disponível nesta página.");
+            }
+            for (index, member) in group.members.iter().enumerate() {
+                let id = member.candidate_id.clone();
+                let key_id = id.clone();
+                let label = format!(
+                    "Ler fonte · {}{}",
+                    member.capture_id,
+                    if member.already_represented {
+                        " · já representada"
+                    } else {
+                        ""
+                    }
+                );
+                section = section.child(
+                    action_button(theme, ("member", index), ButtonKind::Secondary, !self.busy)
+                        .aria_label(label.clone())
+                        .child(label)
+                        .track_focus(&self.member_focus[index])
+                        .when(
+                            self.member_id.as_deref() == Some(&member.candidate_id),
+                            |button| mark_selected(button, theme, true),
+                        )
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.load_member(id.clone(), cx)),
+                        )
+                        .on_key_down(cx.listener(
+                            move |this, event: &gpui::KeyDownEvent, _, cx| {
+                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                    this.load_member(key_id.clone(), cx);
+                                    cx.stop_propagation();
+                                }
+                            },
+                        )),
+                );
+            }
+            for (index, label, offset, enabled) in [
+                (
+                    1,
+                    "Anteriores",
+                    self.group_offset.saturating_sub(20),
+                    self.group_offset > 0,
+                ),
+                (
+                    2,
+                    "Próximas ocorrências",
+                    self.group_offset + 20,
+                    has_more_members(
+                        self.group_offset,
+                        group.members.len(),
+                        group.occurrence_count,
+                    ),
+                ),
+            ] {
+                if enabled {
+                    section = section.child(
+                        action_button(
+                            theme,
+                            ("group-page", index),
+                            ButtonKind::Secondary,
+                            !self.busy,
+                        )
+                        .aria_label(label)
+                        .child(label)
+                        .track_focus(&self.group_focus[index])
+                        .on_click(cx.listener(move |this, _, _, cx| this.load_group(offset, cx)))
+                        .on_key_down(cx.listener(
+                            move |this, event: &gpui::KeyDownEvent, _, cx| {
+                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                    this.load_group(offset, cx);
+                                    cx.stop_propagation();
+                                }
+                            },
+                        )),
+                    );
+                }
+            }
+        } else {
+            section = section.child(skeleton_list(theme, "group-loading", 3));
+        }
+        section.into_any_element()
+    }
+
+    /// Installs capture reads and retry without starting integrations.
+    pub fn set_progress(&mut self, read: ProgressRead, retry: ProgressRetry) {
+        self.progress_read = Some(read);
+        self.progress_retry = Some(retry);
+    }
+
+    fn poll_progress(&mut self, cx: &mut Context<Self>) {
+        if self.progress_busy {
+            return;
+        }
+        let (Some(read), Some(project)) = (self.progress_read.clone(), self.project_id.clone())
+        else {
+            return;
+        };
+        let generation = self.generation;
+        self.progress_busy = true;
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { read(&project) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.progress_busy = false;
+                if generation != this.generation {
+                    this.poll_progress(cx);
+                    return;
+                }
+                match result {
+                    Ok(rows) => {
+                        this.progress = rows;
+                        this.progress_error = false;
+                    }
+                    Err(_) => this.progress_error = true,
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn retry_progress(&mut self, job: String, cx: &mut Context<Self>) {
+        if self.progress_busy {
+            return;
+        }
+        let Some(retry) = self.progress_retry.clone() else {
+            return;
+        };
+        let retry_job = job.clone();
+        let generation = self.generation;
+        self.progress_busy = true;
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { retry(&retry_job) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.progress_busy = false;
+                if generation == this.generation {
+                    record_retry_result(&mut this.progress_action_error, &job, result.is_ok());
+                    if result.is_ok() {
+                        this.notice = Some("Captura reenfileirada para análise.");
+                    }
+                }
+                this.poll_progress(cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
     /// Confirms through the adoption use case, so a decision lands on the
     /// map with the ties the person kept.
     pub fn set_adoption(&mut self, adoption: Arc<dyn AdoptionApi>) {
@@ -173,6 +478,15 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             cursor: None,
             selected: None,
             detail: None,
+            group: None,
+            review_metrics: None,
+            group_offset: 0,
+            group_error: false,
+            member: None,
+            member_id: None,
+            member_error: false,
+            member_focus: Vec::new(),
+            group_focus: std::array::from_fn(|_| cx.focus_handle().tab_stop(true)),
             query: String::new(),
             busy: false,
             loaded: false,
@@ -185,6 +499,12 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             source_lines: Vec::new(),
             project_id: None,
             generation: 0,
+            progress_read: None,
+            progress_retry: None,
+            progress: Vec::new(),
+            progress_busy: false,
+            progress_error: false,
+            progress_action_error: None,
             search: None,
             total: None,
             editor: None,
@@ -231,10 +551,15 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
         }
         self.project_id = project_id;
         self.generation += 1;
+        self.progress.clear();
+        self.progress_error = false;
+        self.progress_action_error = None;
+        self.poll_progress(cx);
         self.rows.clear();
         self.cursor = None;
         self.selected = None;
         self.detail = None;
+        self.clear_group();
         self.query.clear();
         self.error = None;
         self.loaded = false;
@@ -293,12 +618,79 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
         });
     }
 
+    /// Refreshes the loaded window, keeping the reader and any unsaved editor mounted.
+    pub fn poll_visible(&mut self, cx: &mut Context<Self>) {
+        self.poll_progress(cx);
+        if !can_poll_rows(self.busy, self.project_id.is_some(), self.editor.is_some()) {
+            return;
+        }
+        let filter = InboxFilter {
+            project_id: self.project_id.clone(),
+            min_significance: (!self.show_low).then_some(MIN_SIGNIFICANCE),
+            ..InboxFilter::default()
+        };
+        let loaded = self.rows.len().max(filter.limit);
+        let selected = self.selected.clone();
+        self.run(cx, move |inbox| {
+            Outcome::Live((|| {
+                let mut scan = filter.clone();
+                let mut candidates = Vec::new();
+                let next_cursor = loop {
+                    let page = inbox.list(&scan)?;
+                    candidates.extend(page.candidates);
+                    if candidates.len() >= loaded || page.next_cursor.is_none() {
+                        break page.next_cursor;
+                    }
+                    scan.cursor = page.next_cursor;
+                };
+                let total = inbox.count(&filter)?;
+                // Absence from the bounded page is not evidence of resolution.
+                if let Some(id) = selected
+                    .as_ref()
+                    .filter(|id| !candidates.iter().any(|row| &row.id == *id))
+                {
+                    if let Some(project) = filter.project_id.as_deref() {
+                        if inbox.eligible_in_review(project, id, &filter)? {
+                            match inbox.detail(id) {
+                                Ok(detail) => {
+                                    retain_eligible_selection(&mut candidates, detail.summary, true)
+                                }
+                                Err(InboxError::NotFound) => {}
+                                Err(error) => return Err(error),
+                            }
+                        }
+                    }
+                }
+                let everything = InboxFilter {
+                    min_significance: None,
+                    ..filter.clone()
+                };
+                let relevant = InboxFilter {
+                    min_significance: Some(MIN_SIGNIFICANCE),
+                    ..filter
+                };
+                let hidden = inbox
+                    .count(&everything)?
+                    .saturating_sub(inbox.count(&relevant)?);
+                Ok((
+                    InboxPage {
+                        candidates,
+                        next_cursor,
+                    },
+                    total,
+                    hidden,
+                ))
+            })())
+        });
+    }
+
     fn select(&mut self, id: String, cx: &mut Context<Self>) {
         if self.busy {
             return;
         }
         self.selected = Some(id.clone());
         self.detail = None;
+        self.clear_group();
         self.links = None;
         self.source_index = 0;
         self.source_focus.clear();
@@ -338,12 +730,58 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                 if let Some(editor) = &this.editor {
                     editor.update(cx, |editor, cx| editor.set_busy(false, cx));
                 }
-                if generation != this.generation {
+                if !accepts_refresh(generation, this.generation) {
                     this.page(false, cx);
                     cx.notify();
                     return;
                 }
                 match outcome {
+                    Outcome::Live(Ok((page, total, hidden))) => {
+                        let selected_change = selected_change(
+                            this.detail.as_ref().map(|detail| &detail.summary),
+                            &page.candidates,
+                        );
+                        this.total = Some(total);
+                        this.hidden_low = hidden;
+                        this.cursor = page.next_cursor;
+                        this.rows = page.candidates;
+                        this.row_focus
+                            .retain(|(id, _)| this.rows.iter().any(|row| row.id == *id));
+                        for row in &this.rows {
+                            if !this.row_focus.iter().any(|(id, _)| *id == row.id) {
+                                this.row_focus
+                                    .push((row.id.clone(), cx.focus_handle().tab_stop(true)));
+                            }
+                        }
+                        match selected_change {
+                            SelectedChange::Removed => {
+                                this.selected = None;
+                                this.detail = None;
+                                this.clear_group();
+                                this.links = None;
+                                this.source_lines.clear();
+                                this.source_focus.clear();
+                            }
+                            SelectedChange::Changed => {
+                                if let Some(id) = this.selected.clone() {
+                                    this.select(id, cx);
+                                }
+                            }
+                            SelectedChange::Unchanged => {}
+                        }
+                        if selected_change != SelectedChange::Removed
+                            && this.selected.is_none()
+                            && this.editor.is_none()
+                        {
+                            if let Some(row) = this.rows.first() {
+                                this.select(row.id.clone(), cx);
+                            }
+                        }
+                    }
+                    Outcome::Live(Err(error)) => {
+                        tracing::warn!(code = error.code(), "inbox live refresh failed");
+                        this.error = Some(failure_copy(&error));
+                    }
                     Outcome::Page(Ok((page, total, hidden)), append) => {
                         this.total = Some(total);
                         this.hidden_low = hidden;
@@ -397,7 +835,31 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                         let id = detail.summary.id.clone();
                         this.detail = Some(*detail);
                         this.load_links(id, cx);
+                        this.load_group(0, cx);
                     }
+                    Outcome::Group(result, offset) => match result {
+                        Ok((group, metrics)) => {
+                            this.review_metrics = Some(metrics);
+                            this.group_offset = offset;
+                            this.member_focus = group
+                                .members
+                                .iter()
+                                .map(|_| cx.focus_handle().tab_stop(true))
+                                .collect();
+                            this.group = Some(group);
+                            this.group_error = false;
+                        }
+                        Err(_) => this.group_error = true,
+                    },
+                    Outcome::Member(result, id) => match result {
+                        Ok(detail) => {
+                            this.member_id = Some(id);
+                            this.set_sources(&detail, cx);
+                            this.member = Some(*detail);
+                            this.member_error = false;
+                        }
+                        Err(_) => this.member_error = true,
+                    },
                     Outcome::Action(Ok(()), notice) => {
                         this.editor = None;
                         this.editor_subscription = None;
@@ -497,9 +959,14 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                 question: detail.summary.question.clone(),
                 choice: detail.summary.choice.clone(),
                 rationale: detail.rationale.clone(),
+                qualifiers: detail.qualifiers.clone(),
             };
             let id = detail.summary.id.clone();
+            let reviewed = detail.clone();
             let editor = cx.new(|cx| ReviewEditor::new(original, cx));
+            editor.update(cx, |editor, _| {
+                editor.set_evidence(detail.artifacts.clone())
+            });
             window.focus(&editor.read(cx).initial_focus(cx), cx);
             self.editor_subscription = Some(cx.subscribe(
                 &editor,
@@ -516,6 +983,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                                 return;
                             }
                             let id = id.clone();
+                            let reviewed = reviewed.clone();
                             let edits = edits.clone();
                             let confirm = *confirm;
                             let adoption = this.adoption.clone();
@@ -529,14 +997,16 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                                 }
                                 match (adoption, chosen) {
                                     (Some(adoption), Some((kept, declined))) => adopted(
-                                        adoption.adopt(&id, Some(edits), &kept, &declined),
+                                        adoption.adopt_reviewed(
+                                            &reviewed,
+                                            Some(edits),
+                                            &kept,
+                                            &declined,
+                                        ),
                                         "Ajustes confirmados. Decisão criada e ligada ao mapa.",
                                         "Ajustes confirmados. Decisão criada.",
                                     ),
-                                    _ => Outcome::Action(
-                                        inbox.confirm(&id, Some(edits)).map(|_| ()),
-                                        "Ajustes confirmados. Decisão criada.",
-                                    ),
+                                    _ => confirmed(inbox.confirm_reviewed(&reviewed, Some(edits))),
                                 }
                             });
                         }
@@ -552,6 +1022,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             return;
         }
         let id = detail.summary.id.clone();
+        let reviewed = detail.clone();
         let snoozed = detail.summary.status == CandidateStatus::Snoozed;
         let adoption = self.adoption.clone();
         let chosen = self.chosen_links(&id);
@@ -562,15 +1033,12 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                 ReviewAction::Confirm => match (adoption, chosen) {
                     (Some(adoption), Some((kept, declined))) => {
                         return adopted(
-                            adoption.adopt(&id, None, &kept, &declined),
+                            adoption.adopt_reviewed(&reviewed, None, &kept, &declined),
                             "Candidato confirmado. Decisão criada e ligada ao mapa.",
                             "Candidato confirmado. Decisão criada.",
                         );
                     }
-                    _ => (
-                        inbox.confirm(&id, None).map(|_| ()),
-                        "Candidato confirmado. Decisão criada.",
-                    ),
+                    _ => return confirmed(inbox.confirm_reviewed(&reviewed, None)),
                 },
                 ReviewAction::Reject => (inbox.reject(&id), "Candidato rejeitado."),
                 ReviewAction::Snooze if snoozed => {
@@ -928,6 +1396,98 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
         )
     }
 
+    fn progress_panel(&self, cx: &mut Context<Self>) -> Div {
+        let theme = Theme::current(cx);
+        let mut panel = div()
+            .flex()
+            .flex_col()
+            .gap(px(SpacingScale::S4))
+            .p(px(SpacingScale::S6))
+            .child(section_label(&theme, "Últimas capturas do projeto"));
+        if let Some(job) = self.progress_action_error.clone() {
+            panel = panel.child(
+                error_banner(&theme, "Não foi possível reprocessar esta captura.")
+                    .id("capture-action-error")
+                    .role(Role::Alert)
+                    .child(
+                        action_button(
+                            &theme,
+                            "capture-action-retry",
+                            ButtonKind::Secondary,
+                            !self.progress_busy,
+                        )
+                        .aria_label("Tentar reprocessar novamente")
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.retry_progress(job.clone(), cx)),
+                        )
+                        .child("Tentar reprocessar"),
+                    )
+                    .child(
+                        action_button(&theme, "capture-action-dismiss", ButtonKind::Ghost, true)
+                            .aria_label("Dispensar erro de reprocessamento")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.progress_action_error = None;
+                                cx.notify();
+                            }))
+                            .child("Dispensar"),
+                    ),
+            );
+        }
+        if self.progress_error {
+            panel = panel.child(
+                error_banner(&theme, "Não foi possível atualizar as capturas.")
+                    .id("capture-progress-error")
+                    .role(Role::Alert)
+                    .child(
+                        action_button(
+                            &theme,
+                            "capture-progress-retry-read",
+                            ButtonKind::Ghost,
+                            !self.progress_busy,
+                        )
+                        .aria_label("Atualizar capturas")
+                        .on_click(cx.listener(|this, _, _, cx| this.poll_progress(cx)))
+                        .child("Tentar novamente"),
+                    ),
+            );
+        }
+        if self.progress.is_empty() {
+            return panel.child(if self.progress_busy { "Carregando capturas…" }
+                else if self.progress_error { "O destino das capturas está indisponível." }
+                else { "Nenhuma captura recebida neste projeto. As sessões capturadas aparecem aqui antes da revisão." });
+        }
+        for (index, capture) in self.progress.iter().enumerate() {
+            let source = capture.source.as_deref().unwrap_or("Fonte não informada");
+            let mut row = div().flex().flex_col().gap(px(SpacingScale::S2))
+                .child(text_style(div(), TypeScale::BODY).child(progress_copy(capture)))
+                .child(text_style(div(), TypeScale::META).child(format!(
+                    "{} · {}{} · tentativa {} · {} pendentes · {} de baixa relevância · {} confirmados · {} rejeitados · {} adiados",
+                    short_date(&capture.received_at), source,
+                    capture.model.as_ref().map(|model| format!(" · {model}")).unwrap_or_default(),
+                    capture.attempts, capture.candidates.pending, capture.candidates.hidden,
+                    capture.candidates.adopted, capture.candidates.dismissed, capture.candidates.snoozed)));
+            if capture.can_retry {
+                if let Some(job) = capture.job_id.clone() {
+                    row = row.child(
+                        action_button(
+                            &theme,
+                            ("capture-reprocess", index),
+                            ButtonKind::Secondary,
+                            !self.progress_busy,
+                        )
+                        .aria_label("Reprocessar captura")
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.retry_progress(job.clone(), cx)),
+                        )
+                        .child("Reprocessar"),
+                    );
+                }
+            }
+            panel = panel.child(row);
+        }
+        panel
+    }
+
     fn reading_pane(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
         let visible_detail = self
@@ -936,6 +1496,9 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             .filter(|detail| matches_query(&detail.summary, &self.query));
         let Some(detail) = visible_detail else {
             if self.loaded && self.rows.is_empty() && !self.busy {
+                if self.progress_read.is_some() {
+                    return self.progress_panel(cx).into_any_element();
+                }
                 return crate::ui::patterns::empty_panel_mascot(
                     &theme,
                     crate::screens::assistant::resting(),
@@ -961,14 +1524,23 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                 )
                 .into_any_element();
         };
-        let evidence_block = if detail.artifacts.is_empty() {
+        let source_detail = evidence_detail(detail, self.member.as_ref());
+        let evidence_block = if self.member_error {
+            error_banner(
+                &theme,
+                "Não foi possível ler esta fonte. Selecione-a novamente para tentar.",
+            )
+            .into_any_element()
+        } else if self.member_id.is_some() && self.member.is_none() {
+            skeleton_list(&theme, "member-loading", 3)
+        } else if source_detail.artifacts.is_empty() {
             text_style(div(), TypeScale::BODY_SMALL)
                 .text_color(theme.colors.text_muted())
                 .child("Nenhuma fonte disponível para este candidato.")
                 .into_any_element()
         } else {
             let tabs = evidence::tab_strip(&theme, "evidence-tabs").children(
-                detail
+                source_detail
                     .artifacts
                     .iter()
                     .enumerate()
@@ -999,7 +1571,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
             evidence::frame(&theme)
                 .child(tabs)
                 .children(
-                    detail
+                    source_detail
                         .artifacts
                         .get(self.source_index)
                         .zip(self.source_lines.get(self.source_index))
@@ -1010,7 +1582,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                                 .child(evidence::caption_row(&theme, artifact, lines))
                                 .child(evidence::body(
                                     artifact,
-                                    format!("{}-{}", detail.summary.id, self.source_index),
+                                    format!("{}-{}", source_detail.summary.id, self.source_index),
                                     lines,
                                     280.0,
                                     theme,
@@ -1076,6 +1648,11 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                     ),
             )
             .child(section(theme, "Motivo", &detail.rationale))
+            .child(super::review_editor::qualifier_reading(
+                &theme,
+                &detail.qualifiers,
+            ))
+            .child(self.group_section(&theme, cx))
             .children(self.map_section(&theme, &detail.summary.id, detail.summary.kind, cx))
             .child(
                 div()
@@ -1085,11 +1662,28 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                     .gap(px(SpacingScale::S3))
                     .child(section_header(&theme, "Evidências").child(count_chip(
                         &theme,
-                        match detail.artifacts.len() {
+                        match source_detail.artifacts.len() {
                             1 => "1 fonte".to_string(),
                             n => format!("{n} fontes"),
                         },
                     )))
+                    .child(text_style(div(), TypeScale::BODY_SMALL)
+                        .text_color(theme.colors.text_muted())
+                        .child(format!(
+                            "Evidência da ocorrência {}; confirmação aplica à proposta principal {}.",
+                            self.member_id.as_deref().unwrap_or(&detail.summary.id),
+                            detail.summary.id,
+                        )))
+                    .when(self.member.is_some(), |section| {
+                        section.child(super::review_editor::qualifier_reading(
+                            &theme, &source_detail.qualifiers,
+                        )).child(section_label(&theme, "Origem da ocorrência"))
+                            .child(text_style(div(), TypeScale::META)
+                                .text_color(theme.colors.text_muted())
+                                .child(format!("Recebido em {} · {}",
+                                    short_date(&source_detail.summary.received_at),
+                                    source_detail.summary.project_location)))
+                    })
                     .child(evidence_block),
             )
             .child(
@@ -1112,7 +1706,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
                     .child(
                         section(
                             theme,
-                            "Origem",
+                            "Origem da proposta principal",
                             &format!(
                                 "Recebido em {}\n{}",
                                 short_date(&detail.summary.received_at),
@@ -1137,7 +1731,7 @@ impl<S: InboxStore + Send + 'static> InboxScreen<S> {
     }
 }
 
-impl<S: InboxStore + Send + 'static> Render for InboxScreen<S> {
+impl<S: InboxStore + ReviewExceptionStore + Send + 'static> Render for InboxScreen<S> {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::current(cx);
         let visible: Vec<_> = self
@@ -1216,6 +1810,9 @@ fn adopted(
     plain: &'static str,
 ) -> Outcome {
     match result {
+        Ok(outcome) if outcome.rule => {
+            Outcome::Action(Ok(()), confirmation_notice(true, outcome.linked > 0))
+        }
         Ok(outcome) if outcome.linked > 0 => Outcome::Action(Ok(()), linked),
         Ok(_) => Outcome::Action(Ok(()), plain),
         Err(AdoptionError::Inbox(error)) => Outcome::Action(Err(error), plain),
@@ -1223,9 +1820,95 @@ fn adopted(
             tracing::warn!(code = error.code(), "map update after adoption failed");
             Outcome::Action(
                 Ok(()),
-                "Decisão criada. Não foi possível atualizar o mapa; abra o Mapa para revisar.",
+                "Confirmação salva. Não foi possível atualizar o mapa; abra o Mapa para revisar.",
             )
         }
+    }
+}
+
+fn accepts_refresh(request_generation: u64, current_generation: u64) -> bool {
+    request_generation == current_generation
+}
+
+fn can_poll_rows(busy: bool, has_project: bool, editing: bool) -> bool {
+    !busy && has_project && !editing
+}
+
+fn retain_eligible_selection(
+    rows: &mut Vec<CandidateSummary>,
+    row: CandidateSummary,
+    eligible: bool,
+) {
+    if eligible {
+        rows.push(row);
+    }
+}
+
+pub(crate) fn record_retry_result(error: &mut Option<String>, job: &str, successful: bool) {
+    *error = if successful {
+        None
+    } else {
+        Some(job.to_owned())
+    };
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectedChange {
+    Unchanged,
+    Changed,
+    Removed,
+}
+
+fn selected_change(
+    current: Option<&CandidateSummary>,
+    rows: &[CandidateSummary],
+) -> SelectedChange {
+    let Some(current) = current else {
+        return SelectedChange::Unchanged;
+    };
+    match rows.iter().find(|row| row.id == current.id) {
+        None => SelectedChange::Removed,
+        Some(row) if row == current => SelectedChange::Unchanged,
+        Some(_) => SelectedChange::Changed,
+    }
+}
+
+pub(super) fn progress_copy(capture: &CaptureProgress) -> &'static str {
+    match capture.state {
+        CaptureState::Queued => "Captura recebida · aguardando análise",
+        CaptureState::Running => "Captura recebida · análise em andamento",
+        CaptureState::Failed => "A análise falhou; nenhum resultado novo foi confirmado.",
+        CaptureState::Skipped => "Análise não executada: autorização bloqueou a extração.",
+        CaptureState::Cancelled => "Análise cancelada.",
+        CaptureState::Unknown => "Captura recebida · estado da análise não informado",
+        CaptureState::Completed => match capture.reason {
+            AssessmentReason::Candidates => {
+                "Análise concluída · candidatos produzidos para revisão"
+            }
+            AssessmentReason::Detail => {
+                "Análise concluída · apenas detalhes de implementação, sem candidato duradouro"
+            }
+            AssessmentReason::Empty => "Análise concluída · nenhuma proposta produzida",
+            AssessmentReason::Failed => "A análise falhou.",
+            AssessmentReason::Skipped => "Análise não executada: autorização bloqueou a extração.",
+            AssessmentReason::Unknown => "Análise concluída · motivo não informado",
+        },
+    }
+}
+
+fn confirmation_notice(rule: bool, linked: bool) -> &'static str {
+    match (rule, linked) {
+        (true, true) => "Regra criada e ligada ao mapa.",
+        (true, false) => "Regra criada.",
+        (false, true) => "Decisão criada e ligada ao mapa.",
+        (false, false) => "Decisão criada.",
+    }
+}
+
+fn confirmed(result: Result<application::inbox::ConfirmOutcome, InboxError>) -> Outcome {
+    match result {
+        Ok(outcome) => Outcome::Action(Ok(()), confirmation_notice(outcome.rule, false)),
+        Err(error) => Outcome::Action(Err(error), ""),
     }
 }
 
@@ -1345,6 +2028,175 @@ fn failure_copy(error: &InboxError) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reading_member_evidence_does_not_replace_confirmation_snapshot() {
+        let representative = CandidateDetail {
+            summary: sample_summary(),
+            qualifiers: vec![],
+            criteria: vec![],
+            rationale: "Original reviewed rationale".into(),
+            evidence_refs: vec!["representative-source".into()],
+            diff_summary: application::inbox::DiffSummary {
+                files: vec![],
+                artifacts: 0,
+            },
+            artifacts: vec![],
+        };
+        let mut member = representative.clone();
+        member.summary.id = "sibling".into();
+        member.evidence_refs = vec!["sibling-source".into()];
+        assert_eq!(
+            evidence_detail(&representative, Some(&member)).summary.id,
+            "sibling"
+        );
+        assert_eq!(
+            evidence_detail(&representative, None).summary.id,
+            representative.summary.id
+        );
+        assert_eq!(representative.evidence_refs, ["representative-source"]);
+        assert_ne!(representative.summary.id, member.summary.id);
+    }
+
+    #[test]
+    fn refresh_from_previous_project_is_rejected() {
+        assert!(accepts_refresh(3, 3));
+        assert!(!accepts_refresh(3, 4));
+    }
+
+    #[test]
+    fn polling_leaves_drafts_alone_and_never_overlaps_row_requests() {
+        assert!(!can_poll_rows(false, true, true));
+        assert!(!can_poll_rows(true, true, false));
+        assert!(!can_poll_rows(false, false, false));
+        assert!(can_poll_rows(false, true, false));
+    }
+
+    #[test]
+    fn selected_candidate_is_reconciled_after_external_changes() {
+        let row = sample_summary();
+        let current = &row;
+        assert_eq!(
+            selected_change(Some(current), std::slice::from_ref(current)),
+            SelectedChange::Unchanged
+        );
+        assert_eq!(selected_change(Some(current), &[]), SelectedChange::Removed);
+        let mut changed = current.clone();
+        changed.updated_at = "2026-10-05T00:00:00Z".into();
+        assert_eq!(
+            selected_change(Some(current), &[changed]),
+            SelectedChange::Changed
+        );
+    }
+
+    #[test]
+    fn new_arrivals_outside_window_do_not_resolve_selection() {
+        let selected = sample_summary();
+        // Newer arrivals have displaced the selected row from the read window.
+        let mut window = Vec::new();
+        retain_eligible_selection(&mut window, selected.clone(), true);
+        assert_eq!(
+            selected_change(Some(&selected), &window),
+            SelectedChange::Unchanged
+        );
+        let mut resolved = selected.clone();
+        resolved.status = CandidateStatus::Accepted;
+        assert_eq!(
+            selected_change(Some(&selected), &[]),
+            SelectedChange::Removed
+        );
+    }
+
+    #[test]
+    fn sibling_acceptance_removes_raw_pending_selection_when_projection_excludes_it() {
+        let selected = sample_summary();
+        assert_eq!(selected.status, CandidateStatus::Pending);
+        let mut rows = vec![];
+        retain_eligible_selection(&mut rows, selected.clone(), false);
+        assert_eq!(
+            selected_change(Some(&selected), &rows),
+            SelectedChange::Removed
+        );
+        // Removed reconciliation clears detail and links, so footer actions disappear.
+        assert!(rows.is_empty());
+    }
+
+    fn sample_summary() -> CandidateSummary {
+        CandidateSummary {
+            kind: CandidateKind::Decision,
+            significance: 1.0,
+            id: "selected".into(),
+            project_id: "demo-xemnas".into(),
+            project_location: "demo".into(),
+            capture_id: "capture".into(),
+            status: CandidateStatus::Pending,
+            question: "Pergunta".into(),
+            choice: "Escolha".into(),
+            confidence: 1.0,
+            confidence_reason: "Fixture".into(),
+            signals: vec![],
+            adapter: None,
+            session_id: None,
+            observed_at: None,
+            received_at: "2026-10-04".into(),
+            created_at: "2026-10-04".into(),
+            updated_at: "2026-10-04".into(),
+        }
+    }
+
+    #[test]
+    fn successful_read_does_not_clear_failed_retry() {
+        let mut action_error = None;
+        record_retry_result(&mut action_error, "job", false);
+        let mut read_error = true;
+        assert!(read_error);
+        read_error = false;
+        assert!(!read_error);
+        assert_eq!(action_error.as_deref(), Some("job"));
+        record_retry_result(&mut action_error, "job", true);
+        assert!(action_error.is_none());
+    }
+
+    #[test]
+    fn capture_copy_does_not_reuse_old_assessment_while_running() {
+        let mut capture = CaptureProgress {
+            project_id: "p".into(),
+            capture_id: "c".into(),
+            received_at: "2026-10-04".into(),
+            job_id: Some("j".into()),
+            attempts: 2,
+            state: CaptureState::Running,
+            reason: AssessmentReason::Detail,
+            source: None,
+            model: None,
+            durable: 0,
+            detail: 1,
+            candidates: Default::default(),
+            can_retry: false,
+        };
+        assert_eq!(
+            progress_copy(&capture),
+            "Captura recebida · análise em andamento"
+        );
+        capture.state = CaptureState::Completed;
+        assert!(progress_copy(&capture).contains("apenas detalhes"));
+        capture.reason = AssessmentReason::Unknown;
+        assert!(progress_copy(&capture).contains("não informado"));
+    }
+
+    #[test]
+    fn confirmation_names_the_created_item_and_only_effective_links() {
+        assert_eq!(confirmation_notice(true, false), "Regra criada.");
+        assert_eq!(confirmation_notice(false, false), "Decisão criada.");
+        assert_eq!(
+            confirmation_notice(true, true),
+            "Regra criada e ligada ao mapa."
+        );
+        assert_eq!(
+            confirmation_notice(false, true),
+            "Decisão criada e ligada ao mapa."
+        );
+    }
 
     #[test]
     fn storage_details_never_reach_the_error_surface() {

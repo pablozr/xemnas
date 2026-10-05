@@ -8,17 +8,36 @@ use crate::store::SqliteStore;
 
 pub(crate) const CLAIM_COLUMNS: &str =
     "claim_id, project_id, kind, statement, valid_from, valid_until, \
-     source_decision_id, created_at, updated_at";
+     source_decision_id, created_at, updated_at, qualifiers, inherited_scope, source_version";
 
 impl ClaimStore for SqliteStore {
     fn insert_claim(&self, record: &ClaimRecord) -> Result<(), ClaimsError> {
+        self.insert_claim_versioned(record, None)
+    }
+
+    fn insert_claim_versioned(
+        &self,
+        record: &ClaimRecord,
+        source_version: Option<i64>,
+    ) -> Result<(), ClaimsError> {
         let mut connection = self.lock();
         let transaction = connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(storage_error)?;
+        if let Some(version) = source_version {
+            let current: Option<i64> = transaction.query_row(
+                "SELECT version FROM engineering_decisions WHERE decision_id = ?1 AND project_id = ?2",
+                params![record.source_decision_id, record.project_id], |row| row.get(0)
+            ).optional().map_err(storage_error)?;
+            if current != Some(version) {
+                return Err(ClaimsError::InvalidSource);
+            }
+        } else if record.source_decision_id.is_some() {
+            return Err(ClaimsError::InvalidSource);
+        }
         transaction
             .execute(
-                &format!("INSERT INTO context_claims ({CLAIM_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"),
+                &format!("INSERT INTO context_claims ({CLAIM_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"),
                 params![
                     record.claim_id,
                     record.project_id,
@@ -29,6 +48,9 @@ impl ClaimStore for SqliteStore {
                     record.source_decision_id,
                     record.created_at,
                     record.updated_at,
+                    record.qualifiers,
+                    record.inherited_scope,
+                    record.source_version,
                 ],
             )
             .map_err(storage_error)?;
@@ -97,6 +119,9 @@ pub(crate) fn map_row(row: &Row<'_>) -> rusqlite::Result<ClaimRecord> {
         )
     })?;
     Ok(ClaimRecord {
+        source_version: row.get(11)?,
+        inherited_scope: row.get(10)?,
+        qualifiers: row.get(9)?,
         claim_id: row.get(0)?,
         project_id: row.get(1)?,
         kind,

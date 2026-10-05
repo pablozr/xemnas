@@ -205,6 +205,8 @@ fn claims_parts_impact_and_history() {
 
     let claim = Claims::new(test.store.clone())
         .create(NewClaim {
+            source_version: None,
+            qualifiers: Vec::new(),
             project_id: "p1".into(),
             kind: ClaimKind::Constraint,
             statement: "Toda escrita passa por uma transação.".into(),
@@ -425,6 +427,7 @@ fn two_decisions_of_one_capture_keep_their_own_dependencies() {
         })
         .expect("capture");
     let candidate = |key: &str, artifact: &str, file: &str| DecisionCandidateRecord {
+        qualifiers: "[]".into(),
         id: format!("cand-{key}"),
         project_id: "p1".into(),
         capture_id: "capture-two".into(),
@@ -563,6 +566,7 @@ fn an_adopted_rule_is_suggested_for_the_components_its_evidence_touched() {
     component(&graph, "desktop", "apps/desktop/**");
     test.store
         .insert_candidates(&[DecisionCandidateRecord {
+            qualifiers: "[]".into(),
             id: "cand-rule".into(),
             project_id: "p1".into(),
             capture_id: "capture-p1".into(),

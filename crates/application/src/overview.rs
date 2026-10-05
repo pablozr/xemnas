@@ -50,6 +50,18 @@ pub use serde_json::Value as JsonValue;
 
 /// A model that answers one prompt with JSON under a schema.
 pub trait StructuredModel {
+    /// Completes with live authorization. Adapters must recheck before every retry.
+    fn complete_authorized(
+        &self,
+        system: &str,
+        user: &str,
+        schema_name: &str,
+        schema: &serde_json::Value,
+        authorization: &dyn crate::external::Authorization,
+    ) -> Result<String, ExtractError> {
+        authorization.check()?;
+        self.complete(system, user, schema_name, schema)
+    }
     /// The model's JSON text for `system` instructions and `user` content.
     fn complete(
         &self,
@@ -227,7 +239,10 @@ pub trait OverviewApi: Send + Sync {
 }
 
 /// Instructions for the overview call.
-pub const OVERVIEW_PROMPT: &str = "You write the overview of one software project for its own \
+pub const OVERVIEW_PROMPT: &str = "Preserve explicit scope and qualifiers in every summary. \
+Empty scope means not informed, not the entire project. Empty qualifiers mean not informed. \
+Artifact-less qualifiers are reviewer declarations, not verified support. Never invent authority \
+or turn unexecuted validation into a successful check. You write the overview of one software project for its own \
 team, using only the recorded knowledge given: decisions in force (D:...), rules (R:...) and \
 the project map (components and technologies) and the project's own documentation (F:..., title, sections and opening paragraph; documents describe intent and may be outdated: when they disagree with a decision, the decision wins). You never see the code; do not invent \
 components, libraries or behaviour that the records do not state.\n\
@@ -509,7 +524,7 @@ where
         };
         let model = self
             .factory
-            .external(&profile, secret)
+            .authorized(&profile, secret, &self.settings)
             .map_err(|_| OverviewError::ProviderOff)?;
         let answer = model
             .complete(
@@ -550,6 +565,13 @@ where
         let graph = KnowledgeGraph::new(self.store.clone());
         let map = graph.project_map(project_id, None).map_err(storage)?;
         let mut input = OverviewInput::default();
+        for decision in self.store.project_decisions(project_id).map_err(storage)? {
+            if let Some(stored) =
+                DecisionStore::get(&self.store, &decision.decision_id).map_err(storage)?
+            {
+                crate::qualifiers::decode(&stored.qualifiers).map_err(OverviewError::Storage)?;
+            }
+        }
         let project_name = location.rsplit(['/', '\\']).next().unwrap_or(location);
         let mut text = format!("# Project {project_name}\n");
 
@@ -569,11 +591,23 @@ where
             let label = format!("D:{}", short_ref(&decision.decision_id));
             let rationale = DecisionStore::get(&self.store, &decision.decision_id)
                 .map_err(storage)?
-                .map(|stored| stored.rationale.chars().take(400).collect::<String>())
+                .map(|stored| crate::external::limited_text(&stored.rationale, 400))
+                .unwrap_or_default();
+            let restrictions = DecisionStore::get(&self.store, &decision.decision_id)
+                .map_err(storage)?
+                .map(|stored| {
+                    format!(
+                        " scope:{} qualifiers:{}",
+                        crate::external::protected_text(&stored.scope),
+                        crate::external::protected_text(&stored.qualifiers)
+                    )
+                })
                 .unwrap_or_default();
             text.push_str(&format!(
                 "- {label} {} → {} — {}\n",
-                decision.question, decision.choice, rationale
+                crate::external::protected_text(&decision.question),
+                crate::external::protected_text(&decision.choice),
+                rationale
             ));
             input.references.insert(
                 label.to_lowercase(),
@@ -584,6 +618,7 @@ where
                     title: decision.question.clone(),
                 },
             );
+            text.push_str(&restrictions);
         }
         input.decisions = decisions.len();
 
@@ -599,11 +634,20 @@ where
             .collect();
         text.push_str("\n## Rules\n");
         for claim in &claims {
+            crate::qualifiers::decode(&claim.qualifiers).map_err(OverviewError::Storage)?;
             let label = format!("R:{}", short_ref(&claim.claim_id));
             text.push_str(&format!(
                 "- {label} ({}) {}\n",
                 claim.kind.as_str(),
-                claim.statement
+                crate::external::protected_text(&claim.statement)
+            ));
+            text.push_str(&format!(
+                " qualifiers:{}\n",
+                crate::external::protected_text(&claim.qualifiers)
+            ));
+            text.push_str(&format!(
+                " inherited_scope:{}\n",
+                crate::external::protected_text(&claim.inherited_scope)
             ));
             input.references.insert(
                 label.to_lowercase(),
@@ -652,20 +696,31 @@ where
             let parent = parents
                 .get(&entity.entity_id)
                 .and_then(|parent| names.get(parent))
-                .map(|name| format!(", part of {name}"))
+                .map(|name| format!(", part of {}", crate::external::protected_text(name)))
                 .unwrap_or_default();
             text.push_str(&format!(
                 "- {kind} \"{}\"{parent}{}{}: {}\n",
-                entity.name,
+                crate::external::protected_text(&entity.name),
                 if entity.patterns.is_empty() {
                     String::new()
                 } else {
-                    format!(" [{}]", entity.patterns.join(", "))
+                    format!(
+                        " [{}]",
+                        entity
+                            .patterns
+                            .iter()
+                            .map(|pattern| crate::external::protected_text(pattern))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
                 },
                 if entity.description.is_empty() {
                     String::new()
                 } else {
-                    format!(" — {}", entity.description)
+                    format!(
+                        " — {}",
+                        crate::external::protected_text(&entity.description)
+                    )
                 },
                 if refs.is_empty() {
                     "no records yet".to_string()
@@ -699,16 +754,28 @@ where
             let mut entry = format!(
                 "- {label} ({}) {} — {}",
                 document.kind.as_str(),
-                document.path,
-                document.title
+                crate::external::protected_text(&document.path),
+                crate::external::protected_text(&document.title)
             );
             if !document.headings.is_empty() {
-                entry.push_str(&format!(" | sections: {}", document.headings.join("; ")));
+                entry.push_str(&format!(
+                    " | sections: {}",
+                    document
+                        .headings
+                        .iter()
+                        .map(|heading| crate::external::protected_text(heading))
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                ));
             }
             if !document.excerpt.is_empty() {
-                entry.push_str(&format!(" | {}", document.excerpt));
+                entry.push_str(&format!(
+                    " | {}",
+                    crate::external::protected_text(&document.excerpt)
+                ));
             }
             entry.push('\n');
+            let entry = crate::external::protected_text(&entry);
             if entry.chars().count() > budget {
                 break;
             }
@@ -726,7 +793,7 @@ where
             included += 1;
         }
         input.documents = included;
-        input.text = text;
+        input.text = crate::external::protected_text(&text);
         Ok(input)
     }
 }

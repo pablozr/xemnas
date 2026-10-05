@@ -51,6 +51,8 @@ fn seed(test: &support::TestStore) {
     );
     Claims::new(test.store.clone())
         .create(NewClaim {
+            source_version: None,
+            qualifiers: Vec::new(),
             project_id: "p1".to_string(),
             kind: ClaimKind::Convention,
             statement: "Mensagens de erro em português".to_string(),

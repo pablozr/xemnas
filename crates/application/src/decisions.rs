@@ -153,6 +153,8 @@ impl Default for SearchQuery {
 /// Partial revision; at least one field must be present.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DecisionEdits {
+    /// Replacement explicit qualifications, when supplied.
+    pub qualifiers: Option<Vec<crate::qualifiers::KnowledgeQualifier>>,
     /// New decision question.
     pub question: Option<String>,
     /// New proposed choice.
@@ -173,6 +175,7 @@ impl DecisionEdits {
     /// Returns `true` when no field was provided.
     pub fn is_empty(&self) -> bool {
         self.question.is_none()
+            && self.qualifiers.is_none()
             && self.choice.is_none()
             && self.rationale.is_none()
             && self.assumptions.is_none()
@@ -189,6 +192,22 @@ impl DecisionEdits {
             ));
         }
         Ok(DecisionEdits {
+            qualifiers: self
+                .qualifiers
+                .as_ref()
+                .map(|items| {
+                    crate::qualifiers::validate_qualifiers(items)
+                        .map_err(DecisionsError::InvalidEdits)?;
+                    Ok(items
+                        .iter()
+                        .cloned()
+                        .map(|mut item| {
+                            item.artifact_id = None;
+                            item
+                        })
+                        .collect())
+                })
+                .transpose()?,
             question: self
                 .question
                 .as_deref()
@@ -258,6 +277,8 @@ pub struct DecisionSummary {
 /// One full revision in the history.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecisionRevision {
+    /// Qualifications at this version.
+    pub qualifiers: Vec<crate::qualifiers::KnowledgeQualifier>,
     /// Revision version.
     pub version: i64,
     /// RFC 3339 creation time.
@@ -303,6 +324,8 @@ pub struct EvidenceLinkView {
 /// Full decision detail for the disclosure panels.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DecisionDetail {
+    /// Explicit qualifications at the current version.
+    pub qualifiers: Vec<crate::qualifiers::KnowledgeQualifier>,
     /// The list-row fields.
     pub summary: DecisionSummary,
     /// Rationale (editable via [`Decisions::revise`]).
@@ -370,6 +393,8 @@ pub struct DecisionQuery {
 /// A stored decision row with its joined project location.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StoredDecision {
+    /// Serialized explicit qualification array.
+    pub qualifiers: String,
     /// Decision identifier.
     pub decision_id: String,
     /// Candidate the decision came from.
@@ -409,6 +434,8 @@ pub struct StoredDecision {
 /// One revision row in the history, with its full content.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecisionRevisionRow {
+    /// Serialized explicit qualifications at this version.
+    pub qualifiers: String,
     /// Revision version.
     pub version: i64,
     /// RFC 3339 creation time.
@@ -456,6 +483,8 @@ pub struct DecisionSearchRow {
 /// Full content written when a revision is snapshotted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecisionContent {
+    /// Serialized explicit qualifications to snapshot with this version.
+    pub qualifiers: String,
     /// Decision question.
     pub question: String,
     /// Proposed choice.
@@ -614,6 +643,8 @@ impl<S: DecisionStore> Decisions<S> {
             .map(revision_from_row)
             .collect::<Result<Vec<_>, _>>()?;
         Ok(DecisionDetail {
+            qualifiers: crate::qualifiers::decode(&row.qualifiers)
+                .map_err(DecisionsError::InvalidEdits)?,
             provenance: DecisionProvenance {
                 candidate_id: row.candidate_id.clone(),
                 capture_id: row.capture_id.clone(),
@@ -673,12 +704,29 @@ impl<S: DecisionStore> Decisions<S> {
         expected: Option<i64>,
         edits: DecisionEdits,
     ) -> Result<DecisionDetail, DecisionsError> {
-        let edits = edits.validate()?;
+        let mut edits = edits.validate()?;
         let row = self.store.get(id)?.ok_or(DecisionsError::NotFound)?;
+        if let Some(items) = &mut edits.qualifiers {
+            let original =
+                crate::qualifiers::decode(&row.qualifiers).map_err(DecisionsError::InvalidEdits)?;
+            for item in items {
+                if let Some(previous) = original
+                    .iter()
+                    .find(|previous| previous.kind == item.kind && previous.text == item.text)
+                {
+                    item.artifact_id = previous.artifact_id.clone();
+                }
+            }
+        }
         if expected.is_some_and(|expected| row.version != expected) {
             return Err(DecisionsError::Conflict);
         }
         let content = DecisionContent {
+            qualifiers: match &edits.qualifiers {
+                Some(items) => serde_json::to_string(items)
+                    .map_err(|e| DecisionsError::InvalidEdits(e.to_string()))?,
+                None => row.qualifiers.clone(),
+            },
             question: edits.question.unwrap_or(row.question),
             choice: edits.choice.unwrap_or(row.choice),
             rationale: edits.rationale.unwrap_or(row.rationale),
@@ -780,6 +828,8 @@ fn parse_array(raw: &str, column: &str) -> Result<Vec<String>, DecisionsError> {
 /// Maps a stored revision row into its full typed value.
 fn revision_from_row(row: DecisionRevisionRow) -> Result<DecisionRevision, DecisionsError> {
     Ok(DecisionRevision {
+        qualifiers: crate::qualifiers::decode(&row.qualifiers)
+            .map_err(DecisionsError::InvalidEdits)?,
         version: row.version,
         created_at: row.created_at,
         question: row.question,

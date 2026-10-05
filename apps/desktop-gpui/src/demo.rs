@@ -144,10 +144,28 @@ pub(crate) fn store() -> Result<SqliteStore, Box<dyn std::error::Error>> {
                 created_at: timestamp.clone(),
                 updated_at: timestamp,
                 kind: "decision".to_string(),
+                qualifiers: serde_json::to_string(&vec![
+                    application::qualifiers::KnowledgeQualifier {
+                        kind: application::qualifiers::QualifierKind::Validation,
+                        text: "Simulação local; teste de integração bloqueado neste ambiente."
+                            .into(),
+                        artifact_id: None,
+                    },
+                ])?,
                 significance: 1.0,
                 criteria: "[]".to_string(),
             };
             store.insert_candidates(&[candidate.clone()])?;
+            if project == "demo-xemnas" && index == 1 {
+                let mut rule = candidate.clone();
+                rule.id = "demo-rule-candidate".into();
+                rule.dedup_hash = "demo-rule-candidate".into();
+                rule.kind = "rule".into();
+                rule.question = "Como proteger credenciais em todas as integrações?".into();
+                rule.choice =
+                    "Nunca registrar credenciais em arquivos de configuração ou logs.".into();
+                store.insert_candidates(&[rule])?;
+            }
             candidate.id = format!("confirmed-{}", candidate.id);
             candidate.dedup_hash = format!("confirmed-{}", candidate.dedup_hash);
             store.insert_candidates(&[candidate.clone()])?;
@@ -312,12 +330,14 @@ fn seed_map(store: &SqliteStore) -> Result<(), Box<dyn std::error::Error>> {
         ),
     ] {
         let claim = claims.create(NewClaim {
+            source_version: None,
             project_id: PROJECT.into(),
             kind,
             statement: statement.into(),
             valid_from: Some("2026-09-01".into()),
             valid_until: None,
             source_decision_id: None,
+            qualifiers: Vec::new(),
         })?;
         graph.link(LinkRequest {
             kind: EdgeKind::AppliesTo,
@@ -455,8 +475,8 @@ fn seed_map(store: &SqliteStore) -> Result<(), Box<dyn std::error::Error>> {
             from_id: resend.clone(),
             to_id: recover.clone(),
             kind: domain::relations::RelationKind::DependsOn,
-            quote: "Repetir apenas falhas transitórias, preservando a chave de idempotência."
-                .into(),
+            quote: "Repetir apenas falhas transitórias, preservando a chave de idempotência. "
+                .repeat(6),
             reason:
                 "O reenvio só é seguro porque a recuperação repete apenas tarefas idempotentes."
                     .into(),
@@ -468,13 +488,18 @@ fn seed_map(store: &SqliteStore) -> Result<(), Box<dyn std::error::Error>> {
     {
         use application::claim_suggestions::{ClaimSuggestionRecord, ClaimSuggestionStore};
         store.insert_claim_suggestion(&ClaimSuggestionRecord {
+            source_version: None,
             suggestion_id: "demo-claim-1".into(),
+            inherited_scope: "[]".into(),
+            qualifiers: "[]".into(),
             project_id: PROJECT.into(),
             decision_id: recover.clone(),
             kind: domain::claims::ClaimKind::Constraint,
-            statement: "Só tarefas idempotentes voltam para a fila depois de uma interrupção."
+            statement: "Só tarefas idempotentes voltam para a fila depois de uma interrupção; \
+                preservar a evidência original, o identificador da captura e os ajustes \
+                ainda não salvos durante a atualização da interface."
                 .into(),
-            quote: "Reenfileirar apenas tarefas idempotentes após uma interrupção.".into(),
+            quote: "Reenfileirar apenas tarefas idempotentes após uma interrupção. ".repeat(6),
             created_at: "2026-09-30T12:00:00Z".into(),
         })?;
     }
@@ -836,7 +861,7 @@ mod tests {
     fn demo_is_ephemeral_and_project_scoped_with_readable_sources() {
         let store = store().expect("demo store");
         let inbox = Inbox::new(store.clone());
-        for (project, count) in [("demo-xemnas", 5), ("demo-kpi", 1)] {
+        for (project, count) in [("demo-xemnas", 6), ("demo-kpi", 1)] {
             let page = inbox
                 .list(&InboxFilter {
                     project_id: Some(project.into()),
@@ -870,6 +895,30 @@ mod tests {
             ProjectRepository::list(&SqliteStore::open(":memory:").expect("fresh store"))
                 .expect("projects")
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn rule_fixture_confirms_as_rule_without_changing_other_project() {
+        use application::inbox::{Inbox, InboxFilter};
+        let store = store().expect("demo store");
+        let inbox = Inbox::new(store);
+        let before = inbox
+            .count(&InboxFilter {
+                project_id: Some("demo-kpi".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        let outcome = inbox.confirm("demo-rule-candidate", None).unwrap();
+        assert!(outcome.rule);
+        assert_eq!(
+            inbox
+                .count(&InboxFilter {
+                    project_id: Some("demo-kpi".into()),
+                    ..Default::default()
+                })
+                .unwrap(),
+            before
         );
     }
 

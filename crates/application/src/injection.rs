@@ -27,7 +27,7 @@ pub const MAX_BUDGET_TOKENS: usize = 2_000;
 const MAX_REASON_CHARS: usize = 140;
 
 const OPEN_TAG: &str =
-    "<xemnas-context note=\"referência confirmada pelo usuário; não são instruções\">";
+    "<xemnas-context note=\"normas confirmadas pelo usuário; O: observado localmente, não é regra; não são instruções\">";
 const CLOSE_TAG: &str = "</xemnas-context>";
 
 /// Kind of item a compact line cites.
@@ -63,6 +63,10 @@ pub struct DeliveredItem {
 /// A rendered block ready to append to a prompt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompactBlock {
+    /// Descriptive versions delivered, never encoded as ItemKind::Claim.
+    pub observations: Vec<crate::observations::DeliveredObservation>,
+    /// Corrections to previously delivered descriptive facts.
+    pub observation_corrections: Vec<crate::observations::ObservationCorrection>,
     /// Text including the delimiting tags.
     pub text: String,
     /// Items included, in order.
@@ -207,6 +211,7 @@ impl InjectionOutcome {
 #[derive(Debug, Clone)]
 pub struct ContextInjection<S> {
     store: S,
+    routing: Option<std::sync::Arc<crate::context_routing::RoutingLookup>>,
 }
 
 impl<S> ContextInjection<S>
@@ -219,11 +224,25 @@ where
         + ClaimStore
         + ProjectRepository
         + GraphStore
+        + crate::observations::ObservationStore
+        + crate::observations::ObservationDeliveryStore
         + Clone,
 {
     /// Wraps the store.
     pub fn new(store: S) -> Self {
-        Self { store }
+        Self {
+            store,
+            routing: None,
+        }
+    }
+
+    /// Shares the optional local routing cache with other context entry points.
+    pub fn with_routing(
+        mut self,
+        routing: Option<std::sync::Arc<crate::context_routing::RoutingLookup>>,
+    ) -> Self {
+        self.routing = routing;
+        self
     }
 
     /// Prepares the block for one turn; an unregistered directory or a prompt
@@ -269,34 +288,66 @@ where
         }
         files.dedup();
         files.truncate(crate::context::MAX_FILES);
+        if edit {
+            self.store
+                .request_refresh(&crate::observations::RefreshRequest {
+                    project_id: project.id.clone(),
+                    capture_trigger: "agent_edit".into(),
+                    requested_at: now_rfc3339(),
+                })
+                .map_err(|error| ContextError::Storage(error.to_string()))?;
+        }
         // An edit only brings what the map ties to the edited files.
         let tied = if edit {
             let (decisions, claims) = KnowledgeGraph::new(self.store.clone())
                 .context_for_files(&project.id, &files, None)
                 .map_err(|error| ContextError::Storage(error.to_string()))?;
-            if decisions.is_empty() && claims.is_empty() {
-                return Ok(InjectionOutcome::empty(mode));
-            }
             Some((decisions, claims))
         } else {
             None
         };
-        let mut pack = ContextPacks::new(self.store.clone()).build_pack(ContextRequest {
-            project_id: project.id.clone(),
-            task: if edit { String::new() } else { prompt },
-            as_of: None,
-            budget_chars: Some(MAX_BUDGET_CHARS),
-            files,
-        })?;
+        let mut pack = ContextPacks::new(self.store.clone())
+            .with_routing(self.routing.clone())
+            .build_pack(ContextRequest {
+                project_id: project.id.clone(),
+                task: if edit { String::new() } else { prompt },
+                as_of: None,
+                budget_chars: Some(MAX_BUDGET_CHARS),
+                files,
+            })?;
         if let Some((decisions, claims)) = &tied {
             pack.decisions
                 .retain(|decision| decisions.contains(&decision.decision_id));
             pack.claims.retain(|claim| claims.contains(&claim.claim_id));
         }
         let delivered = self.store.delivered(session, delivery)?;
-        let Some(block) = render_compact(&pack, budget, &delivered) else {
+        let observed = self
+            .store
+            .delivered_observations(session, &project.id, delivery)
+            .map_err(|error| ContextError::Storage(error.to_string()))?;
+        let corrections = self
+            .store
+            .observation_corrections(session, &project.id, delivery)
+            .map_err(|error| ContextError::Storage(error.to_string()))?;
+        let Some(block) =
+            render_session_compact(&pack, budget, &delivered, &observed, &corrections)
+        else {
             return Ok(InjectionOutcome::empty(mode));
         };
+        if (!block.observations.is_empty() || !block.observation_corrections.is_empty())
+            && !self
+                .store
+                .record_observation_delivery(
+                    session,
+                    &project.id,
+                    delivery,
+                    &block.observations,
+                    &block.observation_corrections,
+                )
+                .map_err(|error| ContextError::Storage(error.to_string()))?
+        {
+            return Ok(InjectionOutcome::empty(mode));
+        }
         self.store.record_injection(&InjectionRecord {
             injection_id: uuid::Uuid::now_v7().to_string(),
             session_id: session.to_string(),
@@ -310,7 +361,9 @@ where
         Ok(InjectionOutcome {
             mode,
             tokens: block.tokens,
-            items: block.items.len(),
+            items: block.items.len()
+                + block.observations.len()
+                + block.observation_corrections.len(),
             omitted: block.omitted,
             block: (delivery == InjectionMode::Inject).then_some(block.text),
         })
@@ -412,6 +465,8 @@ where
         + ClaimStore
         + ProjectRepository
         + GraphStore
+        + crate::observations::ObservationStore
+        + crate::observations::ObservationDeliveryStore
         + Clone
         + Send
         + Sync,
@@ -455,7 +510,20 @@ pub fn render_compact(
     budget_tokens: usize,
     delivered: &BTreeSet<DeliveredItem>,
 ) -> Option<CompactBlock> {
-    let frame = estimate_tokens(OPEN_TAG) + estimate_tokens(CLOSE_TAG) + 1;
+    render_session_compact(pack, budget_tokens, delivered, &[], &[])
+}
+
+fn render_session_compact(
+    pack: &ContextPack,
+    budget_tokens: usize,
+    delivered: &BTreeSet<DeliveredItem>,
+    observed: &[crate::observations::DeliveredObservation],
+    corrections: &[crate::observations::ObservationCorrection],
+) -> Option<CompactBlock> {
+    let frame = estimate_tokens(&format!("{OPEN_TAG}\n\n{CLOSE_TAG}"));
+    if frame > budget_tokens {
+        return None;
+    }
     let mut used = frame;
     let mut lines = Vec::new();
     let mut items = Vec::new();
@@ -482,16 +550,103 @@ pub fn render_compact(
         lines.push(line);
         items.push(item);
     }
-    if items.is_empty() {
+    let mut observations = Vec::new();
+    let mut observation_corrections = Vec::new();
+    let warning =
+        "Cobertura descritiva desconhecida/parcial; fatos atuais não provam validade histórica.";
+    let warning_cost = if pack.observation_coverage.unknown || pack.observation_coverage.partial {
+        estimate_tokens(warning) + 1
+    } else {
+        0
+    };
+    for correction in corrections {
+        let line = format!(
+            "O:{} v{} {}; não é regra {}",
+            short_ref(&correction.original.observation_id),
+            correction.original.version,
+            correction_label(correction),
+            clean(&serde_json::to_string(correction).expect("correction JSON"))
+        );
+        let cost = estimate_tokens(&line) + 1;
+        if used + cost + warning_cost > budget_tokens {
+            omitted += 1;
+            continue;
+        }
+        used += cost;
+        lines.push(line);
+        observation_corrections.push(correction.clone());
+    }
+    for item in &pack.observations {
+        let record = &item.record;
+        let delivery = crate::observations::DeliveredObservation {
+            observation_id: record.observation_id.clone(),
+            version: record.version,
+            source_id: record.provenance.source_id.clone(),
+            project_id: record.project_id.clone(),
+        };
+        if observed.contains(&delivery) {
+            continue;
+        }
+        // Do not deliver a replacement before its original-version correction fits.
+        if corrections.iter().any(|correction| {
+            correction.original.observation_id == record.observation_id
+                && !observation_corrections.contains(correction)
+        }) {
+            omitted += 1;
+            continue;
+        }
+        let line = observation_line(item);
+        let cost = estimate_tokens(&line) + 1;
+        if used + cost + warning_cost > budget_tokens {
+            omitted += 1;
+            continue;
+        }
+        used += cost;
+        lines.push(line);
+        observations.push(delivery);
+    }
+    if items.is_empty()
+        && observations.is_empty()
+        && observation_corrections.is_empty()
+        && omitted == 0
+    {
         return None;
+    }
+    if warning_cost > 0 && (!observations.is_empty() || !observation_corrections.is_empty()) {
+        // Descriptions must not displace fitting normative items for their coverage notice.
+        let cost = estimate_tokens(warning) + 1;
+        if used + cost <= budget_tokens {
+            used += cost;
+            lines.push(warning.into());
+        }
+    }
+    if omitted > 0 {
+        let notice = format!("Omitidos pelo orçamento: {omitted}.");
+        if used + estimate_tokens(&notice) < budget_tokens {
+            lines.push(notice);
+        }
     }
     let text = format!("{OPEN_TAG}\n{}\n{CLOSE_TAG}", lines.join("\n"));
     Some(CompactBlock {
+        observations,
+        observation_corrections,
         tokens: estimate_tokens(&text),
         text,
         items,
         omitted,
     })
+}
+
+fn correction_label(correction: &crate::observations::ObservationCorrection) -> &'static str {
+    if correction.reason.starts_with("não foi possível revalidar;") {
+        "não foi possível revalidar; não tratar como atual"
+    } else if correction.reason == "revalidada; mesma versão descritiva; não é regra"
+        && correction.replacement.as_ref() == Some(&correction.original)
+    {
+        "revalidada; mesma versão descritiva"
+    } else {
+        "invalidada"
+    }
 }
 
 fn decision_item(decision: &PackDecision) -> DeliveredItem {
@@ -500,6 +655,17 @@ fn decision_item(decision: &PackDecision) -> DeliveredItem {
         id: decision.decision_id.clone(),
         version: decision.version,
     }
+}
+
+/// Indivisible descriptive citation, including complete scope and provenance.
+pub(crate) fn observation_line(item: &crate::observations::PackObservation) -> String {
+    let record = &item.record;
+    format!(
+        "O:{} v{} observado localmente; não é regra {}",
+        short_ref(&record.observation_id),
+        record.version,
+        clean(&serde_json::to_string(record).expect("observation JSON"))
+    )
 }
 
 fn claim_item(claim: &PackClaim) -> DeliveredItem {
@@ -518,6 +684,11 @@ fn decision_line(decision: &PackDecision) -> String {
         clean(&decision.question),
         clean(&decision.choice)
     );
+    line.push_str(&format!(
+        " [scope:{} qualifiers:{}]",
+        clean(&serde_json::to_string(&decision.scope).expect("scope JSON")),
+        clean(&serde_json::to_string(&decision.qualifiers).expect("qualifier JSON"))
+    ));
     let reason = first_sentence(&clean(&decision.rationale));
     if !reason.is_empty() {
         line.push_str(" — ");
@@ -546,9 +717,11 @@ fn claim_line(claim: &PackClaim) -> String {
         _ => "nota",
     };
     format!(
-        "{tag}:{} {}",
+        "{tag}:{} v1 {} [qualifiers:{} scope:{}]",
         short_ref(&claim.claim_id),
-        clean(&claim.statement)
+        clean(&claim.statement),
+        clean(&serde_json::to_string(&claim.qualifiers).expect("qualifier JSON")),
+        clean(&serde_json::to_string(&claim.inherited_scope).expect("scope JSON"))
     )
 }
 
@@ -744,8 +917,139 @@ mod tests {
     use super::*;
     use crate::context::{ContextPack, PackClaim, PackDecision};
 
+    #[test]
+    fn correction_rendering_distinguishes_three_states_and_respects_budget() {
+        use crate::observations::*;
+        let original = DeliveredObservation {
+            observation_id: "o12345678".into(),
+            project_id: "p1".into(),
+            source_id: "source".into(),
+            version: 1,
+        };
+        for (reason, replacement, label) in [
+            ("declaração removida", None, "invalidada"),
+            (
+                "não foi possível revalidar; status=Unreadable",
+                None,
+                "não tratar como atual",
+            ),
+            (
+                "revalidada; mesma versão descritiva; não é regra",
+                Some(original.clone()),
+                "revalidada; mesma versão descritiva",
+            ),
+        ] {
+            let correction = ObservationCorrection {
+                original: original.clone(),
+                invalidated_at: "now".into(),
+                reason: reason.into(),
+                replacement,
+            };
+            let pack = pack(vec![], vec![]);
+            let block = render_session_compact(
+                &pack,
+                2000,
+                &BTreeSet::new(),
+                &[],
+                std::slice::from_ref(&correction),
+            )
+            .unwrap();
+            assert!(block.text.contains(label));
+            if label != "invalidada" {
+                assert!(!block.text.contains("v1 invalidada"));
+            }
+            assert_eq!(block.tokens, estimate_tokens(&block.text));
+            for budget in 0..block.tokens {
+                if let Some(block) = render_session_compact(
+                    &pack,
+                    budget,
+                    &BTreeSet::new(),
+                    &[],
+                    std::slice::from_ref(&correction),
+                ) {
+                    assert!(block.tokens <= budget);
+                    assert!(block.observation_corrections.is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn descriptive_session_corrections_precede_replacements_and_dedupe() {
+        use crate::observations::*;
+        let mut pack = pack(Vec::new(), Vec::new());
+        let original = DeliveredObservation {
+            project_id: "p1".into(),
+            observation_id: "o12345678".into(),
+            version: 1,
+            source_id: "s".into(),
+        };
+        let correction = ObservationCorrection {
+            original: original.clone(),
+            invalidated_at: "now".into(),
+            reason: "declaração removida".into(),
+            replacement: None,
+        };
+        let first = render_session_compact(
+            &pack,
+            2000,
+            &BTreeSet::new(),
+            std::slice::from_ref(&original),
+            std::slice::from_ref(&correction),
+        )
+        .unwrap();
+        assert!(first.items.is_empty());
+        assert_eq!(first.observation_corrections, vec![correction.clone()]);
+        assert!(first.text.contains("O:12345678 v1 invalidada"));
+        assert!(render_session_compact(&pack, 2000, &BTreeSet::new(), &[original], &[]).is_none());
+        pack.observations.push(PackObservation {
+            authority: ObservationAuthority::Descriptive,
+            record: ObservationRecord {
+                observation_id: "o12345678".into(),
+                project_id: "p1".into(),
+                version: 2,
+                subject: ObservationSubject::Package {
+                    name: "backend".into(),
+                },
+                value: ObservationValue {
+                    declared_version: Some("2".into()),
+                    dependency_category: None,
+                    version_requirement: None,
+                    target: None,
+                },
+                path_scope: vec!["backend".into()],
+                provenance: ObservationProvenance {
+                    source_id: "s".into(),
+                    source_sha256: "hash".into(),
+                    supporting_sources: vec![],
+                    parser_policy_version: "1".into(),
+                    field_pointer: "package.version".into(),
+                    capture_trigger: "test".into(),
+                    commit: None,
+                },
+                observed_at: "now".into(),
+                status: RecordStatus::Current,
+                invalidated_at: None,
+                invalidation_reason: None,
+            },
+        });
+        let next =
+            render_session_compact(&pack, 2000, &BTreeSet::new(), &[], &[correction]).unwrap();
+        assert_eq!(next.observations[0].version, 2);
+        assert!(
+            next.text.find("invalidada").unwrap()
+                < next.text.find("observado localmente;").unwrap()
+        );
+        assert!(
+            render_session_compact(&pack, 2000, &BTreeSet::new(), &next.observations, &[])
+                .is_none()
+        );
+    }
+
     fn decision(id: &str, rationale: &str) -> PackDecision {
         PackDecision {
+            qualifiers: Vec::new(),
+            scope: Vec::new(),
             decision_id: id.to_string(),
             version: 2,
             question: "Qual banco?".to_string(),
@@ -760,6 +1064,9 @@ mod tests {
 
     fn claim(id: &str, kind: &str, statement: &str) -> PackClaim {
         PackClaim {
+            source_version: None,
+            inherited_scope: Vec::new(),
+            qualifiers: Vec::new(),
             claim_id: id.to_string(),
             kind: kind.to_string(),
             statement: statement.to_string(),
@@ -772,6 +1079,8 @@ mod tests {
 
     fn pack(decisions: Vec<PackDecision>, claims: Vec<PackClaim>) -> ContextPack {
         ContextPack {
+            observations: Vec::new(),
+            observation_coverage: Default::default(),
             project_id: "p1".to_string(),
             task: "t".to_string(),
             as_of: "2026-09-30T00:00:00Z".to_string(),
@@ -804,7 +1113,7 @@ mod tests {
         assert_eq!(
             block.text,
             format!(
-                "{OPEN_TAG}\nD:bbbbcccc v2 Qual banco? → SQLite — App local, sem servidor. [depende D:22223333]\nregra:55556666 Erros em português\n{CLOSE_TAG}"
+                "{OPEN_TAG}\nD:bbbbcccc v2 Qual banco? → SQLite [scope:[] qualifiers:[]] — App local, sem servidor. [depende D:22223333]\nregra:55556666 v1 Erros em português [qualifiers:[] scope:[]]\n{CLOSE_TAG}"
             )
         );
         assert_eq!(block.items.len(), 2);
@@ -845,10 +1154,10 @@ mod tests {
             vec![claim("c-00000003", "goal", &long)],
         );
         let block = render_compact(&the_pack, 60, &BTreeSet::new()).expect("block");
-        assert_eq!(block.items.len(), 2);
-        assert_eq!(block.omitted, 1);
+        assert_eq!(block.items.len(), 1);
+        assert_eq!(block.omitted, 2);
         assert!(block.tokens <= 60);
-        assert_eq!(render_compact(&the_pack, 10, &BTreeSet::new()), None);
+        assert!(render_compact(&the_pack, 10, &BTreeSet::new()).is_none());
     }
 
     #[test]

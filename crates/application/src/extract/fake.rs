@@ -33,6 +33,8 @@ impl CandidateExtractor for FakeCandidateExtractor {
         let top = labels.first().copied().unwrap_or("unknown");
 
         Ok(vec![CandidateProposal {
+            nature: crate::review_exception::CandidateNature::Unknown,
+            qualifiers: Vec::new(),
             question: format!("Qual decisão durável a captura registra sobre {top}?"),
             choice: format!("Manter a escolha sinalizada por: {joined}"),
             rationale: format!(

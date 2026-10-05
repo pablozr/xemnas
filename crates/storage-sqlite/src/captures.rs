@@ -44,6 +44,51 @@ fn constraint_kind(error: &rusqlite::Error) -> Option<CaptureError> {
 
 impl CaptureRepository for SqliteStore {
     fn insert_capture(&self, write: &CaptureWrite) -> Result<(), CaptureError> {
+        self.write_capture_episode(write, None)
+    }
+
+    fn insert_capture_with_provenance(
+        &self,
+        write: &CaptureWrite,
+        provenance: &application::capture_episode::CaptureProvenance,
+    ) -> Result<(), CaptureError> {
+        self.write_capture_episode(write, Some(provenance))
+    }
+
+    fn find_receipt(&self, capture_id: &str) -> Result<Option<CaptureReceiptRecord>, CaptureError> {
+        self.lock()
+            .query_row(
+                &format!("SELECT {RECEIPT_COLUMNS} FROM capture_receipts WHERE capture_id = ?1"),
+                [capture_id],
+                map_receipt,
+            )
+            .optional()
+            .map_err(storage_error)
+    }
+
+    fn find_receipt_by_idempotency_key(
+        &self,
+        idempotency_key: &str,
+    ) -> Result<Option<CaptureReceiptRecord>, CaptureError> {
+        self.lock()
+            .query_row(
+                &format!(
+                    "SELECT {RECEIPT_COLUMNS} FROM capture_receipts WHERE idempotency_key = ?1"
+                ),
+                [idempotency_key],
+                map_receipt,
+            )
+            .optional()
+            .map_err(storage_error)
+    }
+}
+
+impl SqliteStore {
+    fn write_capture_episode(
+        &self,
+        write: &CaptureWrite,
+        provenance: Option<&application::capture_episode::CaptureProvenance>,
+    ) -> Result<(), CaptureError> {
         let mut connection = self.lock();
         let transaction = connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
@@ -75,6 +120,16 @@ impl CaptureRepository for SqliteStore {
             )
             .map_err(|error| constraint_kind(&error).unwrap_or_else(|| storage_error(error)))?;
 
+        if let Some(provenance) = provenance {
+            let json = serde_json::to_string(provenance)
+                .map_err(|_| CaptureError::Storage("invalid capture provenance".into()))?;
+            transaction
+                .execute(
+                    "INSERT INTO capture_episode_sources(capture_id,provenance) VALUES (?1,?2)",
+                    params![write.receipt.capture_id, json],
+                )
+                .map_err(storage_error)?;
+        }
         for artifact in &write.artifacts {
             transaction
                 .execute(
@@ -136,34 +191,22 @@ impl CaptureRepository for SqliteStore {
             )
             .map_err(storage_error)?;
 
+        let project: String = transaction
+            .query_row(
+                "SELECT id FROM projects WHERE location=?1",
+                [&write.receipt.canonical_path],
+                |row| row.get(0),
+            )
+            .map_err(storage_error)?;
+        crate::observations::schedule(
+            &transaction,
+            &project,
+            "capture",
+            &write.receipt.received_at,
+            true,
+        )
+        .map_err(storage_error)?;
         transaction.commit().map_err(storage_error)?;
         Ok(())
-    }
-
-    fn find_receipt(&self, capture_id: &str) -> Result<Option<CaptureReceiptRecord>, CaptureError> {
-        self.lock()
-            .query_row(
-                &format!("SELECT {RECEIPT_COLUMNS} FROM capture_receipts WHERE capture_id = ?1"),
-                [capture_id],
-                map_receipt,
-            )
-            .optional()
-            .map_err(storage_error)
-    }
-
-    fn find_receipt_by_idempotency_key(
-        &self,
-        idempotency_key: &str,
-    ) -> Result<Option<CaptureReceiptRecord>, CaptureError> {
-        self.lock()
-            .query_row(
-                &format!(
-                    "SELECT {RECEIPT_COLUMNS} FROM capture_receipts WHERE idempotency_key = ?1"
-                ),
-                [idempotency_key],
-                map_receipt,
-            )
-            .optional()
-            .map_err(storage_error)
     }
 }

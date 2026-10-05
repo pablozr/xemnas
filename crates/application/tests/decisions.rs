@@ -31,6 +31,7 @@ impl FakeDecisions {
                 .entry(decision.decision_id.clone())
                 .or_default()
                 .push(DecisionRevisionRow {
+                    qualifiers: "[]".into(),
                     version: decision.version,
                     created_at: decision.created_at.clone(),
                     question: decision.question.clone(),
@@ -203,6 +204,7 @@ impl DecisionStore for FakeDecisions {
             .insert(
                 0,
                 DecisionRevisionRow {
+                    qualifiers: "[]".into(),
                     version,
                     created_at: updated_at.to_string(),
                     question: content.question.clone(),
@@ -220,6 +222,7 @@ impl DecisionStore for FakeDecisions {
 
 fn decision(id: &str, confirmed_at: &str) -> StoredDecision {
     StoredDecision {
+        qualifiers: "[]".into(),
         decision_id: id.to_string(),
         candidate_id: format!("candidate-{id}"),
         project_id: "project-1".to_string(),
@@ -319,6 +322,7 @@ fn revise_snapshots_and_preserves_untouched_fields() {
         .revise(
             "d-1",
             DecisionEdits {
+                qualifiers: None,
                 question: Some("  beta pergunta  ".to_string()),
                 ..DecisionEdits::default()
             },
@@ -370,6 +374,7 @@ fn revise_all_fields_keeps_the_original_revision_reconstructible() {
             "d-1",
             DecisionEdits {
                 question: Some("pergunta \"nova\"".to_string()),
+                qualifiers: None,
                 choice: Some("escolha ç".to_string()),
                 rationale: Some("razão — acentuada".to_string()),
                 assumptions: Some(vec!["nova premissa".to_string()]),

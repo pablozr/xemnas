@@ -12,8 +12,21 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_MAX_INPUT_CHARS: usize = 8_192;
 
 /// The artifact categories the provider may receive.
-pub const PREVIEW_CATEGORIES: &[&str] =
-    &["user_text", "assistant_text", "diff_hunk", "tool_summary"];
+pub const PREVIEW_CATEGORIES: &[&str] = &[
+    "user_text",
+    "assistant_text",
+    "diff_hunk",
+    "tool_summary",
+    "document",
+    "document_metadata",
+    "decision_fields",
+    "confirmed_examples",
+    "rejected_examples",
+    "rules",
+    "project_map",
+    "knowledge_review",
+    "context_routing",
+];
 
 /// Base URL of the OpenAI API used with a ChatGPT plan (ADR-0004).
 pub const CHATGPT_API_BASE: &str = "https://api.openai.com/v1";
@@ -921,8 +934,11 @@ mod tests {
         let second = build_preview(&profile);
         assert_eq!(first, second);
         assert_eq!(first.endpoint_host.as_deref(), Some("api.example.test"));
-        assert_eq!(first.categories.len(), 4);
-        assert_eq!(first.total_approximate_chars, 4_096 * 4);
+        assert_eq!(first.categories.len(), super::PREVIEW_CATEGORIES.len());
+        assert_eq!(
+            first.total_approximate_chars,
+            4_096 * super::PREVIEW_CATEGORIES.len()
+        );
 
         let mut other = profile.clone();
         other.model = "another-model".to_string();

@@ -36,6 +36,14 @@ impl AssessmentOutcome {
 /// One provenance row written to `assessments` (MVP-SPEC §12 line 645).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssessmentRecord {
+    /// Attempt captured at run start, absent for standalone/legacy runs.
+    pub attempt: Option<i64>,
+    /// Safe classification reason.
+    pub reason: String,
+    /// Durable classifications before validation/deduplication.
+    pub durable_count: usize,
+    /// Implementation-detail classifications.
+    pub detail_count: usize,
     /// Generated identifier (UUID v7).
     pub id: String,
     /// Capture this assessment ran for.
@@ -70,6 +78,10 @@ pub struct AssessmentRecord {
 
 /// Persistence port for assessment provenance rows.
 pub trait AssessmentStore {
+    /// Snapshots the triggering job's attempt at run start.
+    fn assessment_attempt(&self, _job: Option<&str>) -> Result<Option<i64>, ExtractError> {
+        Ok(None)
+    }
     /// Inserts one assessment row.
     fn record_assessment(&self, row: &AssessmentRecord) -> Result<(), ExtractError>;
 }
@@ -77,6 +89,10 @@ pub trait AssessmentStore {
 /// Provenance context for one extraction run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunContext {
+    /// Snapshot of the job attempt, set before extraction starts.
+    pub attempt: Option<i64>,
+    /// Classified durable/detail counts for the terminal insert.
+    pub classification: Option<(usize, usize)>,
     /// AI Execution Profile identifier.
     pub profile_id: String,
     /// Adapter literal: `fake` or `openai-compatible`.
@@ -94,8 +110,10 @@ pub struct RunContext {
 impl RunContext {
     /// Builds the context for a profile and the triggering job.
     pub fn for_profile(profile: &AiProfile, job_id: Option<String>) -> Self {
-        let external = profile.kind == ProfileKind::OpenAiCompatible;
+        let external = profile.kind != ProfileKind::Fake;
         Self {
+            attempt: None,
+            classification: None,
             profile_id: profile.id.clone(),
             adapter: profile_adapter(profile).to_string(),
             model: if external {
@@ -117,6 +135,8 @@ impl RunContext {
     /// Fixed context for a run whose profile could not be read.
     pub fn unavailable(job_id: Option<String>) -> Self {
         Self {
+            attempt: None,
+            classification: None,
             profile_id: "unavailable".to_string(),
             adapter: "unknown".to_string(),
             model: None,
@@ -253,7 +273,9 @@ where
     let evidence = normalize(evidence);
     let hash = input_hash(capture_id, &evidence);
     let context = if error == ProviderSetupError::ProfileUnavailable {
-        RunContext::unavailable(context.job_id.clone())
+        let mut unavailable = RunContext::unavailable(context.job_id.clone());
+        unavailable.attempt = context.attempt;
+        unavailable
     } else {
         context.clone()
     };
@@ -290,6 +312,20 @@ pub(super) fn record_assessment<S: AssessmentStore>(
     error_code: Option<&str>,
 ) -> Result<(), ExtractError> {
     let row = AssessmentRecord {
+        attempt: context.attempt,
+        durable_count: context.classification.map_or(0, |counts| counts.0),
+        detail_count: context.classification.map_or(0, |counts| counts.1),
+        reason: match outcome {
+            AssessmentOutcome::Ok => match context.classification {
+                Some((0, detail)) if detail > 0 => "detail",
+                Some((0, 0)) => "empty",
+                _ => "candidates",
+            },
+            AssessmentOutcome::Empty => "empty",
+            AssessmentOutcome::Failed => "failed",
+            AssessmentOutcome::Skipped => "skipped",
+        }
+        .into(),
         id: uuid::Uuid::now_v7().to_string(),
         capture_id: capture_id.to_string(),
         job_id: context.job_id.clone(),

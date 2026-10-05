@@ -64,6 +64,12 @@ impl From<ClaimError> for ClaimsError {
 /// A persisted claim.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClaimRecord {
+    /// Exact source revision; unknown for legacy/direct claims.
+    pub source_version: Option<i64>,
+    /// Scope inherited from the exact source version, independently bounded.
+    pub inherited_scope: String,
+    /// Explicit qualifications inherited intact from the source version.
+    pub qualifiers: String,
     /// Claim identifier (UUID v7).
     pub claim_id: String,
     /// Owning project.
@@ -104,6 +110,10 @@ impl ClaimRecord {
 /// Input for [`Claims::create`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewClaim {
+    /// Expected original source version; absent for direct human claims.
+    pub source_version: Option<i64>,
+    /// Human qualifications; derived claims inherit their source instead.
+    pub qualifiers: Vec<crate::qualifiers::KnowledgeQualifier>,
     /// Owning project.
     pub project_id: String,
     /// Claim kind.
@@ -120,6 +130,18 @@ pub struct NewClaim {
 
 /// Persistence port for claims.
 pub trait ClaimStore {
+    /// Inserts only while the source still has the version read by the caller.
+    /// Adapters must compare and insert in the same transaction.
+    fn insert_claim_versioned(
+        &self,
+        record: &ClaimRecord,
+        source_version: Option<i64>,
+    ) -> Result<(), ClaimsError> {
+        if source_version.is_some() {
+            return Err(ClaimsError::InvalidSource);
+        }
+        self.insert_claim(record)
+    }
     /// Inserts a claim and indexes its statement.
     fn insert_claim(&self, record: &ClaimRecord) -> Result<(), ClaimsError>;
 
@@ -167,15 +189,40 @@ impl<S: ClaimStore + DecisionStore + ProjectRepository> Claims<S> {
         ProjectRepository::get(&self.store, &input.project_id)
             .map_err(project_error)?
             .ok_or(ClaimsError::ProjectNotFound)?;
-        if let Some(source) = &input.source_decision_id {
+        let mut source_version = None;
+        let mut inherited_scope = "[]".to_string();
+        let qualifiers = if let Some(source) = &input.source_decision_id {
             let decision = DecisionStore::get(&self.store, source)
                 .map_err(decision_error)?
                 .ok_or(ClaimsError::InvalidSource)?;
             if decision.project_id != input.project_id {
                 return Err(ClaimsError::InvalidSource);
             }
-        }
+            if input
+                .source_version
+                .is_some_and(|version| version != decision.version)
+            {
+                return Err(ClaimsError::InvalidSource);
+            }
+            source_version = Some(decision.version);
+            let inherited =
+                crate::qualifiers::decode(&decision.qualifiers).map_err(ClaimsError::Storage)?;
+            let scope: Vec<String> = serde_json::from_str(&decision.scope)
+                .map_err(|e| ClaimsError::Storage(e.to_string()))?;
+            inherited_scope =
+                serde_json::to_string(&scope).map_err(|e| ClaimsError::Storage(e.to_string()))?;
+            crate::qualifiers::validate_qualifiers(&inherited).map_err(ClaimsError::Storage)?;
+            serde_json::to_string(&inherited).map_err(|e| ClaimsError::Storage(e.to_string()))?
+        } else {
+            crate::qualifiers::validate_qualifiers(&input.qualifiers)
+                .map_err(ClaimsError::Storage)?;
+            serde_json::to_string(&input.qualifiers)
+                .map_err(|e| ClaimsError::Storage(e.to_string()))?
+        };
         let record = ClaimRecord {
+            source_version,
+            inherited_scope,
+            qualifiers,
             claim_id: uuid::Uuid::now_v7().to_string(),
             project_id: input.project_id,
             kind: claim.kind(),
@@ -186,7 +233,7 @@ impl<S: ClaimStore + DecisionStore + ProjectRepository> Claims<S> {
             created_at: now.clone(),
             updated_at: now,
         };
-        self.store.insert_claim(&record)?;
+        self.store.insert_claim_versioned(&record, source_version)?;
         Ok(record)
     }
 

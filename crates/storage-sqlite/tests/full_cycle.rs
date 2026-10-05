@@ -98,6 +98,7 @@ fn envelope(canonical: &str, capture_id: &str) -> CaptureEnvelope {
 
 fn edited() -> CandidateEdits {
     CandidateEdits {
+        qualifiers: Vec::new(),
         question: "Adotar FTS5 para busca?".to_string(),
         choice: "Sim, com tabela virtual".to_string(),
         rationale: "Busca local exige índice.".to_string(),

@@ -91,6 +91,7 @@ fn seed_capture(store: &SqliteStore, capture_id: &str, artifacts: Vec<CaptureArt
 
 fn candidate(id: &str, capture_id: &str, dedup: &str) -> DecisionCandidateRecord {
     DecisionCandidateRecord {
+        qualifiers: "[]".into(),
         id: id.to_string(),
         project_id: "project-1".to_string(),
         capture_id: capture_id.to_string(),
@@ -288,17 +289,72 @@ fn migration_0005_applies_on_fresh_and_upgraded_databases() {
                 row.get(0)
             })
             .expect("count");
-        assert!(versions >= 7, "0001..0008 must be applied, got {versions}");
+        assert!(versions >= 32);
+        // This synthetic rollback removes a table newer triggers reference.
+        // Drop/reapply only those triggers; real migrations remain forward-only.
+        let triggers = connection
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type='trigger'
+            AND sql LIKE '%decision_candidates%'",
+            )
+            .expect("triggers")
+            .query_map([], |r| r.get::<_, String>(0))
+            .expect("query")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("names");
+        for name in triggers {
+            connection
+                .execute_batch(&format!("DROP TRIGGER \"{}\"", name.replace('"', "\"\"")))
+                .expect("drop fixture trigger");
+        }
         connection
             .execute_batch(
-                "DROP TABLE decision_candidates; DELETE FROM schema_migrations WHERE version = 5;",
+                "DROP TABLE decision_candidates;
+                 ALTER TABLE engineering_decisions DROP COLUMN qualifiers;
+                 ALTER TABLE decision_revisions DROP COLUMN qualifiers;
+                 ALTER TABLE context_claims DROP COLUMN qualifiers;
+                 ALTER TABLE claim_suggestions DROP COLUMN qualifiers;
+                 DELETE FROM schema_migrations WHERE version IN (5, 15, 21);",
             )
             .expect("simulate version 4");
     }
 
-    SqliteStore::open(&database).expect("reopen and migrate");
+    let store = SqliteStore::open(&database).expect("reopen and migrate");
+    Connection::open(&database)
+        .expect("raw")
+        .execute_batch(
+            include_str!("../src/migrations/0033_incremental_review.sql")
+                .split("CREATE TRIGGER")
+                .skip(1)
+                .map(|part| format!("CREATE TRIGGER IF NOT EXISTS{part}"))
+                .collect::<String>()
+                .as_str(),
+        )
+        .expect("restore fixture triggers");
+    seed_capture(&store, "upgrade-capture", Vec::new());
+    let mut upgraded = candidate("upgrade-candidate", "upgrade-capture", "upgrade-dedup");
+    upgraded.qualifiers = "[{\"kind\":\"scope\",\"text\":\"offline only\"}]".into();
+    store
+        .insert_candidates(&[upgraded.clone()])
+        .expect("adapter writes upgraded candidate");
     let connection = Connection::open(&database).expect("open raw connection");
     assert!(table_exists(&connection, "decision_candidates"));
+    let actual: (String, String, f64, String) = connection
+        .query_row(
+            "SELECT qualifiers,kind,significance,criteria FROM decision_candidates WHERE id=?1",
+            [&upgraded.id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        actual,
+        (
+            upgraded.qualifiers,
+            upgraded.kind,
+            upgraded.significance,
+            upgraded.criteria
+        )
+    );
     let versions: i64 = connection
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
             row.get(0)
@@ -311,8 +367,8 @@ fn migration_0005_applies_on_fresh_and_upgraded_databases() {
             |row| row.get(0),
         )
         .expect("count distinct");
-    assert_eq!(versions, 19);
-    assert_eq!(distinct, 19);
+    assert!(versions >= 32);
+    assert_eq!(distinct, versions);
 
     let _ = std::fs::remove_dir_all(&root);
 }

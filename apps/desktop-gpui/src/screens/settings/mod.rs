@@ -407,6 +407,34 @@ impl SettingsScreen {
         self.open_section(section, cx);
     }
 
+    /// Polls only the visible read-only diagnostics; never reloads profile drafts.
+    pub fn poll_visible(&mut self, cx: &mut Context<Self>) {
+        if self.section == SettingsSection::Diagnostics {
+            if let Some(panel) = &self.diagnostics {
+                panel.update(cx, |panel, cx| panel.refresh(cx));
+            }
+        }
+    }
+
+    /// Supplies capture projection services to Diagnostics only.
+    pub fn set_capture_progress(
+        &mut self,
+        read: crate::screens::inbox::ProgressRead,
+        retry: crate::screens::inbox::ProgressRetry,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(panel) = &self.diagnostics {
+            panel.update(cx, |panel, _| panel.set_capture_progress(read, retry));
+        }
+    }
+
+    /// Changes the project used by the diagnostics capture projection.
+    pub fn set_progress_project(&mut self, project: Option<String>, cx: &mut Context<Self>) {
+        if let Some(panel) = &self.diagnostics {
+            panel.update(cx, |panel, cx| panel.set_project(project, cx));
+        }
+    }
+
     /// Shows `section` and reloads what it reads.
     pub fn open_section(&mut self, section: SettingsSection, cx: &mut Context<Self>) {
         self.section = section;
@@ -1581,6 +1609,15 @@ fn category_label(kind: &str) -> &'static str {
         "assistant_text" => "Respostas do assistente",
         "diff_hunk" => "Trechos de diff",
         "tool_summary" => "Resumos de ferramentas",
+        "document" => "Documentos do projeto",
+        "document_metadata" => "Caminhos e metadados dos documentos",
+        "decision_fields" => "Campos, escopo e qualificadores das decisões",
+        "confirmed_examples" => "Exemplos confirmados na revisão",
+        "rejected_examples" => "Exemplos rejeitados na revisão",
+        "rules" => "Regras e seus qualificadores",
+        "project_map" => "Itens e vínculos do mapa do projeto",
+        "knowledge_review" => "Fontes e achados da revisão de conhecimento",
+        "context_routing" => "Tarefa, arquivos e memória selecionada para avaliar relevância",
         _ => "Outro conteúdo",
     }
 }

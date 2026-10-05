@@ -4,6 +4,8 @@
 pub mod adoption;
 pub mod agent_access;
 pub mod analysis;
+pub mod capture_episode;
+pub mod capture_progress;
 pub mod captures;
 pub mod claim_suggestions;
 pub mod claims;
@@ -14,6 +16,7 @@ pub mod decisions;
 pub mod diagnostics;
 pub mod documents;
 pub mod export;
+pub mod external;
 pub mod extract;
 pub mod graph;
 pub mod inbox;
@@ -21,15 +24,18 @@ pub mod injection;
 pub mod integration;
 pub mod jobs;
 pub mod knowledge_review;
+pub mod observations;
 pub mod outbox;
 pub mod overview;
 pub mod paths;
 pub mod profile;
 pub mod projects;
 pub mod providers;
+pub mod qualifiers;
 pub mod redact;
 pub mod relation_suggestions;
 pub mod relations;
+pub mod review_exception;
 
 pub use agent_access::{AgentAccess, AgentAccessError, AgentApi, AgentStore};
 pub use analysis::{AnalysisOutcome, AnalyzeCapture, ExtractorFactory};
@@ -126,3 +132,4 @@ mod tests {
         assert_eq!(domain::crate_name(), "domain");
     }
 }
+pub mod context_routing;

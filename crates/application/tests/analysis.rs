@@ -62,6 +62,9 @@ impl ExtractionStore for Store {
 }
 
 impl AssessmentStore for Store {
+    fn assessment_attempt(&self, job: Option<&str>) -> Result<Option<i64>, ExtractError> {
+        Ok(job.map(|_| 3))
+    }
     fn record_assessment(&self, row: &AssessmentRecord) -> Result<(), ExtractError> {
         self.assessments.lock().expect("lock").push(row.clone());
         Ok(())
@@ -295,4 +298,9 @@ fn unreadable_profile_records_a_fixed_unavailable_context() {
     let rows = store.outcomes();
     assert_eq!(rows[0].1.as_deref(), Some("profile"));
     assert_eq!(rows[0].2, "unavailable");
+    let assessments = store.assessments.lock().unwrap();
+    assert_eq!(
+        assessments[0].attempt,
+        assessments[0].job_id.as_ref().map(|_| 3)
+    );
 }

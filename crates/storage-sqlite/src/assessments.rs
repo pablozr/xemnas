@@ -1,7 +1,7 @@
 //! SQLite implementation of the assessment provenance port.
 
 use application::extract::{AssessmentRecord, AssessmentStore, ExtractError};
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 
 use crate::store::SqliteStore;
 
@@ -11,14 +11,21 @@ fn storage_error(error: rusqlite::Error) -> ExtractError {
 }
 
 impl AssessmentStore for SqliteStore {
+    fn assessment_attempt(&self, job: Option<&str>) -> Result<Option<i64>, ExtractError> {
+        self.lock()
+            .query_row("SELECT attempts FROM jobs WHERE id=?1", [job], |r| r.get(0))
+            .optional()
+            .map_err(storage_error)
+    }
     fn record_assessment(&self, row: &AssessmentRecord) -> Result<(), ExtractError> {
         self.lock()
             .execute(
                 "INSERT INTO assessments \
                  (id, capture_id, job_id, profile_id, adapter, model, policy, \
                   consent_preview_hash, input_hash, started_at, finished_at, outcome, \
-                  candidates, inserted, error_code) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                  candidates, inserted, error_code, attempt, reason, durable_count, detail_count) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+                    ?16, ?17, ?18, ?19)",
                 params![
                     row.id,
                     row.capture_id,
@@ -35,6 +42,10 @@ impl AssessmentStore for SqliteStore {
                     row.candidates,
                     row.inserted,
                     row.error_code,
+                    row.attempt,
+                    row.reason,
+                    row.durable_count as i64,
+                    row.detail_count as i64,
                 ],
             )
             .map(|_| ())

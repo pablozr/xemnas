@@ -23,6 +23,8 @@ pub(super) struct DecisionEditor {
     subscriptions: Vec<Subscription>,
     focus: [FocusHandle; 2],
     busy: bool,
+    qualifiers: super::review_editor::QualifierFields,
+    original_qualifiers: Vec<application::qualifiers::KnowledgeQualifier>,
 }
 impl EventEmitter<RevisionEvent> for DecisionEditor {}
 const LABELS: [&str; 7] = [
@@ -65,6 +67,8 @@ impl DecisionEditor {
             .map(|field| cx.subscribe(field, |_, _, _: &SearchChanged, cx| cx.notify()))
             .collect();
         Self {
+            qualifiers: super::review_editor::QualifierFields::new(&detail.qualifiers, cx),
+            original_qualifiers: detail.qualifiers.clone(),
             fields,
             original,
             original_arrays: arrays,
@@ -106,6 +110,10 @@ impl DecisionEditor {
             scope: array(1),
             consequences: array(2),
             reconsider_when: array(3),
+            qualifiers: {
+                let values = self.qualifiers.values(cx);
+                (values != self.original_qualifiers).then_some(values)
+            },
         }
     }
     fn submit(&mut self, save: bool, cx: &mut Context<Self>) {
@@ -151,7 +159,8 @@ impl Render for DecisionEditor {
                     (index >= 3).then_some("Um item por linha."),
                     self.fields[index].clone(),
                 )
-            }));
+            }))
+            .child(self.qualifiers.render(&t));
         let message = if self.busy {
             Some(("Salvando…", false))
         } else if !edits.is_empty() && !valid {

@@ -1,0 +1,4 @@
+ALTER TABLE assessments ADD COLUMN attempt INTEGER;
+ALTER TABLE assessments ADD COLUMN reason TEXT NOT NULL DEFAULT 'unknown';
+ALTER TABLE assessments ADD COLUMN durable_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE assessments ADD COLUMN detail_count INTEGER NOT NULL DEFAULT 0;

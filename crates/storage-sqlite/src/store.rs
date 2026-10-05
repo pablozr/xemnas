@@ -84,6 +84,66 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 20,
         sql: include_str!("migrations/0020_create_claim_suggestions.sql"),
     },
+    Migration {
+        version: 21,
+        sql: include_str!("migrations/0021_knowledge_qualifiers.sql"),
+    },
+    Migration {
+        version: 22,
+        sql: include_str!("migrations/0022_assessment_destination.sql"),
+    },
+    Migration {
+        version: 23,
+        sql: include_str!("migrations/0023_claim_source_snapshot.sql"),
+    },
+    Migration {
+        version: 24,
+        sql: include_str!("migrations/0024_claim_source_version.sql"),
+    },
+    Migration {
+        version: 25,
+        sql: include_str!("migrations/0025_descriptive_observations.sql"),
+    },
+    Migration {
+        version: 26,
+        sql: include_str!("migrations/0026_observation_deliveries.sql"),
+    },
+    Migration {
+        version: 27,
+        sql: include_str!("migrations/0027_observation_semantic_cache.sql"),
+    },
+    Migration {
+        version: 28,
+        sql: include_str!("migrations/0028_context_routing.sql"),
+    },
+    Migration {
+        version: 29,
+        sql: include_str!("migrations/0029_context_routing_ownership.sql"),
+    },
+    Migration {
+        version: 30,
+        sql: include_str!("migrations/0030_review_exception.sql"),
+    },
+    Migration {
+        version: 31,
+        sql: include_str!("migrations/0031_candidate_nature.sql"),
+    },
+    Migration {
+        version: 32,
+        sql: include_str!("migrations/0032_review_targets.sql"),
+    },
+    Migration {
+        version: 33,
+        sql: include_str!("migrations/0033_incremental_review.sql"),
+    },
+    Migration {
+        version: 34,
+        sql: include_str!("migrations/0034_capture_episode.sql"),
+    },
+    Migration {
+        version: 35,
+        sql: include_str!("migrations/0035_repair_assessment_destination.sql"),
+    },
 ];
 
 /// A single embedded schema migration.
@@ -186,17 +246,26 @@ fn apply_migrations(connection: &Connection, migrations: &[Migration]) -> rusqli
     )?;
 
     for migration in migrations {
-        let applied: i64 = connection.query_row(
+        // Acquire the writer lock before reading the marker/schema. Concurrent
+        // openers must recheck under this lock, without upgrading a WAL snapshot.
+        let transaction = rusqlite::Transaction::new_unchecked(
+            connection,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        let applied: i64 = transaction.query_row(
             "SELECT COUNT(*) FROM schema_migrations WHERE version = ?1",
             [migration.version],
             |row| row.get(0),
         )?;
         if applied > 0 {
+            transaction.commit()?;
             continue;
         }
 
-        let transaction = connection.unchecked_transaction()?;
         transaction.execute_batch(migration.sql)?;
+        if migration.version == 35 {
+            repair_assessment_destination(&transaction)?;
+        }
         transaction.execute(
             "INSERT INTO schema_migrations (version, applied_at) \
              VALUES (?1, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
@@ -205,6 +274,61 @@ fn apply_migrations(connection: &Connection, migrations: &[Migration]) -> rusqli
         transaction.commit()?;
     }
 
+    Ok(())
+}
+
+/// Repairs only the known historical v22 drift; never rebuilds or replays tables.
+fn repair_assessment_destination(connection: &Connection) -> rusqlite::Result<()> {
+    let mut statement = connection.prepare("PRAGMA table_info(assessments)")?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    // Fail closed on unrelated drift rather than inventing assessment history.
+    for required in [
+        "id",
+        "capture_id",
+        "job_id",
+        "profile_id",
+        "adapter",
+        "model",
+        "policy",
+        "consent_preview_hash",
+        "input_hash",
+        "started_at",
+        "finished_at",
+        "outcome",
+        "candidates",
+        "inserted",
+        "error_code",
+    ] {
+        if !columns.iter().any(|column| column == required) {
+            return Err(rusqlite::Error::InvalidColumnName(format!(
+                "migration 35: assessments schema mismatch: missing {required}"
+            )));
+        }
+    }
+    for (name, ddl) in [
+        (
+            "attempt",
+            "ALTER TABLE assessments ADD COLUMN attempt INTEGER",
+        ),
+        (
+            "reason",
+            "ALTER TABLE assessments ADD COLUMN reason TEXT NOT NULL DEFAULT 'unknown'",
+        ),
+        (
+            "durable_count",
+            "ALTER TABLE assessments ADD COLUMN durable_count INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "detail_count",
+            "ALTER TABLE assessments ADD COLUMN detail_count INTEGER NOT NULL DEFAULT 0",
+        ),
+    ] {
+        if !columns.iter().any(|column| column == name) {
+            connection.execute_batch(ddl)?;
+        }
+    }
     Ok(())
 }
 

@@ -203,6 +203,7 @@ fn part_of_expansion_is_two_live_hops_independent_of_edge_order() {
 }
 fn decision(id: &str, status: DecisionStatus) -> StoredDecision {
     StoredDecision {
+        qualifiers: "[]".into(),
         decision_id: id.into(),
         candidate_id: format!("candidate-{id}"),
         project_id: "p".into(),
@@ -231,6 +232,9 @@ fn snapshot() -> ReviewSnapshot {
             decision("dependent", DecisionStatus::Accepted),
         ],
         claims: vec![ClaimRecord {
+            source_version: None,
+            inherited_scope: "[]".into(),
+            qualifiers: "[]".into(),
             claim_id: "rule".into(),
             project_id: "p".into(),
             kind: domain::claims::ClaimKind::Constraint,
@@ -259,6 +263,9 @@ fn snapshot() -> ReviewSnapshot {
         edges: vec![],
         relation_suggestions: vec![],
         claim_suggestions: vec![ClaimSuggestionRecord {
+            inherited_scope: "[]".into(),
+            source_version: Some(1),
+            qualifiers: "[]".into(),
             suggestion_id: "pending".into(),
             project_id: "p".into(),
             decision_id: "old".into(),
@@ -268,6 +275,16 @@ fn snapshot() -> ReviewSnapshot {
             created_at: NOW.into(),
         }],
     }
+}
+
+#[test]
+fn inherited_scope_is_validated_for_claims_and_pending_suggestions() {
+    let mut s = snapshot();
+    s.claims[0].inherited_scope = "not-json".into();
+    assert!(inspect_snapshot(&s, "2026-01-01T00:00:00Z".into()).is_err());
+    s.claims[0].inherited_scope = "[]".into();
+    s.claim_suggestions[0].inherited_scope = "{}".into();
+    assert!(inspect_snapshot(&s, "2026-01-01T00:00:00Z".into()).is_err());
 }
 #[derive(Clone)]
 struct Store(ReviewSnapshot);

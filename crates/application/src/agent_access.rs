@@ -113,6 +113,7 @@ pub trait AgentApi: Send + Sync {
 #[derive(Debug, Clone)]
 pub struct AgentAccess<S> {
     store: S,
+    routing: Option<std::sync::Arc<crate::context_routing::RoutingLookup>>,
 }
 
 impl<S> AgentAccess<S>
@@ -124,11 +125,24 @@ where
         + ContextStore
         + ProjectRepository
         + GraphStore
+        + crate::observations::ObservationStore
         + Clone,
 {
     /// Wraps the store.
     pub fn new(store: S) -> Self {
-        Self { store }
+        Self {
+            store,
+            routing: None,
+        }
+    }
+
+    /// Shares the optional local routing cache with context injection.
+    pub fn with_routing(
+        mut self,
+        routing: Option<std::sync::Arc<crate::context_routing::RoutingLookup>>,
+    ) -> Self {
+        self.routing = routing;
+        self
     }
 
     /// The full decision behind a short reference such as `D:bbbbcccc`.
@@ -214,13 +228,15 @@ where
             .map(|path| crate::injection::relative_file(path, &location))
             .into_iter()
             .collect();
-        let pack = ContextPacks::new(self.store.clone()).build_pack(ContextRequest {
-            project_id: project,
-            task,
-            as_of: None,
-            budget_chars: Some(MAX_BUDGET_CHARS),
-            files,
-        })?;
+        let pack = ContextPacks::new(self.store.clone())
+            .with_routing(self.routing.clone())
+            .build_pack(ContextRequest {
+                project_id: project,
+                task,
+                as_of: None,
+                budget_chars: Some(MAX_BUDGET_CHARS),
+                files,
+            })?;
         Ok(render_compact(&pack, budget, &BTreeSet::new()).map(|block| block.text))
     }
 
@@ -250,6 +266,10 @@ where
             format!("pergunta: {}", clean(&summary.question)),
             format!("escolha: {}", clean(&summary.choice)),
             format!("motivo: {}", clean(&detail.rationale)),
+            format!(
+                "qualifiers: {}",
+                clean(&serde_json::to_string(&detail.qualifiers).expect("qualifier JSON"))
+            ),
         ];
         for (label, items) in [
             ("premissas", &detail.assumptions),
@@ -286,11 +306,16 @@ where
         for claim in self.store.project_claims(project).map_err(storage)? {
             let valid = now.as_ref().is_some_and(|at| claim.is_valid_at(at));
             if valid && claim.source_decision_id.as_deref() == Some(id) {
+                crate::qualifiers::decode(&claim.qualifiers).map_err(storage)?;
+                serde_json::from_str::<Vec<String>>(&claim.inherited_scope).map_err(storage)?;
                 lines.push(format!(
-                    "claim {}:{} {}",
+                    "claim {}:{} {} qualifiers:{} scope:{} source_version:{:?}",
                     claim.kind.as_str(),
                     short_ref(&claim.claim_id),
-                    clean(&claim.statement)
+                    clean(&claim.statement),
+                    clean(&claim.qualifiers),
+                    clean(&claim.inherited_scope),
+                    claim.source_version
                 ));
             }
         }
@@ -313,6 +338,7 @@ where
         + ContextStore
         + ProjectRepository
         + GraphStore
+        + crate::observations::ObservationStore
         + Clone
         + Send
         + Sync,

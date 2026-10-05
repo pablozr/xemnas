@@ -105,6 +105,7 @@ pub fn decision(
     let id = format!("cand-{key}");
     store
         .insert_candidates(&[DecisionCandidateRecord {
+            qualifiers: "[]".into(),
             id: id.clone(),
             project_id: project.to_string(),
             capture_id: format!("capture-{project}"),
@@ -187,6 +188,7 @@ pub fn decision_with_diff(
     let files: Vec<String> = files.iter().map(|file| format!("\"{file}\"")).collect();
     store
         .insert_candidates(&[DecisionCandidateRecord {
+            qualifiers: "[]".into(),
             id: id.clone(),
             project_id: project.to_string(),
             capture_id: capture,

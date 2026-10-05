@@ -64,6 +64,8 @@ pub trait ContextStores:
     + DocumentStore
     + InjectionHistory
     + ClaimSuggestionStore
+    + application::observations::ObservationStore
+    + application::observations::ObservationDeliveryStore
     + Clone
     + Send
     + 'static
@@ -81,6 +83,8 @@ impl<T> ContextStores for T where
         + DocumentStore
         + InjectionHistory
         + ClaimSuggestionStore
+        + application::observations::ObservationStore
+        + application::observations::ObservationDeliveryStore
         + Clone
         + Send
         + 'static
@@ -515,12 +519,14 @@ impl<S: ContextStores> ContextScreen<S> {
         });
         self.run(cx, move |backend| {
             let created = backend.claims.create(NewClaim {
+                source_version: None,
                 project_id: project.clone(),
                 kind,
                 statement,
                 valid_from: None,
                 valid_until: None,
                 source_decision_id: None,
+                qualifiers: Vec::new(),
             });
             Outcome::Claims(
                 created
@@ -1067,6 +1073,38 @@ impl<S: ContextStores> ContextScreen<S> {
             .as_ref()
             .is_some_and(|snapshot| snapshot.review.contains(&claim.claim_id));
         let id = claim.claim_id.clone();
+        let qualifiers = application::qualifiers::decode(&claim.qualifiers);
+        let scope = serde_json::from_str::<Vec<String>>(&claim.inherited_scope);
+        let readable = qualifiers.is_ok() && scope.is_ok();
+        let qualification = match (&qualifiers, &scope) {
+            (Ok(items), Ok(scope)) => super::review_editor::qualifier_reading(theme, items)
+                .child(if scope.is_empty() {
+                    "Escopo herdado não informado.".into()
+                } else {
+                    format!("Escopo herdado: {}", scope.join("; "))
+                })
+                .into_any_element(),
+            _ => error_banner(
+                theme,
+                "Não foi possível ler os qualificadores ou o escopo desta regra.",
+            )
+            .id(gpui::ElementId::Name(
+                format!("claim-qualification-error-{id}").into(),
+            ))
+            .role(Role::Alert)
+            .child(
+                action_button(
+                    theme,
+                    gpui::ElementId::Name(format!("claim-qualification-retry-{id}").into()),
+                    ButtonKind::Ghost,
+                    !self.busy,
+                )
+                .aria_label("Tentar ler qualificadores e escopo novamente")
+                .on_click(cx.listener(|this, _, _, cx| this.refresh(cx)))
+                .child("Tentar novamente"),
+            )
+            .into_any_element(),
+        };
         let row = div()
             .flex()
             .items_center()
@@ -1083,6 +1121,7 @@ impl<S: ContextStores> ContextScreen<S> {
                     .flex_col()
                     .gap(px(2.0))
                     .child(text_style(div(), TypeScale::BODY).child(claim.statement.clone()))
+                    .child(qualification)
                     .child(
                         div()
                             .flex()
@@ -1126,12 +1165,14 @@ impl<S: ContextStores> ContextScreen<S> {
                     theme,
                     "context-claim-retire",
                     ButtonKind::Secondary,
-                    !self.busy,
+                    !self.busy && readable,
                 )
                 .aria_label("Encerrar regra")
-                .on_click(
-                    cx.listener(move |this, _, _, cx| this.retire_claim(retire_id.clone(), cx)),
-                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if readable && !this.busy {
+                        this.retire_claim(retire_id.clone(), cx);
+                    }
+                }))
                 .child("Encerrar"),
             )
             .into_any_element()
@@ -1141,10 +1182,13 @@ impl<S: ContextStores> ContextScreen<S> {
                     theme,
                     gpui::ElementId::Name(format!("context-claim-{id}").into()),
                     ButtonKind::Ghost,
-                    !self.busy,
+                    !self.busy && readable,
                 )
                 .aria_label("Encerrar regra")
                 .on_click(cx.listener(move |this, _, _, cx| {
+                    if !readable || this.busy {
+                        return;
+                    }
                     this.confirm_retire = Some(id.clone());
                     cx.notify();
                 }))
@@ -1245,7 +1289,16 @@ impl<S: ContextStores> ContextScreen<S> {
                                 .child(
                                     text_style(div(), TypeScale::BODY_SMALL)
                                         .text_color(colors.text_secondary())
-                                        .child(decision.choice.clone()),
+                                        .child(decision.choice.clone())
+                                        .child(super::review_editor::qualifier_reading(
+                                            theme,
+                                            &decision.qualifiers,
+                                        ))
+                                        .child(if decision.scope.is_empty() {
+                                            "Escopo não informado.".into()
+                                        } else {
+                                            format!("Escopo: {}", decision.scope.join("; "))
+                                        }),
                                 ),
                         )
                         .child(
@@ -1267,7 +1320,16 @@ impl<S: ContextStores> ContextScreen<S> {
                         .child(
                             text_style(div(), TypeScale::BODY_SMALL)
                                 .flex_1()
-                                .child(claim.statement.clone()),
+                                .child(claim.statement.clone())
+                                .child(super::review_editor::qualifier_reading(
+                                    theme,
+                                    &claim.qualifiers,
+                                ))
+                                .child(if claim.inherited_scope.is_empty() {
+                                    "Escopo herdado não informado.".into()
+                                } else {
+                                    format!("Escopo herdado: {}", claim.inherited_scope.join("; "))
+                                }),
                         )
                         .child(
                             text_style(div(), TypeScale::META)
@@ -1503,8 +1565,10 @@ impl<S: ContextStores> ContextScreen<S> {
             ),
             Section::Documents => (
                 "Documentação",
-                "Lida da pasta do projeto (docs/, specs/, ADRs e README). Alimenta a Visão \
-                 como fonte; não é enviada ao agente nem vira decisão.",
+                "Capturada e indexada da pasta do projeto (docs/, specs/, ADRs e README). \
+                  Alimenta a Visão como fonte e pode gerar candidatos após análise. \
+                  Decisões e regras só são criadas após confirmação na Revisão; \
+                  o documento não é enviado diretamente ao agente.",
                 self.render_documents(theme, &documents, cx),
             ),
             Section::Mode => (

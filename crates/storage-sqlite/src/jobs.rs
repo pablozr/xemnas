@@ -39,6 +39,25 @@ fn map_row(row: &Row<'_>) -> rusqlite::Result<JobRecord> {
 const TOUCH_UPDATED_AT: &str = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')";
 
 impl JobRepository for SqliteStore {
+    fn cancelled_by_project_purge(&self, record: &JobRecord) -> Result<bool, JobError> {
+        if !matches!(
+            record.kind.as_str(),
+            application::observations::refresh::REFRESH_OBSERVATIONS_KIND
+                | application::context_routing::CONTEXT_ROUTING_KIND
+        ) || record.state != JobState::Running
+        {
+            return Ok(false);
+        }
+        self.lock()
+            .query_row(
+                "SELECT NOT EXISTS (SELECT 1 FROM jobs WHERE id = ?1) \
+                 AND NOT EXISTS (SELECT 1 FROM projects WHERE id = ?2)",
+                params![record.id, record.payload],
+                |row| row.get(0),
+            )
+            .map_err(storage_error)
+    }
+
     fn insert(&self, record: &JobRecord) -> Result<(), JobError> {
         self.lock()
             .execute(

@@ -113,6 +113,7 @@ fn candidate(
     status: &str,
 ) -> DecisionCandidateRecord {
     DecisionCandidateRecord {
+        qualifiers: "[]".into(),
         id: id.to_string(),
         project_id: "project-1".to_string(),
         capture_id: capture_id.to_string(),
@@ -188,6 +189,10 @@ fn metrics_are_aggregated_from_seeded_timestamps() {
     ] {
         store
             .record_assessment(&AssessmentRecord {
+                attempt: None,
+                reason: "unknown".into(),
+                durable_count: 0,
+                detail_count: 0,
                 id: format!("assessment-{index}"),
                 capture_id: "capture-1".to_string(),
                 job_id: None,

@@ -13,6 +13,8 @@ pub(super) fn validate_proposal(
     evidence: &DecisionEvidence,
     detected: &[RelevanceSignal],
 ) -> Result<Vec<RelevanceSignal>, ExtractError> {
+    crate::qualifiers::validate_extracted(&proposal.qualifiers, evidence)
+        .map_err(ExtractError::Validation)?;
     if proposal.question.trim().is_empty() {
         return Err(ExtractError::Validation(
             "proposta sem pergunta".to_string(),

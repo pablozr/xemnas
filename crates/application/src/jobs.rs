@@ -69,7 +69,7 @@ pub enum JobState {
     Completed,
     /// Finished with an error or panic.
     Failed,
-    /// Cancelled before it started running.
+    /// Cancelled before execution, or invalidated by project purge while running.
     Cancelled,
 }
 
@@ -255,6 +255,12 @@ pub trait JobRepository {
     /// Requeues interrupted idempotent jobs and fails interrupted
     /// non-idempotent ones.
     fn recover_interrupted(&self) -> Result<RecoveryReport, JobError>;
+
+    /// Confirms that a claimed job disappeared with its owning project during purge.
+    /// Called only after a terminal compare-and-set miss, never after a storage error.
+    fn cancelled_by_project_purge(&self, _record: &JobRecord) -> Result<bool, JobError> {
+        Ok(false)
+    }
 }
 
 /// Jobs use cases over a [`JobRepository`].
@@ -419,30 +425,24 @@ impl<R: JobRepository> Jobs<R> {
         let result = catch_unwind(AssertUnwindSafe(|| handler(&record)));
         replace_job_panic_sanitized(previous);
 
-        let state = match result {
-            Ok(Ok(())) => {
-                self.transition_checked(&record.id, JobState::Running, JobState::Completed, None)?;
-                JobState::Completed
-            }
-            Ok(Err(failure)) => {
-                self.transition_checked(
-                    &record.id,
-                    JobState::Running,
-                    JobState::Failed,
-                    Some(failure.as_str()),
-                )?;
-                JobState::Failed
-            }
-            Err(_panic) => {
-                self.transition_checked(
-                    &record.id,
-                    JobState::Running,
-                    JobState::Failed,
-                    Some(PANIC_MESSAGE),
-                )?;
-                JobState::Failed
-            }
+        let (mut state, last_error) = match result {
+            Ok(Ok(())) => (JobState::Completed, None),
+            Ok(Err(failure)) => (JobState::Failed, Some(failure.as_str())),
+            Err(_panic) => (JobState::Failed, Some(PANIC_MESSAGE)),
         };
+        if !self
+            .repository
+            .transition(&record.id, JobState::Running, state, last_error)?
+        {
+            if self.repository.cancelled_by_project_purge(&record)? {
+                state = JobState::Cancelled;
+            } else {
+                return Err(JobError::InvalidTransition {
+                    from: JobState::Running,
+                    to: state,
+                });
+            }
+        }
 
         Ok(Some(JobOutcome {
             job_id: record.id,

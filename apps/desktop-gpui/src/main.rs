@@ -86,6 +86,7 @@ fn main() {
             Box::new(|_| Arc::new(demo::SampleKnowledgeReview)),
             true,
             CaptureStatus::Demo,
+            None,
         );
         return;
     }
@@ -112,6 +113,7 @@ fn main() {
                 review_api(ai_settings(&paths.ai_profile), Arc::default()),
                 false,
                 CaptureStatus::Unavailable,
+                None,
             );
             return;
         }
@@ -126,6 +128,25 @@ fn main() {
     // One ChatGPT session per process: Settings (sign-in, models) and the
     // jobs worker (extraction) share it so token refreshes never race.
     let chatgpt = std::sync::Arc::new(ai_provider::ChatGptSession::default());
+    let routing = Arc::new(application::context_routing::RoutingLookup::new(
+        Arc::new(store.clone()),
+        Arc::new(settings.clone()),
+    ));
+    jobs.register(
+        application::context_routing::CONTEXT_ROUTING_KIND,
+        Arc::new({
+            let judge = application::context_routing::JudgeContextAmbiguity::new(
+                store.clone(),
+                settings.clone(),
+                ai_provider::ProviderFactory::new(chatgpt.clone()),
+            );
+            move |record: &application::jobs::JobRecord| {
+                judge
+                    .run(&record.id)
+                    .map_err(|_| application::jobs::JobFailure::Failed)
+            }
+        }),
+    );
     match settings.load_or_seed() {
         Ok(_) => tracing::info!(
             path = %ai_profile_path.display(),
@@ -217,7 +238,8 @@ fn main() {
 
     // Recovery must finish before the worker starts: a failed recovery means the
     // queue is unreconciled, so the worker stays down and the window still opens.
-    let worker = match jobs.recover() {
+    let local_jobs = observation_jobs(store.clone());
+    let (worker, local_worker, reconciler) = match jobs.recover() {
         Ok(report) => {
             tracing::info!(
                 requeued = report.requeued,
@@ -225,7 +247,11 @@ fn main() {
                 operation = "recover_jobs",
                 "recovered interrupted jobs"
             );
-            Some(jobs.spawn_worker())
+            (
+                Some(jobs.spawn_worker()),
+                Some(local_jobs.spawn_worker()),
+                Some(ObservationReconciler::spawn(store.clone())),
+            )
         }
         Err(error) => {
             tracing::error!(
@@ -233,7 +259,7 @@ fn main() {
                 operation = "recover_jobs",
                 "could not recover interrupted jobs; the jobs worker will not start"
             );
-            None
+            (None, None, None)
         }
     };
 
@@ -249,7 +275,7 @@ fn main() {
     // runtime thread beside the jobs worker, and a startup failure is logged
     // while the window still opens (MVP-SPEC §14 - a broken integration must
     // never block the rest of the app).
-    let api = match start_local_api(store.clone(), &paths.runtime_dir) {
+    let api = match start_local_api(store.clone(), &paths.runtime_dir, routing.clone()) {
         Ok(api) => Some(api),
         Err(error) => {
             tracing::error!(
@@ -286,15 +312,33 @@ fn main() {
     );
     let overview = overview_api(ai_settings(&paths.ai_profile), chatgpt.clone());
     let reviewer = review_api(ai_settings(&paths.ai_profile), chatgpt.clone());
-    run_shell_mode(Ok(store), services, overview, reviewer, false, capture);
+    run_shell_mode(
+        Ok(store),
+        services,
+        overview,
+        reviewer,
+        false,
+        capture,
+        Some(routing),
+    );
 
     // Graceful shutdown mirrors startup: stop the API first so the discovery
     // and per-session token files are removed, then stop the jobs worker.
     if let Some(api) = api {
         api.shutdown();
     }
-    if let Some(worker) = worker {
+    if let Some(reconciler) = &reconciler {
+        reconciler.stop();
+    }
+    for worker in [&worker, &local_worker].into_iter().flatten() {
         worker.stop();
+    }
+    if let Some(reconciler) = reconciler {
+        if reconciler.thread.join().is_err() {
+            tracing::error!(operation = "observation_reconciler", "reconciler panicked");
+        }
+    }
+    for worker in [worker, local_worker].into_iter().flatten() {
         if let Err(error) = worker.join() {
             tracing::error!(
                 error = %error,
@@ -302,6 +346,104 @@ fn main() {
                 "jobs worker stopped with an error"
             );
         }
+    }
+}
+
+/// Independent local queue: remote provider handlers must never be registered here.
+fn observation_jobs(store: SqliteStore) -> application::jobs::Jobs<SqliteStore> {
+    let mut jobs = application::jobs::Jobs::new(store.clone());
+    let refresh = application::observations::refresh::RefreshObservations::new(
+        store,
+        application::observations::reader::LocalObservationReader,
+    );
+    jobs.register(
+        application::observations::refresh::REFRESH_OBSERVATIONS_KIND,
+        Arc::new(move |record| refresh.run(record)),
+    );
+    jobs.observe_with(|event| {
+        if let application::jobs::JobEvent::StorageError(detail) = event {
+            tracing::error!(error = %detail, operation = "observation_worker", "worker stopped");
+        }
+    });
+    jobs
+}
+
+/// Bounded scheduling over a fresh full project listing, not a bounded SQL read.
+fn refresh_batch(mut ids: Vec<String>, cursor: &mut Option<String>) -> Vec<String> {
+    ids.sort();
+    ids.dedup();
+    let start = cursor
+        .as_ref()
+        .map_or(0, |last| ids.partition_point(|id| id <= last));
+    let batch: Vec<_> = ids[start..]
+        .iter()
+        .chain(ids[..start].iter())
+        .take(64)
+        .cloned()
+        .collect();
+    *cursor = batch.last().cloned();
+    batch
+}
+
+/// Interruptible startup and periodic observation scheduling, independent of providers.
+struct ObservationReconciler {
+    stop: Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+    thread: std::thread::JoinHandle<()>,
+}
+
+impl ObservationReconciler {
+    fn spawn(store: SqliteStore) -> Self {
+        let stop = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let signal = stop.clone();
+        let thread = std::thread::spawn(move || {
+            use application::observations::{ObservationStore, RefreshRequest};
+            let mut cursor = None;
+            loop {
+                if *signal.0.lock().unwrap_or_else(|error| error.into_inner()) {
+                    break;
+                }
+                match application::projects::ProjectRepository::list(&store) {
+                    Ok(projects) => {
+                        let ids = projects.into_iter().map(|project| project.id).collect();
+                        for project_id in refresh_batch(ids, &mut cursor) {
+                            if *signal.0.lock().unwrap_or_else(|error| error.into_inner()) {
+                                break;
+                            }
+                            if let Err(error) = store.request_refresh(&RefreshRequest {
+                                project_id,
+                                capture_trigger: "reconciler".into(),
+                                requested_at: chrono::Utc::now().to_rfc3339(),
+                            }) {
+                                tracing::error!(error = %error, operation = "observation_refresh",
+                                    "could not schedule refresh");
+                            }
+                        }
+                    }
+                    Err(error) => tracing::error!(error = %error,
+                        operation = "observation_reconciler", "could not list projects"),
+                }
+                let guard = signal.0.lock().unwrap_or_else(|error| error.into_inner());
+                let (guard, _) = signal
+                    .1
+                    .wait_timeout_while(guard, std::time::Duration::from_secs(60), |stopped| {
+                        !*stopped
+                    })
+                    .unwrap_or_else(|error| error.into_inner());
+                if *guard {
+                    break;
+                }
+            }
+        });
+        Self { stop, thread }
+    }
+
+    fn stop(&self) {
+        *self
+            .stop
+            .0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = true;
+        self.stop.1.notify_all();
     }
 }
 
@@ -435,6 +577,7 @@ fn run_shell_mode(
     reviewer: ReviewFactory,
     demo: bool,
     capture: CaptureStatus,
+    routing: Option<Arc<application::context_routing::RoutingLookup>>,
 ) {
     let backdrop = backdrop_from_env();
     // The status line reads the jobs table through the application port.
@@ -548,6 +691,17 @@ fn run_shell_mode(
             .map(|store| -> Arc<dyn application::adoption::AdoptionApi> {
                 Arc::new(application::adoption::Adoption::new(store.clone()))
             });
+        let capture_progress = store.as_ref().ok().map(|store| {
+            let reader = application::capture_progress::CaptureProgressReader(store.clone());
+            let jobs = application::jobs::Jobs::new(store.clone());
+            let read: xemnas_desktop::screens::inbox::ProgressRead =
+                Arc::new(move |project| reader.recent(project, 8));
+            let retry: xemnas_desktop::screens::inbox::ProgressRetry = Arc::new(move |job| {
+                jobs.reprocess(job)
+                    .map_err(|_| "Não foi possível reprocessar a captura.".into())
+            });
+            (read, retry)
+        });
         let (projects, inbox, decisions, context, map, overview) = match store {
             Ok(store) => (
                 Ok(application::projects::Projects::new(store.clone())),
@@ -562,7 +716,8 @@ fn run_shell_mode(
                     decisions: application::decisions::Decisions::new(store.clone()),
                     claims: application::claims::Claims::new(store.clone()),
                     settings: application::context_settings::ContextSettings::new(store.clone()),
-                    packs: application::context::ContextPacks::new(store.clone()),
+                    packs: application::context::ContextPacks::new(store.clone())
+                        .with_routing(routing.clone()),
                     documents: application::documents::Documents::new(store.clone()),
                     deliveries: application::injection::Deliveries::new(store.clone()),
                     derived: application::claim_suggestions::ClaimSuggestions::new(store.clone()),
@@ -597,6 +752,9 @@ fn run_shell_mode(
                 shell.set_adoption(adoption, cx);
             }
             shell.set_demo(demo);
+            if let Some((read, retry)) = capture_progress {
+                shell.set_capture_progress(read, retry, cx);
+            }
             if let Some(route) = route {
                 shell.open_route(route);
             }
@@ -750,20 +908,97 @@ fn drain_outbox(store: &SqliteStore, root: &std::path::Path) {
 fn start_local_api(
     store: SqliteStore,
     runtime_dir: &std::path::Path,
+    routing: Arc<application::context_routing::RoutingLookup>,
 ) -> Result<local_api::RunningApi, local_api::ApiServerError> {
     let use_case = std::sync::Arc::new(application::captures::CaptureIngest::new(store.clone()));
     let mut config = local_api::ApiServerConfig::new(use_case, runtime_dir);
     config.services.context = Some(std::sync::Arc::new(
-        application::injection::ContextInjection::new(store.clone()),
+        application::injection::ContextInjection::new(store.clone())
+            .with_routing(Some(routing.clone())),
     ));
     config.services.agent = Some(std::sync::Arc::new(
-        application::agent_access::AgentAccess::new(store),
+        application::agent_access::AgentAccess::new(store).with_routing(Some(routing)),
     ));
     local_api::ApiServer::start(config)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn refresh_rounds_are_fair_and_track_membership_changes() {
+        let ids: Vec<_> = (0..130).map(|id| format!("{id:03}")).collect();
+        let mut cursor = None;
+        let mut seen = std::collections::BTreeSet::new();
+        for _ in 0..3 {
+            let batch = refresh_batch(ids.clone(), &mut cursor);
+            assert_eq!(batch.len(), 64);
+            seen.extend(batch);
+        }
+        assert_eq!(seen.len(), 130);
+        cursor = Some("063".into());
+        let mut changed = ids;
+        changed.retain(|id| id != "063");
+        changed.push("063-new".into());
+        assert_eq!(refresh_batch(changed, &mut cursor)[0], "063-new");
+        assert!(refresh_batch(Vec::new(), &mut cursor).is_empty());
+    }
+
+    #[test]
+    fn local_worker_does_not_claim_slow_remote_jobs() {
+        let store = SqliteStore::open(":memory:").unwrap();
+        let mut remote = application::jobs::Jobs::new(store.clone());
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let release_rx = std::sync::Mutex::new(release_rx);
+        remote.register(
+            application::jobs::ANALYZE_CAPTURE_KIND,
+            Arc::new(move |_| {
+                started_tx.send(()).unwrap();
+                release_rx.lock().unwrap().recv().unwrap();
+                Ok(())
+            }),
+        );
+        remote
+            .enqueue(application::jobs::ANALYZE_CAPTURE_KIND, "slow", true)
+            .unwrap();
+        let local = observation_jobs(store);
+        remote.recover().unwrap();
+        assert!(local.run_next().unwrap().is_none());
+        let remote_worker = remote.spawn_worker();
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        local
+            .enqueue(
+                application::observations::refresh::REFRESH_OBSERVATIONS_KIND,
+                "removed-project",
+                true,
+            )
+            .unwrap();
+        let outcome = local.run_next().unwrap().unwrap();
+        assert_eq!(
+            outcome.kind,
+            application::observations::refresh::REFRESH_OBSERVATIONS_KIND
+        );
+        let local_worker = local.spawn_worker();
+        remote_worker.stop();
+        local_worker.stop();
+        release_tx.send(()).unwrap();
+        remote_worker.join().unwrap();
+        local_worker.join().unwrap();
+    }
+
+    #[test]
+    fn reconciler_shutdown_interrupts_cadence() {
+        let reconciler = ObservationReconciler::spawn(SqliteStore::open(":memory:").unwrap());
+        let started = std::time::Instant::now();
+        reconciler.stop();
+        reconciler.thread.join().unwrap();
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
+
     #[test]
     fn smoke() {
         assert_eq!(env!("CARGO_PKG_NAME"), "desktop-gpui");

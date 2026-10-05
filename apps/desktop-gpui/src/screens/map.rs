@@ -1292,6 +1292,8 @@ impl<S: MapStores> MapScreen<S> {
                     div()
                         .flex()
                         .items_start()
+                        .flex_col()
+                        .w_full()
                         .gap(px(SpacingScale::S3))
                         .py(px(SpacingScale::S3))
                         .when(index > 0, |row| {
@@ -1319,6 +1321,8 @@ impl<S: MapStores> MapScreen<S> {
                                         ))
                                         .child(
                                             text_style(div(), TypeScale::BODY_SMALL)
+                                                .flex_1()
+                                                .min_w(px(0.0))
                                                 .text_color(colors.text_secondary())
                                                 .child(suggestion.to_question.clone()),
                                         ),
@@ -1340,8 +1344,14 @@ impl<S: MapStores> MapScreen<S> {
                                     )
                                 }),
                         )
-                        .child(reject)
-                        .child(confirm),
+                        .child(
+                            div()
+                                .flex()
+                                .flex_wrap()
+                                .gap(px(SpacingScale::S2))
+                                .child(reject)
+                                .child(confirm),
+                        ),
                 );
             }
             column = column.child(section(theme, "Relações entre decisões", list));
@@ -1355,7 +1365,9 @@ impl<S: MapStores> MapScreen<S> {
                 let confirm = self.button(
                     format!("map-context-confirm-{index}"),
                     ButtonKind::Secondary,
-                    !self.busy,
+                    !self.busy
+                        && application::qualifiers::decode(&record.qualifiers).is_ok()
+                        && serde_json::from_str::<Vec<String>>(&record.inherited_scope).is_ok(),
                     "Confirmar",
                     move |this, cx| {
                         let id = confirm_id.clone();
@@ -1382,8 +1394,38 @@ impl<S: MapStores> MapScreen<S> {
                     },
                     cx,
                 );
+                let qualifiers = application::qualifiers::decode(&record.qualifiers);
+                let inherited = serde_json::from_str::<Vec<String>>(&record.inherited_scope);
+                let qualification = match (qualifiers, inherited) {
+                    (Ok(items), Ok(scope)) => {
+                        super::review_editor::qualifier_reading(theme, &items)
+                            .child(if scope.is_empty() {
+                                "Escopo herdado não informado.".into()
+                            } else {
+                                format!("Escopo herdado: {}", scope.join("; "))
+                            })
+                            .into_any_element()
+                    }
+                    _ => error_banner(
+                        theme,
+                        "Não foi possível ler qualificadores ou escopo. Confirmação indisponível.",
+                    )
+                    .id(gpui::ElementId::Name(
+                        format!("map-qualification-error-{index}").into(),
+                    ))
+                    .role(Role::Alert)
+                    .child(self.button(
+                        format!("map-qualification-retry-{index}"),
+                        ButtonKind::Ghost,
+                        !self.busy,
+                        "Tentar novamente",
+                        |this, cx| this.refresh(cx),
+                        cx,
+                    ))
+                    .into_any_element(),
+                };
                 let scope = if suggestion.scope.is_empty() {
-                    "Vale para o projeto todo".to_owned()
+                    "Sem vínculos de escopo informados".to_owned()
                 } else {
                     format!(
                         "Vale em {}",
@@ -1399,6 +1441,8 @@ impl<S: MapStores> MapScreen<S> {
                     div()
                         .flex()
                         .items_start()
+                        .flex_col()
+                        .w_full()
                         .gap(px(SpacingScale::S3))
                         .py(px(SpacingScale::S3))
                         .when(index > 0, |row| {
@@ -1419,6 +1463,8 @@ impl<S: MapStores> MapScreen<S> {
                                         .child(tag(theme, claim_label(record.kind.as_str())))
                                         .child(
                                             text_style(div(), TypeScale::ROW_TITLE)
+                                                .flex_1()
+                                                .min_w(px(0.0))
                                                 .child(record.statement.clone()),
                                         ),
                                 )
@@ -1430,6 +1476,7 @@ impl<S: MapStores> MapScreen<S> {
                                             suggestion.decision_question
                                         )),
                                 )
+                                .child(qualification)
                                 .child(
                                     text_style(div(), TypeScale::BODY_SMALL)
                                         .mt(px(SpacingScale::S1))
@@ -1440,8 +1487,14 @@ impl<S: MapStores> MapScreen<S> {
                                         .child(format!("“{}”", record.quote)),
                                 ),
                         )
-                        .child(reject)
-                        .child(confirm),
+                        .child(
+                            div()
+                                .flex()
+                                .flex_wrap()
+                                .gap(px(SpacingScale::S2))
+                                .child(reject)
+                                .child(confirm),
+                        ),
                 );
             }
             column = column.child(section(theme, "Contexto sugerido", list));
@@ -1480,7 +1533,8 @@ impl<S: MapStores> MapScreen<S> {
                 list = list.child(
                     div()
                         .flex()
-                        .items_center()
+                        .flex_col()
+                        .items_start()
                         .gap(px(SpacingScale::S3))
                         .py(px(SpacingScale::S3))
                         .when(index > 0, |row| {
@@ -1488,11 +1542,11 @@ impl<S: MapStores> MapScreen<S> {
                         })
                         .child(
                             div()
-                                .flex_1()
+                                .w_full()
                                 .min_w(px(0.0))
                                 .flex()
                                 .flex_col()
-                                .gap(px(2.0))
+                                .gap(px(SpacingScale::S1))
                                 .child(
                                     text_style(div(), TypeScale::ROW_TITLE)
                                         .child(suggestion.source.label.clone()),
@@ -1508,8 +1562,14 @@ impl<S: MapStores> MapScreen<S> {
                                         )),
                                 ),
                         )
-                        .child(reject)
-                        .child(confirm),
+                        .child(
+                            div()
+                                .flex()
+                                .flex_wrap()
+                                .gap(px(SpacingScale::S2))
+                                .child(reject)
+                                .child(confirm),
+                        ),
                 );
             }
             // Several ties from the same evidence are usually confirmed

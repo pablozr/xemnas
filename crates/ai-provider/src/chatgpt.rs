@@ -184,6 +184,173 @@ struct UserInfo {
     email: Option<String>,
 }
 
+fn handle_invalid_credential(preserve: bool, delete: impl FnOnce()) {
+    if !preserve {
+        delete();
+    }
+}
+
+/// Sanitized Responses HTTP failure metadata; never contains a response body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResponseFailureMetadata {
+    /// HTTP status returned by the content endpoint.
+    pub status: u16,
+    /// Allowlisted error code, or `unknown` for anything else.
+    pub code: &'static str,
+    /// Allowlisted request parameter named by the server, if any.
+    pub parameter: &'static str,
+    /// Semantic classification of the server message, never its raw text.
+    pub reason: &'static str,
+    /// Whether the server supplied a string message.
+    pub message_present: bool,
+}
+
+fn response_failure_metadata(status: u16, code: &str) -> ResponseFailureMetadata {
+    ResponseFailureMetadata {
+        status,
+        parameter: "unknown",
+        reason: "unknown",
+        message_present: false,
+        code: match code {
+            "model_not_found" => "model_not_found",
+            "unsupported_model" => "unsupported_model",
+            "invalid_model" => "invalid_model",
+            "access_denied" => "access_denied",
+            "insufficient_quota" => "insufficient_quota",
+            "rate_limit" => "rate_limit",
+            "invalid_request" => "invalid_request",
+            "not_signed_in" => "not_signed_in",
+            _ => "unknown",
+        },
+    }
+}
+
+fn response_failure_details(status: u16, value: &serde_json::Value) -> ResponseFailureMetadata {
+    let error = value.get("error").unwrap_or(value);
+    let field = |name: &str| error.get(name).and_then(serde_json::Value::as_str);
+    let mut metadata = response_failure_metadata(status, field("code").unwrap_or_default());
+    metadata.parameter = match field("param").unwrap_or_default() {
+        "model" => "model",
+        "store" => "store",
+        "stream" => "stream",
+        "instructions" => "instructions",
+        "input" => "input",
+        "text" | "text.format" | "text.format.schema" => "text.format.schema",
+        "temperature" => "temperature",
+        "max_output_tokens" => "max_output_tokens",
+        "tool_choice" => "tool_choice",
+        _ => "unknown",
+    };
+    let message = field("message").or_else(|| field("detail"));
+    metadata.message_present = message.is_some();
+    let lower = message.unwrap_or_default().to_ascii_lowercase();
+    metadata.reason = if lower.contains("schema")
+        && (lower.contains("invalid")
+            || lower.contains("required")
+            || lower.contains("additionalproperties"))
+    {
+        "json_schema_invalid"
+    } else if lower.contains("store") && (lower.contains("false") || lower.contains("disabled")) {
+        "store_must_false"
+    } else if lower.contains("stream") && (lower.contains("required") || lower.contains("true")) {
+        "stream_required"
+    } else if lower.contains("instructions")
+        && (lower.contains("required") || lower.contains("missing"))
+    {
+        "instructions_required"
+    } else if lower.contains("model")
+        && (lower.contains("not supported")
+            || lower.contains("unsupported")
+            || lower.contains("not found")
+            || lower.contains("does not exist"))
+    {
+        "model_not_supported"
+    } else if lower.contains("unsupported parameter")
+        || lower.contains("unknown parameter")
+        || lower.contains("unrecognized parameter")
+        || lower.contains("not supported parameter")
+    {
+        "unsupported_parameter"
+    } else if lower.contains("access denied")
+        || lower.contains("not authorized")
+        || lower.contains("not eligible")
+    {
+        "account_access_denied"
+    } else {
+        "unknown"
+    };
+    metadata
+}
+
+#[cfg(test)]
+mod credential_failure_policy_tests {
+    #[test]
+    fn failure_metadata_never_exposes_unrecognized_code() {
+        let metadata = super::response_failure_metadata(400, "SYNTHETIC_SECRET_UNEXPECTED");
+        assert_eq!(metadata.status, 400);
+        assert_eq!(metadata.code, "unknown");
+        assert!(!format!("{metadata:?}").contains("SYNTHETIC_SECRET"));
+        assert_eq!(
+            super::response_failure_metadata(404, "model_not_found").code,
+            "model_not_found"
+        );
+    }
+    #[test]
+    fn loopback_failure_metadata_does_not_leak_body() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("address");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut request = [0; 4096];
+            let received = stream.read(&mut request).expect("request");
+            assert!(received > 0);
+            let body = r#"{"error":{"code":"SYNTHETIC_SECRET_UNEXPECTED","message":"SYNTHETIC_SECRET_BODY"}}"#;
+            write!(stream, "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).expect("response");
+        });
+        let response = reqwest::blocking::get(format!("http://{address}")).expect("response");
+        let status = response.status().as_u16();
+        let value: serde_json::Value = response.json().expect("json");
+        let code = value
+            .pointer("/error/code")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        let metadata = super::response_failure_details(status, &value);
+        assert_eq!(code, "SYNTHETIC_SECRET_UNEXPECTED");
+        assert_eq!(metadata.code, "unknown");
+        assert_eq!(metadata.status, 400);
+        assert!(!format!("{metadata:?}").contains("SYNTHETIC_SECRET"));
+        server.join().expect("server");
+    }
+    #[test]
+    fn semantic_failure_details_are_bounded_literals() {
+        let value = serde_json::json!({"error": {
+            "code": "SYNTHETIC_SECRET", "param": "text.format.schema",
+            "message": "Invalid schema: required must include nature. SYNTHETIC_SECRET"
+        }});
+        let metadata = super::response_failure_details(400, &value);
+        assert_eq!(metadata.parameter, "text.format.schema");
+        assert_eq!(metadata.reason, "json_schema_invalid");
+        assert!(metadata.message_present);
+        assert!(!format!("{metadata:?}").contains("SYNTHETIC_SECRET"));
+    }
+    #[test]
+    fn assessment_preserves_and_default_deletes_invalid_credential() {
+        let mut deletions = 0;
+        super::handle_invalid_credential(true, || deletions += 1);
+        assert_eq!(deletions, 0);
+        super::handle_invalid_credential(false, || deletions += 1);
+        assert_eq!(deletions, 1);
+        assert!(
+            super::ChatGptSession::with_preserve_invalid_credentials(
+                crate::KeyringSecretStore::new()
+            )
+            .preserve_invalid_credentials
+        );
+        assert!(!super::ChatGptSession::default().preserve_invalid_credentials);
+    }
+}
+
 struct CachedToken {
     client_id: String,
     access_token: String,
@@ -194,8 +361,12 @@ struct CachedToken {
 /// worker (extraction). One instance per process: refreshes are serialized so
 /// two callers never rotate the same refresh token twice.
 pub struct ChatGptSession {
+    // Only successful provider refreshes enter this session-owned lineage.
+    rotations: Mutex<Vec<(AiProfile, String, String)>>,
     secrets: KeyringSecretStore,
     cache: Mutex<Option<CachedToken>>,
+    preserve_invalid_credentials: bool,
+    response_failure_observer: Option<Arc<dyn Fn(ResponseFailureMetadata) + Send + Sync>>,
 }
 
 impl std::fmt::Debug for ChatGptSession {
@@ -218,12 +389,41 @@ impl ChatGptSession {
         Self {
             secrets,
             cache: Mutex::new(None),
+            rotations: Mutex::new(Vec::new()),
+            preserve_invalid_credentials: false,
+            response_failure_observer: None,
         }
+    }
+
+    /// Builds an assessment session that never deletes an invalid refresh token.
+    /// Authentication still fails normally; successful refresh rotation is unchanged.
+    pub fn with_preserve_invalid_credentials(secrets: KeyringSecretStore) -> Self {
+        Self {
+            preserve_invalid_credentials: true,
+            ..Self::new(secrets)
+        }
+    }
+
+    /// Observes only sanitized content-endpoint HTTP failures. No logging by default.
+    pub fn with_response_failure_observer(
+        mut self,
+        observer: Arc<dyn Fn(ResponseFailureMetadata) + Send + Sync>,
+    ) -> Self {
+        self.response_failure_observer = Some(observer);
+        self
     }
 
     /// A valid access token for `profile`, refreshing (and rotating the stored
     /// refresh token) when the cached one is about to expire.
     pub fn access_token(&self, profile: &AiProfile) -> Result<String, ProviderError> {
+        self.access_token_checked(profile, None)
+    }
+
+    fn access_token_checked(
+        &self,
+        profile: &AiProfile,
+        authorization: Option<&dyn application::external::Authorization>,
+    ) -> Result<String, ProviderError> {
         let account = profile
             .chatgpt
             .as_ref()
@@ -267,7 +467,9 @@ impl ChatGptSession {
                 "invalid_grant" | "invalid_refresh_token" | "token_expired"
             ) {
                 // The documented recovery: clear the unusable token and sign in again.
-                let _ = self.secrets.delete_secret(&key);
+                handle_invalid_credential(self.preserve_invalid_credentials, || {
+                    let _ = self.secrets.delete_secret(&key);
+                });
                 *cache = None;
                 return Err(ProviderError::NotSignedIn);
             }
@@ -280,11 +482,34 @@ impl ChatGptSession {
         let token: TokenResponse =
             serde_json::from_str(&body).map_err(|_| ProviderError::InvalidResponse)?;
         if let Some(rotated) = token.refresh_token.as_deref() {
+            if let Some(authorization) = authorization {
+                authorization
+                    .check()
+                    .map_err(|_| ProviderError::Unauthorized)?;
+            }
+            if self
+                .secrets
+                .get_secret(&key)
+                .map_err(|_| ProviderError::Keystore)?
+                .as_deref()
+                != Some(refresh.as_str())
+            {
+                return Err(ProviderError::Unauthorized);
+            }
             // Each refresh returns a replacement token; losing it would sign
             // the user out, so a store failure is an error, not a warning.
             self.secrets
                 .set_secret(&key, rotated)
                 .map_err(|_| ProviderError::Keystore)?;
+            self.rotations
+                .lock()
+                .map_err(|_| ProviderError::Keystore)?
+                .push((profile.clone(), refresh.clone(), rotated.to_string()));
+            if let Some(authorization) = authorization {
+                authorization
+                    .rotated(&refresh, rotated)
+                    .map_err(|_| ProviderError::Unauthorized)?;
+            }
         }
         let lifetime = Duration::from_secs(token.expires_in.unwrap_or(3600));
         *cache = Some(CachedToken {
@@ -293,6 +518,23 @@ impl ChatGptSession {
             expires_at: Instant::now() + lifetime,
         });
         Ok(token.access_token)
+    }
+
+    fn authorize_operation(
+        &self,
+        profile: &AiProfile,
+        authorization: &dyn application::external::Authorization,
+    ) -> Result<(), ExtractError> {
+        let rotations = self
+            .rotations
+            .lock()
+            .map_err(|_| ExtractError::Extractor("sessão indisponível".into()))?;
+        let chain = rotations
+            .iter()
+            .filter(|(source, _, _)| source == profile)
+            .map(|(_, previous, replacement)| (previous.clone(), replacement.clone()))
+            .collect::<Vec<_>>();
+        authorization.refresh_lineage(profile, &chain)
     }
 
     /// Drops the cached access token (after a 401 or a sign-out).
@@ -700,12 +942,27 @@ impl ChatGptExtractor {
         })
     }
 
-    fn attempt(&self, body: &serde_json::Value) -> Attempt<String> {
-        let token = match self.session.access_token(&self.profile) {
+    fn attempt(
+        &self,
+        body: &serde_json::Value,
+        authorization: Option<&dyn application::external::Authorization>,
+    ) -> Attempt<String> {
+        let token = match self
+            .session
+            .access_token_checked(&self.profile, authorization)
+        {
             Ok(token) => token,
             Err(ProviderError::Unreachable) => return Attempt::Transient,
             Err(error) => return Attempt::Fatal(ExtractError::Extractor(error.message().into())),
         };
+        if let Some(authorization) = authorization {
+            if let Err(error) = self
+                .session
+                .authorize_operation(&self.profile, authorization)
+            {
+                return Attempt::Fatal(error);
+            }
+        }
         let response = match self
             .client
             .post(format!("{CHATGPT_API_BASE}/responses"))
@@ -726,16 +983,15 @@ impl ChatGptExtractor {
             if status.as_u16() == 401 {
                 self.session.invalidate();
             }
-            let code = response
-                .json::<serde_json::Value>()
-                .ok()
-                .and_then(|value| {
-                    value
-                        .pointer("/error/code")
-                        .and_then(|code| code.as_str())
-                        .map(str::to_owned)
-                })
+            let error_value = response.json::<serde_json::Value>().unwrap_or_default();
+            let code = error_value
+                .pointer("/error/code")
+                .and_then(|code| code.as_str())
+                .map(str::to_owned)
                 .unwrap_or_default();
+            if let Some(observer) = &self.session.response_failure_observer {
+                observer(response_failure_details(status.as_u16(), &error_value));
+            }
             if status.as_u16() == 503 || code == "subscription_sharing_usage_unavailable" {
                 return Attempt::Transient;
             }
@@ -798,6 +1054,21 @@ impl ChatGptExtractor {
         schema_name: &str,
         schema: &serde_json::Value,
     ) -> Result<String, ExtractError> {
+        self.complete_checked(system, user, schema_name, schema, None)
+    }
+
+    pub(crate) fn profile(&self) -> &AiProfile {
+        &self.profile
+    }
+
+    pub(crate) fn complete_checked(
+        &self,
+        system: &str,
+        user: &str,
+        schema_name: &str,
+        schema: &serde_json::Value,
+        authorization: Option<&dyn application::external::Authorization>,
+    ) -> Result<String, ExtractError> {
         if let Err(reason) = consent_status(&self.profile) {
             return Err(ExtractError::Extractor(format!(
                 "chamadas externas bloqueadas: {reason}"
@@ -825,7 +1096,11 @@ impl ChatGptExtractor {
         });
         let mut attempt = 1u32;
         loop {
-            match self.attempt(&body) {
+            if let Some(authorization) = authorization {
+                self.session
+                    .authorize_operation(&self.profile, authorization)?;
+            }
+            match self.attempt(&body, authorization) {
                 Attempt::Success(text) => return Ok(text),
                 Attempt::Fatal(error) => return Err(error),
                 Attempt::Transient => {

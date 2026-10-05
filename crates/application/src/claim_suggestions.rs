@@ -38,6 +38,12 @@ const MIN_QUOTE_CHARS: usize = 12;
 /// A stored suggestion.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClaimSuggestionRecord {
+    /// Exact original decision version; legacy unknown sources require recomputation.
+    pub source_version: Option<i64>,
+    /// Scope snapshot from that version.
+    pub inherited_scope: String,
+    /// Qualifications of the source decision version, not model generated.
+    pub qualifiers: String,
     /// Identifier.
     pub suggestion_id: String,
     /// Project.
@@ -228,8 +234,20 @@ where
             .pending_claim_suggestion(suggestion_id)
             .map_err(storage)?
             .ok_or(ClaimSuggestionError::NotFound)?;
+        let source = DecisionStore::get(&self.store, &record.decision_id)
+            .map_err(storage)?
+            .ok_or(ClaimSuggestionError::NotFound)?;
+        if source.project_id != record.project_id
+            || source.qualifiers != record.qualifiers
+            || record.source_version != Some(source.version)
+            || source.scope != record.inherited_scope
+        {
+            return Err(ClaimSuggestionError::NotFound);
+        }
         let claim = Claims::new(self.store.clone())
             .create(NewClaim {
+                source_version: record.source_version,
+                qualifiers: crate::qualifiers::decode(&record.qualifiers).map_err(storage)?,
                 project_id: record.project_id.clone(),
                 kind: record.kind,
                 statement: record.statement.clone(),
@@ -464,14 +482,14 @@ where
             Ok(None) if !profile.credential_required() => String::new(),
             _ => return Ok(0),
         };
-        let Ok(model) = self.factory.external(&profile, secret) else {
+        let Ok(model) = self.factory.authorized(&profile, secret, &self.settings) else {
             return Ok(0);
         };
         let user = format!(
             "Question: {}\nChoice: {}\nWhy: {}\n",
-            decision.question,
-            decision.choice,
-            decision.rationale.chars().take(1500).collect::<String>()
+            crate::external::protected_text(&decision.question),
+            crate::external::protected_text(&decision.choice),
+            crate::external::limited_text(&decision.rationale, 1500)
         );
         let answer = model
             .complete(CLAIM_PROMPT, &user, "decision_context", &claim_schema())
@@ -489,6 +507,9 @@ where
             if self
                 .store
                 .insert_claim_suggestion(&ClaimSuggestionRecord {
+                    source_version: Some(decision.version),
+                    inherited_scope: decision.scope.clone(),
+                    qualifiers: decision.qualifiers.clone(),
                     suggestion_id: uuid::Uuid::now_v7().to_string(),
                     project_id: decision.project_id.clone(),
                     decision_id: decision.decision_id.clone(),
@@ -512,6 +533,7 @@ mod tests {
 
     fn decision() -> StoredDecision {
         StoredDecision {
+            qualifiers: "[]".into(),
             decision_id: "d1".into(),
             candidate_id: "c1".into(),
             project_id: "p".into(),

@@ -105,6 +105,12 @@ pub const MAX_FILES: usize = 20;
 /// One decision in a pack.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PackDecision {
+    /// Explicit restrictions; absence means not informed.
+    #[serde(default)]
+    pub qualifiers: Vec<crate::qualifiers::KnowledgeQualifier>,
+    /// Declared scope, never implicitly the whole project.
+    #[serde(default)]
+    pub scope: Vec<String>,
     /// Decision identifier.
     pub decision_id: String,
     /// Version cited.
@@ -128,6 +134,15 @@ pub struct PackDecision {
 /// One claim in a pack.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PackClaim {
+    /// Source revision actually used, never inferred for legacy claims.
+    #[serde(default)]
+    pub source_version: Option<i64>,
+    /// Scope inherited independently from qualifiers.
+    #[serde(default)]
+    pub inherited_scope: Vec<String>,
+    /// Explicit inherited restrictions.
+    #[serde(default)]
+    pub qualifiers: Vec<crate::qualifiers::KnowledgeQualifier>,
     /// Claim identifier.
     pub claim_id: String,
     /// Claim kind literal.
@@ -147,6 +162,12 @@ pub struct PackClaim {
 /// A temporary, cited selection for one task.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextPack {
+    /// Descriptive O-citations, independent of normative claims and budgets.
+    #[serde(default)]
+    pub observations: Vec<crate::observations::PackObservation>,
+    /// Explicit bounded source coverage; never implies historical validity.
+    #[serde(default)]
+    pub observation_coverage: crate::observations::ObservationCoverage,
     /// Project read.
     pub project_id: String,
     /// Task as asked.
@@ -167,6 +188,10 @@ pub struct ContextPack {
 
 /// FTS ranking the pack needs.
 pub trait ContextStore {
+    /// A pending refresh makes previously checked descriptive facts ineligible.
+    fn observations_dirty(&self, _project_id: &str) -> Result<bool, ContextError> {
+        Ok(false)
+    }
     /// Decision ids matching `match_query` in a project, best first.
     fn rank_decisions(
         &self,
@@ -194,12 +219,25 @@ pub trait ContextProvider {
 #[derive(Debug, Clone)]
 pub struct ContextPacks<S> {
     store: S,
+    routing: Option<std::sync::Arc<crate::context_routing::RoutingLookup>>,
 }
 
 impl<S> ContextPacks<S> {
     /// Wraps the store.
     pub fn new(store: S) -> Self {
-        Self { store }
+        Self {
+            store,
+            routing: None,
+        }
+    }
+
+    /// Enables optional local cache routing; the default remains deterministic.
+    pub fn with_routing(
+        mut self,
+        routing: Option<std::sync::Arc<crate::context_routing::RoutingLookup>>,
+    ) -> Self {
+        self.routing = routing;
+        self
     }
 }
 
@@ -211,6 +249,7 @@ where
         + ClaimStore
         + ProjectRepository
         + GraphStore
+        + crate::observations::ObservationStore
         + Clone,
 {
     fn build_pack(&self, request: ContextRequest) -> Result<ContextPack, ContextError> {
@@ -294,13 +333,58 @@ where
             .map(|claim| (claim, true))
             .chain(standing.map(|claim| (*claim, false)));
         for (claim, matched) in ordered {
-            let item = pack_claim(claim, matched);
-            if selection.take(item.statement.chars().count()) {
+            let item = pack_claim(claim, matched)?;
+            if selection.take(
+                serde_json::to_string(&item)
+                    .map_err(|e| ContextError::Storage(e.to_string()))?
+                    .chars()
+                    .count(),
+            ) {
                 pack_claims.push(item);
             }
         }
 
-        Ok(ContextPack {
+        let (observations, observation_coverage) = if request.as_of.is_some() {
+            (Vec::new(), Default::default())
+        } else {
+            let snapshot = self
+                .store
+                .snapshot(&request.project_id)
+                .map_err(|error| ContextError::Storage(error.to_string()))?;
+            if snapshot.sources.iter().any(|source| {
+                matches!(
+                    source.last_check_status,
+                    crate::observations::CheckStatus::Unreadable
+                        | crate::observations::CheckStatus::Unsupported
+                        | crate::observations::CheckStatus::QuotaExceeded
+                )
+            }) {
+                self.store
+                    .request_refresh(&crate::observations::RefreshRequest {
+                        project_id: request.project_id.clone(),
+                        capture_trigger: "context_suspect_source".into(),
+                        requested_at: now_rfc3339(),
+                    })
+                    .map_err(|error| ContextError::Storage(error.to_string()))?;
+            }
+            let mut observation_files = files.clone();
+            observation_files.extend(crate::injection::mentioned_paths(&task, ""));
+            let eligible = if self.store.observations_dirty(&request.project_id)? {
+                Vec::new()
+            } else {
+                select_observations(&snapshot, &request.project_id, &task, &observation_files)
+            };
+            let observations = eligible
+                .into_iter()
+                .filter(|item| {
+                    selection.take(crate::injection::observation_line(item).chars().count())
+                })
+                .collect();
+            (observations, snapshot.coverage)
+        };
+        let mut pack = ContextPack {
+            observations,
+            observation_coverage,
             project_id: request.project_id,
             task,
             as_of: as_of.to_string(),
@@ -309,8 +393,112 @@ where
             decisions,
             claims: pack_claims,
             omitted: selection.omitted,
-        })
+        };
+        if let Some(routing) = &self.routing {
+            routing.apply(&mut pack, &files, request.as_of.is_some());
+        }
+        Ok(pack)
     }
+}
+
+pub(crate) fn routing_tokens(text: &str) -> BTreeSet<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .map(str::to_lowercase)
+        .filter(|w| w.chars().count() >= 4 && !STOPWORDS.contains(&w.as_str()))
+        .collect()
+}
+
+/// Deterministic current-source routing, independent of the normative graph.
+pub(crate) fn select_observations(
+    snapshot: &crate::observations::ObservationSnapshot,
+    project_id: &str,
+    task: &str,
+    files: &[String],
+) -> Vec<crate::observations::PackObservation> {
+    use crate::observations::{
+        CheckStatus, ObservationAuthority, ObservationSubject, RecordStatus,
+    };
+    let verified: BTreeMap<_, _> = snapshot
+        .sources
+        .iter()
+        .filter(|source| {
+            source.project_id == project_id && source.last_check_status == CheckStatus::Verified
+        })
+        .map(|source| (source.source_id.as_str(), source))
+        .collect();
+    let tokens: BTreeSet<_> = task
+        .split(|c: char| !(c.is_alphanumeric() || "_-@/".contains(c)))
+        .filter(|word| !word.is_empty())
+        .map(str::to_lowercase)
+        .collect();
+    let current: Vec<_> = snapshot
+        .observations
+        .iter()
+        .filter(|record| {
+            record.project_id == project_id
+                && record.status == RecordStatus::Current
+                && verified
+                    .get(record.provenance.source_id.as_str())
+                    .is_some_and(|source| {
+                        source.sha256.as_deref() == Some(record.provenance.source_sha256.as_str())
+                            && source.parser_policy_version
+                                == record.provenance.parser_policy_version
+                    })
+        })
+        .collect();
+    let scope_length = |record: &crate::observations::ObservationRecord, file: &str| {
+        let declared = record
+            .path_scope
+            .iter()
+            .filter_map(|scope| {
+                let scope = scope.trim_end_matches('/');
+                (file == scope || file.starts_with(&format!("{scope}/"))).then_some(scope.len())
+            })
+            .max();
+        let package = verified
+            .get(record.provenance.source_id.as_str())
+            .and_then(|source| {
+                let scope = source
+                    .project_relative_path
+                    .rsplit_once('/')
+                    .map_or("", |(parent, _)| parent);
+                (scope.is_empty() || file.starts_with(&format!("{scope}/"))).then_some(scope.len())
+            });
+        declared.into_iter().chain(package).max()
+    };
+    let longest: Vec<_> = files
+        .iter()
+        .map(|file| {
+            current
+                .iter()
+                .filter_map(|record| scope_length(record, file))
+                .max()
+        })
+        .collect();
+    let mut selected: Vec<_> = current
+        .into_iter()
+        .filter(|record| {
+            let name = match &record.subject {
+                ObservationSubject::Package { name } | ObservationSubject::Dependency { name } => {
+                    name
+                }
+            };
+            tokens.contains(&name.to_lowercase())
+                || files.iter().zip(&longest).any(|(file, longest)| {
+                    scope_length(record, file).is_some_and(|length| Some(length) == *longest)
+                        || verified
+                            .get(record.provenance.source_id.as_str())
+                            .is_some_and(|source| source.project_relative_path == *file)
+                })
+        })
+        .map(|record| crate::observations::PackObservation {
+            record: record.clone(),
+            authority: ObservationAuthority::Descriptive,
+        })
+        .collect();
+    selected.sort_by(|a, b| a.record.observation_id.cmp(&b.record.observation_id));
+    selected.truncate(crate::observations::MAX_OBSERVATIONS);
+    selected
 }
 
 impl<S> ContextPacks<S>
@@ -345,6 +533,10 @@ where
                 .collect()
         };
         Ok(PackDecision {
+            qualifiers: crate::qualifiers::decode(&decision.qualifiers)
+                .map_err(ContextError::Storage)?,
+            scope: serde_json::from_str(&decision.scope)
+                .map_err(|e| ContextError::Storage(e.to_string()))?,
             depends_on: related(RelationKind::DependsOn),
             conflicts_with: related(RelationKind::ConflictsWith),
             decision_id: decision.decision_id,
@@ -418,14 +610,18 @@ fn created_by(row: &RelationRow, as_of: &Timestamp) -> bool {
 }
 
 fn decision_cost(decision: &PackDecision) -> usize {
-    [&decision.question, &decision.choice, &decision.rationale]
-        .iter()
-        .map(|text| text.chars().count())
-        .sum()
+    serde_json::to_string(decision)
+        .expect("pack serialization is infallible")
+        .chars()
+        .count()
 }
 
-fn pack_claim(claim: &ClaimRecord, matched: bool) -> PackClaim {
-    PackClaim {
+fn pack_claim(claim: &ClaimRecord, matched: bool) -> Result<PackClaim, ContextError> {
+    Ok(PackClaim {
+        source_version: claim.source_version,
+        inherited_scope: serde_json::from_str(&claim.inherited_scope)
+            .map_err(|e| ContextError::Storage(e.to_string()))?,
+        qualifiers: crate::qualifiers::decode(&claim.qualifiers).map_err(ContextError::Storage)?,
         claim_id: claim.claim_id.clone(),
         kind: claim.kind.as_str().to_string(),
         statement: claim.statement.clone(),
@@ -433,7 +629,7 @@ fn pack_claim(claim: &ClaimRecord, matched: bool) -> PackClaim {
         valid_until: claim.valid_until.clone(),
         source_decision_id: claim.source_decision_id.clone(),
         matched,
-    }
+    })
 }
 
 /// FTS5 `MATCH` for any meaningful word of `task`, or `None` when none remain.
@@ -452,6 +648,70 @@ pub fn match_any_query(task: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::match_any_query;
+
+    #[test]
+    fn observations_require_verified_matching_provenance_and_explicit_subject() {
+        use crate::observations::*;
+        let source = ObservationSource {
+            source_id: "source".into(),
+            project_id: "p".into(),
+            project_relative_path: "pkg/Cargo.toml".into(),
+            manifest_kind: ManifestKind::Cargo,
+            sha256: Some("hash".into()),
+            parser_policy_version: "1".into(),
+            last_checked_at: None,
+            last_check_status: CheckStatus::Verified,
+            semantic_cache: None,
+        };
+        let record = ObservationRecord {
+            observation_id: "o".into(),
+            project_id: "p".into(),
+            version: 1,
+            subject: ObservationSubject::Dependency {
+                name: "serde".into(),
+            },
+            value: ObservationValue {
+                declared_version: None,
+                dependency_category: None,
+                version_requirement: Some("1".into()),
+                target: None,
+            },
+            path_scope: vec!["pkg".into()],
+            provenance: ObservationProvenance {
+                source_id: "source".into(),
+                source_sha256: "hash".into(),
+                supporting_sources: vec![],
+                parser_policy_version: "1".into(),
+                field_pointer: "dependencies.serde".into(),
+                capture_trigger: "test".into(),
+                commit: None,
+            },
+            observed_at: "2026-10-04T00:00:00Z".into(),
+            status: RecordStatus::Current,
+            invalidated_at: None,
+            invalidation_reason: None,
+        };
+        let mut snapshot = ObservationSnapshot {
+            observations: vec![record],
+            sources: vec![source],
+            coverage: Default::default(),
+        };
+        assert!(super::select_observations(&snapshot, "p", "alterar projeto", &[]).is_empty());
+        assert_eq!(
+            super::select_observations(&snapshot, "p", "usar serde", &[]).len(),
+            1
+        );
+        assert_eq!(
+            super::select_observations(&snapshot, "p", "", &["pkg/src/lib.rs".into()]).len(),
+            1
+        );
+        assert!(super::select_observations(&snapshot, "other", "serde", &[]).is_empty());
+        snapshot.sources[0].last_check_status = CheckStatus::Unreadable;
+        assert!(super::select_observations(&snapshot, "p", "serde", &[]).is_empty());
+        snapshot.sources[0].last_check_status = CheckStatus::Verified;
+        snapshot.sources[0].sha256 = Some("changed".into());
+        assert!(super::select_observations(&snapshot, "p", "serde", &[]).is_empty());
+    }
 
     #[test]
     fn match_query_keeps_meaningful_words_once() {

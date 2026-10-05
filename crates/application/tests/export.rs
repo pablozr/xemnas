@@ -56,6 +56,7 @@ impl DecisionStore for FakeStore {
 
 fn revision(version: i64, question: &str, created_at: &str) -> DecisionRevisionRow {
     DecisionRevisionRow {
+        qualifiers: "[]".into(),
         version,
         created_at: created_at.to_string(),
         question: question.to_string(),
@@ -71,6 +72,7 @@ fn revision(version: i64, question: &str, created_at: &str) -> DecisionRevisionR
 fn store() -> FakeStore {
     FakeStore {
         decision: StoredDecision {
+            qualifiers: "[]".into(),
             decision_id: "decision-1".to_string(),
             candidate_id: "candidate-1".to_string(),
             project_id: "project-1".to_string(),
