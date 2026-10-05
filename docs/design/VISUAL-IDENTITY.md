@@ -721,6 +721,11 @@ em `docs/arquitetura/desempenho-e-escala.md`. No visual, isso vira:
 - Estados vazios sem nada a fazer mostram o mascote de olhos fechados
   (Revisão); os que esperam o primeiro passo, de olhos acesos (Decisões)
   (`empty_panel_mascot`).
+- Falha de inicialização (sem banco): `empty_panel_actions`, o `empty_panel` com as ações
+  que saem do estado (a primária à esquerda), dentro de um cartão de conteúdo.
+  O texto é por causa (`StartupError`: não abriu, ou migração de outra versão);
+  o erro técnico nunca vai à tela, só a "Copiar detalhes" e ao log. Captura sem
+  foco: `XEMNAS_DEMO_STARTUP_ERROR=migration|open` com `tools/capture-background.ps1`.
 - Com fundo de imagem, um grão finíssimo (tile de 256 px) fica sobre a
   imagem e sob as superfícies: aspecto fosco, nunca sobre o texto.
 - Botões são **placas** (`ui::material`): gradiente vertical iluminado de

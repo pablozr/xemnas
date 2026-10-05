@@ -13,7 +13,7 @@ use gpui::{
     WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
-use storage_sqlite::SqliteStore;
+use storage_sqlite::{SqliteStore, StorageError};
 
 use std::sync::Arc;
 use xemnas_desktop::app::{
@@ -23,6 +23,7 @@ use xemnas_desktop::app::{
     TogglePalette,
 };
 use xemnas_desktop::screens::settings::SettingsServices;
+use xemnas_desktop::startup_error::StartupError;
 use xemnas_desktop::ui::search_field::{
     Backspace, Clear, Copy, Cut, Delete, End, Home, Left, Paste, Right, SelectAll, SelectLeft,
     SelectRight,
@@ -51,7 +52,12 @@ fn main() {
     application::jobs::install_panic_sanitizer();
 
     if std::env::args().any(|argument| argument == "--demo") {
-        let store = demo::store().map_err(|error| error.to_string());
+        let store = match demo_startup_error() {
+            Some(error) => Err(error),
+            None => demo::store().map_err(|error| StartupError::CannotOpen {
+                detail: error.to_string(),
+            }),
+        };
         let ai = demo::ai_settings();
         // Sample paths and a fictitious port: the demo starts no API, and the
         // OpenCode section reports on these as on any other environment.
@@ -102,7 +108,7 @@ fn main() {
         Ok(store) => store,
         Err(error) => {
             // The shell logs the technical detail through `tracing` and paints a
-            // product-language error state; the raw error never reaches the UI.
+            // screen for the cause; the raw error only feeds "Copy details".
             let providers =
                 provider_ports(&std::sync::Arc::new(ai_provider::ChatGptSession::default()));
             let services = SettingsServices {
@@ -114,7 +120,7 @@ fn main() {
                 diagnostics: None,
             };
             run_shell_mode(
-                Err(error.to_string()),
+                Err(startup_error(error)),
                 services,
                 overview_api(ai_settings(&paths.ai_profile), Arc::default()),
                 review_api(ai_settings(&paths.ai_profile), Arc::default()),
@@ -649,7 +655,7 @@ where
 // The composition root receives every service the shell needs.
 #[allow(clippy::too_many_arguments)]
 fn run_shell_mode(
-    store: Result<SqliteStore, String>,
+    store: Result<SqliteStore, StartupError>,
     settings: SettingsServices,
     overview: OverviewFactory,
     reviewer: ReviewFactory,
@@ -915,6 +921,26 @@ fn run_shell_mode(
     });
 }
 
+/// Maps the storage failure to the cause the screen explains; the raw text
+/// stays in the variant for the log and "Copy details".
+fn startup_error(error: StorageError) -> StartupError {
+    match error {
+        StorageError::Migration(detail) => StartupError::Migration { detail },
+        StorageError::Open(detail) => StartupError::CannotOpen { detail },
+    }
+}
+
+/// Capture aid for the demo only: `XEMNAS_DEMO_STARTUP_ERROR=migration|open`
+/// shows the startup error screen so it can be captured without focus.
+fn demo_startup_error() -> Option<StartupError> {
+    let detail = "demo".to_owned();
+    match std::env::var("XEMNAS_DEMO_STARTUP_ERROR").ok()?.as_str() {
+        "migration" => Some(StartupError::Migration { detail }),
+        "open" => Some(StartupError::CannotOpen { detail }),
+        _ => None,
+    }
+}
+
 /// Analysis use case wired with the concrete stores and provider.
 type Analysis = application::analysis::AnalyzeCapture<
     SqliteStore,
@@ -1029,6 +1055,15 @@ fn start_local_api(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn storage_failures_map_to_their_startup_cause() {
+        let migration = startup_error(StorageError::Migration("table x already exists".into()));
+        assert!(matches!(migration, StartupError::Migration { .. }));
+        assert!(migration.detail().contains("table x already exists"));
+        let open = startup_error(StorageError::Open("denied".into()));
+        assert!(matches!(open, StartupError::CannotOpen { .. }));
+    }
 
     #[test]
     fn refresh_rounds_are_fair_and_track_membership_changes() {

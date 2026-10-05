@@ -280,37 +280,90 @@ strings! {
         de: "Demo · fiktive Daten", it: "Demo · dati fittizi",
         ja: "デモ · 架空のデータ", zh: "演示 · 虚构数据", ko: "데모 · 가상 데이터",
         ru: "Демонстрация · вымышленные данные" }
-    /// Title of the startup error.
-    startup_error_title { en: "Could not open the database",
+    /// Eyebrow of the startup error screen.
+    startup_error_eyebrow { en: "Startup", pt: "Inicialização", es: "Inicio", fr: "Démarrage",
+        de: "Start", it: "Avvio", ja: "起動", zh: "启动", ko: "시작", ru: "Запуск" }
+    /// Title of the startup error when the database file cannot be opened.
+    startup_error_open_title { en: "Could not open the database",
         pt: "Não foi possível abrir o banco de dados",
         es: "No se pudo abrir la base de datos",
         fr: "Impossible d’ouvrir la base de données",
         de: "Die Datenbank konnte nicht geöffnet werden",
-        it: "Impossibile aprire il database", ja: "データベースを開けませんでした",
+        it: "Impossibile aprire il database",
+        ja: "データベースを開けませんでした",
         zh: "无法打开数据库", ko: "데이터베이스를 열 수 없어요",
         ru: "Не удалось открыть базу данных" }
-    /// Explanation of the startup error.
-    startup_error_detail { en: "The tracked projects could not be loaded.",
-        pt: "Os projetos acompanhados não puderam ser carregados.",
-        es: "No se pudieron cargar los proyectos seguidos.",
-        fr: "Les projets suivis n’ont pas pu être chargés.",
-        de: "Die verfolgten Projekte konnten nicht geladen werden.",
-        it: "Non è stato possibile caricare i progetti seguiti.",
-        ja: "追跡中のプロジェクトを読み込めませんでした。",
-        zh: "无法加载已跟踪的项目。", ko: "추적 중인 프로젝트를 불러오지 못했어요.",
-        ru: "Не удалось загрузить отслеживаемые проекты." }
-    /// Recovery hint of the startup error.
-    startup_error_hint {
-        en: "Close and reopen the app. If the error persists, check your disk space.",
-        pt: "Feche e abra o app novamente. Se o erro persistir, verifique o espaço em disco.",
-        es: "Cierra y vuelve a abrir la app. Si el error persiste, revisa el espacio en disco.",
-        fr: "Fermez puis rouvrez l’app. Si l’erreur persiste, vérifiez l’espace disque.",
-        de: "Schließe die App und öffne sie erneut. Wenn der Fehler bleibt, prüfe den Speicherplatz.",
-        it: "Chiudi e riapri l’app. Se l’errore persiste, controlla lo spazio su disco.",
-        ja: "アプリを閉じて開き直してください。エラーが続く場合は、ディスクの空き容量を確認してください。",
-        zh: "请关闭并重新打开应用。如果错误仍然存在，请检查磁盘空间。",
-        ko: "앱을 닫았다가 다시 열어 주세요. 오류가 계속되면 디스크 공간을 확인해 보세요.",
-        ru: "Закройте и снова откройте приложение. Если ошибка повторится, проверьте свободное место на диске." }
+    /// What failed when the database file cannot be opened.
+    startup_error_open_detail { en: "The database file could not be opened.",
+        pt: "O arquivo do banco de dados não pôde ser aberto.",
+        es: "No se pudo abrir el archivo de la base de datos.",
+        fr: "Le fichier de la base de données n’a pas pu être ouvert.",
+        de: "Die Datenbankdatei konnte nicht geöffnet werden.",
+        it: "Impossibile aprire il file del database.",
+        ja: "データベースファイルを開けませんでした。",
+        zh: "无法打开数据库文件。", ko: "데이터베이스 파일을 열 수 없어요.",
+        ru: "Не удалось открыть файл базы данных." }
+    /// What to do when the database file cannot be opened.
+    startup_error_open_hint {
+        en: "Check that the folder is accessible and has free space, then open the app again.",
+        pt: "Verifique se a pasta está acessível e tem espaço livre, e abra o app novamente.",
+        es: "Comprueba que la carpeta sea accesible y tenga espacio libre, y vuelve a abrir la app.",
+        fr: "Vérifiez que le dossier est accessible et dispose d’espace libre, puis rouvrez l’app.",
+        de: "Prüfe, ob der Ordner erreichbar ist und freien Speicherplatz hat, und öffne die App dann erneut.",
+        it: "Controlla che la cartella sia accessibile e abbia spazio libero, poi riapri l’app.",
+        ja: "フォルダーにアクセスでき、空き容量があることを確認してから、アプリをもう一度開いてください。",
+        zh: "请确认该文件夹可访问且有可用空间，然后重新打开应用。",
+        ko: "폴더에 접근할 수 있고 여유 공간이 있는지 확인한 뒤 앱을 다시 열어 주세요.",
+        ru: "Убедитесь, что папка доступна и на диске есть свободное место, затем снова откройте приложение." }
+    /// Title of the startup error when the database cannot be migrated.
+    startup_error_migration_title { en: "This database needs another version of Xemnas",
+        pt: "Este banco de dados precisa de outra versão do Xemnas",
+        es: "Esta base de datos necesita otra versión de Xemnas",
+        fr: "Cette base de données nécessite une autre version de Xemnas",
+        de: "Diese Datenbank braucht eine andere Xemnas-Version",
+        it: "Questo database richiede un’altra versione di Xemnas",
+        ja: "このデータベースには別のバージョンの Xemnas が必要です",
+        zh: "此数据库需要其他版本的 Xemnas",
+        ko: "이 데이터베이스는 다른 버전의 Xemnas가 필요해요",
+        ru: "Для этой базы данных нужна другая версия Xemnas" }
+    /// What happened when the database cannot be migrated; data is untouched.
+    startup_error_migration_detail {
+        en: "It was created or changed by a different version of Xemnas, and this version cannot update it. Your data was not changed.",
+        pt: "Ele foi criado ou alterado por outra versão do Xemnas, e esta versão não consegue atualizá-lo. Seus dados não foram alterados.",
+        es: "La creó o modificó otra versión de Xemnas y esta versión no puede actualizarla. Tus datos no se han modificado.",
+        fr: "Elle a été créée ou modifiée par une autre version de Xemnas, et cette version ne peut pas la mettre à jour. Vos données n’ont pas été modifiées.",
+        de: "Sie wurde von einer anderen Xemnas-Version erstellt oder geändert, und diese Version kann sie nicht aktualisieren. Deine Daten wurden nicht verändert.",
+        it: "È stato creato o modificato da un’altra versione di Xemnas e questa versione non può aggiornarlo. I tuoi dati non sono stati modificati.",
+        ja: "別のバージョンの Xemnas が作成または変更したため、このバージョンでは更新できません。データは変更されていません。",
+        zh: "它由其他版本的 Xemnas 创建或修改，当前版本无法更新它。你的数据没有被更改。",
+        ko: "다른 버전의 Xemnas가 만들었거나 변경해서 이 버전으로는 업데이트할 수 없어요. 데이터는 바뀌지 않았어요.",
+        ru: "Она создана или изменена другой версией Xemnas, и эта версия не может её обновить. Ваши данные не изменены." }
+    /// What to do when the database cannot be migrated.
+    startup_error_migration_hint {
+        en: "Open Xemnas with the version that created it, or restore a backup of the data folder.",
+        pt: "Abra o Xemnas com a versão que o criou, ou restaure um backup da pasta de dados.",
+        es: "Abre Xemnas con la versión que la creó, o restaura una copia de seguridad de la carpeta de datos.",
+        fr: "Ouvrez Xemnas avec la version qui l’a créée, ou restaurez une sauvegarde du dossier de données.",
+        de: "Öffne Xemnas mit der Version, die sie erstellt hat, oder stelle eine Sicherung des Datenordners wieder her.",
+        it: "Apri Xemnas con la versione che lo ha creato, oppure ripristina un backup della cartella dei dati.",
+        ja: "作成したバージョンの Xemnas で開くか、データフォルダーのバックアップを復元してください。",
+        zh: "请用创建它的版本打开 Xemnas，或恢复数据文件夹的备份。",
+        ko: "만든 버전의 Xemnas로 열거나 데이터 폴더의 백업을 복원해 주세요.",
+        ru: "Откройте Xemnas той версией, которая её создала, или восстановите резервную копию папки данных." }
+    /// Startup error action: open the data folder in the file manager.
+    startup_error_open_folder { en: "Open data folder", pt: "Abrir pasta de dados",
+        es: "Abrir carpeta de datos", fr: "Ouvrir le dossier de données",
+        de: "Datenordner öffnen", it: "Apri cartella dei dati", ja: "データフォルダーを開く",
+        zh: "打开数据文件夹", ko: "데이터 폴더 열기", ru: "Открыть папку данных" }
+    /// Startup error action: copy the technical line for a bug report.
+    startup_error_copy { en: "Copy details", pt: "Copiar detalhes", es: "Copiar detalles",
+        fr: "Copier les détails", de: "Details kopieren", it: "Copia dettagli",
+        ja: "詳細をコピー", zh: "复制详情", ko: "세부 정보 복사", ru: "Копировать подробности" }
+    /// Toast after the startup error details were copied.
+    startup_error_copied { en: "Details copied", pt: "Detalhes copiados",
+        es: "Detalles copiados", fr: "Détails copiés", de: "Details kopiert",
+        it: "Dettagli copiati", ja: "詳細をコピーしました", zh: "详情已复制",
+        ko: "세부 정보를 복사했어요", ru: "Подробности скопированы" }
     /// Error when a capture cannot be reprocessed.
     reprocess_failed { en: "Could not reprocess the capture.",
         pt: "Não foi possível reprocessar a captura.",

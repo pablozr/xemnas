@@ -12,4 +12,5 @@ pub mod fonts;
 pub mod i18n;
 pub mod palette;
 pub mod screens;
+pub mod startup_error;
 pub mod ui;
