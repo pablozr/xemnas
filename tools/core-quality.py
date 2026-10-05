@@ -25,6 +25,7 @@ ENV.setdefault('CARGO_TARGET_DIR', os.path.join(ROOT, 'target'))
 GATES = [
     ('context selection', 'storage-sqlite', 'test:context_corpus', 'context_quality_gate', False),
     ('context selection, sealed v4', 'storage-sqlite', 'test:context_corpus', 'sealed_v4_quality_gate', False),
+    ('context selection, calibration v5', 'storage-sqlite', 'test:context_corpus', 'calibration_v5_quality_gate', False),
     ('context report', 'storage-sqlite', 'test:context_corpus', 'report_context_corpus', True),
     ('mention links', 'application', 'lib', 'graph::mention', False),
     ('automatic review', 'storage-sqlite', 'test:auto_approval', '', False),

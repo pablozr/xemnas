@@ -21,6 +21,7 @@ Control bloqueia o hash (o comportamento é o mesmo; só o hash muda) e imprime 
 | --- | --- | --- | --- | --- |
 | Seleção de contexto | `storage-sqlite/tests/context_corpus.rs` (`context_quality_gate`), corpus v3: 29 famílias, 87 consultas, um terço em holdout | precisão, cobertura e casos negativos contaminados do bloco entregue, no geral e por divisão; p95 de `build_pack` | precisão ≥ 0,93; cobertura ≥ 0,95; contaminados = 0; p95 ≤ 20 ms | linha de base 0,23 / 0,76 / 9 de 24; com cobertura mínima de termos: 0,63 / 0,58 / 1; com foco do grafo: 0,70 / 0,58 / 1; com ponte PT/EN: 0,75 / 0,91 / 1; com termos de busca como último recurso: 0,76 / 0,95 / 1; com sinônimos como um conceito e cobertura relativa: 0,83 / 0,95 / 1; com a oração principal: 0,94 (63/67); 0,95 (63/66); 0 de 24; holdout 0,96 / 0,89 / 0 de 9; 2 ms |
 | Seleção de contexto, holdout selado | `storage-sqlite/tests/context_corpus.rs` (`sealed_v4_quality_gate`), corpus v4: 24 famílias, 72 tarefas escritas às cegas (sem ver o código de seleção), todas holdout | as mesmas | precisão ≥ 0,58; cobertura ≥ 0,61; contaminados ≤ 4 de 21; p95 ≤ 20 ms; **nenhuma regra é ajustada olhando estas famílias** | 0,58 (39/67); 0,62 (39/63); 4 de 21; 2 ms |
+| Seleção de contexto, calibração | `storage-sqlite/tests/context_corpus.rs` (`calibration_v5_quality_gate`), corpus v5: 30 famílias escritas às cegas, 8 negativas de mesmo vocabulário | as mesmas | precisão ≥ 0,41; cobertura ≥ 0,43; contaminados ≤ 15 de 24; p95 ≤ 20 ms; aqui se ajusta, o v4 continua selado | 0,41 / 0,43 / 15 de 24 |
 | Ligações por menção | `application/src/graph/mention.rs` (`mention_quality_gate`, `mention_matching_scales_to_a_large_project`) | precisão e cobertura em textos rotulados (com negativos de mesmo vocabulário); tempo para 2.000 decisões × 60 partes | precisão ≥ 0,92; cobertura = 1,0; ≤ 3 s | 0,93 (13/14); 1,0; 1,5 s |
 | Revisão automática | `storage-sqlite/tests/auto_approval.rs` | regras só aceitam com confiança calibrada; uma chamada por lote; limites diários; desfazer | todos passam | 8/8 |
 | Triagem automática | `application/src/auto_approval.rs` (testes de unidade) | repetição descartada, sem calibração nada aceito pelas regras | todos passam | 9/9 |
@@ -60,5 +61,6 @@ modelo real e versionados como fixture (`context_corpus_terms.json`); regenerar 
 autorização do usuário, porque chama o provedor. O plano está em [precisão do contexto](../pesquisas/precisao-do-contexto.md).
 Embeddings como veto e resgate (vetores em `context_corpus_vectors_*.json`) levaram o v4 a
 0,67 / 0,60 / 4 (`potion-multilingual-128M`) e 0,60 / 0,60 / 4 (`multilingual-e5-small`) e
-não entraram
+não entraram; o corpus de calibração v5, escrito às cegas, mede 0,41 / 0,43 / 15 de 24 e
+nenhuma variante com vetor o melhora sem derrubar o v3
 ([embeddings no contexto](../pesquisas/embeddings-no-contexto.md)).

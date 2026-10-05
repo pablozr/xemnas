@@ -5,7 +5,9 @@
 tira a seleção de contexto do teto lexical medido no corpus v4?
 **Status:** Aberta. Os dois modelos foram reprovados no v4 como veto e resgate sobre a busca
 lexical: `potion-multilingual-128M` 0,67 / 0,60 / 4 de 21 e `multilingual-e5-small` 0,60 /
-0,60 / 4 (aceite 0,70 / 0,70). Nenhum entra; a decisão seguinte é do usuário. Continua o passo 5 de [precisão do contexto](precisao-do-contexto.md).
+0,60 / 4 (aceite 0,70 / 0,70). Com um corpus de calibração novo (v5) e variantes em que o
+vetor substitui o item lexical, nenhuma melhora o v5 sem derrubar o v3; o v4 não foi lido
+de novo. Nenhum modelo entra; o próximo passo é o dogfood com tarefas reais. Continua o passo 5 de [precisão do contexto](precisao-do-contexto.md).
 
 ## Ponto de partida
 
@@ -136,7 +138,34 @@ prefixos "query: " e "passage: " do modelo. Fixture `context_corpus_vectors_e5.j
 - **Custo:** o `potion` cabe no orçamento por prompt, mas pesa na memória; o e5 custa 25 a
   55 ms por prompt.
 
-Caminhos possíveis, a decidir: (1) um corpus de ajuste novo, escrito às cegas como o v4,
-para calibrar sem tocar o v4; (2) a fusão por Reciprocal Rank Fusion, em que o vetor também
-pode trocar o item lexical, calibrada nesse corpus novo; (3) esperar o dogfood com tarefas
-reais antes de investir mais em embeddings.
+## Calibração nova (v5) e substituição (05/10/2026)
+
+O usuário escolheu os caminhos 1 e 2: um corpus de calibração escrito às cegas e variantes
+em que o vetor pode trocar o item lexical.
+
+- **Corpus v5** (`fixtures/context_corpus_v5.rs`): 30 famílias, 22 positivas e 8
+  negativas, escritas por um agente que só viu as decisões, as claims e os componentes. A
+  seleção lexical mede **0,41 / 0,43 / 15 de 24**, pior que o v4; vira o portão
+  `calibration_v5_quality_gate`, com esses pisos.
+- **Variantes** (`report_replacement_variants`): além do veto e do resgate, o item achado só
+  por texto precisa estar entre os N mais parecidos (N de 1 a 3); o mais parecido entra
+  sempre que a folga sobre o segundo passa de um limiar, mesmo que o texto tenha achado
+  outro; e uma seleção só pelo vetor, sem o lexical. 108 variantes por modelo.
+- **Resultado no v5:** a melhor no agregado (e5, item lexical entre os 3 mais parecidos)
+  chega a 0,49 / 0,39 / 11, mas derruba o v3 para 0,93 / 0,86. Nenhuma variante que mantém
+  o v3 em 0,90 / 0,90 muda o v5. Só pelo vetor, o e5 fica em 0,42 / 0,25 / 12 com folga de
+  0,01, e o `potion` é pior.
+- **Por quê:** no v5, o e5 põe a decisão exigida em primeiro em 27 de 65 tarefas positivas
+  (71% entre as três primeiras), e a folga entre primeiro e segundo dos negativos (até 0,03)
+  se sobrepõe à dos acertos (quase todos até 0,04). Nenhum limiar separa os dois.
+- Sem candidata aprovada no v5, o v4 não foi lido nesta rodada.
+
+## Conclusão
+
+Embeddings de uso geral, pequenos o bastante para rodar a cada prompt, não separam as
+decisões deste projeto, que dividem o mesmo vocabulário. O problema aberto continua sendo a
+precisão em tarefas escritas como pessoas escrevem (v4 0,58, v5 0,41). Próximo passo,
+decidido pelo usuário: usar o Xemnas no dia a dia e medir com
+`storage-sqlite/tests/dogfood_context.rs`; o usuário roda e compartilha só o agregado. Ideias
+para depois do dogfood: juiz de IA para casos ambíguos (técnica 9 de
+[precisão do contexto](precisao-do-contexto.md)) e abster-se mais vezes.

@@ -5,6 +5,8 @@
 mod corpus;
 #[path = "fixtures/context_corpus_v4.rs"]
 mod corpus_v4;
+#[path = "fixtures/context_corpus_v5.rs"]
+mod corpus_v5;
 mod support;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -250,13 +252,15 @@ fn corpus_integrity_budgets_and_isolation() {
 }
 
 #[test]
-fn sealed_v4_corpus_is_well_formed() {
+fn v4_and_v5_corpora_are_well_formed() {
     let fixture = Fixture::seed("corpus-v4-integrity");
     let mut names: BTreeSet<&str> = corpus::FAMILIES.iter().map(|f| f.name).collect();
     let mut queries: BTreeSet<&str> = corpus::FAMILIES.iter().flat_map(|f| f.queries).collect();
-    for family in corpus_v4::FAMILIES_V4 {
+    let v4 = corpus_v4::FAMILIES_V4.iter().map(|family| (family, true));
+    let v5 = corpus_v5::FAMILIES_V5.iter().map(|family| (family, false));
+    for (family, holdout) in v4.chain(v5) {
         assert!(names.insert(family.name), "{}", family.name);
-        assert!(family.holdout);
+        assert_eq!(family.holdout, holdout);
         assert_eq!(family.positive, !family.required.is_empty());
         for task in family.queries {
             assert!(queries.insert(task), "{task}");
@@ -268,6 +272,7 @@ fn sealed_v4_corpus_is_well_formed() {
         }
     }
     assert_eq!(corpus_v4::FAMILIES_V4.len(), 24);
+    assert_eq!(corpus_v5::FAMILIES_V5.len(), 30);
 }
 
 #[derive(Default)]
@@ -603,7 +608,7 @@ fn sealed_v4_quality_gate() {
 }
 
 /// Texts the vector fixture is generated from: each decision's question and
-/// choice, each claim's statement and every v3 and v4 task. Input of
+/// choice, each claim's statement and every v3, v4 and v5 task. Input of
 /// `tools/context-embeddings`.
 #[test]
 #[ignore = "writes the embedding input; run with XEMNAS_EMBED_TEXTS=<file>"]
@@ -622,10 +627,30 @@ fn export_embedding_texts() {
     let tasks: BTreeSet<&str> = corpus::FAMILIES
         .iter()
         .chain(corpus_v4::FAMILIES_V4)
+        .chain(corpus_v5::FAMILIES_V5)
         .flat_map(|family| family.queries)
         .collect();
     let json = serde_json::json!({ "items": items, "tasks": tasks });
     std::fs::write(path, serde_json::to_string_pretty(&json).expect("json")).expect("write");
+}
+
+/// Floors of the v5 calibration corpus, written blind like v4 (30 families,
+/// hard same-vocabulary negatives). Tuning may look here; v4 stays sealed.
+/// First run, lexical selection as of the main-clause rule: 0.41 / 0.43 /
+/// 15 of 24. No embedding variant that keeps v3 above 0.90 moved it.
+const V5_PRECISION_FLOOR: f64 = 0.41;
+const V5_RECALL_FLOOR: f64 = 0.43;
+const V5_CONTAMINATED_CASES_CEILING: usize = 15;
+
+#[test]
+fn calibration_v5_quality_gate() {
+    let measure = measure("corpus-v5-gate", corpus_v5::FAMILIES_V5);
+    assert_floors(
+        &measure,
+        V5_PRECISION_FLOOR,
+        V5_RECALL_FLOOR,
+        V5_CONTAMINATED_CASES_CEILING,
+    );
 }
 
 /// Embeddings of the corpus texts (`fixtures/context_corpus_vectors_*.json`,
@@ -671,12 +696,21 @@ impl Vectors {
 /// A semantic pass over the lexical selection. `floor`/`fraction`: an item
 /// found only by text stays when its similarity reaches the floor and that
 /// fraction of the best one. `rescue`: when nothing is left, the most similar
-/// item enters if it reaches `rescue` with `margin` over the second.
+/// item enters if it reaches `rescue` with `margin` over the second. `rank`
+/// and `promote` let the vector replace a lexical item instead of only
+/// vetoing: an item found only by text stays when it is among the `rank`
+/// most similar items (0 is off), and the most similar item enters whatever
+/// the text found when its margin over the second reaches `promote`.
 #[derive(Clone, Copy, Debug)]
 struct Semantic {
     floor: f32,
     fraction: f32,
     rescue: Option<(f32, f32)>,
+    rank: usize,
+    promote: Option<f32>,
+    /// Whether items found only by text count at all; off, the vector alone
+    /// picks (through `promote`), beside the graph's links.
+    lexical: bool,
 }
 
 fn graph_linked(family: &corpus::Family) -> BTreeSet<String> {
@@ -707,23 +741,6 @@ fn apply_semantic(
         .iter()
         .map(|alias| vectors.similarity(task, alias))
         .fold(f32::MIN, f32::max);
-    let mut kept: BTreeSet<String> = items
-        .iter()
-        .filter(|alias| {
-            !lexical.contains(alias) || {
-                let similarity = vectors.similarity(task, alias);
-                similarity >= semantic.floor && similarity >= semantic.fraction * best
-            }
-        })
-        .cloned()
-        .collect();
-
-    let Some((rescue, margin)) = semantic.rescue else {
-        return kept;
-    };
-    if kept.difference(&standing).next().is_some() {
-        return kept;
-    }
     let forbidden: BTreeSet<&str> = corpus::FORBIDDEN.iter().copied().collect();
     let mut ranked: Vec<(f32, &String)> = vectors
         .items
@@ -732,7 +749,34 @@ fn apply_semantic(
         .map(|alias| (vectors.similarity(task, alias), alias))
         .collect();
     ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
-    if ranked[0].0 >= rescue && ranked[0].0 - ranked[1].0 >= margin {
+    let position = |alias: &String| ranked.iter().position(|(_, a)| *a == alias);
+    let margin = ranked[0].0 - ranked[1].0;
+
+    let mut kept: BTreeSet<String> = items
+        .iter()
+        .filter(|alias| {
+            !lexical.contains(alias)
+                || semantic.lexical && {
+                    let similarity = vectors.similarity(task, alias);
+                    similarity >= semantic.floor
+                        && similarity >= semantic.fraction * best
+                        && (semantic.rank == 0
+                            || position(alias).is_some_and(|at| at < semantic.rank))
+                }
+        })
+        .cloned()
+        .collect();
+    if semantic.promote.is_some_and(|promote| margin >= promote) {
+        kept.insert(ranked[0].1.clone());
+    }
+
+    let Some((rescue, rescue_margin)) = semantic.rescue else {
+        return kept;
+    };
+    if kept.difference(&standing).next().is_some() {
+        return kept;
+    }
+    if ranked[0].0 >= rescue && margin >= rescue_margin {
         kept.insert(ranked[0].1.clone());
     }
     kept
@@ -777,21 +821,33 @@ const SEMANTIC_CANDIDATES: &[Semantic] = &[
         floor: -1.0,
         fraction: 0.0,
         rescue: None,
+        rank: 0,
+        promote: None,
+        lexical: true,
     },
     Semantic {
         floor: 0.0,
         fraction: 0.8,
         rescue: None,
+        rank: 0,
+        promote: None,
+        lexical: true,
     },
     Semantic {
         floor: -1.0,
         fraction: 0.0,
         rescue: Some((0.5, 0.1)),
+        rank: 0,
+        promote: None,
+        lexical: true,
     },
     Semantic {
         floor: 0.0,
         fraction: 0.8,
         rescue: Some((0.5, 0.1)),
+        rank: 0,
+        promote: None,
+        lexical: true,
     },
 ];
 
@@ -813,6 +869,9 @@ fn report_semantic_variants_v3() {
                     floor,
                     fraction,
                     rescue,
+                    rank: 0,
+                    promote: None,
+                    lexical: true,
                 });
             }
         }
@@ -832,19 +891,23 @@ fn report_semantic_candidates_v4() {
     );
 }
 
-/// Similarity of each v3 task to its required items and to the best other
+/// Similarity of each v3 (or v5) task to its required items and to the best other
 /// item, to place the floors of the semantic pass.
 #[test]
 #[ignore = "embedding experiment on v3; run with --nocapture"]
 fn report_similarity_v3() {
     let model = std::env::var("XEMNAS_EMBED_MODEL").unwrap_or_default();
     let vectors = Vectors::load(if model == "e5" { E5 } else { POTION });
+    let families = match std::env::var("XEMNAS_EMBED_CORPUS").as_deref() {
+        Ok("v5") => corpus_v5::FAMILIES_V5,
+        _ => corpus::FAMILIES,
+    };
     let skip: BTreeSet<&str> = corpus::FORBIDDEN
         .iter()
         .chain(corpus::STANDING)
         .copied()
         .collect();
-    for family in corpus::FAMILIES {
+    for family in families {
         for task in family.queries {
             let mut ranked: Vec<(f32, &str)> = vectors
                 .items
@@ -887,21 +950,33 @@ const E5_CANDIDATES: &[Semantic] = &[
         floor: -1.0,
         fraction: 0.0,
         rescue: None,
+        rank: 0,
+        promote: None,
+        lexical: true,
     },
     Semantic {
         floor: -1.0,
         fraction: 0.97,
         rescue: None,
+        rank: 0,
+        promote: None,
+        lexical: true,
     },
     Semantic {
         floor: -1.0,
         fraction: 0.0,
         rescue: Some((0.0, 0.04)),
+        rank: 0,
+        promote: None,
+        lexical: true,
     },
     Semantic {
         floor: -1.0,
         fraction: 0.97,
         rescue: Some((0.0, 0.04)),
+        rank: 0,
+        promote: None,
+        lexical: true,
     },
 ];
 
@@ -924,6 +999,9 @@ fn report_e5_variants_v3() {
         floor: -1.0,
         fraction: 0.0,
         rescue: None,
+        rank: 0,
+        promote: None,
+        lexical: true,
     }];
     for floor in [0.0, 0.75, 0.78, 0.8, 0.82, 0.84] {
         for fraction in [0.0, 0.95, 0.97, 0.98] {
@@ -938,9 +1016,62 @@ fn report_e5_variants_v3() {
                     floor,
                     fraction,
                     rescue,
+                    rank: 0,
+                    promote: None,
+                    lexical: true,
                 });
             }
         }
     }
     measure_semantic("e5-v3", E5, corpus::FAMILIES, &variants);
+}
+
+/// Replacement variants (the vector may swap a lexical item) tuned on the
+/// v5 calibration corpus, with v3 alongside; v4 stays unread.
+#[test]
+#[ignore = "embedding experiment on v5 and v3; run with --nocapture"]
+fn report_replacement_variants() {
+    for (model, vectors, fractions) in [("potion", POTION, [0.0, 0.8]), ("e5", E5, [0.0, 0.97])] {
+        let mut variants = Vec::new();
+        for fraction in fractions {
+            for rank in [0, 1, 2, 3] {
+                for promote in [
+                    None,
+                    Some(0.02),
+                    Some(0.03),
+                    Some(0.04),
+                    Some(0.06),
+                    Some(0.08),
+                ] {
+                    for rescue in [None, Some((0.0, 0.04))] {
+                        variants.push(Semantic {
+                            floor: -1.0,
+                            fraction,
+                            rescue,
+                            rank,
+                            promote,
+                            lexical: true,
+                        });
+                    }
+                }
+            }
+        }
+        for promote in [0.0, 0.01, 0.015, 0.02, 0.025, 0.03, 0.04] {
+            variants.push(Semantic {
+                floor: -1.0,
+                fraction: 0.0,
+                rescue: None,
+                rank: 0,
+                promote: Some(promote),
+                lexical: false,
+            });
+        }
+        measure_semantic(
+            &format!("{model}-v5"),
+            vectors,
+            corpus_v5::FAMILIES_V5,
+            &variants,
+        );
+        measure_semantic(&format!("{model}-v3"), vectors, corpus::FAMILIES, &variants);
+    }
 }
