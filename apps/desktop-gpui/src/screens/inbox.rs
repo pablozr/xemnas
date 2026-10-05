@@ -27,8 +27,9 @@ use gpui::{
 
 use super::context::OpenDecision;
 use super::evidence;
-use super::format::{plural, relative, short_date};
+use super::format::{relative, short_date};
 use super::review_editor::{EditorEvent, ReviewEditor};
+use crate::i18n::inbox as t;
 use crate::ui::controls::{action_button, button_foreground, ButtonKind};
 use crate::ui::glass::focus_ring;
 use crate::ui::icons::{icon, IconName};
@@ -274,14 +275,11 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                 .flex()
                 .flex_col()
                 .gap(px(SpacingScale::S2))
-                .child(error_banner(
-                    theme,
-                    "Não foi possível ver em quais conversas esta decisão apareceu.",
-                ))
+                .child(error_banner(theme, t::group_load_error()))
                 .child(
                     action_button(theme, "retry-group", ButtonKind::Ghost, !self.busy)
-                        .aria_label("Tentar novamente")
-                        .child("Tentar novamente")
+                        .aria_label(t::try_again())
+                        .child(t::try_again())
                         .track_focus(&self.group_focus[0])
                         .on_click(
                             cx.listener(|this, _, _, cx| this.load_group(this.group_offset, cx)),
@@ -308,14 +306,14 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             let key_id = id.clone();
             let number = self.group_offset + index + 1;
             let label = if member.already_represented {
-                format!("Conversa {number} · já confirmada")
+                t::conversation_confirmed(number)
             } else {
-                format!("Conversa {number}")
+                t::conversation(number)
             };
             chips = chips.child(
                 action_button(theme, ("member", index), ButtonKind::Ghost, !self.busy)
-                    .aria_label(format!("Ler a evidência da {label}"))
-                    .tooltip(tooltip(format!("Captura {}", member.capture_id), None))
+                    .aria_label(t::read_conversation_evidence(&label))
+                    .tooltip(tooltip(t::capture_tooltip(&member.capture_id), None))
                     .child(label)
                     .track_focus(&self.member_focus[index])
                     .when(
@@ -334,13 +332,13 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
         for (index, label, offset, enabled) in [
             (
                 1,
-                "Anteriores",
+                t::previous(),
                 self.group_offset.saturating_sub(20),
                 self.group_offset > 0,
             ),
             (
                 2,
-                "Mais conversas",
+                t::more_conversations(),
                 self.group_offset + 20,
                 has_more_members(
                     self.group_offset,
@@ -372,15 +370,15 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             .flex_col()
             .gap(px(SpacingScale::S2))
             .child(
-                section_header(theme, "Também apareceu em").child(count_chip(
+                section_header(theme, t::also_appeared_in()).child(count_chip(
                     theme,
-                    format!("{} conversas", group.occurrence_count),
+                    t::conversations_count(group.occurrence_count),
                 )),
             )
             .child(
                 text_style(div(), TypeScale::META)
                     .text_color(theme.colors.text_muted())
-                    .child("Confirmar ou rejeitar vale para todas; cada uma guarda sua evidência."),
+                    .child(t::group_rule_hint()),
             )
             .child(chips)
             .into_any_element()
@@ -446,7 +444,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                 if generation == this.generation {
                     record_retry_result(&mut this.progress_action_error, &job, result.is_ok());
                     if result.is_ok() {
-                        this.notice = Some("Captura reenfileirada para análise.");
+                        this.notice = Some(t::notice_requeued());
                     }
                 }
                 this.poll_progress(cx);
@@ -536,9 +534,9 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.notice = Some(if done {
-                    "Candidato de volta à fila."
+                    t::notice_back_to_queue()
                 } else {
-                    "Não foi possível desfazer."
+                    t::notice_undo_failed()
                 });
                 this.page(false, cx);
             });
@@ -1189,7 +1187,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                                 if !confirm {
                                     return Outcome::Action(
                                         inbox.adjust(&id, edits),
-                                        "Ajustes salvos. O candidato continua na revisão.",
+                                        t::notice_edits_saved(),
                                     );
                                 }
                                 match (adoption, chosen) {
@@ -1200,8 +1198,8 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                                             &kept,
                                             &declined,
                                         ),
-                                        "Ajustes confirmados. Decisão criada e ligada ao mapa.",
-                                        "Ajustes confirmados. Decisão criada.",
+                                        t::notice_edits_confirmed_linked(),
+                                        t::notice_edits_confirmed(),
                                     ),
                                     _ => confirmed(inbox.confirm_reviewed(&reviewed, Some(edits))),
                                 }
@@ -1237,20 +1235,15 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                     (Some(adoption), Some((kept, declined))) => {
                         return adopted(
                             adoption.adopt_reviewed(&reviewed, None, &kept, &declined),
-                            "Candidato confirmado. Decisão criada e ligada ao mapa.",
-                            "Candidato confirmado. Decisão criada.",
+                            t::notice_confirmed_linked(),
+                            t::notice_confirmed(),
                         );
                     }
                     _ => return confirmed(inbox.confirm_reviewed(&reviewed, None)),
                 },
-                ReviewAction::Reject => (inbox.reject(&id), "Candidato rejeitado."),
-                ReviewAction::Snooze if snoozed => {
-                    (inbox.unsnooze(&id), "Candidato retomado para revisão.")
-                }
-                ReviewAction::Snooze => (
-                    inbox.snooze(&id),
-                    "Candidato adiado. Você pode retomá-lo depois.",
-                ),
+                ReviewAction::Reject => (inbox.reject(&id), t::notice_rejected()),
+                ReviewAction::Snooze if snoozed => (inbox.unsnooze(&id), t::notice_resumed()),
+                ReviewAction::Snooze => (inbox.snooze(&id), t::notice_snoozed()),
                 ReviewAction::Edit => unreachable!(),
             };
             Outcome::Action(result, notice)
@@ -1262,8 +1255,13 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
     /// (approval rises and scrutiny falls with practice), so the notice says
     /// so once and does not block anything.
     fn note_confirmation(&mut self, notice: &'static str) {
-        if !notice.starts_with("Candidato confirmado") && !notice.starts_with("Ajustes confirmados")
-        {
+        let confirmations = [
+            t::notice_confirmed_linked(),
+            t::notice_confirmed(),
+            t::notice_edits_confirmed_linked(),
+            t::notice_edits_confirmed(),
+        ];
+        if !confirmations.contains(&notice) {
             self.streak.clear();
             return;
         }
@@ -1278,8 +1276,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
         self.streak.push(now);
         if self.streak.len() >= STREAK_LEN {
             self.streak.clear();
-            self.notice =
-                Some("Ritmo alto: abra a evidência de um dos próximos antes de confirmar.");
+            self.notice = Some(t::notice_streak());
         }
     }
 
@@ -1290,8 +1287,8 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
         };
         self.notice = None;
         self.run(cx, move |inbox| match undo {
-            Undo::Reject(id) => Outcome::Action(inbox.reopen(&id), "Rejeição desfeita."),
-            Undo::Snooze(id) => Outcome::Action(inbox.unsnooze(&id), "Adiamento desfeito."),
+            Undo::Reject(id) => Outcome::Action(inbox.reopen(&id), t::notice_reject_undone()),
+            Undo::Snooze(id) => Outcome::Action(inbox.unsnooze(&id), t::notice_snooze_undone()),
         });
     }
 
@@ -1309,9 +1306,9 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             .cursor_pointer()
             .role(Role::Button)
             .aria_label(if open {
-                "Esconder o motivo escrito pela IA"
+                t::reason_hide_aria()
             } else {
-                "Mostrar o motivo escrito pela IA"
+                t::reason_show_aria()
             })
             .focus_visible(focus_ring(theme))
             .on_click(cx.listener(|this, _, _, cx| {
@@ -1327,7 +1324,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                 13.0,
                 colors.text_muted(),
             ))
-            .child(section_label(theme, "Motivo escrito pela IA"));
+            .child(section_label(theme, t::reason_title()));
         div()
             .flex()
             .flex_col()
@@ -1352,16 +1349,16 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             return div().into_any_element();
         };
         let labels = [
-            "Rejeitar",
+            t::review_reject(),
             if detail.summary.status == CandidateStatus::Snoozed {
-                "Retomar"
+                t::review_resume()
             } else {
-                "Adiar"
+                t::review_snooze()
             },
-            "Ajustar",
-            "Confirmar",
+            t::review_adjust(),
+            t::review_confirm(),
         ];
-        action_footer(&theme, self.busy.then_some(("Registrando…", false)))
+        action_footer(&theme, self.busy.then_some((t::review_recording(), false)))
             .children(
                 [
                     ReviewAction::Reject,
@@ -1430,12 +1427,15 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                 }
             }))
             .role(Role::Button)
-            .aria_label(format!(
-                "{}: {}. Relevância {:.0}%, confiança {:.0}%.",
-                if rule { "Regra" } else { "Decisão" },
-                row.question,
-                row.significance * 100.0,
-                row.confidence * 100.0
+            .aria_label(t::row_aria(
+                if rule {
+                    t::kind_rule()
+                } else {
+                    t::kind_decision()
+                },
+                &row.question,
+                row.significance as f32 * 100.0,
+                row.confidence as f32 * 100.0,
             ))
             .aria_selected(selected)
             .cursor_pointer()
@@ -1500,7 +1500,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                                     .children(self.left_for_you(&row.id).map(|_| {
                                         text_style(div(), TypeScale::META)
                                             .text_color(theme.colors.status_info())
-                                            .child("a IA deixou para você")
+                                            .child(t::left_for_you_tag())
                                     })),
                             ),
                     )
@@ -1572,8 +1572,8 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             .id("inbox-mode")
             .role(Role::RadioGroup);
         for (mode, id, label) in [
-            (Mode::Manual, "inbox-mode-manual", "Manual"),
-            (Mode::Automatic, "inbox-mode-auto", "Automático"),
+            (Mode::Manual, "inbox-mode-manual", t::mode_manual()),
+            (Mode::Automatic, "inbox-mode-auto", t::mode_automatic()),
         ] {
             track = track.child(
                 crate::ui::patterns::segment_label(
@@ -1599,9 +1599,9 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                         text_style(div(), TypeScale::META)
                             .text_color(colors.text_muted())
                             .child(if status.judge {
-                                "A IA aceita o que é seguro e deixa o resto para você."
+                                t::mode_judge_on()
                             } else {
-                                "Sem provedor de IA ativo: só as regras locais agem."
+                                t::mode_judge_off()
                             }),
                     )
                 }),
@@ -1631,7 +1631,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             .py(px(SpacingScale::S2))
             .cursor_pointer()
             .role(Role::Button)
-            .aria_label("Mostrar o que foi feito sozinho")
+            .aria_label(t::ledger_toggle_aria())
             .focus_visible(focus_ring(theme))
             .on_click(cx.listener(|this, _, _, cx| {
                 this.ledger_open = !this.ledger_open;
@@ -1649,7 +1649,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             .child(
                 text_style(div(), TypeScale::META)
                     .text_color(colors.text_secondary())
-                    .child(format!("Feito sozinho · {}", accepted.len())),
+                    .child(t::ledger_title(accepted.len())),
             );
         let mut list = div().flex().flex_col();
         if open {
@@ -1661,19 +1661,19 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                 let put_back = (entry.kind == ItemKind::Candidate
                     && entry.verdict == Verdict::Discarded)
                     .then(|| entry.item_id.clone());
-                let word = match entry.verdict {
-                    Verdict::Accepted => "aceita",
-                    _ => "descartada",
+                let verdict = match entry.verdict {
+                    Verdict::Accepted => t::ledger_verdict_accepted(),
+                    _ => t::ledger_verdict_discarded(),
                 };
                 let kind = match entry.kind {
-                    ItemKind::Candidate => "candidato",
-                    ItemKind::Relation => "relação",
-                    ItemKind::Claim => "contexto",
-                    ItemKind::Link => "ligação",
+                    ItemKind::Candidate => t::ledger_kind_candidate(),
+                    ItemKind::Relation => t::ledger_kind_relation(),
+                    ItemKind::Claim => t::ledger_kind_claim(),
+                    ItemKind::Link => t::ledger_kind_link(),
                 };
                 let by = match entry.by {
-                    By::Rules => "pelas regras",
-                    By::Ai => "pela IA",
+                    By::Rules => t::ledger_by_rules(),
+                    By::Ai => t::ledger_by_ai(),
                 };
                 let mut line = div()
                     .id(("inbox-ledger-row", index))
@@ -1697,10 +1697,12 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                             .child(
                                 text_style(div(), TypeScale::META)
                                     .text_color(colors.text_muted())
-                                    .child(format!(
-                                        "{kind} {word} {by}, há {} · {}",
-                                        relative(&entry.created_at),
-                                        entry.reason
+                                    .child(t::ledger_line(
+                                        kind,
+                                        verdict,
+                                        by,
+                                        &relative(&entry.created_at),
+                                        &entry.reason,
                                     )),
                             ),
                     );
@@ -1708,7 +1710,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                     line = line
                         .cursor_pointer()
                         .role(Role::Link)
-                        .aria_label(format!("Abrir a decisão: {}", entry.title))
+                        .aria_label(t::open_decision_aria(&entry.title))
                         .hover(move |style| style.bg(colors.glass_fill_low()))
                         .focus_visible(focus_ring(theme))
                         .on_click(
@@ -1718,11 +1720,11 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                 if let Some(item_id) = put_back {
                     line = line.child(
                         action_button(theme, ("inbox-put-back", index), ButtonKind::Ghost, true)
-                            .aria_label("Desfazer")
+                            .aria_label(t::undo())
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.put_back(ItemKind::Candidate, item_id.clone(), cx)
                             }))
-                            .child("Desfazer"),
+                            .child(t::undo()),
                     );
                 }
                 list = list.child(line);
@@ -1748,27 +1750,18 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
         let colors = theme.colors;
         let mut parts = Vec::new();
         if briefing.new_candidates > 0 {
-            parts.push(plural(
-                briefing.new_candidates,
-                "candidato novo",
-                "candidatos novos",
-            ));
+            parts.push(t::briefing_new_candidates(briefing.new_candidates));
         }
         if briefing.decisions > 0 {
-            parts.push(plural(briefing.decisions, "decisão", "decisões"));
+            parts.push(t::briefing_decisions(briefing.decisions));
         }
         if briefing.deliveries > 0 {
-            parts.push(format!(
-                "{} ao agente ({})",
-                plural(briefing.deliveries, "entrega", "entregas"),
-                plural(briefing.sessions, "sessão", "sessões")
+            parts.push(t::briefing_deliveries(
+                briefing.deliveries,
+                briefing.sessions,
             ));
         }
-        let label = format!(
-            "Desde a última visita, há {}: {}",
-            relative(&briefing.since),
-            parts.join(" · ")
-        );
+        let label = t::briefing_line(&relative(&briefing.since), &parts.join(" · "));
         Some(
             div()
                 .flex()
@@ -1793,7 +1786,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                         .child(label),
                 )
                 .child(
-                    crate::ui::controls::icon_action(theme, "inbox-briefing-close", "Dispensar")
+                    crate::ui::controls::icon_action(theme, "inbox-briefing-close", t::dismiss())
                         .size(px(18.0))
                         .child(icon(IconName::Close, 10.0, colors.text_muted()))
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -1808,9 +1801,9 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
     fn low_toggle(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let theme = Theme::current(cx);
         let label = if self.show_low {
-            "Esconder os de baixa relevância".to_owned()
+            t::low_hide().to_owned()
         } else {
-            format!("Mostrar {} de baixa relevância", self.hidden_low)
+            t::low_show(self.hidden_low)
         };
         div()
             .px(px(SpacingScale::S4))
@@ -1853,9 +1846,9 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
         for (index, (link, keep)) in links.links.iter().enumerate() {
             let keep = *keep;
             let verb = match link.kind {
-                EdgeKind::Uses => "usa",
-                EdgeKind::AppliesTo => "vale para",
-                _ => "muda",
+                EdgeKind::Uses => t::link_uses(),
+                EdgeKind::AppliesTo => t::link_applies_to(),
+                _ => t::link_changes(),
             };
             let glyph = match link.entity_kind {
                 EntityKind::Component => IconName::Component,
@@ -1943,15 +1936,11 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             let more = links.uncovered.len().saturating_sub(3);
             text_style(div(), TypeScale::META)
                 .text_color(colors.text_muted())
-                .child(format!(
-                    "Sem componente no mapa: {}{}. Crie no Mapa para ligar da próxima vez.",
-                    shown.join(", "),
-                    if more > 0 {
-                        format!(" e mais {more}")
-                    } else {
-                        String::new()
-                    }
-                ))
+                .child(if more > 0 {
+                    t::map_uncovered_more(&shown.join(", "), more)
+                } else {
+                    t::map_uncovered(&shown.join(", "))
+                })
         });
         Some(
             div()
@@ -1959,11 +1948,8 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                 .flex_col()
                 .gap(px(SpacingScale::S2))
                 .child(
-                    section_header(theme, "No mapa").when(!links.links.is_empty(), |row| {
-                        row.child(count_chip(
-                            theme,
-                            format!("{kept} de {}", links.links.len()),
-                        ))
+                    section_header(theme, t::map_title()).when(!links.links.is_empty(), |row| {
+                        row.child(count_chip(theme, t::count_of(kept, links.links.len())))
                     }),
                 )
                 .when(!links.links.is_empty(), |section| {
@@ -1971,13 +1957,8 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                         text_style(div(), TypeScale::META)
                             .text_color(colors.text_muted())
                             .child(match kind {
-                                CandidateKind::Rule => {
-                                    "Ao confirmar, a regra passa a valer nos itens marcados."
-                                }
-                                _ => {
-                                    "Ao confirmar, a decisão fica ligada aos itens marcados; \
-                                      os desmarcados não voltam como sugestão."
-                                }
+                                CandidateKind::Rule => t::map_rule_hint(),
+                                _ => t::map_decision_hint(),
                             }),
                     )
                 })
@@ -1993,10 +1974,10 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             .flex_col()
             .gap(px(SpacingScale::S4))
             .p(px(SpacingScale::S6))
-            .child(section_label(&theme, "Últimas capturas do projeto"));
+            .child(section_label(&theme, t::progress_title()));
         if let Some(job) = self.progress_action_error.clone() {
             panel = panel.child(
-                error_banner(&theme, "Não foi possível reprocessar esta captura.")
+                error_banner(&theme, t::reprocess_error())
                     .id("capture-action-error")
                     .role(Role::Alert)
                     .child(
@@ -2006,26 +1987,26 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                             ButtonKind::Secondary,
                             !self.progress_busy,
                         )
-                        .aria_label("Tentar reprocessar novamente")
+                        .aria_label(t::reprocess_retry_aria())
                         .on_click(
                             cx.listener(move |this, _, _, cx| this.retry_progress(job.clone(), cx)),
                         )
-                        .child("Tentar reprocessar"),
+                        .child(t::reprocess_retry()),
                     )
                     .child(
                         action_button(&theme, "capture-action-dismiss", ButtonKind::Ghost, true)
-                            .aria_label("Dispensar erro de reprocessamento")
+                            .aria_label(t::reprocess_dismiss_aria())
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.progress_action_error = None;
                                 cx.notify();
                             }))
-                            .child("Dispensar"),
+                            .child(t::dismiss()),
                     ),
             );
         }
         if self.progress_error {
             panel = panel.child(
-                error_banner(&theme, "Não foi possível atualizar as capturas.")
+                error_banner(&theme, t::progress_error())
                     .id("capture-progress-error")
                     .role(Role::Alert)
                     .child(
@@ -2035,27 +2016,48 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                             ButtonKind::Ghost,
                             !self.progress_busy,
                         )
-                        .aria_label("Atualizar capturas")
+                        .aria_label(t::progress_refresh_aria())
                         .on_click(cx.listener(|this, _, _, cx| this.poll_progress(cx)))
-                        .child("Tentar novamente"),
+                        .child(t::try_again()),
                     ),
             );
         }
         if self.progress.is_empty() {
-            return panel.child(if self.progress_busy { "Carregando capturas…" }
-                else if self.progress_error { "O destino das capturas está indisponível." }
-                else { "Nenhuma captura recebida neste projeto. As sessões capturadas aparecem aqui antes da revisão." });
+            return panel.child(if self.progress_busy {
+                t::progress_loading()
+            } else if self.progress_error {
+                t::progress_unavailable()
+            } else {
+                t::progress_empty()
+            });
         }
         for (index, capture) in self.progress.iter().enumerate() {
-            let source = capture.source.as_deref().unwrap_or("Fonte não informada");
-            let mut row = div().flex().flex_col().gap(px(SpacingScale::S2))
+            let source = capture
+                .source
+                .as_deref()
+                .unwrap_or(t::progress_source_unknown());
+            let mut row = div()
+                .flex()
+                .flex_col()
+                .gap(px(SpacingScale::S2))
                 .child(text_style(div(), TypeScale::BODY).child(progress_copy(capture)))
-                .child(text_style(div(), TypeScale::META).child(format!(
-                    "{} · {}{} · tentativa {} · {} pendentes · {} de baixa relevância · {} confirmados · {} rejeitados · {} adiados",
-                    short_date(&capture.received_at), source,
-                    capture.model.as_ref().map(|model| format!(" · {model}")).unwrap_or_default(),
-                    capture.attempts, capture.candidates.pending, capture.candidates.hidden,
-                    capture.candidates.adopted, capture.candidates.dismissed, capture.candidates.snoozed)));
+                .child(
+                    text_style(div(), TypeScale::META).child(t::capture_meta(
+                        &short_date(&capture.received_at),
+                        source,
+                        &capture
+                            .model
+                            .as_ref()
+                            .map(|model| format!(" · {model}"))
+                            .unwrap_or_default(),
+                        capture.attempts,
+                        capture.candidates.pending,
+                        capture.candidates.hidden,
+                        capture.candidates.adopted,
+                        capture.candidates.dismissed,
+                        capture.candidates.snoozed,
+                    )),
+                );
             if capture.can_retry {
                 if let Some(job) = capture.job_id.clone() {
                     row = row.child(
@@ -2065,11 +2067,11 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                             ButtonKind::Secondary,
                             !self.progress_busy,
                         )
-                        .aria_label("Reprocessar captura")
+                        .aria_label(t::reprocess_aria())
                         .on_click(
                             cx.listener(move |this, _, _, cx| this.retry_progress(job.clone(), cx)),
                         )
-                        .child("Reprocessar"),
+                        .child(t::reprocess()),
                     );
                 }
             }
@@ -2092,9 +2094,9 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                 return crate::ui::patterns::empty_panel_mascot(
                     &theme,
                     crate::screens::assistant::resting(),
-                    "Fila de revisão",
-                    "Nada aguardando revisão",
-                    "Quando uma sessão do OpenCode registrar uma escolha de engenharia, o extrator propõe um candidato aqui para você confirmar, ajustar ou rejeitar.",
+                    t::empty_eyebrow(),
+                    t::empty_title(),
+                    t::empty_body(),
                 )
                 .into_any_element();
             }
@@ -2106,27 +2108,19 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                 .child(
                     text_style(div(), TypeScale::BODY_SMALL)
                         .text_color(theme.colors.text_muted())
-                        .child(if self.busy {
-                            ""
-                        } else {
-                            "Selecione um candidato para ler as evidências."
-                        }),
+                        .child(if self.busy { "" } else { t::select_candidate() }),
                 )
                 .into_any_element();
         };
         let source_detail = evidence_detail(detail, self.member.as_ref());
         let evidence_block = if self.member_error {
-            error_banner(
-                &theme,
-                "Não foi possível ler esta fonte. Selecione-a novamente para tentar.",
-            )
-            .into_any_element()
+            error_banner(&theme, t::source_read_error()).into_any_element()
         } else if self.member_id.is_some() && self.member.is_none() {
             skeleton_list(&theme, "member-loading", 3)
         } else if source_detail.artifacts.is_empty() {
             text_style(div(), TypeScale::BODY_SMALL)
                 .text_color(theme.colors.text_muted())
-                .child("Nenhuma fonte disponível para este candidato.")
+                .child(t::no_source())
                 .into_any_element()
         } else {
             let tabs = evidence::tab_strip(&theme, "evidence-tabs").children(
@@ -2195,7 +2189,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                     .gap(px(SpacingScale::S3))
                     .child(status_badge(detail.summary.status, theme))
                     .when(detail.summary.kind == CandidateKind::Rule, |line| {
-                        line.child(tag(&theme, "Regra"))
+                        line.child(tag(&theme, t::kind_rule()))
                     })
                     .child(
                         text_style(div(), TypeScale::META)
@@ -2207,14 +2201,13 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                 page.child(
                     text_style(div(), TypeScale::META)
                         .text_color(theme.colors.text_muted())
-                        .child(format!(
-                            "Por que importa: {}",
-                            detail
+                        .child(t::why_it_matters(
+                            &detail
                                 .criteria
                                 .iter()
                                 .map(|criterion| criterion_label(criterion))
                                 .collect::<Vec<_>>()
-                                .join(" · ")
+                                .join(" · "),
                         )),
                 )
             })
@@ -2236,7 +2229,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                             .flex_1()
                             .min_w(px(0.0))
                             .text_color(theme.colors.text_secondary())
-                            .child(format!("A IA deixou este para você: {}", entry.reason)),
+                            .child(t::left_for_you_reason(&entry.reason)),
                     )
             }))
             .child(reading_title(&detail.summary.question).text_color(theme.colors.text_primary()))
@@ -2249,7 +2242,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                     .border_color(theme.colors.accent_hover())
                     .pl(px(SpacingScale::S4))
                     .child(
-                        section_label(&theme, "Escolha sugerida")
+                        section_label(&theme, t::editor_choice())
                             .text_color(theme.colors.accent_hover()),
                     )
                     .child(
@@ -2269,13 +2262,12 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                     .flex()
                     .flex_col()
                     .gap(px(SpacingScale::S3))
-                    .child(section_header(&theme, "Evidências").child(count_chip(
-                        &theme,
-                        match source_detail.artifacts.len() {
-                            1 => "1 fonte".to_string(),
-                            n => format!("{n} fontes"),
-                        },
-                    )))
+                    .child(
+                        section_header(&theme, t::evidence_title()).child(count_chip(
+                            &theme,
+                            t::sources_count(source_detail.artifacts.len()),
+                        )),
+                    )
                     .when(
                         self.member_id
                             .as_deref()
@@ -2284,10 +2276,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                             section.child(
                                 text_style(div(), TypeScale::BODY_SMALL)
                                     .text_color(theme.colors.text_muted())
-                                    .child(
-                                        "Evidência de outra conversa em que a mesma decisão \
-                                         apareceu. Confirmar vale para todas.",
-                                    ),
+                                    .child(t::member_evidence_note()),
                             )
                         },
                     )
@@ -2297,14 +2286,13 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                                 &theme,
                                 &source_detail.qualifiers,
                             ))
-                            .child(section_label(&theme, "Origem desta conversa"))
+                            .child(section_label(&theme, t::member_origin_title()))
                             .child(
                                 text_style(div(), TypeScale::META)
                                     .text_color(theme.colors.text_muted())
-                                    .child(format!(
-                                        "Recebido em {} · {}",
-                                        short_date(&source_detail.summary.received_at),
-                                        source_detail.summary.project_location
+                                    .child(t::received_inline(
+                                        &short_date(&source_detail.summary.received_at),
+                                        &source_detail.summary.project_location,
                                     )),
                             )
                     })
@@ -2332,11 +2320,10 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                     .child(
                         section(
                             theme,
-                            "Origem",
-                            &format!(
-                                "Recebido em {}\n{}",
-                                short_date(&detail.summary.received_at),
-                                detail.summary.project_location,
+                            t::origin_title(),
+                            &t::received_lines(
+                                &short_date(&detail.summary.received_at),
+                                &detail.summary.project_location,
                             ),
                         )
                         .flex_1()
@@ -2386,61 +2373,165 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> Render for InboxScre
         }
         let retry = self.error.map(|_| {
             action_button(&theme, "inbox-retry", ButtonKind::Secondary, !self.busy)
-                .aria_label("Tentar novamente")
+                .aria_label(t::try_again())
                 .on_click(cx.listener(|this, _, _, cx| this.page(false, cx)))
-                .child("Tentar novamente")
+                .child(t::try_again())
         });
-        div().size_full().relative().flex().flex_col()
-            .children(self.error.map(|message| error_banner(&theme, message).id("inbox-error").role(Role::Alert).children(retry)))
+        div()
+            .size_full()
+            .relative()
+            .flex()
+            .flex_col()
+            .children(self.error.map(|message| {
+                error_banner(&theme, message)
+                    .id("inbox-error")
+                    .role(Role::Alert)
+                    .children(retry)
+            }))
             .children(self.notice.map(|message| {
                 let action = self.undo.is_some().then(|| {
                     action_button(&theme, "inbox-undo", ButtonKind::Ghost, !self.busy)
-                        .aria_label("Desfazer")
+                        .aria_label(t::undo())
                         .on_click(cx.listener(|this, _, _, cx| this.undo(cx)))
-                        .child("Desfazer")
+                        .child(t::undo())
                         .into_any_element()
                 });
                 toast_with(&theme, message, 72.0, action)
             }))
-            .child(div().flex_1().min_h(px(0.0)).flex()
-                .child(div().w(px(320.0)).flex_none().h_full().flex().flex_col().bg(theme.colors.pane())
-                    .border_r_1().border_color(theme.colors.hairline_divider())
-                    .child(div().px(px(SpacingScale::S4)).pt(px(SpacingScale::S3)).pb(px(SpacingScale::S2)).flex().items_center().gap(px(SpacingScale::S2))
-                        .child(panel_title(&theme, "Aguardando revisão"))
-                        .child(count_chip(&theme, if self.rows.len() == visible.len() {
-                            visible.len().to_string()
-                        } else {
-                            format!("{} de {}", visible.len(), self.rows.len())
-                        }))
-                        .child(div().flex_1())
-                        .child(self.button("inbox-refresh", "Atualizar", false, cx)))
-                    .children(self.mode_switch(&theme, cx))
-                    .child(div().px(px(SpacingScale::S4)).pb(px(SpacingScale::S3)).children(self.search.clone()))
-                    .children(self.briefing_strip(&theme, cx))
-                    .when(self.hidden_low > 0 || self.show_low, |rail| rail.child(self.low_toggle(cx)))
-                    .child(div().id("inbox-list").flex_1().min_h(px(0.0)).overflow_y_scroll().track_scroll(&self.list_scroll)
-                        .children(visible.iter().enumerate().map(|(index, row)| {
-                            crate::ui::motion::cascade(
-                                ElementId::Name(format!("candidate-in-{}", row.id).into()),
-                                index,
-                                div().child(self.row(row, cx)),
+            .child(
+                div()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .flex()
+                    .child(
+                        div()
+                            .w(px(320.0))
+                            .flex_none()
+                            .h_full()
+                            .flex()
+                            .flex_col()
+                            .bg(theme.colors.pane())
+                            .border_r_1()
+                            .border_color(theme.colors.hairline_divider())
+                            .child(
+                                div()
+                                    .px(px(SpacingScale::S4))
+                                    .pt(px(SpacingScale::S3))
+                                    .pb(px(SpacingScale::S2))
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(SpacingScale::S2))
+                                    .child(panel_title(&theme, t::queue_title()))
+                                    .child(count_chip(
+                                        &theme,
+                                        if self.rows.len() == visible.len() {
+                                            visible.len().to_string()
+                                        } else {
+                                            t::count_of(visible.len(), self.rows.len())
+                                        },
+                                    ))
+                                    .child(div().flex_1())
+                                    .child(self.button("inbox-refresh", t::refresh(), false, cx)),
                             )
-                        }))
-                        .when(visible.is_empty() && self.busy, |list| list.child(skeleton_list(&theme, "inbox-skeleton", 5)))
-                        .when(visible.is_empty() && !self.busy, |list| list.child(text_style(div(), TypeScale::BODY_SMALL).p(px(SpacingScale::S4))
-                            .text_color(theme.colors.text_muted()).child(
-                            if !self.loaded { "Atualize para carregar os candidatos." }
-                            else if self.rows.is_empty() { "Fila vazia." }
-                            else { "Nenhum candidato carregado corresponde à busca." }))))
-                    .children(self.ledger_section(&theme, cx))
-                    .when(self.cursor.is_some() || self.rows.len() != visible.len(), |rail| rail.child(text_style(div(), TypeScale::META).flex_none().px(px(SpacingScale::S4)).py(px(SpacingScale::S2))
-                        .flex().items_center().justify_between()
-                        .border_t_1().border_color(theme.colors.hairline_divider()).text_color(theme.colors.text_muted())
-                        .child(format!("{} carregados · {} visíveis", self.rows.len(), visible.len()))
-                        .when(self.cursor.is_some(), |footer| footer.child(self.button("inbox-more", "Carregar mais", true, cx))))))
-                .child(div().flex_1().min_w(px(0.0)).h_full().flex().flex_col()
-                    .child(div().flex_1().min_h(px(0.0)).child(if let Some(editor) = self.editor.as_ref().filter(|_| self.detail.as_ref().is_some_and(|detail| matches_query(&detail.summary, &self.query))) { editor.clone().into_any_element() } else { self.reading_pane(cx) }))
-                    .when(self.editor.is_none(), |pane| pane.child(self.review_actions(cx)))))
+                            .children(self.mode_switch(&theme, cx))
+                            .child(
+                                div()
+                                    .px(px(SpacingScale::S4))
+                                    .pb(px(SpacingScale::S3))
+                                    .children(self.search.clone()),
+                            )
+                            .children(self.briefing_strip(&theme, cx))
+                            .when(self.hidden_low > 0 || self.show_low, |rail| {
+                                rail.child(self.low_toggle(cx))
+                            })
+                            .child(
+                                div()
+                                    .id("inbox-list")
+                                    .flex_1()
+                                    .min_h(px(0.0))
+                                    .overflow_y_scroll()
+                                    .track_scroll(&self.list_scroll)
+                                    .children(visible.iter().enumerate().map(|(index, row)| {
+                                        crate::ui::motion::cascade(
+                                            ElementId::Name(
+                                                format!("candidate-in-{}", row.id).into(),
+                                            ),
+                                            index,
+                                            div().child(self.row(row, cx)),
+                                        )
+                                    }))
+                                    .when(visible.is_empty() && self.busy, |list| {
+                                        list.child(skeleton_list(&theme, "inbox-skeleton", 5))
+                                    })
+                                    .when(visible.is_empty() && !self.busy, |list| {
+                                        list.child(
+                                            text_style(div(), TypeScale::BODY_SMALL)
+                                                .p(px(SpacingScale::S4))
+                                                .text_color(theme.colors.text_muted())
+                                                .child(if !self.loaded {
+                                                    t::queue_not_loaded()
+                                                } else if self.rows.is_empty() {
+                                                    t::queue_empty()
+                                                } else {
+                                                    t::queue_no_match()
+                                                }),
+                                        )
+                                    }),
+                            )
+                            .children(self.ledger_section(&theme, cx))
+                            .when(
+                                self.cursor.is_some() || self.rows.len() != visible.len(),
+                                |rail| {
+                                    rail.child(
+                                        text_style(div(), TypeScale::META)
+                                            .flex_none()
+                                            .px(px(SpacingScale::S4))
+                                            .py(px(SpacingScale::S2))
+                                            .flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .border_t_1()
+                                            .border_color(theme.colors.hairline_divider())
+                                            .text_color(theme.colors.text_muted())
+                                            .child(t::loaded_visible(
+                                                self.rows.len(),
+                                                visible.len(),
+                                            ))
+                                            .when(self.cursor.is_some(), |footer| {
+                                                footer.child(self.button(
+                                                    "inbox-more",
+                                                    t::load_more(),
+                                                    true,
+                                                    cx,
+                                                ))
+                                            }),
+                                    )
+                                },
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .h_full()
+                            .flex()
+                            .flex_col()
+                            .child(div().flex_1().min_h(px(0.0)).child(
+                                if let Some(editor) = self.editor.as_ref().filter(|_| {
+                                    self.detail.as_ref().is_some_and(|detail| {
+                                        matches_query(&detail.summary, &self.query)
+                                    })
+                                }) {
+                                    editor.clone().into_any_element()
+                                } else {
+                                    self.reading_pane(cx)
+                                },
+                            ))
+                            .when(self.editor.is_none(), |pane| {
+                                pane.child(self.review_actions(cx))
+                            }),
+                    ),
+            )
     }
 }
 
@@ -2460,10 +2551,7 @@ fn adopted(
         Err(AdoptionError::Inbox(error)) => Outcome::Action(Err(error), plain),
         Err(AdoptionError::Graph(error)) => {
             tracing::warn!(code = error.code(), "map update after adoption failed");
-            Outcome::Action(
-                Ok(()),
-                "Confirmação salva. Não foi possível atualizar o mapa; abra o Mapa para revisar.",
-            )
+            Outcome::Action(Ok(()), t::notice_map_failed())
         }
     }
 }
@@ -2517,33 +2605,29 @@ fn selected_change(
 
 pub(super) fn progress_copy(capture: &CaptureProgress) -> &'static str {
     match capture.state {
-        CaptureState::Queued => "Captura recebida · aguardando análise",
-        CaptureState::Running => "Captura recebida · análise em andamento",
-        CaptureState::Failed => "A análise falhou; nenhum resultado novo foi confirmado.",
-        CaptureState::Skipped => "Análise não executada: autorização bloqueou a extração.",
-        CaptureState::Cancelled => "Análise cancelada.",
-        CaptureState::Unknown => "Captura recebida · estado da análise não informado",
+        CaptureState::Queued => t::progress_queued(),
+        CaptureState::Running => t::progress_running(),
+        CaptureState::Failed => t::progress_failed_nothing(),
+        CaptureState::Skipped => t::progress_skipped(),
+        CaptureState::Cancelled => t::progress_cancelled(),
+        CaptureState::Unknown => t::progress_unknown(),
         CaptureState::Completed => match capture.reason {
-            AssessmentReason::Candidates => {
-                "Análise concluída · candidatos produzidos para revisão"
-            }
-            AssessmentReason::Detail => {
-                "Análise concluída · apenas detalhes de implementação, sem candidato duradouro"
-            }
-            AssessmentReason::Empty => "Análise concluída · nenhuma proposta produzida",
-            AssessmentReason::Failed => "A análise falhou.",
-            AssessmentReason::Skipped => "Análise não executada: autorização bloqueou a extração.",
-            AssessmentReason::Unknown => "Análise concluída · motivo não informado",
+            AssessmentReason::Candidates => t::progress_done_candidates(),
+            AssessmentReason::Detail => t::progress_done_detail(),
+            AssessmentReason::Empty => t::progress_done_empty(),
+            AssessmentReason::Failed => t::progress_failed(),
+            AssessmentReason::Skipped => t::progress_skipped(),
+            AssessmentReason::Unknown => t::progress_done_unknown(),
         },
     }
 }
 
 fn confirmation_notice(rule: bool, linked: bool) -> &'static str {
     match (rule, linked) {
-        (true, true) => "Regra criada e ligada ao mapa.",
-        (true, false) => "Regra criada.",
-        (false, true) => "Decisão criada e ligada ao mapa.",
-        (false, false) => "Decisão criada.",
+        (true, true) => t::notice_rule_linked(),
+        (true, false) => t::notice_rule(),
+        (false, true) => t::notice_decision_linked(),
+        (false, false) => t::notice_decision(),
     }
 }
 
@@ -2557,15 +2641,15 @@ fn confirmed(result: Result<application::inbox::ConfirmOutcome, InboxError>) -> 
 /// Product copy for a significance criterion.
 fn criterion_label(criterion: &str) -> &'static str {
     match criterion {
-        "cross_cutting" => "afeta várias partes",
-        "data_or_contract" => "dados ou contrato",
-        "security_or_privacy" => "segurança ou privacidade",
-        "external_dependency" => "dependência externa",
-        "hard_to_reverse" => "difícil de reverter",
-        "first_of_a_kind" => "primeira vez no projeto",
-        "past_problem" => "resolve problema recorrente",
-        "constrains_future_work" => "condiciona trabalho futuro",
-        _ => "outro motivo",
+        "cross_cutting" => t::criterion_cross_cutting(),
+        "data_or_contract" => t::criterion_data_or_contract(),
+        "security_or_privacy" => t::criterion_security_or_privacy(),
+        "external_dependency" => t::criterion_external_dependency(),
+        "hard_to_reverse" => t::criterion_hard_to_reverse(),
+        "first_of_a_kind" => t::criterion_first_of_a_kind(),
+        "past_problem" => t::criterion_past_problem(),
+        "constrains_future_work" => t::criterion_constrains_future_work(),
+        _ => t::criterion_other(),
     }
 }
 
@@ -2577,7 +2661,7 @@ fn confidence(theme: Theme, value: f32, reason: &str) -> Div {
         .flex()
         .flex_col()
         .gap(px(SpacingScale::S2))
-        .child(section_label(&theme, "Confiança da extração"))
+        .child(section_label(&theme, t::confidence_title()))
         .child(
             div()
                 .flex()
@@ -2596,7 +2680,7 @@ fn confidence(theme: Theme, value: f32, reason: &str) -> Div {
                 .child(
                     text_style(div(), TypeScale::META)
                         .text_color(theme.colors.text_muted())
-                        .child("estimativa do extrator"),
+                        .child(t::confidence_estimate()),
                 ),
         )
         .child(
@@ -2630,13 +2714,11 @@ fn project_label(location: &str) -> &str {
 
 fn status_badge(status: CandidateStatus, theme: Theme) -> Div {
     let (label, color) = match status {
-        CandidateStatus::Pending => ("Pendente", theme.colors.text_muted()),
-        CandidateStatus::Snoozed => ("Adiado", theme.colors.status_info()),
-        CandidateStatus::Accepted => ("Confirmado", theme.colors.status_success()),
-        CandidateStatus::EditedAndAccepted => {
-            ("Ajustado e confirmado", theme.colors.status_success())
-        }
-        CandidateStatus::Dismissed => ("Rejeitado", theme.colors.status_danger()),
+        CandidateStatus::Pending => (t::status_pending(), theme.colors.text_muted()),
+        CandidateStatus::Snoozed => (t::status_snoozed(), theme.colors.status_info()),
+        CandidateStatus::Accepted => (t::status_accepted(), theme.colors.status_success()),
+        CandidateStatus::EditedAndAccepted => (t::status_edited(), theme.colors.status_success()),
+        CandidateStatus::Dismissed => (t::status_dismissed(), theme.colors.status_danger()),
     };
     status_pill(&theme, color, label)
 }
@@ -2650,11 +2732,9 @@ fn matches_query(row: &CandidateSummary, query: &str) -> bool {
 
 fn failure_copy(error: &InboxError) -> &'static str {
     match error {
-        InboxError::InvalidEdits(_) => "Preencha pergunta, escolha e motivo. Limites: 500, 1.000 e 4.000 caracteres, respectivamente.",
-        InboxError::NotFound | InboxError::InvalidState => {
-            "Este candidato mudou. Atualize a Inbox para continuar."
-        }
-        _ => "Não foi possível carregar a Inbox. Tente atualizar; se persistir, reabra o app.",
+        InboxError::InvalidEdits(_) => t::error_invalid_edits(),
+        InboxError::NotFound | InboxError::InvalidState => t::error_candidate_changed(),
+        _ => t::error_load(),
     }
 }
 
@@ -2809,25 +2889,25 @@ mod tests {
         };
         assert_eq!(
             progress_copy(&capture),
-            "Captura recebida · análise em andamento"
+            "Capture received · analysis in progress"
         );
         capture.state = CaptureState::Completed;
-        assert!(progress_copy(&capture).contains("apenas detalhes"));
+        assert!(progress_copy(&capture).contains("only implementation details"));
         capture.reason = AssessmentReason::Unknown;
-        assert!(progress_copy(&capture).contains("não informado"));
+        assert!(progress_copy(&capture).contains("not reported"));
     }
 
     #[test]
     fn confirmation_names_the_created_item_and_only_effective_links() {
-        assert_eq!(confirmation_notice(true, false), "Regra criada.");
-        assert_eq!(confirmation_notice(false, false), "Decisão criada.");
+        assert_eq!(confirmation_notice(true, false), "Rule created.");
+        assert_eq!(confirmation_notice(false, false), "Decision created.");
         assert_eq!(
             confirmation_notice(true, true),
-            "Regra criada e ligada ao mapa."
+            "Rule created and linked to the map."
         );
         assert_eq!(
             confirmation_notice(false, true),
-            "Decisão criada e ligada ao mapa."
+            "Decision created and linked to the map."
         );
     }
 

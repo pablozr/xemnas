@@ -1,5 +1,6 @@
 //! Presentation of redacted capture artifacts, using recorded provenance only.
 
+use crate::i18n::inbox as t;
 use crate::ui::glass::focus_ring;
 use crate::ui::icons::{icon, IconName};
 use crate::ui::theme::{code_style, text_style, Theme};
@@ -51,15 +52,15 @@ fn metadata(artifact: &ArtifactView) -> serde_json::Value {
     serde_json::from_str(&artifact.metadata).unwrap_or(serde_json::Value::Null)
 }
 
-fn kind_label(kind: &str) -> &str {
+fn kind_label(kind: &str) -> &'static str {
     match kind {
-        "diff_hunk" => "Trecho de alteração",
-        "user_text" => "Mensagem do usuário",
-        "assistant_text" => "Resposta do assistente",
-        "tool_summary" => "Resultado de ferramenta",
-        "export_document" => "Documento de exportação",
-        "document" => "Documento do projeto",
-        _ => "Fonte da captura",
+        "diff_hunk" => t::source_diff_hunk(),
+        "user_text" => t::source_user_text(),
+        "assistant_text" => t::source_assistant_text(),
+        "tool_summary" => t::source_tool_summary(),
+        "export_document" => t::source_export_document(),
+        "document" => t::source_document(),
+        _ => t::source_capture(),
     }
 }
 
@@ -92,13 +93,13 @@ fn is_code(artifact: &ArtifactView) -> bool {
 /// The one-line description under a source: what it is and which lines.
 fn description(artifact: &ArtifactView, source: &SourceLines) -> String {
     let range = match start_line(artifact) {
-        Some(start) => format!(
-            "linhas {start}–{}",
-            start.saturating_add(source.lines.len().saturating_sub(1) as u64)
+        Some(start) => t::source_lines(
+            start,
+            start.saturating_add(source.lines.len().saturating_sub(1) as u64),
         ),
-        None if artifact.kind == "export_document" => "conteúdo exato para salvar".into(),
-        None if is_code(artifact) => format!("{} linhas do trecho", source.lines.len()),
-        None => "texto da captura".into(),
+        None if artifact.kind == "export_document" => t::source_export_exact().into(),
+        None if is_code(artifact) => t::source_excerpt_lines(source.lines.len()),
+        None => t::source_capture_text().into(),
     };
     format!("{} · {range}", kind_label(&artifact.kind))
 }
@@ -369,7 +370,7 @@ mod tests {
         };
         assert_eq!(label(&source), "inbox.rs");
         source.metadata = "broken".into();
-        assert_eq!(label(&source), "Trecho de alteração");
+        assert_eq!(label(&source), "Change hunk");
     }
 
     #[test]
