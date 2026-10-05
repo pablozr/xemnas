@@ -457,6 +457,26 @@ fn documentation_extension(name: &str) -> bool {
         .is_some_and(|(_, extension)| EXTENSIONS.contains(&extension.to_lowercase().as_str()))
 }
 
+/// Whether a project-relative path is documentation: a Markdown, reST or
+/// AsciiDoc file anywhere, or a `.txt` inside a documentation folder
+/// (`requirements.txt` at the root is a manifest, not a document).
+///
+/// Documentation is evidence of a decision, not the part it affects: the map
+/// does not derive `affects` from these paths (ADR-0005).
+pub fn is_documentation_path(path: &str) -> bool {
+    let path = domain::entities::normalize_path(path).to_lowercase();
+    let name = path.rsplit('/').next().unwrap_or(&path);
+    if !documentation_extension(name) {
+        return false;
+    }
+    if !name.ends_with(".txt") {
+        return true;
+    }
+    path.split('/')
+        .next()
+        .is_some_and(|folder| folder != name && DOC_DIRS.contains(&folder))
+}
+
 fn read(project_id: &str, relative: &str, path: &Path, now: &str) -> Option<ProjectDocument> {
     let bytes = std::fs::metadata(path).ok()?.len();
     if bytes > MAX_FILE_BYTES {
@@ -639,6 +659,17 @@ fn fingerprint(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn documentation_paths_are_text_documents_not_manifests() {
+        assert!(is_documentation_path("docs/arquitetura/adr/0005-grafo.md"));
+        assert!(is_documentation_path("README.md"));
+        assert!(is_documentation_path("crates\\core\\NOTES.MD"));
+        assert!(is_documentation_path("docs/notas.txt"));
+        assert!(!is_documentation_path("requirements.txt"));
+        assert!(!is_documentation_path("crates/core/src/lib.rs"));
+        assert!(!is_documentation_path("docs/build.rs"));
+    }
 
     #[test]
     fn kinds_come_from_place_and_name() {

@@ -30,6 +30,8 @@ Uma aresta `human` nasce confirmada. Uma `derived` nasce como **sugestão** (sem
 - **Sugestões `affects`**: arquivos de uma decisão vigente que casam com o padrão de um componente.
 - **Sugestões `applies_to` (2026-10-01)**: uma regra adotada da Revisão guarda o candidato de origem (`source_candidate_id`, migration 18) e é sugerida para os componentes que a evidência dela tocou, enquanto vale.
 - **Tecnologias propostas e sugestões `uses`**: dependências adicionadas em `Cargo.toml` ou `package.json` nos hunks citados pela decisão, resolvidas por chave ou alias. O parser lê a seção do manifest (`[dependencies]`, `"devDependencies"`); `[package.metadata]`, `"engines"` e afins não são dependências, troca de versão não é adição, e sem seção visível só conta valor com cara de versão.
+- **Sugestões por menção (2026-10-03).** O texto de uma decisão vigente (pergunta, escolha, motivo, premissas, escopo e consequências) é lido em busca dos itens vivos do mapa: nome, aliases e a parte literal dos padrões de caminho (`crates/core/**` → `crates/core`). A comparação ignora caixa e acento e exige palavra inteira (`-` e `_` continuam a palavra, então `storage` não casa com `storage-sqlite`). Caminho sempre conta; nome ou alias com 4 ou mais caracteres conta em qualquer lugar; nome de 3 (`api`, `cli`) só em maiúsculas ou entre crases ou aspas; menor que isso nunca. Cada menção vira `affects` (componente) ou `uses` (tecnologia) com o motivo `citado no texto: "<trecho>"`, sujeita às mesmas regras de sugestão; o que já tem aresta pelo arquivo ou pela dependência mantém esse motivo. No modo automático (`auto_approval`), vínculo por menção não é aceito pelas regras: vai ao juiz de IA com o trecho; vínculo por arquivo ou dependência continua aceito sem chamada.
+- **Documentação é evidência, não a parte afetada (2026-10-03).** Arquivos de documentação (`.md`, `.mdx`, `.markdown`, `.rst`, `.adoc` em qualquer lugar; `.txt` só dentro das pastas de documentação, porque `requirements.txt` é manifesto) não geram `affects`/`applies_to`, proposta de componente nem vínculo na prévia da Revisão. Uma decisão tirada de um ADR chega às partes de que fala pelas menções do seu texto. Vínculos com a pasta de documentação já confirmados continuam.
 - **Identidade**: a chave mantém `+` e `#`, então C, C++ e C# são itens distintos.
 - **Ação do usuário**: qualquer entidade, padrão, alias ou aresta, confirmada na hora.
 
@@ -77,7 +79,7 @@ Uma aba **Mapa** no projeto (Ctrl 4 e paleta), no padrão de `docs/design/VISUAL
 - `domain` ganha `entities` (tipos, chave normalizada, glob e regras de aresta), sem dependências novas.
 - Migration 14 cria `entities`, `entity_patterns`, `entity_aliases` e `entity_edges`; apagar o projeto apaga o grafo dele, e o impacto da remoção conta entidades.
 - `application::graph` concentra casos de uso e consultas; `storage-sqlite` implementa o port.
-- A qualidade das sugestões depende dos diffs capturados; sem diff não há sugestão, só vínculo manual.
+- A qualidade das sugestões depende dos diffs capturados; sem diff, a sugestão só vem das menções no texto da decisão, mais fracas (pedem confirmação) que as de arquivo.
 
 ## Alternativas rejeitadas
 

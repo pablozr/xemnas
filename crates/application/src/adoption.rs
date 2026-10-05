@@ -119,6 +119,7 @@ where
     /// Ties the candidate's own evidence points to: components whose
     /// patterns cover the files it cites (`affects`, or `applies_to` for a
     /// rule) and, for a decision, technologies its cited hunks add (`uses`).
+    /// Documentation files it cites are neither tied nor listed as uncovered.
     ///
     /// # Errors
     ///
@@ -138,7 +139,13 @@ where
         let rule = detail.summary.kind == CandidateKind::Rule;
         let mut preview = AdoptionPreview::default();
         let mut seen: BTreeSet<(EdgeKind, String)> = BTreeSet::new();
-        for file in &detail.diff_summary.files {
+        // Documentation is evidence, not the part a decision affects.
+        for file in detail
+            .diff_summary
+            .files
+            .iter()
+            .filter(|file| !crate::documents::is_documentation_path(file))
+        {
             let covering: Vec<_> = live
                 .iter()
                 .filter(|entity| entity.kind == EntityKind::Component)
