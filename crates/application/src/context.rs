@@ -13,6 +13,7 @@ use crate::decisions::{DecisionStore, DecisionsError, StoredDecision};
 use crate::graph::{GraphError, GraphStore, KnowledgeGraph};
 use crate::projects::ProjectRepository;
 use crate::relations::{RelationRow, RelationStore};
+use crate::terms::TaskTerms;
 
 /// Default size budget, in characters of selected text.
 pub const DEFAULT_BUDGET_CHARS: usize = 8_000;
@@ -302,7 +303,10 @@ where
         let (by_file_decisions, by_file_claims) = KnowledgeGraph::new(self.store.clone())
             .context_for_files(&request.project_id, &files, Some(as_of.as_str()))
             .map_err(graph_error)?;
-        let query = match_any_query(&task);
+        // Plurals and English/Portuguese pairs meet (`crate::terms`), so a
+        // task in one language finds what was decided in the other.
+        let task_words = TaskTerms::new(&meaningful_words(&task));
+        let query = task_words.match_query();
         let lexical_decisions = match &query {
             Some(query) => self
                 .store
@@ -315,7 +319,6 @@ where
                 .rank_claims(&request.project_id, query, MAX_RANKED)?,
             None => Vec::new(),
         };
-        let task_words = meaningful_words(&task);
         // What the graph ties to the task's files is the strongest signal,
         // but a component can be wide (a whole app): when some of its items
         // also speak of the task, the ones that share nothing with it go.
@@ -707,18 +710,7 @@ fn pack_claim(claim: &ClaimRecord, matched: bool) -> Result<PackClaim, ContextEr
 /// Lowercase without accents, so `Persistência` and `persistencia` meet, as
 /// in the FTS5 `unicode61` tokenizer.
 fn fold_word(word: &str) -> String {
-    word.chars()
-        .flat_map(char::to_lowercase)
-        .map(|character| match character {
-            'á' | 'à' | 'â' | 'ã' | 'ä' => 'a',
-            'é' | 'è' | 'ê' | 'ë' => 'e',
-            'í' | 'ì' | 'î' | 'ï' => 'i',
-            'ó' | 'ò' | 'ô' | 'õ' | 'ö' => 'o',
-            'ú' | 'ù' | 'û' | 'ü' => 'u',
-            'ç' => 'c',
-            other => other,
-        })
-        .collect()
+    crate::terms::fold(word)
 }
 
 /// The meaningful words of a text, folded: what a task asks about.
@@ -735,14 +727,11 @@ fn meaningful_words(text: &str) -> BTreeSet<String> {
 /// to be about it: at least two of its meaningful words (the only one when
 /// the task has one). One shared word ("cache", "terminal") is how unrelated
 /// decisions of the same project got in.
-fn covers_task(task_words: &BTreeSet<String>, text: &str) -> bool {
+fn covers_task(task_words: &TaskTerms, text: &str) -> bool {
     if task_words.is_empty() {
         return false;
     }
-    let words = meaningful_words(text);
-    let matched = task_words.intersection(&words).count();
-    let needed = task_words.len().min(2);
-    matched >= needed
+    task_words.covered_by(&meaningful_words(text)) >= task_words.len().min(2)
 }
 
 /// Graph-linked ids narrowed to those that speak of the task, when at least
@@ -750,7 +739,7 @@ fn covers_task(task_words: &BTreeSet<String>, text: &str) -> bool {
 /// task written in another language or with no text at all).
 fn focus_on_task(
     linked: Vec<String>,
-    task_words: &BTreeSet<String>,
+    task_words: &TaskTerms,
     text_of: impl Fn(&str) -> String,
 ) -> Vec<String> {
     if task_words.is_empty() {
@@ -758,7 +747,7 @@ fn focus_on_task(
     }
     let speaking: Vec<String> = linked
         .iter()
-        .filter(|id| !task_words.is_disjoint(&meaningful_words(&text_of(id))))
+        .filter(|id| task_words.covered_by(&meaningful_words(&text_of(id))) > 0)
         .cloned()
         .collect();
     if speaking.is_empty() {

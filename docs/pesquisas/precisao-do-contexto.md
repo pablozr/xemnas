@@ -12,7 +12,13 @@ fora. A busca que o agente pede sob demanda é exploratória e não usa o corte.
 Passo 3: foco do grafo (num componente largo, itens que não falam da tarefa saem quando
 outros falam) levou a precisão a 0,70 (holdout 0,73). O caso que motivou a regra é do
 holdout, que nesse ponto deixa de ser prova independente. Regras com escopo ficam para
-quando o portão medir regras permanentes. A medição usa o portão de
+quando o portão medir regras permanentes.
+Passo 4: ponte PT/EN sem modelo (`crates/application/src/terms.rs`): remoção de acentos,
+plurais dos dois idiomas, terminações verbais do português, `-ing`/`-ed` do inglês e um
+glossário bilíngue de vocabulário geral de software; a busca de texto pede o radical como
+prefixo. Precisão 0,75, cobertura 0,91 (desenvolvimento 1,0), holdout 0,70 / 0,78 / 0.
+As terminações verbais vieram de um caso do holdout. Falta a meta de precisão; o próximo
+passo é o 5 (embeddings), com o orçamento fixado antes. A medição usa o portão de
 [qualidade do núcleo](../arquitetura/qualidade-do-nucleo.md).
 
 Complementa [medir a eficácia do contexto](medir-eficacia-do-contexto.md) (se o contexto
