@@ -76,6 +76,9 @@ atrase a análise da sessão que o desenvolvedor acabou de encerrar.
   `documents`, 1 em `suggestions`). Mudar vale no próximo início. Não fica no
   perfil de IA porque o formulário de IA regrava o perfil inteiro e o
   consentimento é amarrado a ele; `context_settings` é por projeto.
+- Ajustes → Diagnóstico mostra o cartão "Filas de análise": contagens por
+  fila e a escolha de análises em paralelo (`segmented`), com o aviso de que
+  vale no próximo início.
 
 ## Orçamentos
 
