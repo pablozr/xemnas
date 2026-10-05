@@ -106,6 +106,13 @@ pub trait PlanAccount: Send + Sync {
     ) -> Result<(), ProviderError>;
 }
 
+/// The alias the settings fill in. On four synthetic extraction turns (rule,
+/// decision, routine fix, open discussion; 2026-10-05, two runs each) Sonnet
+/// at low effort got 8/8 in 3.9-6.1 s for ~$0.0065 per call as Claude Code
+/// reports it; Haiku with a 1024-token thinking budget also got 8/8, but took
+/// 7.5-22 s for ~$0.0085, its thinking outweighing the cheaper tokens.
+pub const CLAUDE_CODE_DEFAULT_MODEL: &str = "sonnet";
+
 /// The command that signs Claude Code in; the user runs it in a terminal.
 pub const CLAUDE_CODE_LOGIN_COMMAND: &str = "claude auth login";
 

@@ -566,9 +566,12 @@ impl SettingsScreen {
                 ProfileKind::OpenCode => OPENCODE_ZEN_ENDPOINT.to_owned(),
                 _ => String::new(),
             };
-            // Claude Code offers three fixed aliases; the cheapest is the default.
+            // Claude Code offers three fixed aliases; the default is the one
+            // that measured fastest and cheapest per extraction.
             let model = match kind {
-                ProfileKind::ClaudeCode => "haiku".to_owned(),
+                ProfileKind::ClaudeCode => {
+                    application::providers::CLAUDE_CODE_DEFAULT_MODEL.to_owned()
+                }
                 _ => String::new(),
             };
             [endpoint, model, limit]

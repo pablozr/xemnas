@@ -605,7 +605,7 @@ diz o que ela é e o que confirmar faz, e cada sugestão é um cartão
   versão com o selo **Conectado** e a dica de que é experimental e conta no uso
   do plano. **Verificar de novo** fica no rodapé, e o painel não tem ação
   primária: a de ativar é a do consentimento. Escolher o Claude Code preenche
-  `haiku`, o modelo mais barato. Rota de captura: `settings:claude-code` (o
+  `sonnet`, o mais rápido e barato por extração (ADR-0004). Rota de captura: `settings:claude-code` (o
   demo simula os outros estados com `XEMNAS_DEMO_CLAUDE=logged-out|missing`).
 - Credencial do provedor (chave de API ou chave do OpenCode) é um painel com
   selo de estado ("Guardada no cofre", "Opcional neste endereço", "Nenhuma chave")

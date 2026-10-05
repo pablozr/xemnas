@@ -196,8 +196,8 @@ pub(crate) fn call_args(model: &str, system: &str, schema: &serde_json::Value) -
         system,
         "--json-schema",
         &schema.to_string(),
-        // Meant to spend less on Sonnet and Opus (not measured); Haiku
-        // ignores it, hence [`THINKING_BUDGET`].
+        // Sonnet answers without thinking at low effort (measured: 0 thinking
+        // tokens even with a budget); Haiku ignores it, hence [`THINKING_BUDGET`].
         "--effort",
         "low",
         // No tools: the context is already in the prompt.
