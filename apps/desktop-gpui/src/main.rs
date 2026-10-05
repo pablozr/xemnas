@@ -766,7 +766,7 @@ fn run_shell_mode(
                 Arc::new(move |project| reader.recent(project, 8));
             let retry: xemnas_desktop::screens::inbox::ProgressRetry = Arc::new(move |job| {
                 jobs.reprocess(job)
-                    .map_err(|_| "Não foi possível reprocessar a captura.".into())
+                    .map_err(|_| xemnas_desktop::i18n::app::reprocess_failed().into())
             });
             (read, retry)
         });
@@ -842,7 +842,7 @@ fn run_shell_mode(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
-                    title: Some("xemnas — Projetos".into()),
+                    title: Some(xemnas_desktop::i18n::app::window_title_projects().into()),
                     // The key change in this pass. The app draws its own
                     // 48 px title row — mark, wordmark, breadcrumb and search —
                     // and the OS was drawing *its* title bar above it, so the

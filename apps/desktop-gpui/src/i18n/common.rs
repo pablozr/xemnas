@@ -1,7 +1,7 @@
 //! Copy shared by the UI layer (`ui::*`): theme names and the vocabulary of
 //! reusable patterns. See [`crate::i18n`] for how entries are declared.
 
-use super::strings;
+use super::{formats, strings};
 
 strings! {
     /// Theme: the original bluish graphite.
@@ -77,4 +77,103 @@ strings! {
         zh: "海军蓝配一抹冷静低调的青色。",
         ko: "네이비에 차갑고 은은한 시안.",
         ru: "Тёмно-синий с холодным сдержанным бирюзовым." }
+}
+
+strings! {
+    /// Status label: confirmed.
+    status_success { en: "Confirmed", pt: "Confirmado", es: "Confirmado", fr: "Confirmé",
+        de: "Bestätigt", it: "Confermato", ja: "確定済み", zh: "已确认", ko: "확인됨",
+        ru: "Подтверждено" }
+    /// Status label: pending.
+    status_warning { en: "Pending", pt: "Pendente", es: "Pendiente", fr: "En attente",
+        de: "Ausstehend", it: "In sospeso", ja: "保留中", zh: "待处理", ko: "대기 중",
+        ru: "Ожидает" }
+    /// Status label: error.
+    status_danger { en: "Error", pt: "Erro", es: "Error", fr: "Erreur", de: "Fehler",
+        it: "Errore", ja: "エラー", zh: "错误", ko: "오류", ru: "Ошибка" }
+    /// Status label: information.
+    status_info { en: "Information", pt: "Informação", es: "Información", fr: "Information",
+        de: "Information", it: "Informazioni", ja: "情報", zh: "信息", ko: "정보",
+        ru: "Информация" }
+    /// Heading above the quote that gave rise to a suggestion.
+    suggestion_source { en: "Excerpt that gave rise to the suggestion",
+        pt: "Trecho que originou a sugestão",
+        es: "Fragmento que originó la sugerencia",
+        fr: "Extrait à l’origine de la suggestion",
+        de: "Auszug, aus dem der Vorschlag stammt",
+        it: "Brano da cui nasce il suggerimento",
+        ja: "提案のもとになった一節",
+        zh: "产生该建议的片段",
+        ko: "제안의 출처가 된 구절",
+        ru: "Фрагмент, из которого возникло предложение" }
+    /// Accessible name of a loading skeleton.
+    loading { en: "Loading", pt: "Carregando", es: "Cargando", fr: "Chargement",
+        de: "Wird geladen", it: "Caricamento", ja: "読み込み中", zh: "加载中",
+        ko: "불러오는 중", ru: "Загрузка" }
+    /// Default placeholder and accessible name of a search field.
+    search_projects { en: "Search projects", pt: "Buscar projetos", es: "Buscar proyectos",
+        fr: "Rechercher des projets", de: "Projekte suchen", it: "Cerca progetti",
+        ja: "プロジェクトを検索", zh: "搜索项目", ko: "프로젝트 검색", ru: "Искать проекты" }
+    /// Hint inside a focused search field.
+    search_clear_hint { en: "Esc · clear", pt: "Esc · limpar", es: "Esc · borrar",
+        fr: "Échap · effacer", de: "Esc · leeren", it: "Esc · cancella", ja: "Esc · クリア",
+        zh: "Esc · 清除", ko: "Esc · 지우기", ru: "Esc · очистить" }
+    /// Built-in background "never".
+    wallpaper_never { en: "The city that never existed", pt: "A cidade que nunca existiu",
+        es: "La ciudad que nunca existió", fr: "La ville qui n’a jamais existé",
+        de: "Die Stadt, die es nie gab", it: "La città che non è mai esistita",
+        ja: "存在しなかった街", zh: "从未存在的城市", ko: "존재한 적 없는 도시",
+        ru: "Город, которого никогда не было" }
+    /// Built-in background "castle".
+    wallpaper_castle { en: "The castle", pt: "O castelo", es: "El castillo",
+        fr: "Le château", de: "Das Schloss", it: "Il castello", ja: "城", zh: "城堡",
+        ko: "성", ru: "Замок" }
+    /// Built-in background "thirteen".
+    wallpaper_thirteen { en: "Where nothing gathers", pt: "Onde nada se reúne",
+        es: "Donde nada se reúne", fr: "Là où rien ne se rassemble",
+        de: "Wo nichts zusammenkommt", it: "Dove nulla si riunisce",
+        ja: "何も集まらない場所", zh: "万物不聚之处", ko: "아무것도 모이지 않는 곳",
+        ru: "Где ничто не собирается" }
+    /// Built-in background "chain".
+    wallpaper_chain { en: "Chain", pt: "Corrente", es: "Cadena", fr: "Chaîne", de: "Kette",
+        it: "Catena", ja: "鎖", zh: "锁链", ko: "사슬", ru: "Цепь" }
+}
+
+formats! {
+    /// Explains what confirming a suggestion will do.
+    on_confirm(effect: &str) {
+        en: "On confirming, {effect}", pt: "Ao confirmar, {effect}",
+        es: "Al confirmar, {effect}", fr: "En confirmant, {effect}",
+        de: "Beim Bestätigen {effect}", it: "Alla conferma, {effect}",
+        ja: "確定すると、{effect}", zh: "确认后，{effect}", ko: "확인하면 {effect}",
+        ru: "При подтверждении {effect}" }
+    /// Position in a list: "3 of 40".
+    of_total(shown: usize, total: usize) {
+        en: "{shown} of {total}", pt: "{shown} de {total}", es: "{shown} de {total}",
+        fr: "{shown} sur {total}", de: "{shown} von {total}", it: "{shown} di {total}",
+        ja: "{shown} / {total}", zh: "{shown} / {total}", ko: "{shown} / {total}",
+        ru: "{shown} из {total}" }
+}
+
+/// A count with its noun, from one `[one, few, many]` triple per language in
+/// [`Language::ALL`] order. Only Russian tells `few` from `many`; French
+/// counts 0 as singular; Japanese, Chinese and Korean attach the counter to
+/// the number without a space and do not inflect.
+pub fn counted(n: usize, forms: [[&'static str; 3]; 10]) -> String {
+    use super::Language;
+
+    let language = super::current();
+    let [one_form, few_form, many_form] = forms[language as usize];
+    match language {
+        Language::Japanese | Language::Chinese | Language::Korean => {
+            format!("{n}{many_form}")
+        }
+        Language::Russian => {
+            let form = [one_form, few_form, many_form][super::russian_form(n)];
+            format!("{n} {form}")
+        }
+        Language::French if super::french_one(n) => format!("{n} {one_form}"),
+        _ if language != Language::French && super::one(n) => format!("{n} {one_form}"),
+        _ => format!("{n} {many_form}"),
+    }
 }

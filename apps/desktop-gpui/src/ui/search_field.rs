@@ -15,6 +15,7 @@ use gpui::{
     UTF16Selection, UnderlineStyle, Window,
 };
 
+use crate::i18n::common as t;
 use crate::ui::icons::{icon, IconName};
 use crate::ui::search_edit::SearchEdit;
 use crate::ui::theme::{text_style, Theme};
@@ -97,7 +98,7 @@ impl SearchField {
     pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
             theme: Theme::current(cx),
-            placeholder: "Buscar projetos",
+            placeholder: t::search_projects(),
             focus: cx.focus_handle().tab_stop(true),
             edit: SearchEdit::default(),
             layout: None,
@@ -985,7 +986,11 @@ impl Render for SearchField {
                     field.child(
                         text_style(div(), TypeScale::META)
                             .text_color(theme.colors.text_muted())
-                            .child(if focused { "Esc · limpar" } else { "Ctrl F" }),
+                            .child(if focused {
+                                t::search_clear_hint()
+                            } else {
+                                "Ctrl F"
+                            }),
                     )
                 },
             )

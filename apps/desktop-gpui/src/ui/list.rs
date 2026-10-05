@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use gpui::prelude::*;
 use gpui::{canvas, div, px, relative, Div, IntoElement, ListState, SharedString};
 
+use crate::i18n::common as t;
 use crate::ui::patterns::tabular;
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{SpacingScale, TypeScale};
@@ -121,7 +122,7 @@ pub fn reveal_footer(
     } else {
         (shown as f32 / total as f32).clamp(0.0, 1.0)
     };
-    let progress = SharedString::from(format!("{shown} de {total}"));
+    let progress = SharedString::from(t::of_total(shown, total));
     div()
         .flex()
         .flex_col()

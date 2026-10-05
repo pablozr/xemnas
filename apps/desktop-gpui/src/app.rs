@@ -18,6 +18,8 @@ use gpui::{
 use std::sync::Arc;
 
 use crate::fonts::{app_icon, wordmark};
+use crate::i18n::app as t;
+use crate::i18n::settings::settings_at;
 use crate::palette::{self, PaletteItem};
 use crate::screens::assistant::{AssistantGo, AssistantScreen, AssistantToggled, Briefing};
 use crate::screens::context::{ContextScreen, ContextServices, ContextStores, OpenDecision};
@@ -209,11 +211,11 @@ impl Destination {
 
     fn label(self) -> &'static str {
         match self {
-            Self::Review => "Revisão",
-            Self::Decisions => "Decisões",
-            Self::Context => "Contexto",
-            Self::Map => "Mapa",
-            Self::Overview => "Visão",
+            Self::Review => t::nav_review(),
+            Self::Decisions => t::nav_decisions(),
+            Self::Context => t::nav_context(),
+            Self::Map => t::nav_map(),
+            Self::Overview => t::nav_overview(),
         }
     }
 
@@ -341,7 +343,7 @@ impl<
         };
         let search = cx.new(SearchField::new);
         search.update(cx, |search, cx| {
-            search.set_context("Filtrar candidatos carregados", cx)
+            search.set_context(t::filter_candidates(), cx)
         });
         let assistant = cx.new(AssistantScreen::new);
         let assistant_subscription =
@@ -424,7 +426,7 @@ impl<
                 }
                 if shell.destination == Destination::Review {
                     shell.search.update(cx, |search, cx| {
-                        search.set_context("Filtrar candidatos carregados", cx)
+                        search.set_context(t::filter_candidates(), cx)
                     });
                 }
                 shell.dismiss_project_panel(cx);
@@ -596,18 +598,18 @@ impl<
         let (dot, label, hint) = match capture {
             CaptureStatus::Listening => (
                 theme.colors.status_success(),
-                "Captura ativa",
-                "O app recebe capturas do OpenCode pela API local.",
+                t::capture_active(),
+                t::capture_active_hint(),
             ),
             CaptureStatus::Unavailable => (
                 theme.colors.status_warning(),
-                "Captura indisponível",
-                "A API local não iniciou; as capturas aguardam na outbox do adapter.",
+                t::capture_unavailable(),
+                t::capture_unavailable_hint(),
             ),
             CaptureStatus::Demo => (
                 theme.colors.status_info(),
-                "Demonstração",
-                "Dados fictícios em memória; nenhuma integração roda.",
+                t::demo_status(),
+                t::demo_status_hint(),
             ),
         };
         let summary = self.activity.unwrap_or_default();
@@ -625,7 +627,7 @@ impl<
                 .border_color(theme.colors.hairline_divider())
                 .text_color(theme.colors.text_muted())
                 .role(Role::Button)
-                .aria_label(format!("{label}. Abrir detalhes"))
+                .aria_label(t::open_details(label))
                 .tooltip(tooltip(hint, None))
                 .when(self.settings.is_some(), |line| {
                     let hover = theme.colors.glass_fill_medium();
@@ -648,15 +650,14 @@ impl<
                         12.0,
                         theme.colors.accent_default(),
                     ))
-                    .child(format!("Extraindo {working}"))
+                    .child(t::extracting(working))
                 })
                 .when(summary.failed > 0, |line| {
-                    line.child(div().text_color(theme.colors.status_danger()).child(
-                        match summary.failed {
-                            1 => "1 falha".to_string(),
-                            n => format!("{n} falhas"),
-                        },
-                    ))
+                    line.child(
+                        div()
+                            .text_color(theme.colors.status_danger())
+                            .child(t::failures(summary.failed)),
+                    )
                 })
                 .into_any_element(),
         )
@@ -885,25 +886,19 @@ impl<
             (
                 ReviewTab::Candidates,
                 "review-tab-candidates",
-                "Decisões propostas",
+                t::tab_proposed_decisions(),
             ),
-            (ReviewTab::Ties, "review-tab-ties", "Ligações sugeridas"),
+            (ReviewTab::Ties, "review-tab-ties", t::tab_suggested_links()),
         ] {
             switch = switch.child(
                 crate::ui::patterns::segment_label(theme, id, label, self.review_tab == tab)
                     .on_click(cx.listener(move |this, _, _, cx| this.set_review_tab(tab, cx))),
             );
         }
-        let count_of = |count: usize, one: &str, many: &str| {
-            format!("{count} {}", if count == 1 { one } else { many })
-        };
         let waiting = format!(
             "{} · {}",
-            candidates.map_or_else(
-                || "…".to_owned(),
-                |count| count_of(count, "decisão", "decisões")
-            ),
-            count_of(ties, "ligação", "ligações")
+            candidates.map_or_else(|| "…".to_owned(), t::decisions_count),
+            t::links_count(ties)
         );
         div()
             .size_full()
@@ -923,7 +918,7 @@ impl<
                     .child(
                         text_style(div(), TypeScale::META)
                             .text_color(colors.text_muted())
-                            .child(format!("Aguardando você: {waiting}")),
+                            .child(t::waiting_for_you(&waiting)),
                     ),
             )
             .child(div().flex_1().min_h(px(0.0)).child(body))
@@ -985,7 +980,7 @@ impl<
         let field = cx.new(|cx| {
             let mut field = SearchField::new(cx);
             field.stretch();
-            field.set_context("Ir para projeto, candidato, decisão ou ação…", cx);
+            field.set_context(t::palette_placeholder(), cx);
             field
         });
         let subscription = cx.subscribe(&field, |shell, _, _: &SearchChanged, cx| {
@@ -1034,9 +1029,9 @@ impl<
                 .is_some_and(|screen| screen.read(cx).has_reviewer(cx))
             {
                 items.push(PaletteItem {
-                    group: "Ir para",
-                    label: "Revisar conhecimento".into(),
-                    detail: Some("Contexto · consultivo".into()),
+                    group: t::group_go_to(),
+                    label: t::review_knowledge().into(),
+                    detail: Some(t::review_knowledge_detail().into()),
                     glyph: IconName::Layers,
                     shortcut: None,
                     command: Command::KnowledgeReview,
@@ -1050,7 +1045,7 @@ impl<
                 Destination::Map,
             ] {
                 items.push(PaletteItem {
-                    group: "Ir para",
+                    group: t::group_go_to(),
                     label: destination.label().to_owned(),
                     detail: None,
                     glyph: destination.glyph(),
@@ -1062,7 +1057,7 @@ impl<
         if let Some(inbox) = &self.inbox {
             for (id, question) in inbox.read(cx).palette_rows() {
                 items.push(PaletteItem {
-                    group: "Candidatos",
+                    group: t::group_candidates(),
                     label: question,
                     detail: None,
                     glyph: IconName::Inbox,
@@ -1075,9 +1070,9 @@ impl<
             let parts = decisions.read(cx).palette_parts();
             if !parts.is_empty() {
                 items.push(PaletteItem {
-                    group: "Ir para",
-                    label: "Decisões por parte".into(),
-                    detail: Some("Decisões · filtro".into()),
+                    group: t::group_go_to(),
+                    label: t::decisions_by_part().into(),
+                    detail: Some(t::decisions_by_part_detail().into()),
                     glyph: IconName::Component,
                     shortcut: None,
                     command: Command::DecisionsByPart(None),
@@ -1085,12 +1080,9 @@ impl<
             }
             for (id, name, count) in parts {
                 items.push(PaletteItem {
-                    group: "Decisões por parte",
-                    label: format!("Decisões sobre {name}"),
-                    detail: Some(match count {
-                        1 => "1 em vigor".to_owned(),
-                        n => format!("{n} em vigor"),
-                    }),
+                    group: t::decisions_by_part(),
+                    label: t::decisions_about(&name),
+                    detail: Some(t::in_effect_count(count)),
                     glyph: IconName::Component,
                     shortcut: None,
                     command: Command::DecisionsByPart(Some(id)),
@@ -1100,7 +1092,7 @@ impl<
         if let Some(decisions) = &self.decisions {
             for (id, question) in decisions.read(cx).palette_rows() {
                 items.push(PaletteItem {
-                    group: "Decisões",
+                    group: t::nav_decisions(),
                     label: question,
                     detail: None,
                     glyph: IconName::Decision,
@@ -1112,7 +1104,7 @@ impl<
         if let Some(projects) = &self.projects {
             for (id, name, location) in projects.read(cx).palette_projects() {
                 items.push(PaletteItem {
-                    group: "Projetos",
+                    group: t::group_projects(),
                     label: name,
                     detail: Some(location),
                     glyph: IconName::Folder,
@@ -1123,8 +1115,8 @@ impl<
         }
         if selected.is_some() {
             items.push(PaletteItem {
-                group: "Ações",
-                label: "Propriedades do projeto".into(),
+                group: t::group_actions(),
+                label: t::project_properties().into(),
                 detail: None,
                 glyph: IconName::Info,
                 shortcut: None,
@@ -1132,28 +1124,28 @@ impl<
             });
         }
         items.push(PaletteItem {
-            group: "Ações",
-            label: "Abrir pasta…".into(),
-            detail: Some("Acompanhar um novo projeto".into()),
+            group: t::group_actions(),
+            label: t::open_folder().into(),
+            detail: Some(t::open_folder_detail().into()),
             glyph: IconName::FolderPlus,
             shortcut: None,
             command: Command::OpenFolder,
         });
         let mode = cx.try_global::<ThemeMode>().copied().unwrap_or_default();
         items.push(PaletteItem {
-            group: "Ações",
-            label: format!("Usar tema {}", mode.toggled().label()),
+            group: t::group_actions(),
+            label: t::use_theme(mode.toggled().label()),
             detail: None,
             glyph: IconName::Contrast,
             shortcut: None,
             command: Command::ToggleTheme,
         });
         items.push(PaletteItem {
-            group: "Ações",
+            group: t::group_actions(),
             label: if self.focus_mode {
-                "Mostrar a lateral".to_owned()
+                t::show_sidebar().to_owned()
             } else {
-                "Modo foco: esconder a lateral".to_owned()
+                t::focus_mode().to_owned()
             },
             detail: None,
             glyph: IconName::Expand,
@@ -1161,8 +1153,8 @@ impl<
             command: Command::FocusMode,
         });
         items.push(PaletteItem {
-            group: "Ações",
-            label: "Falar com o Xemnas, o assistente".to_owned(),
+            group: t::group_actions(),
+            label: t::talk_to_assistant().to_owned(),
             detail: None,
             glyph: IconName::Hood,
             shortcut: None,
@@ -1170,8 +1162,8 @@ impl<
         });
         if self.settings.is_some() {
             items.push(PaletteItem {
-                group: "Ações",
-                label: "Configurações".into(),
+                group: t::group_actions(),
+                label: t::settings().into(),
                 detail: None,
                 glyph: IconName::Settings,
                 shortcut: None,
@@ -1180,40 +1172,40 @@ impl<
             for (section, label, detail, glyph) in [
                 (
                     SettingsSection::OpenCode,
-                    "Testar conexão com o OpenCode",
-                    "Configurações › OpenCode",
+                    t::test_opencode(),
+                    settings_at("OpenCode"),
                     IconName::Link,
                 ),
                 (
                     SettingsSection::Diagnostics,
-                    "Diagnóstico e tarefas",
-                    "Configurações › Diagnóstico",
+                    t::diagnostics_tasks(),
+                    settings_at(t::section_diagnostics()),
                     IconName::Activity,
                 ),
                 (
                     SettingsSection::Ai,
-                    "IA e privacidade",
-                    "Configurações › Extração, chave e envio",
+                    t::ai_privacy(),
+                    settings_at(t::section_ai()),
                     IconName::Shield,
                 ),
                 (
                     SettingsSection::Appearance,
-                    "Tema e fundo",
-                    "Configurações › Aparência",
+                    t::theme_and_background(),
+                    settings_at(t::section_appearance()),
                     IconName::Contrast,
                 ),
             ] {
                 items.push(PaletteItem {
-                    group: "Configurações",
+                    group: t::settings(),
                     label: label.into(),
-                    detail: Some(detail.into()),
+                    detail: Some(detail),
                     glyph,
                     shortcut: None,
                     command: Command::SettingsAt(section),
                 });
             }
             items.push(PaletteItem {
-                group: "Configurações",
+                group: t::settings(),
                 label: crate::i18n::settings::language_palette().into(),
                 detail: Some(crate::i18n::settings::settings_at(
                     crate::i18n::settings::language_title(),
@@ -1382,7 +1374,7 @@ impl<
                     .px(px(SpacingScale::S4))
                     .py(px(SpacingScale::S4))
                     .text_color(theme.colors.text_muted())
-                    .child("Nada corresponde. A paleta procura no que já está carregado."),
+                    .child(t::palette_empty()),
             );
         }
         let panel = div()
@@ -1429,16 +1421,20 @@ impl<
                     .border_color(theme.colors.hairline_divider())
                     .text_color(theme.colors.text_muted())
                     .children(
-                        [("↑↓", "Navegar"), ("↵", "Abrir"), ("esc", "Fechar")]
-                            .into_iter()
-                            .map(|(key, label)| {
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(SpacingScale::S2))
-                                    .child(kbd(theme.colors.text_muted(), key))
-                                    .child(label)
-                            }),
+                        [
+                            ("↑↓", t::hint_navigate()),
+                            ("↵", t::hint_open()),
+                            ("esc", t::close()),
+                        ]
+                        .into_iter()
+                        .map(|(key, label)| {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(SpacingScale::S2))
+                                .child(kbd(theme.colors.text_muted(), key))
+                                .child(label)
+                        }),
                     ),
             );
         Some(
@@ -1527,7 +1523,7 @@ impl<
         match destination {
             Destination::Review => {
                 self.search.update(cx, |search, cx| {
-                    search.set_context("Filtrar candidatos carregados", cx)
+                    search.set_context(t::filter_candidates(), cx)
                 });
                 if let Some(screen) = &self.inbox {
                     screen.update(cx, |screen, cx| screen.refresh(cx));
@@ -1607,9 +1603,9 @@ impl<
                 crumb.hover(move |style| style.bg(theme.colors.hover_veil()))
             })
             .role(Role::Button)
-            .aria_label(format!("{name}: propriedades do projeto"))
+            .aria_label(t::project_properties_aria(&name))
             .aria_expanded(open)
-            .tooltip(tooltip("Propriedades do projeto", None))
+            .tooltip(tooltip(t::project_properties(), None))
             .track_focus(&self.project_focus)
             .focus_visible(focus_ring(&theme))
             .cursor_pointer()
@@ -1716,34 +1712,30 @@ impl<
     fn theme_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let mode = cx.try_global::<ThemeMode>().copied().unwrap_or_default();
-        icon_action(
-            &theme,
-            "theme-switch",
-            &format!("Tema: {}. Escolher tema", mode.label()),
-        )
-        .tooltip(tooltip(format!("Tema: {}", mode.label()), None))
-        .mr(px(SpacingScale::S2))
-        .track_focus(&self.theme_focus)
-        .aria_expanded(self.theme_menu.is_open())
-        .when(self.theme_menu.is_open(), |button| {
-            button.bg(theme.colors.glass_fill_medium())
-        })
-        .on_mouse_down(
-            gpui::MouseButton::Left,
-            cx.listener(|this, _, _, _| this.theme_menu.note_trigger_press()),
-        )
-        .on_click(cx.listener(Self::on_theme_click))
-        .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                this.toggle_theme_menu(window, cx);
-                cx.stop_propagation();
-            }
-        }))
-        .child(icon(
-            IconName::Contrast,
-            16.0,
-            theme.colors.text_secondary(),
-        ))
+        icon_action(&theme, "theme-switch", &t::theme_aria(mode.label()))
+            .tooltip(tooltip(t::theme_tooltip(mode.label()), None))
+            .mr(px(SpacingScale::S2))
+            .track_focus(&self.theme_focus)
+            .aria_expanded(self.theme_menu.is_open())
+            .when(self.theme_menu.is_open(), |button| {
+                button.bg(theme.colors.glass_fill_medium())
+            })
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|this, _, _, _| this.theme_menu.note_trigger_press()),
+            )
+            .on_click(cx.listener(Self::on_theme_click))
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    this.toggle_theme_menu(window, cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .child(icon(
+                IconName::Contrast,
+                16.0,
+                theme.colors.text_secondary(),
+            ))
     }
 
     /// The opening mark: the mascot and the wordmark over the theme's
@@ -1906,7 +1898,7 @@ impl<
             .cursor_pointer()
             .hover(move |style| style.bg(colors.glass_fill_medium()))
             .role(Role::MenuItem)
-            .aria_label("Fundo e mais opções de aparência")
+            .aria_label(t::background_more_aria())
             .on_click(cx.listener(|this, _, _, cx| {
                 if !this.theme_menu.is_open() {
                     return;
@@ -1918,7 +1910,7 @@ impl<
             .child(
                 text_style(div(), TypeScale::BODY_SMALL)
                     .text_color(colors.text_secondary())
-                    .child("Fundo e mais opções…"),
+                    .child(t::background_more()),
             );
         let menu = div()
             .id("theme-menu")
@@ -1933,7 +1925,7 @@ impl<
             ))
             .occlude()
             .role(Role::Menu)
-            .aria_label("Tema")
+            .aria_label(t::theme_menu())
             .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_theme_menu(cx)))
             .child(list)
             .child(
@@ -1999,9 +1991,9 @@ impl<
             &theme,
             "settings-open",
             if open {
-                "Fechar configurações"
+                t::settings_close()
             } else {
-                "Configurações"
+                t::settings()
             },
         )
         .mr(px(SpacingScale::S1))
@@ -2094,10 +2086,10 @@ impl<
             .and_then(|screen| screen.read(cx).selected_project())
             .map(|project| project.name().to_owned());
         let window_title = if self.settings_open {
-            "xemnas — Configurações".to_owned()
+            t::window_title_settings().to_owned()
         } else {
             match project_name {
-                Some(name) => format!("{name} · {} — xemnas", self.destination.label()),
+                Some(name) => t::window_title_project(&name, self.destination.label()),
                 None => "xemnas".to_owned(),
             }
         };
@@ -2134,7 +2126,7 @@ impl<
                                 .border_1()
                                 .border_color(theme.colors.hairline_divider())
                                 .text_color(theme.colors.text_muted())
-                                .child("Demonstração · dados fictícios"),
+                                .child(t::demo_badge()),
                         )
                     }),
             )
@@ -2406,9 +2398,9 @@ impl<
             error_state(
                 &theme,
                 "startup-error",
-                "Não foi possível abrir o banco de dados",
-                "Os projetos acompanhados não puderam ser carregados.",
-                "Feche e abra o app novamente. Se o erro persistir, verifique o espaço em disco.",
+                t::startup_error_title(),
+                t::startup_error_detail(),
+                t::startup_error_hint(),
             )
             .into_any_element()
         };
@@ -2546,7 +2538,7 @@ fn window_controls(theme: &Theme, maximized: bool) -> impl IntoElement {
         .child(caption_button(
             theme,
             "window-minimize",
-            "Minimizar",
+            t::minimize(),
             "\u{e921}",
             WindowControlArea::Min,
             false,
@@ -2554,7 +2546,11 @@ fn window_controls(theme: &Theme, maximized: bool) -> impl IntoElement {
         .child(caption_button(
             theme,
             "window-maximize",
-            if maximized { "Restaurar" } else { "Maximizar" },
+            if maximized {
+                t::restore()
+            } else {
+                t::maximize()
+            },
             if maximized { "\u{e923}" } else { "\u{e922}" },
             WindowControlArea::Max,
             false,
@@ -2562,7 +2558,7 @@ fn window_controls(theme: &Theme, maximized: bool) -> impl IntoElement {
         .child(caption_button(
             theme,
             "window-close",
-            "Fechar",
+            t::close(),
             "\u{e8bb}",
             WindowControlArea::Close,
             true,

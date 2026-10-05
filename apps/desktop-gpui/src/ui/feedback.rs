@@ -7,6 +7,7 @@
 use gpui::prelude::*;
 use gpui::{div, px, Div, ElementId, Role, Stateful};
 
+use crate::i18n::common as t;
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{SpacingScale, TypeScale};
 
@@ -37,10 +38,10 @@ impl StatusKind {
     /// The human-readable label that accompanies the color.
     pub fn label(&self) -> &'static str {
         match self {
-            Self::Success => "Confirmado",
-            Self::Warning => "Pendente",
-            Self::Danger => "Erro",
-            Self::Info => "Informação",
+            Self::Success => t::status_success(),
+            Self::Warning => t::status_warning(),
+            Self::Danger => t::status_danger(),
+            Self::Info => t::status_info(),
         }
     }
 }
