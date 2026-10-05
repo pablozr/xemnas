@@ -23,6 +23,8 @@ a expansão do documento na adoção, como último recurso, levou a 0,76 / 0,95.
 tarefa como um só conceito e cobertura relativa ao melhor resultado (a partir de 4
 conceitos): 0,83 / 0,95, holdout 0,92 / 0,89. Oração principal (o item precisa se apoiar
 nela, tanto quanto o melhor resultado): 0,94 / 0,95 / 0 contaminados, holdout 0,96 / 0,89.
+Corpus v4, escrito às cegas e selado: 0,58 / 0,62 / 4 de 21. Os ganhos depois da ponte
+PT/EN eram, na maior parte, ajuste ao v3; o próximo passo se decide pelo v4 e pelo dogfood.
 Ganho provavelmente otimista: falta um corpus v4 com holdout novo. A medição usa o portão de
 [qualidade do núcleo](../arquitetura/qualidade-do-nucleo.md).
 

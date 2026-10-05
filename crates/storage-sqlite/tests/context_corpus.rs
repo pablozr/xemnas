@@ -3,6 +3,8 @@
 
 #[path = "fixtures/context_corpus.rs"]
 mod corpus;
+#[path = "fixtures/context_corpus_v4.rs"]
+mod corpus_v4;
 mod support;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -258,6 +260,27 @@ fn corpus_integrity_budgets_and_isolation() {
     assert_eq!(queries.len(), corpus::FAMILIES.len() * 3);
 }
 
+#[test]
+fn sealed_v4_corpus_is_well_formed() {
+    let fixture = Fixture::seed("corpus-v4-integrity");
+    let mut names: BTreeSet<&str> = corpus::FAMILIES.iter().map(|f| f.name).collect();
+    let mut queries: BTreeSet<&str> = corpus::FAMILIES.iter().flat_map(|f| f.queries).collect();
+    for family in corpus_v4::FAMILIES_V4 {
+        assert!(names.insert(family.name), "{}", family.name);
+        assert!(family.holdout);
+        assert_eq!(family.positive, !family.required.is_empty());
+        for task in family.queries {
+            assert!(queries.insert(task), "{task}");
+        }
+        for alias in family.required.iter().chain(family.partial) {
+            assert!(fixture.aliases.contains_key(*alias), "{alias}");
+            assert!(!corpus::FORBIDDEN.contains(alias), "{alias}");
+            assert!(!corpus::STANDING.contains(alias), "{alias}");
+        }
+    }
+    assert_eq!(corpus_v4::FAMILIES_V4.len(), 24);
+}
+
 #[derive(Default)]
 struct Totals {
     tp: usize,
@@ -460,15 +483,21 @@ const CONTAMINATED_CASES_CEILING: usize = 0;
 /// Generous on purpose: this runs on a developer's machine beside other work.
 const BUILD_PACK_P95_CEILING_US: u128 = 20_000;
 
-#[test]
-fn context_quality_gate() {
-    let fixture = Fixture::seed("corpus-gate");
+struct Measure {
+    totals: Totals,
+    development: Totals,
+    holdout: Totals,
+    p95_us: u128,
+}
+
+fn measure(tag: &str, families: &[corpus::Family]) -> Measure {
+    let fixture = Fixture::seed(tag);
     let packs = ContextPacks::new(fixture.test.store.clone());
     let mut totals = Totals::default();
     let mut development = Totals::default();
     let mut holdout = Totals::default();
     let mut latency = Vec::new();
-    for family in corpus::FAMILIES {
+    for family in families {
         for (variant, task) in family.queries.iter().enumerate() {
             let req = request(family, task, 12_000);
             let pack = packs.build_pack(req.clone()).expect("pack");
@@ -501,37 +530,85 @@ fn context_quality_gate() {
         }
     }
     latency.sort_unstable();
-    let p95 = latency[latency.len() * 95 / 100];
-    let precision = totals.tp as f64 / totals.retrieved.max(1) as f64;
-    let recall = totals.tp as f64 / totals.expected.max(1) as f64;
+    let p95_us = latency[latency.len() * 95 / 100];
     println!(
-        "gate precision={precision:.4} recall={recall:.4} contaminated={}/{} p95_us={p95}",
-        totals.contaminated, totals.negative_cases
+        "gate {tag} precision={} recall={} contaminated={}/{} p95_us={p95_us}",
+        ratio(totals.tp, totals.retrieved),
+        ratio(totals.tp, totals.expected),
+        totals.contaminated,
+        totals.negative_cases
     );
     for (name, split) in [("development", &development), ("holdout", &holdout)] {
         println!(
-            "gate {name} precision={} recall={} contaminated={}/{}",
+            "gate {tag} {name} precision={} recall={} contaminated={}/{}",
             ratio(split.tp, split.retrieved),
             ratio(split.tp, split.expected),
             split.contaminated,
             split.negative_cases
         );
     }
+    Measure {
+        totals,
+        development,
+        holdout,
+        p95_us,
+    }
+}
+
+fn assert_floors(measure: &Measure, precision_floor: f64, recall_floor: f64, ceiling: usize) {
+    let totals = &measure.totals;
+    let precision = totals.tp as f64 / totals.retrieved.max(1) as f64;
+    let recall = totals.tp as f64 / totals.expected.max(1) as f64;
     assert!(
-        precision >= PRECISION_FLOOR,
-        "context precision fell to {precision:.4} (floor {PRECISION_FLOOR})"
+        precision >= precision_floor,
+        "context precision fell to {precision:.4} (floor {precision_floor})"
     );
     assert!(
-        recall >= RECALL_FLOOR,
-        "context recall fell to {recall:.4} (floor {RECALL_FLOOR})"
+        recall >= recall_floor,
+        "context recall fell to {recall:.4} (floor {recall_floor})"
     );
     assert!(
-        totals.contaminated <= CONTAMINATED_CASES_CEILING,
-        "{} negative cases received context (ceiling {CONTAMINATED_CASES_CEILING})",
+        totals.contaminated <= ceiling,
+        "{} negative cases received context (ceiling {ceiling})",
         totals.contaminated
     );
     assert!(
-        p95 <= BUILD_PACK_P95_CEILING_US,
-        "build_pack p95 {p95}us above {BUILD_PACK_P95_CEILING_US}us"
+        measure.p95_us <= BUILD_PACK_P95_CEILING_US,
+        "build_pack p95 {}us above {BUILD_PACK_P95_CEILING_US}us",
+        measure.p95_us
+    );
+}
+
+#[test]
+fn context_quality_gate() {
+    let measure = measure("corpus-gate", corpus::FAMILIES);
+    assert!(measure.development.expected > 0 && measure.holdout.expected > 0);
+    assert_floors(
+        &measure,
+        PRECISION_FLOOR,
+        RECALL_FLOOR,
+        CONTAMINATED_CASES_CEILING,
+    );
+}
+
+/// Floors of the sealed v4 holdout, set at its first measurement and never
+/// a target for tuning. First run, with every rule up to the main clause:
+/// 0.58 / 0.62 / 4 of 21. The same families at earlier steps: search terms
+/// last resort 0.54 / 0.62 / 4, synonym concepts and relative coverage 0.55
+/// / 0.62 / 4; without search terms 0.60 / 0.59 / 2. The v3 gains were
+/// mostly fitted to v3: on tasks written blind, the rules after the PT/EN
+/// bridge move precision by four points and recall not at all.
+const V4_PRECISION_FLOOR: f64 = 0.58;
+const V4_RECALL_FLOOR: f64 = 0.61;
+const V4_CONTAMINATED_CASES_CEILING: usize = 4;
+
+#[test]
+fn sealed_v4_quality_gate() {
+    let measure = measure("corpus-v4-gate", corpus_v4::FAMILIES_V4);
+    assert_floors(
+        &measure,
+        V4_PRECISION_FLOOR,
+        V4_RECALL_FLOOR,
+        V4_CONTAMINATED_CASES_CEILING,
     );
 }

@@ -20,6 +20,7 @@ Control bloqueia o hash (o comportamento é o mesmo; só o hash muda) e imprime 
 | Portão | Onde | Mede | Piso ou teto | Linha de base (05/10/2026) |
 | --- | --- | --- | --- | --- |
 | Seleção de contexto | `storage-sqlite/tests/context_corpus.rs` (`context_quality_gate`), corpus v3: 29 famílias, 87 consultas, um terço em holdout | precisão, cobertura e casos negativos contaminados do bloco entregue, no geral e por divisão; p95 de `build_pack` | precisão ≥ 0,93; cobertura ≥ 0,95; contaminados = 0; p95 ≤ 20 ms | linha de base 0,23 / 0,76 / 9 de 24; com cobertura mínima de termos: 0,63 / 0,58 / 1; com foco do grafo: 0,70 / 0,58 / 1; com ponte PT/EN: 0,75 / 0,91 / 1; com termos de busca como último recurso: 0,76 / 0,95 / 1; com sinônimos como um conceito e cobertura relativa: 0,83 / 0,95 / 1; com a oração principal: 0,94 (63/67); 0,95 (63/66); 0 de 24; holdout 0,96 / 0,89 / 0 de 9; 2 ms |
+| Seleção de contexto, holdout selado | `storage-sqlite/tests/context_corpus.rs` (`sealed_v4_quality_gate`), corpus v4: 24 famílias, 72 tarefas escritas às cegas (sem ver o código de seleção), todas holdout | as mesmas | precisão ≥ 0,58; cobertura ≥ 0,61; contaminados ≤ 4 de 21; p95 ≤ 20 ms; **nenhuma regra é ajustada olhando estas famílias** | 0,58 (39/67); 0,62 (39/63); 4 de 21; 2 ms |
 | Ligações por menção | `application/src/graph/mention.rs` (`mention_quality_gate`, `mention_matching_scales_to_a_large_project`) | precisão e cobertura em textos rotulados (com negativos de mesmo vocabulário); tempo para 2.000 decisões × 60 partes | precisão ≥ 0,92; cobertura = 1,0; ≤ 3 s | 0,93 (13/14); 1,0; 1,5 s |
 | Revisão automática | `storage-sqlite/tests/auto_approval.rs` | regras só aceitam com confiança calibrada; uma chamada por lote; limites diários; desfazer | todos passam | 8/8 |
 | Triagem automática | `application/src/auto_approval.rs` (testes de unidade) | repetição descartada, sem calibração nada aceito pelas regras | todos passam | 9/9 |
@@ -47,9 +48,13 @@ grafo, a ponte PT/EN e os termos de busca gerados na adoção (só como último 
 levaram a 0,76; contar sinônimos da tarefa como um conceito e exigir que um quase-acerto
 cubra tanto quanto o melhor resultado, a 0,83; exigir que o item se apoie na oração
 principal da tarefa, a 0,94, com cobertura de 0,95 e nenhum caso negativo contaminado
-(holdout 0,96 / 0,89). A meta foi atingida **neste corpus**, mas várias regras foram
-ajustadas olhando o holdout e os distratores do corpus são escritos como orações
-secundárias: o próximo passo é um corpus v4 com holdout novo, de preferência com tarefas
-reais, antes de declarar a meta. Os termos são gerados uma vez por um
+(holdout 0,96 / 0,89). A meta foi atingida **neste corpus**, mas não se sustentou fora dele: o corpus v4,
+escrito às cegas por um agente que só viu as decisões (gírias, erros de digitação, prompts
+longos com identificadores, quase-acertos de vários formatos), mediu 0,58 / 0,62 / 4 de 21.
+Nele, as regras depois da ponte PT/EN somam quatro pontos de precisão e nenhum de
+cobertura; os termos de busca trocam três pontos de cobertura por dois casos contaminados.
+O v4 fica selado: serve para medir, nunca para ajustar. O próximo passo se decide pelo v4
+e pelos dados reais do usuário, medidos só na máquina dele com
+`storage-sqlite/tests/dogfood_context.rs` (ignorado; nada do que lê é versionado). Os termos são gerados uma vez por um
 modelo real e versionados como fixture (`context_corpus_terms.json`); regenerar exige a
 autorização do usuário, porque chama o provedor. O plano está em [precisão do contexto](../pesquisas/precisao-do-contexto.md).
