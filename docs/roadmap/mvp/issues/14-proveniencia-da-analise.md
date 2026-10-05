@@ -22,6 +22,10 @@
 
 ## Evidências
 
+**Registro histórico:** os relatos de bloqueio por caminho/cópia em `%TEMP%`
+abaixo preservam a interpretação daquela rodada, superada pelo diagnóstico por
+hash. Para recuperação atual, use [Smart App Control](../../../operacao/operacao-e-referencia.md#smart-app-control-sac).
+
 - `cargo test -p application --locked`: **68 pass** (49 lib + 19 extração), 0 fail — inclui gravação por caminho (ok/empty/failed/skipped), input_hash, códigos estáveis, `reprocess`, captura inexistente sem linha, `fail_provider_setup` (3 variants + profile).
 - `cargo test -p ai-provider --locked`: **13 pass + 1 ignorado** — 5 de retry: 503,503,200 ⇒ 3 requests; 503 sempre ⇒ 3 e Err sanitizado; 400 ⇒ 1 request; delays injetados [500 ms, 1000 ms]; connect recusado transiente.
 - `cargo test -p storage-sqlite --locked`: **43 pass** — migração 6 (vazio + upgrade 5→6), roundtrip/FK/índices de assessments, reprocess integration.
@@ -32,6 +36,9 @@
 - Regressão dos tickets 12/13 dentro dos totais acima (consent_status fonte único, envelope real, 0 requisições com consent inválido — suítes de ai-provider verdes).
 
 ## Dívida registrada
+
+**SAC/WDAC:** o workaround de cópia abaixo é histórico e foi superado; siga o
+[procedimento atual](../../../operacao/operacao-e-referencia.md#smart-app-control-sac).
 
 - **`ExtractError` não distingue validação de extractor** (ambos `code()=="extractor"`) — variantes novas mudariam enum público; diagnóstico granular de validação fica para iteração de UX.
 - Assessment `empty` significa "filtro de relevância achou nada"; modelo que retorna 0 propostas grava `ok` com counts 0.

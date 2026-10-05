@@ -41,13 +41,13 @@ Pacote distribuível (ZIP versionado em `dist\`):
 | Item | Caminho |
 | --- | --- |
 | Diretório de dados | `XEMNAS_DATA_DIR` (se definido) ou `%LOCALAPPDATA%\xemnas` |
-| Banco SQLite | `<dados>\state\app.db` (migrations forward-only, versão atual 14) |
+| Banco SQLite | `<dados>\state\app.db` (forward-only; [migrações na fonte](../../crates/storage-sqlite/src/store.rs)) |
 | API local | somente loopback; token por sessão em `<dados>\api-token`; porta em `<dados>\discovery.json` |
 | Outbox de capturas | `XEMNAS_OUTBOX_DIR` ou `<dados>\outbox` (`pending/`, `accepted/`, `rejected/`, `stalled/`) |
 
 ## Integração com o OpenCode
 
-O adapter em [`adapters/opencode/`](adapters/opencode/) é um plugin fino: disparo em idle → reconcile pela API pública do OpenCode → validação do **Capture Envelope** → `POST /v1/captures` (ou escrita na outbox quando o desktop está fechado). Ele não contém regras de domínio e nunca chama modelo.
+O adapter em [`adapters/opencode/`](../../adapters/opencode/) é um plugin fino: disparo em idle → reconcile pela API pública do OpenCode → validação do **Capture Envelope** → `POST /v1/captures` (ou escrita na outbox quando o desktop está fechado). Ele não contém regras de domínio e nunca chama modelo.
 
 **Captura automática (padrão).** O OpenCode entrega ao plugin um `client` já vinculado à instância, ao diretório e à autorização da sessão, com requisições em processo. O adapter usa esse client para ler mensagens e diffs — não é preciso configurar porta nem `OPENCODE_URL`. A paginação segue o cursor opaco do header `Link` (nunca sintetizado) no mesmo client, e uma falha do client é erro fatal: o adapter **não** cai para uma URL HTTP alternativa, para não capturar de outra instância. `OPENCODE_URL` só é usada como caminho legado/diagnóstico quando o plugin roda sem client utilizável (fixtures e testes).
 
@@ -58,17 +58,20 @@ npm test                      # testes de contrato e captura automática
 npm run send-fixture          # envia fixture pela outbox (modo CLI)
 ```
 
-Variáveis relevantes: `XEMNAS_DATA_DIR`, `XEMNAS_OUTBOX_DIR` e `OPENCODE_URL` (override **legado** da fonte HTTP de diagnóstico; padrão `http://127.0.0.1:4096`). A injeção de contexto é ligada por projeto no app (desligada, medir ou ativa) e acontece em dois momentos: no prompt e logo depois de cada edição de arquivo, com o que o mapa do projeto liga àquele arquivo (ADR-0005); o plugin só aceita `XEMNAS_CONTEXT_TIMEOUT_MS` como ajuste opcional (ver [`docs/roadmap/fase-3/02-injecao-de-contexto.md`](docs/roadmap/fase-3/02-injecao-de-contexto.md)).
+Variáveis relevantes: `XEMNAS_DATA_DIR`, `XEMNAS_OUTBOX_DIR` e `OPENCODE_URL` (override **legado** da fonte HTTP de diagnóstico; padrão `http://127.0.0.1:4096`). A injeção de contexto é ligada por projeto no app (desligada, medir ou ativa) e acontece em dois momentos: no prompt e logo depois de cada edição de arquivo, com o que o mapa do projeto liga àquele arquivo (ADR-0005); o plugin só aceita `XEMNAS_CONTEXT_TIMEOUT_MS` como ajuste opcional (ver [injeção de contexto](../roadmap/fase-3/02-injecao-de-contexto.md)).
 
 **Ativação (uma vez, sem publicar):** o OpenCode carrega plugins de arquivos locais — crie `~/.config/opencode/plugins/xemnas.ts` reexportando o build (`export { XemnasOpenCodeAdapter as Xemnas } from "<repo>/adapters/opencode/dist/src/index.js"`; caminho relativo a partir de `plugins/` é `../../../orca/projects/xemnas/...`). O wrapper deve ter **um único export** (o factory), para o OpenCode não registrar os exports utilitários do módulo. Reinicie a sessão do OpenCode após criar o arquivo.
 
+Esse wrapper global é a integração instalada, não a fonte: alterações no adapter
+pertencem a `adapters/opencode` neste repositório.
+
 ## Context Pack (Fase 3)
 
-O backend monta um **Context Pack** para uma tarefa: decisões vigentes e premissas/regras válidas numa data, escolhidas por busca lexical, com citações (decisão e versão, evidências, relações) e limite de tamanho. Exportar para Markdown ou JSON exige ação explícita e destino escolhido. Decisões podem ser substituídas sem apagar a anterior. No OpenCode, o plugin pode anexar ao pedido um bloco compacto (cerca de 300 tokens, sem repetir na sessão), desligado por padrão, ligado por projeto nas configurações do app, com modo sombra para medir antes de ativar. Detalhes e contrato para a UI: [`docs/roadmap/fase-3/01-context-pack-manual.md`](docs/roadmap/fase-3/01-context-pack-manual.md) e [ADR-0003](docs/arquitetura/adr/0003-fase-3-contexto-recuperavel.md).
+O backend monta um **Context Pack** para uma tarefa: decisões vigentes e premissas/regras válidas numa data, escolhidas por busca lexical, com citações (decisão e versão, evidências, relações) e limite de tamanho. Exportar para Markdown ou JSON exige ação explícita e destino escolhido. Decisões podem ser substituídas sem apagar a anterior. No OpenCode, o plugin pode anexar ao pedido um bloco compacto (cerca de 300 tokens, sem repetir na sessão), desligado por padrão, ligado por projeto nas configurações do app, com modo sombra para medir antes de ativar. Detalhes e contrato para a UI: [Context Pack manual](../roadmap/fase-3/01-context-pack-manual.md) e [ADR-0003](../arquitetura/adr/0003-fase-3-contexto-recuperavel.md).
 
 ## MCP para agentes (somente leitura)
 
-`xemnas-mcp` é um servidor MCP sobre stdio com três ferramentas: `get_decision` (abre a decisão pela referência `D:xxxx` que aparece no bloco injetado), `search_context` (busca decisões vigentes e regras do projeto; aceita `path` de um arquivo envolvido) e `file_context` (o que o mapa do projeto liga a um arquivo, ADR-0005). Ele consulta o app aberto pela API local e nunca altera nada. Compilação e configuração no OpenCode e no Claude Code: [`docs/roadmap/fase-5/01-mcp-leitura.md`](docs/roadmap/fase-5/01-mcp-leitura.md).
+`xemnas-mcp` é um servidor MCP sobre stdio com três ferramentas: `get_decision` (abre a decisão pela referência `D:xxxx` que aparece no bloco injetado), `search_context` (busca decisões vigentes e regras do projeto; aceita `path` de um arquivo envolvido) e `file_context` (o que o mapa do projeto liga a um arquivo, ADR-0005). Ele consulta o app aberto pela API local e nunca altera nada. Compilação e configuração no OpenCode e no Claude Code: [MCP de leitura](../roadmap/fase-5/01-mcp-leitura.md).
 
 ## Privacidade
 
@@ -86,16 +89,37 @@ O backend monta um **Context Pack** para uma tarefa: decisões vigentes e premis
 
 ## Limitações conhecidas
 
-- A interface (telas Inbox/Decisions/Settings/Diagnostics, Context Pack e navegação por teclado) é entregue em paralelo — o backend dos fluxos já está completo.
 - A redação é por padrões conhecidos (mesmas regras do adapter): um segredo em formato não reconhecido ainda é persistido. Os arquivos em `outbox/accepted/` guardam o envelope como o adapter o escreveu, até a retenção removê-los.
 - Busca é lexical (FTS5) — sem embeddings/vector graph (spec: provar filtros antes de embeddings).
-- `superseded` está modelado no schema, sem ação/UI ainda.
 - Builds bit-a-bit reproduzíveis não são prometidos (timestamps Windows); o caminho `--locked` + CI é o mesmo.
 - Cross build (`pwsh -File tools\build-windows-cross.ps1`): só faz sentido em **release** — em debug o GPUI resolve os shaders HLSL em runtime pelo `CARGO_MANIFEST_DIR` do container, caminho inexistente no Windows (panic `os error 3`). O script gera o `shaders_bytes.rs` no host com o `fxc.exe` da SDK e o container o copia para o `OUT_DIR` antes de compilar.
-- Smart App Control pode bloquear binários novos não assinados (erros `os error 4551`, DLLs de proc-macro em `target\debug\deps`, `E0463` em compilações). O veredito é **por hash e fica em cache**: insistir no mesmo arquivo repete o mesmo bloqueio — vale para o binário em outro caminho e para re-extração de ZIP (medido em out/2026: mesmo hash bloqueado em `target\release` e em `%TEMP%`). O contorno é **hash novo**: apague o artefato bloqueado (e o fingerprint em `target\debug\.fingerprint`) e recompile; um veredito de permissão pode levar alguns relinks (medido em out/2026: 1 ciclo em release, 2 em debug). Desligar a SAC é decisão do usuário — em builds recentes do Windows ela pode ser religada depois, sem reinstalar o sistema.
 
 - Testes de provedor pago são opt-in; a suíte padrão usa fake/fixtures.
-- Estado de conclusão do MVP e dogfood: ver [`docs/roadmap/mvp/issues/20-dogfood-e-conclusao.md`](docs/roadmap/mvp/issues/20-dogfood-e-conclusao.md) e [`docs/operacao/dogfood-log.md`](docs/operacao/dogfood-log.md).
+- Estado de conclusão do MVP e dogfood: ver [conclusão](../roadmap/mvp/issues/20-dogfood-e-conclusao.md) e [dogfood](dogfood-log.md).
+
+## Smart App Control (SAC)
+
+O Windows pode bloquear binários novos não assinados e DLLs de proc-macro.
+Sintomas incluem `os error 4551`, `E0463` durante compilação e falhas `uv_spawn`
+ao iniciar uma ferramenta. `E0463` e `uv_spawn` isolados não comprovam SAC:
+confira o arquivo envolvido e os eventos de Code Integrity no Windows antes de
+atribuir a causa. Se `rg` estiver bloqueado, use `git grep` (exemplos no
+[mapa do código](../arquitetura/mapa-do-codigo.md#busca-no-windows)).
+
+O veredito é **por hash e fica em cache**. Copiar o mesmo arquivo para `%TEMP%`
+ou reextrair o ZIP não muda o hash; isso não é procedimento de recuperação.
+Medição em out/2026: mesmo hash bloqueado em `target\release` e `%TEMP%`;
+relinks liberados após 1 ciclo em release e 2 em debug, sem garantia de repetição.
+
+Para tentar um rebuild, identifique primeiro o artefato e seu pacote a partir do
+erro. Encerre apenas o processo que mantém esse artefato aberto. Faça uma alteração
+legítima ou um clean restrito ao pacote (`cargo clean -p <pacote> --release` para
+release; omita `--release` para debug) e refaça o comando de build original com
+`--locked`. Confirme o novo hash com `Get-FileHash -Algorithm SHA256 <arquivo>`:
+rebuild pode produzir os mesmos bytes e repetir o bloqueio. Se ainda bloquear,
+registre erro, hash e evento para investigação; não automatize tentativas infinitas.
+Não apague artefatos/fingerprints alheios nem mude a política de segurança como
+parte desse procedimento. Desligar SAC é decisão explícita do usuário.
 
 ## Desenvolvimento (validação)
 
@@ -106,9 +130,20 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 cargo deny check
 cargo audit
+python -m unittest discover -s tools -p test_check_doc_links.py
+python tools/check-doc-links.py
 ```
 
-CI (`.github/workflows/ci.yml`): `quality` (fmt, clippy, testes, audit, deny), `contract` (testes TS do adapter) e `package` (ZIP como artifact).
+O checker valida destinos locais de links Markdown inline, imagens e definições
+de referência em arquivos rastreados de `docs/` e README/AGENTS da raiz. Ignora
+código cercado, código inline, URLs externas e âncoras isoladas; remove fragmentos
+e query e decodifica URLs. Exige destino existente e versionado, inclusive para
+diretórios. Não valida âncoras, HTTP, HTML, labels aninhados ou destinos multilinha.
+Para validação focada: `python tools/check-doc-links.py --files docs/README.md`.
+
+CI (`.github/workflows/ci.yml`): `docs` (testes do checker e links locais),
+`quality` (fmt, clippy, testes, audit, deny), `contract` (testes TS do adapter)
+e `package` (ZIP como artifact).
 # Revisão consultiva do conhecimento
 
 Em Contexto › Revisar conhecimento (também na paleta Ctrl K), **Verificar

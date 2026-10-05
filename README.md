@@ -117,6 +117,8 @@ cargo build --release --locked -p desktop-gpui --bin xemnas
 Distributable ZIP: `.\tools\package.ps1`. Demo flags, data locations and the cross build are
 covered in [docs/operacao/operacao-e-referencia.md](docs/operacao/operacao-e-referencia.md) (Portuguese).
 
+Windows blocks a new build? See [Smart App Control](docs/operacao/operacao-e-referencia.md#smart-app-control-sac).
+
 ## Integrations
 
 | | |
