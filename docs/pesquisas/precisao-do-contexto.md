@@ -17,8 +17,8 @@ Passo 4: ponte PT/EN sem modelo (`crates/application/src/terms.rs`): remoção d
 plurais dos dois idiomas, terminações verbais do português, `-ing`/`-ed` do inglês e um
 glossário bilíngue de vocabulário geral de software; a busca de texto pede o radical como
 prefixo. Precisão 0,75, cobertura 0,91 (desenvolvimento 1,0), holdout 0,70 / 0,78 / 0.
-As terminações verbais vieram de um caso do holdout. Falta a meta de precisão; o próximo
-passo é o 5 (embeddings), com o orçamento fixado antes. A medição usa o portão de
+As terminações verbais vieram de um caso do holdout. Falta a meta de precisão. Antes do passo 5
+(embeddings), as opções sem modelo estão em [busca além do léxico](busca-alem-do-lexico.md). A medição usa o portão de
 [qualidade do núcleo](../arquitetura/qualidade-do-nucleo.md).
 
 Complementa [medir a eficácia do contexto](medir-eficacia-do-contexto.md) (se o contexto
