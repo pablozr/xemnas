@@ -308,7 +308,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!("xemnas-tail-{}.jsonl", std::process::id()));
         let mut lines = vec![tool("Edit", "old-head.rs").to_string()];
         let filler = json!({ "type": "attachment", "text": "x".repeat(1_000) }).to_string();
-        lines.extend(std::iter::repeat(filler).take(600));
+        lines.extend(std::iter::repeat_n(filler, 600));
         lines.extend([
             tool("Read", "a.rs").to_string(),
             tool("Bash", "ignored.rs").to_string(),
