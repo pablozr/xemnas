@@ -164,6 +164,15 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
 
 ## Revisão — candidatos por projeto
 
+- Qualificadores de atribuição, alcance e validação acompanham a leitura e os
+  editores; distinguir fonte citada de declaração do revisor. Não ocultar dados
+  malformados como ausência. Evidência na edição reutiliza `screens::evidence`.
+- Progresso recente de capturas pertence ao vazio da Revisão e ao Diagnóstico,
+  não interrompe o documento do candidato. Estado/motivo e retry vêm do backend.
+  Polling somente visível preserva drafts, seleção e evidência; ausência na janela
+  paginada não comprova que o candidato foi resolvido. Toast nomeia regra/decisão
+  e vínculos realmente concluídos.
+
 - **No mapa** (entre Motivo e Evidências): o que confirmar põe no mapa. Uma
   linha por vínculo que a evidência aponta, com caixa marcada por padrão
   (lavanda quando marcada), o verbo ("muda", "usa", "vale para"), ícone do

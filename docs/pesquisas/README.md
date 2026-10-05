@@ -8,6 +8,8 @@ planos de `docs/roadmap/`.
 
 | Documento | Assunto | Status |
 | --- | --- | --- |
+| [direcao-memoria-contexto-baixo-atrito.md](direcao-memoria-contexto-baixo-atrito.md) | Direção aprovada: memória descritiva/normativa, context router, baixo custo e revisão por exceção | Aberta. Algoritmos e metas pendentes; política normativa vigente preservada |
+| [ideias-para-ciclo-avaliacao-real.md](ideias-para-ciclo-avaliacao-real.md) | Sete incrementos com fontes primárias, casos contrastivos, qualificadores, admissão de contexto e experimentos | Aberta. Pesquisa documental; experimentos e implementação não executados |
 | [melhorias-apos-avaliacao-real.md](melhorias-apos-avaliacao-real.md) | Dezessete melhorias priorizadas, evidências, critérios e sequência após pesquisas e retestes no ripgrep | Aberta. Proposta consolidada; implementação e hipóteses de valor pendentes |
 | [20-ideias-dores-reais-devs.md](20-ideias-dores-reais-devs.md) | Vinte ideias adicionais com dores, evidência empírica, diferenças, prioridades e pilotos | Aberta. Síntese concluída; demanda e eficácia não validadas |
 | [dores-dev-cognicao-fontes.md](dores-dev-cognicao-fontes.md) | Oito estudos de cognição, interrupções, compreensão e investigação | Aberta. Fontes consultadas; propostas sem experimento próprio |

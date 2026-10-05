@@ -31,8 +31,29 @@ propostos de investigação, compreensão, coordenação e verificação de muda
 
 Síntese para evolução: [melhorias após a avaliação real](pesquisas/melhorias-apos-avaliacao-real.md),
 com prioridades, critérios de conclusão e sequência de confiança, contexto e valor.
+O [refinamento do próximo ciclo](pesquisas/ideias-para-ciclo-avaliacao-real.md)
+acrescenta fontes primárias e sete experimentos localizados de fidelidade,
+relevância, cobertura e esforço de revisão; nenhuma implementação foi feita.
 
 ## Precedência
+
+Revisão por exceção: [implementação e evidências](operacao/revisao-por-excecao-e-episodios.md),
+precedida pelo [piloto comparativo executado](operacao/resultado-piloto-recuperacao.md).
+Grupos reduzem repetição; não autorizam normas automaticamente.
+
+Visão visual local: [Xemnas, por dentro](operacao/visao-projeto.html).
+Última entrega: [avaliação completa e router IA opcional](operacao/avaliacao-final-e-router-ia.md),
+com resultados controlados e [protocolo de produtividade](operacao/experimento-produtividade-assertividade.md).
+
+Memória descritiva automática: [operação e medições](operacao/memoria-descritiva-e-router.md)
+e [ADR-0011](arquitetura/adr/0011-observacoes-descritivas-de-manifests.md), com
+manifests, proveniência, invalidação e roteamento determinístico de baixo custo.
+
+Entrega e ressalvas: [lote de confiança, clareza e medição](operacao/lote-confianca-clareza.md),
+com builds/capturas, baseline e limites de testes/SAC e arquitetura preexistente.
+Contrato: [ADR-0010](arquitetura/adr/0010-qualificadores-e-fronteira-de-envio.md).
+A [direção de memória de baixo atrito](pesquisas/direcao-memoria-contexto-baixo-atrito.md)
+registra objetivos confirmados e distingue-os da automação ainda não implementada.
 
 Avaliação operacional: [ciclo supervisionado com agentes](operacao/avaliacao-agentes.md),
 com piloto GPT-6 Luna medium, controles sem memória/ADR/MCP, evidências e limites.

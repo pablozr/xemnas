@@ -2,7 +2,11 @@
 
 **Data:** 03/10/2026.
 **Pergunta:** quais mudanças devem tornar o Xemnas mais confiável, fácil de usar e útil, considerando as pesquisas anteriores e os retestes no ripgrep?
-**Status:** Aberta. Proposta priorizada; nenhuma correção de produto foi implementada nesta síntese. Não altera o escopo aprovado.
+**Status:** Em implementação. Primeiro lote de confiança/clareza integrado, com
+builds/capturas e baseline; ressalvas de testes/SAC e arquitetura registradas.
+Demais propostas continuam abertas. Contratos incorporados estão no
+[ADR-0010](../arquitetura/adr/0010-qualificadores-e-fronteira-de-envio.md).
+Estado e limites: [registro do lote](../operacao/lote-confianca-clareza.md).
 
 A recomendação é melhorar primeiro a qualidade do ciclo captura → revisão → contexto. Os testes comprovaram operações importantes do núcleo, mas também mostraram contexto irrelevante, perda de qualificadores, esforço manual e estados difíceis de interpretar. A evolução mais promissora é ajudar a pessoa a retomar uma tarefa e perceber quando uma premissa merece revisão. Essa evolução depende de uma memória confiável.
 
@@ -174,6 +178,92 @@ Minha primeira entrega proposta é o conjunto **destino da captura + toast corre
 ## O que adiar
 
 Adiar biblioteca global com OCR amplo, chat livre, muitas integrações, contexto por branch e decoração adicional. São direções possíveis das pesquisas anteriores, mas não corrigem os problemas que impediram confiança cotidiana. Contexto por branch volta à pauta quando houver casos reais de decisões de experimento confundidas com decisões vigentes. Embeddings voltam como experimento de relevância, não como promessa automática de qualidade.
+
+## Refinamento do plano após revisar as avaliações dos agentes
+
+**Revisão documental em 03/10/2026:** piloto supervisionado, cinco críticas,
+auditoria estática, retomada, núcleo instrumentado e relações finais. A pesquisa
+adicional está em [ideias para o próximo ciclo](ideias-para-ciclo-avaliacao-real.md),
+com fontes primárias, sete incrementos e protocolos de comparação. Não houve nova
+execução do produto nem confirmação de que o código atual mantém todas as lacunas.
+
+### O que não reabrir como recurso ausente
+
+Extração arquitetural explícita, adoção com vínculos, replay idêntico, retry de job
+Failed e confirmação/rejeição de relações passaram nos retestes registrados.
+`file_context` funcionou depois de um vínculo manual; o problema é cobertura e
+explicação, não ausência da ferramenta. A Visão ganhou navegação para entidades
+depois de receber decisões. Preservar esses positivos como regressões, sem afirmar
+cobertura geral. Os retestes finais prevalecem sobre as críticas iniciais.
+
+Não criar ticket de suporte a UUID a partir do relato de recuperação: o registro
+bruto inclui uma consulta bem-sucedida com UUID completo, embora a crítica relate
+recusa. O contrato e uma reprodução nova devem resolver a divergência antes de
+classificá-la como defeito; ver [trajetória da crítica](../operacao/avaliacao-repositorio-real/logs/critic-retrieval.jsonl).
+
+### Pacotes propostos para execução futura
+
+| Ordem | Unidade pequena | Base e aceite principal | Dependência/limite |
+| --- | --- | --- | --- |
+| 0 | Fixar casos e identidade da rodada | Protocolo: fixture, oráculo, commit/hash, modo Fake/provider e tentativa; separar falha do produto, instrumento e ambiente | Reservar famílias de consultas antes de calibrar; nenhuma execução foi feita nesta pesquisa |
+| 1A | Fronteira comum de envio externo (item 1) | Risco estático: segredo sintético introduzido pela edição não sai nos caminhos cobertos; revogação impede a próxima chamada | Conferir caminhos atuais; não armazenar payload integral por padrão |
+| 1B | Preservar escolha e ressalva (item 2) | Observado: local/simulação/teste bloqueado não viram autoridade do projeto/teste executado | Resolver contrato backend antes da UI; orçamento não pode cortar só a ressalva |
+| 1C | Toast, sobreposição e refresh (item 5) | Observado: resultado persistido corresponde à mensagem e fica legível | Separar por defeito quando possível; validação visual autorizada nas duas paletas e compacto |
+| 2A | Explicar destino da captura (item 4) | Observado: distinguir não recebida, em processamento, detalhe descartado, candidato e erro | Backend fornece causa real; não pedir retry para descarte válido nem inferir desconexão só por ausência |
+| 2B | Corpus e política de admissão (item 3) | Observado: comparar negativos, positivos e contexto parcial; medir precisão e omissões conjuntamente | Busca atual como base; depois melhoria lexical; híbrida só se o mesmo corpus justificar |
+| 2C | Prévia e cobertura por arquivo (itens 6 e 12, recorte) | Atrito observado: explicar por que arquivo ligado/desligado tem contexto e oferecer associação revisável | Não inferir responsabilidade por mera citação; instalação limpa continua uma prova separada |
+| 3 | Integridade em tickets separados (9, 10, 11, 14) | Adoção parcial, replay divergente, checkpoint e história são riscos estáticos; jobs remanescentes são observados | Injetar falha por fronteira; decidir política de retenção e validar worker concorrente |
+| 4 | Seleção de pares e redundância (7 e 8) | Observado: comparar regras opostas juntas e indicar propostas equivalentes | Zero achados não certifica consistência; não retirar conhecimento automaticamente |
+| 5 | Comparação de tarefa inteira; só depois expansão (15–17) | Hipótese: menos esforço total com correção e alcance preservados | Controles sem memória adicional/ADR/Xemnas; contar captura, revisão, vínculos e recuperação |
+
+1A, 1B e 1C podem avançar em frentes independentes **depois** de delimitar arquivos
+e contratos. Integridade não precisa esperar todo o ciclo de contexto, mas não
+deve virar uma única mudança grande. Não há prazo ou aprovação de implementação.
+
+### Ideias pesquisadas que valem experimentar
+
+- **Unidade indivisível de contexto:** escolha + autoria/alcance + limite de
+  validação + referência/versionamento. Se não couber, omitir explicitamente;
+  não entregar uma afirmação mais forte por cortar sua ressalva.
+- **Admissão em vez de preenchimento:** distinguir nada pertinente de informação
+  pertinente mas parcial. Não confundir score lexical com probabilidade de verdade.
+- **Testes contrastivos e por família:** idioma e termos distratores não deveriam
+  mudar o sentido recuperado; reservar intenções inteiras evita calibrar no teste.
+- **Revisão junto ao suporte:** ensaiar trechos que sustentam escolha, motivo e
+  ressalva; manter fonte completa acessível e medir o custo de preparar os trechos.
+- **Vazio com próxima ação real:** explicar causa e ação sem criar outro painel ou
+  sugerir reprocessamento quando a análise descartou corretamente uma rotina.
+
+São refinamentos das 17 melhorias, não cinco recursos adicionais. Os fundamentos
+externos e limites de transferência estão na pesquisa vinculada: SWE-bench/Pro,
+práticas de avaliação/contexto da Anthropic, Sufficient Context, W3C PROV e
+qualificadores do Wikidata. Nenhuma fonte prova benefício destas adaptações no app.
+
+### Reaproveitar o roadmap sem declarar trabalho encerrado
+
+Os tickets MVP [13](../roadmap/mvp/issues/13-perfil-ia-consentido.md),
+[14](../roadmap/mvp/issues/14-proveniencia-da-analise.md),
+[15](../roadmap/mvp/issues/15-decision-inbox.md) e
+[18](../roadmap/mvp/issues/18-distribuicao-e-upgrade.md) são antecedentes de
+consentimento, proveniência, revisão e distribuição, não provas de correção destas
+lacunas. Contexto já tem [plano manual](../roadmap/fase-3/01-context-pack-manual.md)
+e [injeção/auditoria](../roadmap/fase-3/02-injecao-de-contexto.md); mapa e radar têm
+o [plano do grafo](../roadmap/fase-4/00-plano-grafo-de-entidades.md).
+Ao autorizar execução, abrir deltas específicos em vez de reabrir a implementação
+original. Esta revisão não criou tickets nem alterou o escopo aprovado.
+
+### Decisões para fechar com o usuário
+
+1. Priorizar **confiança + clareza operacional** como primeiro lote, mantendo busca
+   como próxima melhoria de valor cotidiano — recomendação desta síntese.
+2. Escolher se o primeiro teste de clareza será documental com voluntários ou no
+   fluxo real; agentes críticos não substituem participantes humanos.
+3. Fixar metas e orçamento do corpus antes do ajuste. Os números da pesquisa nova
+   são propostas exploratórias, não compromissos de qualidade de produção.
+
+O app estava fechado, portanto não foi possível consultar decisões via MCP nesta
+revisão. Usaram-se documentos versionados; conferir decisões vigentes antes de
+aprovar contratos novos. Não foi necessário abrir o app ou acessar dados pessoais.
 
 ## Medir se o app ficou melhor
 
