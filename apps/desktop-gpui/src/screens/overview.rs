@@ -17,7 +17,8 @@ use gpui::{
 };
 
 use super::context::OpenDecision;
-use super::format::{clipped, plural, short_date};
+use super::format::{clipped, short_date};
+use crate::i18n::overview as t;
 use crate::ui::controls::{action_button, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
@@ -26,16 +27,6 @@ use crate::ui::patterns::{
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{RadiusScale, SpacingScale, TypeScale};
 use crate::ui::tooltip::tooltip;
-
-const SENDS: &str = "Gera um resumo e os principais fluxos com o provedor de IA configurado. \
-                     Envia as decisões em vigor, as regras, os nomes do mapa e títulos, seções \
-                     e o primeiro parágrafo da documentação; nada do código.";
-
-const PAGE_HINT: &str = "Gera um arquivo HTML com a arquitetura e os fluxos e o abre no navegador. Funciona offline e pode ser enviado a alguém.";
-
-const PROVENANCE: &str = "Escrita pela IA a partir das decisões e regras confirmadas e da \
-                          documentação do projeto. Cada trecho mostra as fontes; o que não \
-                          tinha fonte ficou de fora.";
 
 enum Outcome {
     Loaded(Result<Option<OverviewView>, String>),
@@ -124,11 +115,11 @@ impl OverviewScreen {
                     let local = path.to_string_lossy().replace('\\', "/");
                     let url = format!("file:///{}", local.replace(' ', "%20"));
                     cx.open_url(&url);
-                    this.show_notice("Página aberta no navegador.".into(), cx);
+                    this.show_notice(t::page_opened().into(), cx);
                 }
                 Err(error) => {
                     tracing::error!(%error, operation = "overview-page", "page not written");
-                    this.error = Some("Não foi possível criar a página. Tente de novo.".into());
+                    this.error = Some(t::page_failed().into());
                     cx.notify();
                 }
             });
@@ -198,14 +189,8 @@ impl OverviewScreen {
                         this.view = Some(view);
                         this.show_notice(
                             match queued {
-                                0 => "Visão atualizada.".into(),
-                                1 => "Visão atualizada. 1 documento foi para análise; os \
-                                      candidatos aparecem na Revisão."
-                                    .into(),
-                                n => format!(
-                                    "Visão atualizada. {n} documentos foram para análise; os \
-                                     candidatos aparecem na Revisão."
-                                ),
+                                0 => t::updated().into(),
+                                n => t::updated_queued(n),
                             },
                             cx,
                         );
@@ -277,13 +262,8 @@ impl OverviewScreen {
         let parts = overview.architecture.containers.len();
         let flows = overview.flows.len();
         let what = match (parts, flows) {
-            (0, 0) => "Ainda não há partes nem fluxos. Gere a visão de novo quando o mapa e as decisões cobrirem mais do projeto."
-                .to_owned(),
-            _ => format!(
-                "{} e {} em uma página para ler com calma: um diagrama que se explora e cada fluxo passo a passo. Abre no navegador; nada sai do computador.",
-                plural(parts, "parte", "partes"),
-                plural(flows, "fluxo", "fluxos"),
-            ),
+            (0, 0) => t::page_empty().to_owned(),
+            _ => t::page_what(&t::parts_count(parts), &t::flows_count(flows)),
         };
         let button = action_button(
             theme,
@@ -291,15 +271,15 @@ impl OverviewScreen {
             ButtonKind::Primary,
             parts + flows > 0,
         )
-        .aria_label("Ver arquitetura e fluxos")
-        .tooltip(tooltip(PAGE_HINT, None))
-        .child("Ver arquitetura e fluxos");
+        .aria_label(t::view_page())
+        .tooltip(tooltip(t::page_hint(), None))
+        .child(t::view_page());
         let button = self.pressable(button, "overview-page", |this, cx| this.open_page(cx), cx);
         div()
             .flex()
             .flex_col()
             .gap(px(SpacingScale::S3))
-            .child(section_label(theme, "Arquitetura e fluxos"))
+            .child(section_label(theme, t::page_section()))
             .child(
                 div()
                     .flex()
@@ -327,15 +307,15 @@ impl OverviewScreen {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let label = if self.generating {
-            "Gerando…"
+            t::generating()
         } else if self.view.is_some() {
-            "Atualizar visão"
+            t::update_overview()
         } else {
-            "Gerar visão"
+            t::generate_overview()
         };
         let button = action_button(theme, "overview-generate", kind, !self.busy)
             .aria_label(label)
-            .tooltip(tooltip(SENDS, None))
+            .tooltip(tooltip(t::sends(), None))
             .child(label);
         let enabled = !self.busy;
         self.pressable(
@@ -396,8 +376,8 @@ impl OverviewScreen {
                     .cursor_pointer()
                     .hover(move |style| style.bg(colors.glass_fill_medium()))
                     .role(Role::Link)
-                    .aria_label(format!("Abrir a decisão: {title}"))
-                    .tooltip(tooltip(format!("{title} · abrir em Decisões"), None))
+                    .aria_label(t::open_decision(&title))
+                    .tooltip(tooltip(t::open_in_decisions(&title), None))
                     .focus_visible(crate::ui::controls::focus_ring(theme));
                 row = row.child(self.pressable(
                     chip,
@@ -407,9 +387,9 @@ impl OverviewScreen {
                 ));
             } else {
                 let label = if citation.kind == "document" {
-                    format!("Documento: {} ({})", title, citation.id)
+                    t::cite_document(&title, &citation.id)
                 } else {
-                    format!("Regra: {title}")
+                    t::cite_rule(&title)
                 };
                 row = row.child(chip.aria_label(label.clone()).tooltip(tooltip(label, None)));
             }
@@ -427,20 +407,15 @@ impl OverviewScreen {
         let overview = &view.overview;
         let update = self.generate_button(theme, ButtonKind::Secondary, cx);
         let page = self.page_card(theme, overview, cx);
-        let mut sources = vec![
-            plural(overview.decisions, "decisão", "decisões"),
-            plural(overview.rules, "regra", "regras"),
-        ];
-        if overview.documents > 0 {
-            sources.push(plural(overview.documents, "documento", "documentos"));
-        }
-        let last = sources.pop().unwrap_or_default();
-        let meta = format!(
-            "Gerada em {} a partir de {} e {}",
-            short_date(&overview.generated_at),
-            sources.join(", "),
-            last
-        );
+        let decisions = t::decisions_count(overview.decisions);
+        let rules = t::rules_count(overview.rules);
+        let date = short_date(&overview.generated_at);
+        let meta = if overview.documents > 0 {
+            let documents = t::documents_count(overview.documents);
+            t::generated_from_three(&date, &decisions, &rules, &documents)
+        } else {
+            t::generated_from_two(&date, &decisions, &rules)
+        };
         let stale = (view.new_decisions > 0).then(|| {
             div()
                 .flex()
@@ -455,14 +430,7 @@ impl OverviewScreen {
                 .child(
                     text_style(div(), TypeScale::META)
                         .text_color(colors.text_secondary())
-                        .child(format!(
-                            "{} desde então. Atualize para incluí-las.",
-                            if view.new_decisions == 1 {
-                                "1 decisão nova".to_owned()
-                            } else {
-                                format!("{} decisões novas", view.new_decisions)
-                            }
-                        )),
+                        .child(t::stale(&t::new_decisions_count(view.new_decisions))),
                 )
         });
         let title = div()
@@ -471,7 +439,7 @@ impl OverviewScreen {
             .flex()
             .flex_col()
             .gap(px(SpacingScale::S1))
-            .child(text_style(div(), TypeScale::HEADING_1).child("Visão do projeto"))
+            .child(text_style(div(), TypeScale::HEADING_1).child(t::project_overview()))
             .child(
                 text_style(div(), TypeScale::META)
                     .text_color(colors.text_muted())
@@ -508,14 +476,14 @@ impl OverviewScreen {
                     .flex()
                     .flex_col()
                     .gap(px(SpacingScale::S3))
-                    .child(section_label(theme, "Resumo"))
+                    .child(section_label(theme, t::summary_section()))
                     .child(summary),
             )
             .child(page)
             .child(
                 text_style(div(), TypeScale::META)
                     .text_color(colors.text_muted())
-                    .child(PROVENANCE),
+                    .child(t::provenance()),
             )
     }
 }
@@ -542,9 +510,9 @@ impl Render for OverviewScreen {
                     empty_panel(
                         &theme,
                         IconName::Compass,
-                        "Visão",
-                        "Um resumo do projeto, com arquitetura e fluxos",
-                        SENDS,
+                        t::empty_label(),
+                        t::empty_title(),
+                        t::sends(),
                     )
                     .flex_1(),
                 )
@@ -583,7 +551,7 @@ const CHIP_CHARS: usize = 48;
 fn product(error: OverviewError) -> String {
     if let OverviewError::Storage(detail) = &error {
         tracing::error!(error = %detail, operation = "overview", "overview storage failed");
-        return "Não foi possível ler a visão do projeto. Tente de novo.".into();
+        return t::read_failed().into();
     }
     let text = error.to_string();
     let mut chars = text.chars();
