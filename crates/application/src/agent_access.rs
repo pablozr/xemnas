@@ -241,6 +241,7 @@ where
             .collect();
         let pack = ContextPacks::new(self.store.clone())
             .with_routing(self.routing.clone())
+            .exploratory()
             .build_pack(ContextRequest {
                 project_id: project,
                 task,

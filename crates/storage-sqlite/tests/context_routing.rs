@@ -133,7 +133,9 @@ fn settings() -> (AiSettings<Profiles, Secrets>, Profiles, Arc<AtomicUsize>) {
 fn request() -> ContextRequest {
     ContextRequest {
         project_id: "p1".into(),
-        task: "cache migration".into(),
+        // Three words: items naming two of them pass the deterministic cut
+        // but stay ambiguous, which is what the router judges.
+        task: "cache migration rollback".into(),
         as_of: None,
         budget_chars: None,
         files: vec![],
@@ -145,18 +147,20 @@ fn seed(test: &support::TestStore) -> String {
         .unwrap()
         .execute("UPDATE observation_refresh SET dirty=0", [])
         .unwrap();
+    // Both name the two task words, so the deterministic term-coverage cut
+    // keeps them and their relevance stays ambiguous: the router's case.
     support::decision(
         &test.store,
         "p1",
         "cache",
-        "Cache response policy?",
+        "Cache response policy during a migration?",
         "Retain short responses",
     );
     support::decision(
         &test.store,
         "p1",
         "migration",
-        "Migration execution policy?",
+        "Migration execution policy for the cache?",
         "Run serially",
     );
     Claims::new(test.store.clone())

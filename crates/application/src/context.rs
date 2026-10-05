@@ -31,9 +31,22 @@ pub const MAX_RANKED: usize = 50;
 
 /// Words ignored when matching a task (Portuguese and English).
 const STOPWORDS: &[&str] = &[
-    "a", "o", "as", "os", "de", "da", "do", "das", "dos", "e", "em", "no", "na", "nos", "nas",
-    "um", "uma", "para", "por", "com", "sem", "que", "se", "ao", "the", "an", "and", "or", "of",
-    "to", "in", "on", "for", "with", "is", "it", "not", "near",
+    // Portuguese: articles, prepositions, pronouns, question words and verbs
+    // so generic they name no subject ("como usar", "qual fazer").
+    "a", "o", "as", "os", "de", "da", "do", "das", "dos", "e", "em", "no", "na", "nos", "nas", "um",
+    "uma", "uns", "umas", "para", "pra", "por", "pelo", "pela", "pelos", "pelas", "com", "sem",
+    "que", "se", "ao", "aos", "num", "numa", "ou", "mas", "como", "qual", "quais", "quando",
+    "onde", "quanto", "quantos", "quem", "porque", "este", "esta", "isto", "esse", "essa", "isso",
+    "aquele", "aquela", "seu", "sua", "seus", "suas", "meu", "minha", "nosso", "nossa", "mais",
+    "menos", "muito", "cada", "todo", "toda", "todos", "todas", "ja", "não", "nao", "sim",
+    "também", "tambem", "entre", "sobre", "depois", "antes", "ainda", "usar", "usa", "uso",
+    "fazer", "faz", "ser", "estar", "está", "esta", "ter", "tem", "deve", "devo", "pode", "posso",
+    "vai", "novo", "nova", "novos", "novas", // English
+    "the", "an", "and", "or", "of", "to", "in", "on", "for", "with", "is", "it", "not", "near",
+    "what", "which", "how", "when", "where", "why", "who", "use", "using", "should", "does", "do",
+    "from", "by", "this", "that", "these", "those", "be", "are", "was", "new", "its", "at", "as",
+    "can", "will", "while", "before", "after", "into", "our", "your", "we", "all", "each", "more",
+    "less", "make", "get",
 ];
 
 /// Failure modes of pack building.
@@ -220,6 +233,7 @@ pub trait ContextProvider {
 pub struct ContextPacks<S> {
     store: S,
     routing: Option<std::sync::Arc<crate::context_routing::RoutingLookup>>,
+    exploratory: bool,
 }
 
 impl<S> ContextPacks<S> {
@@ -228,7 +242,16 @@ impl<S> ContextPacks<S> {
         Self {
             store,
             routing: None,
+            exploratory: false,
         }
+    }
+
+    /// For a search the agent asked for: one word in common is enough,
+    /// since the agent reads the results and decides. Automatic injection
+    /// keeps the term-coverage cut, where a weak item costs the agent.
+    pub fn exploratory(mut self) -> Self {
+        self.exploratory = true;
+        self
     }
 
     /// Enables optional local cache routing; the default remains deterministic.
@@ -292,6 +315,9 @@ where
                 .rank_claims(&request.project_id, query, MAX_RANKED)?,
             None => Vec::new(),
         };
+        let task_words = meaningful_words(&task);
+        let linked_decisions: BTreeSet<String> = by_file_decisions.iter().cloned().collect();
+        let linked_claims: BTreeSet<String> = by_file_claims.iter().cloned().collect();
         let ranked_decisions = first_unique(by_file_decisions, lexical_decisions);
         let ranked_claims = first_unique(by_file_claims, lexical_claims);
 
@@ -305,7 +331,13 @@ where
         let matched_claims: BTreeSet<&str> = ranked_claims
             .iter()
             .map(String::as_str)
-            .filter(|id| valid.contains_key(id))
+            .filter(|id| {
+                valid.get(id).is_some_and(|claim| {
+                    self.exploratory
+                        || linked_claims.contains(*id)
+                        || covers_task(&task_words, &claim.statement)
+                })
+            })
             .collect();
 
         let mut decisions = Vec::new();
@@ -314,6 +346,18 @@ where
                 continue;
             };
             if !in_force(&decision, &relations, &as_of) {
+                continue;
+            }
+            if !self.exploratory
+                && !linked_decisions.contains(id)
+                && !covers_task(
+                    &task_words,
+                    &format!(
+                        "{} {} {}",
+                        decision.question, decision.choice, decision.rationale
+                    ),
+                )
+            {
                 continue;
             }
             let item = self.pack_decision(decision, &relations, &as_of)?;
@@ -329,6 +373,7 @@ where
         });
         let ordered = ranked_claims
             .iter()
+            .filter(|id| matched_claims.contains(id.as_str()))
             .filter_map(|id| valid.get(id.as_str()).copied())
             .map(|claim| (claim, true))
             .chain(standing.map(|claim| (*claim, false)));
@@ -630,6 +675,47 @@ fn pack_claim(claim: &ClaimRecord, matched: bool) -> Result<PackClaim, ContextEr
         source_decision_id: claim.source_decision_id.clone(),
         matched,
     })
+}
+
+/// Lowercase without accents, so `Persistência` and `persistencia` meet, as
+/// in the FTS5 `unicode61` tokenizer.
+fn fold_word(word: &str) -> String {
+    word.chars()
+        .flat_map(char::to_lowercase)
+        .map(|character| match character {
+            'á' | 'à' | 'â' | 'ã' | 'ä' => 'a',
+            'é' | 'è' | 'ê' | 'ë' => 'e',
+            'í' | 'ì' | 'î' | 'ï' => 'i',
+            'ó' | 'ò' | 'ô' | 'õ' | 'ö' => 'o',
+            'ú' | 'ù' | 'û' | 'ü' => 'u',
+            'ç' => 'c',
+            other => other,
+        })
+        .collect()
+}
+
+/// The meaningful words of a text, folded: what a task asks about.
+fn meaningful_words(text: &str) -> BTreeSet<String> {
+    text.split(|character: char| !(character.is_alphanumeric() || character == '_'))
+        .map(str::to_lowercase)
+        .filter(|word| word.chars().count() >= 2 && !STOPWORDS.contains(&word.as_str()))
+        .map(|word| fold_word(&word))
+        .filter(|word| !STOPWORDS.contains(&word.as_str()))
+        .collect()
+}
+
+/// Whether a text found only by words in common covers enough of the task
+/// to be about it: at least two of its meaningful words (the only one when
+/// the task has one). One shared word ("cache", "terminal") is how unrelated
+/// decisions of the same project got in.
+fn covers_task(task_words: &BTreeSet<String>, text: &str) -> bool {
+    if task_words.is_empty() {
+        return false;
+    }
+    let words = meaningful_words(text);
+    let matched = task_words.intersection(&words).count();
+    let needed = task_words.len().min(2);
+    matched >= needed
 }
 
 /// FTS5 `MATCH` for any meaningful word of `task`, or `None` when none remain.

@@ -240,8 +240,13 @@ impl RoutingLookup {
 
 fn weak_overlap(tokens: &std::collections::BTreeSet<String>, text: &str) -> bool {
     let words = crate::context::routing_tokens(text);
-    // Two significant exact words are strong evidence, never model-filterable.
-    tokens.intersection(&words).count() == 1
+    // The deterministic cut already left out items sharing a single word;
+    // what reaches here and covers the task only in part (two of three
+    // words) is still ambiguous. Full coverage is strong evidence, never
+    // model-filterable.
+    let shared = tokens.intersection(&words).count();
+    shared >= 1
+        && shared < tokens.len()
         && !text
             .to_lowercase()
             .contains(&tokens.iter().cloned().collect::<Vec<_>>().join(" "))
@@ -409,6 +414,14 @@ mod tests {
         assert!(weak_overlap(
             &crate::context::routing_tokens("cache migration"),
             "Cache response policy"
+        ));
+        assert!(weak_overlap(
+            &crate::context::routing_tokens("cache migration rollback"),
+            "Cache response policy during a migration"
+        ));
+        assert!(!weak_overlap(
+            &crate::context::routing_tokens("cache migration"),
+            "Cache response policy during a migration"
         ));
     }
 }

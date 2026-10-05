@@ -555,14 +555,19 @@ fn report_context_corpus() {
     }
 }
 
-/// Floors of the context selection on corpus v3 (baseline measured on
-/// 2026-10-05, before any precision work: OR match, no relevance cut). The
-/// gate fails on a regression; raise a floor whenever an improvement lands,
-/// so the next change cannot quietly give it back. Improvements are judged
-/// on the holdout families, which no tuning may look at.
-const PRECISION_FLOOR: f64 = 0.22;
-const RECALL_FLOOR: f64 = 0.75;
-const CONTAMINATED_CASES_CEILING: usize = 9;
+/// Floors of the context selection on corpus v3. The gate fails on a
+/// regression; raise a floor whenever an improvement lands, so the next
+/// change cannot quietly give it back. Improvements are judged on the
+/// holdout families, which no tuning may look at.
+///
+/// History: baseline 0.23 / 0.76 / 9 contaminated (OR match, no cut). Term
+/// coverage (two meaningful words in common) and fuller stopwords: 0.63 /
+/// 0.58 / 1. Recall was traded for precision on purpose (a wrong item
+/// costs the agent more than a missing one); the PT/EN bridge must win it
+/// back.
+const PRECISION_FLOOR: f64 = 0.63;
+const RECALL_FLOOR: f64 = 0.57;
+const CONTAMINATED_CASES_CEILING: usize = 1;
 /// Generous on purpose: this runs on a developer's machine beside other work.
 const BUILD_PACK_P95_CEILING_US: u128 = 20_000;
 

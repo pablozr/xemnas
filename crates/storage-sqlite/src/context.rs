@@ -26,7 +26,7 @@ impl ContextStore for SqliteStore {
             "SELECT f.decision_id FROM decisions_fts f \
              JOIN engineering_decisions d ON d.decision_id = f.decision_id \
              WHERE decisions_fts MATCH ?1 AND d.project_id = ?2 \
-             ORDER BY bm25(decisions_fts), f.decision_id LIMIT ?3",
+             ORDER BY bm25(decisions_fts, 0.0, 3.0, 2.0, 1.0), f.decision_id LIMIT ?3",
             project_id,
             match_query,
             limit,
