@@ -8,9 +8,18 @@
 //! architecture as a navigable map (pan, zoom, what each part calls and is
 //! called by, a guided walk through one flow with the camera following each
 //! step), each flow as a sequence diagram with its steps and the records they
-//! rest on. Nothing is fetched: the app's fonts (subset, OFL), the exact mark
+//! rest on. Beside them go the decisions in force and the rules valid now
+//! ([`knowledge`]), each tied to the parts it touches, so the page can say why
+//! a part is built the way it is. Nothing is fetched: the app's fonts (subset, OFL), the exact mark
 //! of the product, the styles and the scripts are inline, so the file opens
 //! offline.
+
+mod knowledge;
+
+pub use knowledge::{
+    assemble, first_sentence, PageDecision, PageEntity, PageKnowledge, PageRelation, PageRule,
+    MAX_PAGE_DECISIONS, MAX_PAGE_RULES,
+};
 
 use crate::overview::ProjectOverview;
 
@@ -23,13 +32,18 @@ const DATA_MARK: &str = "/*__DATA__*/";
 const TITLE_MARK: &str = "/*__TITLE__*/";
 const LOGO_MARK: &str = "<!--__LOGO__-->";
 
-/// The page for `overview` of the project called `project`.
-pub fn render(project: &str, overview: &ProjectOverview) -> String {
+/// The page for `overview` of the project called `project`, with the
+/// decisions and rules that explain it.
+pub fn render(project: &str, overview: &ProjectOverview, knowledge: &PageKnowledge) -> String {
     let mut data = serde_json::to_value(overview).unwrap_or_default();
     if let Some(map) = data.as_object_mut() {
         // The summary stays in the app; the page is the architecture and the flows.
         map.remove("summary");
         map.insert("project".into(), project.into());
+        map.insert(
+            "knowledge".into(),
+            serde_json::to_value(knowledge).unwrap_or_default(),
+        );
     }
     let title = if project.trim().is_empty() {
         "Arquitetura e fluxos · Xemnas".to_owned()
@@ -135,9 +149,70 @@ mod tests {
         }
     }
 
+    fn knowledge(text: &str) -> PageKnowledge {
+        let entity = PageEntity {
+            id: "e1".into(),
+            name: text.into(),
+            kind: "component".into(),
+            edge: "affects".into(),
+        };
+        PageKnowledge {
+            decisions: vec![PageDecision {
+                id: "d1".into(),
+                label: "D:abcd1234".into(),
+                question: text.into(),
+                choice: text.into(),
+                rationale: text.into(),
+                reason: text.into(),
+                assumptions: vec![text.into()],
+                consequences: vec![text.into()],
+                reconsider_when: vec![text.into()],
+                scope: vec![text.into()],
+                criteria: vec!["data_or_contract".into()],
+                entities: vec![entity.clone()],
+                containers: vec!["e1".into()],
+                relations: vec![PageRelation {
+                    kind: "conflicts_with".into(),
+                    outgoing: true,
+                    other_id: "d2".into(),
+                    other_label: "D:ef567890".into(),
+                    other_title: text.into(),
+                    in_force: true,
+                }],
+                confirmed_at: "2026-09-01T00:00:00Z".into(),
+            }],
+            rules: vec![PageRule {
+                id: "r1".into(),
+                label: "R:1234abcd".into(),
+                kind: "constraint".into(),
+                statement: text.into(),
+                entities: vec![entity],
+                containers: vec!["e1".into()],
+            }],
+        }
+    }
+
+    #[test]
+    fn the_decisions_ride_along_with_their_context() {
+        let page = render(
+            "xemnas",
+            &overview("x"),
+            &knowledge("Outbox porque o app fecha"),
+        );
+        assert!(page.contains("\"knowledge\":{\"decisions\":[{"));
+        assert!(page.contains("\"label\":\"D:abcd1234\""));
+        assert!(page.contains("\"reconsider_when\":[\"Outbox porque o app fecha\"]"));
+        assert!(page.contains("\"kind\":\"conflicts_with\""));
+        assert!(page.contains("\"label\":\"R:1234abcd\""));
+    }
+
     #[test]
     fn the_flows_and_the_title_land_in_the_template_without_the_summary() {
-        let page = render("xemnas", &overview("Captura até candidato"));
+        let page = render(
+            "xemnas",
+            &overview("Captura até candidato"),
+            &knowledge("x"),
+        );
         assert!(page.contains("Captura até candidato"));
         assert!(!page.contains("Resumo que fica no app."));
         assert!(page.contains("<title>xemnas · Arquitetura e fluxos · Xemnas</title>"));
@@ -149,7 +224,7 @@ mod tests {
 
     #[test]
     fn the_page_carries_the_exact_mark_and_the_fonts() {
-        let page = render("xemnas", &overview("x"));
+        let page = render("xemnas", &overview("x"), &knowledge("x"));
         assert!(page.contains("class=\"mark\""));
         assert!(page.contains("id=\"xm-tile\"") && page.contains("url(#xm-chosen)"));
         assert!(
@@ -160,12 +235,18 @@ mod tests {
 
     #[test]
     fn text_from_the_model_cannot_close_the_script_or_the_title() {
-        let hostile = "</script><script>alert(1)</script><!-- x";
-        let page = render("</title><b>", &overview(hostile));
+        let hostile = "</script><script>alert(1)</script><!-- x\u{2028}y";
+        let page = render("</title><b>", &overview(hostile), &knowledge(hostile));
         let data_start = page.find("id=\"xemnas-data\">").unwrap();
         let data_end = data_start + page[data_start..].find("</script>").unwrap();
         let data = &page[data_start..data_end];
         assert!(!data.to_lowercase().contains("</script") && !data.contains("<!--"));
+        assert!(!data.contains('\u{2028}'));
+        // Every decision and rule field carries the text, escaped: question,
+        // choice, rationale, reason, four lists, entity names, the relation's
+        // title, the statement, plus the five fields of the flow.
+        let escaped = "<\\/script><script>alert(1)<\\/script><\\!-- x\\u2028y";
+        assert_eq!(data.matches(escaped).count(), 17);
         assert!(
             page.contains("<title>&lt;/title&gt;&lt;b&gt; · Arquitetura e fluxos · Xemnas</title>")
         );

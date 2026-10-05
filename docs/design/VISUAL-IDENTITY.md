@@ -312,9 +312,14 @@ com `crate::plain_rules!()`.
 **Página de arquitetura e fluxos.** Na Visão, o botão "Ver arquitetura e fluxos" grava
 `arquitetura-<projeto>.html` em `%TEMP%\xemnas` e abre no navegador. É um arquivo único,
 sem rede, que abre offline e pode ser enviado a alguém. Só tem arquitetura e fluxos: o
-resumo fica no app. `application::page::render` coloca o JSON da Visão (sem o resumo)
-num modelo fixo (`page/template.html`); a IA não escreve HTML, e o JSON é escapado para
-não fechar o `<script>` nem o `<title>`.
+resumo fica no app. O caso de uso `OverviewApi::page` lê a Visão gravada e as decisões
+em vigor e regras válidas (`page::assemble`: pergunta, escolha, motivo e sua primeira
+frase, premissas, consequências, quando reconsiderar, escopo, critérios de relevância do
+candidato, entidades por vínculo confirmado, a parte do mapa de cada uma e as relações
+entre decisões); sugestões de vínculo pendentes ficam de fora. `application::page::render`
+coloca esse JSON (sem o resumo) num modelo fixo (`page/template.html`); a IA não escreve
+HTML, o modelo põe todo texto com `textContent`, e o JSON é escapado para não fechar o
+`<script>` nem o `<title>`.
 
 - **Marca e fontes do app, embutidas.** O símbolo é o `xemnas-mark.svg` exato (ids com
   prefixo `xm-`, também como ícone da aba); o nome em Bricolage Grotesque, o texto em
@@ -326,17 +331,33 @@ não fechar o `<script>` nem o `<title>`.
   `prefers-reduced-motion` respeitado; tema escuro e claro com a mesma paleta do app.
 - **Arquitetura.** Mapa em colunas com curvas, um glifo por tipo de parte (banco, IA,
   fila, janela, agente...) deduzido do nome e das tecnologias, só decoração. Clicar
-  numa parte abre o inspetor flutuante (o que chama, quem a chama, onde aparece);
-  clicar numa seta mostra os passos que a formam. Pan, zoom, "Copiar Mermaid" e "Baixar
+  numa parte abre o inspetor flutuante (o que chama, quem a chama, onde aparece) com
+  **Por que é assim**: as decisões em vigor da parte e das partes dentro dela,
+  agrupadas pelo primeiro critério de relevância gravado (sem critério, lista simples;
+  nenhum tema inventado), pergunta como título e escolha embaixo; clicar abre o motivo,
+  premissas, consequências, quando reconsiderar, escopo, o que toca e as relações
+  ("substitui", "depende de", conflito na cor de perigo); abaixo, as regras que valem
+  ali. Clicar numa seta mostra os passos que a formam. Pan, zoom, "Copiar Mermaid" e "Baixar
   SVG". **Passo a passo** (a referência é o fluxo guiado do IcePanel): escolher um
   fluxo nas pílulas acima liga uma barra no pé com "Passo n de m", título e texto; a
   câmera voa até as duas partes do passo, o resto apaga, a seta ativa corre tracejada
-  com uma luz que a percorre. Setas do teclado, "Reproduzir" e Esc.
+  com uma luz que a percorre; cada decisão citada no passo aparece com a escolha e a
+  primeira frase do motivo ("— porque …"). Setas do teclado, "Reproduzir" e Esc.
 - **Fluxos.** Diagrama de sequência por fluxo (participantes com glifo, setas
   numeradas, meio em mono) e a linha do tempo dos passos, cada um com o componente, o
-  texto e as fontes (decisão em lavanda, regra em azul). Passo ativo sincronizado entre
+  texto e as fontes (decisão em lavanda com a escolha e "porque" e a primeira frase do
+  motivo, regra em azul). Passo ativo sincronizado entre
   o diagrama, a linha do tempo e a barra de progresso; "Ver no mapa" abre o mesmo passo
   no passo a passo da arquitetura.
+- **Decisões** (`#decisoes`, `#decisoes/<id>`, tecla 3). Vista calma "Por que é assim":
+  uma coluna por parte do mapa, com o glifo do mapa, e cada decisão em vigor num cartão
+  na parte principal que toca (código, pergunta, escolha, "porque …", "Também em …");
+  as que não tocam parte desenhada ficam em "Fora do mapa". Curvas entre cartões, por
+  trás deles: depende de (linha), substitui (tracejada), conflito (cor de perigo); ao
+  passar ou selecionar, o cartão e suas ligações acendem e o resto apaga. Filtros em
+  pílulas: Todas, Só conflitos, uma por parte. O cartão abre a mesma leitura do
+  inspetor numa gaveta de vidro fixa à direita; "Ver em Decisões" e as fontes dos
+  passos levam a ela.
 
 Para acrescentar uma tela: uma função de montagem em `BUILD` e uma entrada em `TABS` no
 modelo; os dados novos entram no JSON sem mudar a Rust além do tipo.
