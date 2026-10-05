@@ -64,7 +64,9 @@ pub(super) fn validate_proposal(
             ));
         }
     }
-    validate_diff_summary(&proposal.diff_summary, evidence.artifacts.len())?;
+    // The summary counts the artifacts the proposal cites
+    // (`reconcile_with_evidence`), not the whole capture.
+    validate_diff_summary(&proposal.diff_summary, proposal.evidence_refs.len())?;
 
     let mut canonical = proposal.signals.clone();
     canonical.sort_by(|left, right| left.as_str().cmp(right.as_str()));
