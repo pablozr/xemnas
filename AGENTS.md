@@ -10,6 +10,7 @@
 - Use commits pequenos, separados por assunto; evite acumular alterações para um commit grande.
 - Inclua todo código, testes e documentação pertinentes à alteração. Preserve mudanças anteriores do usuário.
 - Toda documentação fica em `docs/`, organizada por assunto; o mapa e a precedência entre documentos estão em `docs/README.md`. Consulte-o antes de criar um arquivo novo e mantenha-o atualizado.
+- Para localizar um fluxo, símbolo ou teste, consulte `docs/arquitetura/mapa-do-codigo.md`.
 - Pesquisas, planos de tela e ideias futuras ficam em `docs/pesquisas/`, com linha de status e entrada no índice da pasta. Ao implementar, leve o que for duradouro para `docs/design/VISUAL-IDENTITY.md`, o design system, `docs/arquitetura/` ou um ADR e apague a pesquisa no mesmo commit, junto com imagens e protótipos que só ela usava; só fica a que uma regra vigente cita como fundamento.
 - Versione `/docs/` junto com as alterações pertinentes. Ao fechar uma pendência registrada em `docs/roadmap/mvp/issues/`, anote no próprio ticket o que foi feito e o commit.
 - Registre limitações de validação quando o ambiente impedir algum check, na mensagem do commit e no resumo ao usuário.

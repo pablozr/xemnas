@@ -54,6 +54,9 @@ Nenhuma biblioteca de embeddings, banco vetorial ou GraphRAG entra no MVP. Essas
 
 ## Organização do repositório
 
+**Divisão-alvo conceitual, não árvore atual.** Para arquivos e símbolos existentes,
+consulte o [mapa do código](mapa-do-codigo.md).
+
 ```text
 /
 ├── Cargo.toml
@@ -524,7 +527,9 @@ Settings
 
 Primeiro design system GPUI necessário: typography, spacing, colors, button, icon button, text field, select, checkbox, tabs, list row, virtual list, modal, popover, tooltip, toast, progress, empty/error states e focus ring.
 
-A direção visual canônica e os tokens iniciais estão definidos em `../design/design-system-quiet-glass.md`, acompanhados por `../design/design-system-reference.png`. A implementação deve centralizar as receitas de glass e não espalhar cores ou efeitos diretamente pelas views.
+A regra visual canônica está em [VISUAL-IDENTITY.md](../design/VISUAL-IDENTITY.md).
+O design system original é referência histórica complementar. A implementação
+deve centralizar as receitas de glass e não espalhar cores ou efeitos pelas views.
 
 ## Fases de implementação
 
