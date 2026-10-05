@@ -431,10 +431,9 @@ Cada item passa primeiro por uma triagem local e gratuita (repete uma decisão j
 registrada: descarta; alta confiança, com fonte e sem parecido: aceita **só depois que a
 calibração mostrar que a confiança prevê o que você mantém** (ADR-0012), senão pergunta; vínculo ao
 Mapa por arquivo ou dependência: aceita; vínculo por menção no texto: pergunta, com o
-trecho; o resto pergunta). Só o que sobra vai ao juiz de IA, **em lote** e com limites para não gerar
-chamadas: no mínimo 3 itens (ou o mais antigo esperando 2 h), no máximo 12 por chamada,
-20 minutos entre chamadas e 6 chamadas por dia. A falha do provedor não perde nada: o
-item espera a próxima rodada. O que a IA não resolve fica na fila com o marcador
+trecho; o resto pergunta). Só o que sobra vai ao juiz de IA, **em lote** de até 30 itens,
+sem espera nem teto diário: a fila esvazia rodada após rodada (ADR-0012). A falha do
+provedor não perde nada: o item espera a próxima rodada, 20 minutos depois. O que a IA não resolve fica na fila com o marcador
 **"a IA deixou para você"** na linha e a frase do motivo no alto do detalhe.
 
 Aceitar passa pelo mesmo caminho da confirmação manual (prévia e adoção), sem pausa: o

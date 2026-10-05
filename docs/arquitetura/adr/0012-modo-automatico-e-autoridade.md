@@ -31,7 +31,9 @@ conviver sem que o sistema aceite normas com base em sinais fracos.
 
 - Sem provedor de IA ativo, o modo automático só descarta repetições; o resto espera a
   pessoa. Isso é intencional.
-- O custo de IA sobe um pouco no começo (mais itens vão ao juiz), dentro dos limites já
-  definidos: lotes de até 12 itens, 20 minutos entre chamadas, 6 chamadas por dia.
+- O custo de IA sobe no começo (mais itens vão ao juiz). Em 05/10/2026 o usuário tirou os
+  limites de ritmo: lotes de até 30 itens, sem espera para juntar itens, sem intervalo
+  entre chamadas que funcionam e sem teto diário; só uma falha do provedor pausa a próxima
+  chamada por 20 minutos. Quem liga o automático escolhe que a IA faça a revisão.
 - A confiabilidade do automático passa a ser medida: a calibração aparece no Diagnóstico
   e a taxa de desfazer no registro indica quando o juiz erra.

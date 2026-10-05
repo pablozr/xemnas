@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use application::adoption::{Adoption, AdoptionApi};
 use application::analysis::ExtractorFactory;
 use application::auto_approval::{
-    ApprovalStore, Approvals, ApprovalsApi, By, ItemKind, Mode, ReviewError, Verdict, CALLS_PER_DAY,
+    ApprovalStore, Approvals, ApprovalsApi, By, ItemKind, Mode, ReviewError, Verdict, BATCH,
 };
 use application::extract::{
     CandidateExtractor, CandidateProposal, DecisionCandidateRecord, DecisionEvidence, ExtractError,
@@ -329,7 +329,7 @@ fn the_rules_settle_the_plain_cases_and_one_batched_call_settles_the_rest() {
 }
 
 #[test]
-fn a_lone_ambiguous_item_waits_for_company_up_to_two_hours() {
+fn a_lone_ambiguous_item_is_asked_at_once() {
     let test = support::open("review-wait", &[PROJECT]);
     let judge = Judge::answering(r#"{"verdicts":[{"id":"I1","verdict":"accept","reason":"ok"}]}"#);
     let review = review_with(&test.store, consented(), &judge);
@@ -340,28 +340,23 @@ fn a_lone_ambiguous_item_waits_for_company_up_to_two_hours() {
             "pending",
             0.6,
             "qual formato exportar relatorios",
-            "2026-03-01T09:30:00Z",
+            "2026-03-01T09:59:00Z",
         )])
         .expect("pending");
-    let early = review
+    let pass = review
         .run_at(PROJECT, "2026-03-01T10:00:00Z")
-        .expect("early");
-    assert!(!early.asked, "30 minutes old and alone: it waits");
-    assert_eq!(judge.calls.load(Ordering::SeqCst), 0);
-    let late = review
-        .run_at(PROJECT, "2026-03-01T11:31:00Z")
-        .expect("late");
-    assert!(late.asked, "two hours old: it is asked");
+        .expect("pass");
+    assert!(pass.asked, "nothing waits for company");
     assert_eq!(status_of(&test.store, "lone"), CandidateStatus::Accepted);
 }
 
 #[test]
-fn calls_are_spaced_capped_per_day_and_not_retried_at_once_after_a_failure() {
+fn a_failed_call_pauses_the_next_and_working_calls_drain_the_backlog() {
     let test = support::open("review-limits", &[PROJECT]);
     let judge = Judge::failing();
     let review = review_with(&test.store, consented(), &judge);
     review.set_mode(Mode::Automatic).expect("on");
-    let rows: Vec<_> = (0..4)
+    let rows: Vec<_> = (0..2 * BATCH + 1)
         .map(|at| {
             old(
                 &format!("amb-{at}"),
@@ -377,30 +372,21 @@ fn calls_are_spaced_capped_per_day_and_not_retried_at_once_after_a_failure() {
         matches!(first, Err(ReviewError::Provider(_))),
         "the failure is reported"
     );
-    assert_eq!(judge.calls.load(Ordering::SeqCst), 1);
     let soon = review
         .run_at(PROJECT, "2026-03-01T10:10:00Z")
         .expect("soon");
-    assert!(!soon.asked, "20 minutes keep apart even after a failure");
+    assert!(!soon.asked, "a failed call pauses the next one");
     assert_eq!(judge.calls.load(Ordering::SeqCst), 1);
-    for at in 0..4 {
-        assert_eq!(
-            status_of(&test.store, &format!("amb-{at}")),
-            CandidateStatus::Pending
-        );
-    }
+    assert_eq!(status_of(&test.store, "amb-0"), CandidateStatus::Pending);
 
-    // The daily cap: six calls in the last day and nothing more is asked.
-    for hour in 0..CALLS_PER_DAY {
-        test.store
-            .record_review_call(&format!("2026-03-01T{:02}:00:00Z", 11 + hour), 3, true)
-            .expect("call");
+    // Back up: every pass asks at once, a batch each, until nothing waits.
+    *judge.answer.lock().expect("lock") = Ok(r#"{"verdicts":[]}"#.to_owned());
+    let later = "2026-03-01T10:30:00Z";
+    for _ in 0..3 {
+        assert!(review.run_at(PROJECT, later).expect("pass").asked);
     }
-    let capped = review
-        .run_at(PROJECT, "2026-03-01T20:00:00Z")
-        .expect("capped");
-    assert!(!capped.asked);
-    assert_eq!(judge.calls.load(Ordering::SeqCst), 1);
+    assert!(!review.run_at(PROJECT, later).expect("drained").asked);
+    assert_eq!(judge.calls.load(Ordering::SeqCst), 4);
 }
 
 #[test]
