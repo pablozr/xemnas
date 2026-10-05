@@ -69,6 +69,27 @@ impl CaptureProgressStore for SqliteStore {
                 .optional()
                 .map_err(|e| e.to_string())?
             };
+            // Bounded read: one indexed row, only the head of the prompt.
+            let title = tx
+                .query_row(
+                    "SELECT substr(content,1,400) FROM capture_artifacts
+                    WHERE capture_id=?1 AND kind='user_text' ORDER BY artifact_id LIMIT 1",
+                    params![capture_id],
+                    |r| r.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?
+                .and_then(|text| title_of(&text));
+            let adapter = tx
+                .query_row(
+                    "SELECT json_extract(provenance,'$.adapter') FROM capture_episode_sources
+                    WHERE capture_id=?1",
+                    params![capture_id],
+                    |r| r.get::<_, Option<String>>(0),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?
+                .flatten();
             let mut counts = CandidateCounts::default();
             let mut candidates = tx
                 .prepare(
@@ -120,6 +141,8 @@ impl CaptureProgressStore for SqliteStore {
                 project_id: project.into(),
                 capture_id,
                 received_at,
+                title,
+                adapter,
                 job_id,
                 attempts,
                 state: if reason == AssessmentReason::Skipped {
@@ -141,4 +164,14 @@ impl CaptureProgressStore for SqliteStore {
         tx.commit().map_err(|e| e.to_string())?;
         Ok(result)
     }
+}
+
+/// First non-empty line, ellipsized on a character boundary.
+fn title_of(text: &str) -> Option<String> {
+    let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
+    if line.chars().count() <= TITLE_MAX_CHARS {
+        return Some(line.to_owned());
+    }
+    let cut: String = line.chars().take(TITLE_MAX_CHARS - 1).collect();
+    Some(format!("{}…", cut.trim_end()))
 }

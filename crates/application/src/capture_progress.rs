@@ -51,6 +51,9 @@ pub struct CandidateCounts {
     pub snoozed: usize,
 }
 
+/// Longest title, ellipsis included.
+pub const TITLE_MAX_CHARS: usize = 90;
+
 /// One receipt and the result of its current attempt, read in one snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CaptureProgress {
@@ -60,6 +63,11 @@ pub struct CaptureProgress {
     pub capture_id: String,
     /// Receipt timestamp.
     pub received_at: String,
+    /// First line of the redacted user prompt, at most [`TITLE_MAX_CHARS`]
+    /// characters; `None` when the capture has no user text.
+    pub title: Option<String>,
+    /// Adapter that reported the capture (for example `claude-code`).
+    pub adapter: Option<String>,
     /// Current job identifier.
     pub job_id: Option<String>,
     /// Current attempt counter.

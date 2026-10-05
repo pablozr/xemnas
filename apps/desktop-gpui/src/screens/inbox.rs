@@ -1973,6 +1973,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             .flex()
             .flex_col()
             .gap(px(SpacingScale::S4))
+            .max_w(px(READING_WIDTH))
             .p(px(SpacingScale::S6))
             .child(section_label(&theme, t::progress_title()));
         if let Some(job) = self.progress_action_error.clone() {
@@ -2031,32 +2032,30 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                 t::progress_empty()
             });
         }
-        for (index, capture) in self.progress.iter().enumerate() {
-            let source = capture
-                .source
-                .as_deref()
-                .unwrap_or(t::progress_source_unknown());
+        panel = panel.child(
+            text_style(div(), TypeScale::META)
+                .text_color(theme.colors.text_secondary())
+                .child(capture_summary(&self.progress)),
+        );
+        for (index, capture) in self.progress.iter().take(PROGRESS_ROWS).enumerate() {
+            let (pill_color, pill_label) = capture_pill(&theme, capture);
+            let title = capture.title.as_deref().unwrap_or(t::capture_untitled());
             let mut row = div()
                 .flex()
                 .flex_col()
-                .gap(px(SpacingScale::S2))
-                .child(text_style(div(), TypeScale::BODY).child(progress_copy(capture)))
+                .gap(px(SpacingScale::S1))
                 .child(
-                    text_style(div(), TypeScale::META).child(t::capture_meta(
-                        &short_date(&capture.received_at),
-                        source,
-                        &capture
-                            .model
-                            .as_ref()
-                            .map(|model| format!(" · {model}"))
-                            .unwrap_or_default(),
-                        capture.attempts,
-                        capture.candidates.pending,
-                        capture.candidates.hidden,
-                        capture.candidates.adopted,
-                        capture.candidates.dismissed,
-                        capture.candidates.snoozed,
-                    )),
+                    div()
+                        .flex()
+                        .items_start()
+                        .gap(px(SpacingScale::S3))
+                        .child(word_wrapped(title, TypeScale::BODY, Some(2)))
+                        .child(status_pill(&theme, pill_color, pill_label)),
+                )
+                .child(
+                    text_style(div(), TypeScale::META)
+                        .text_color(theme.colors.text_muted())
+                        .child(capture_facts(capture)),
                 );
             if capture.can_retry {
                 if let Some(job) = capture.job_id.clone() {
@@ -2071,6 +2070,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                         .on_click(
                             cx.listener(move |this, _, _, cx| this.retry_progress(job.clone(), cx)),
                         )
+                        .self_start()
                         .child(t::reprocess()),
                     );
                 }
@@ -2603,6 +2603,75 @@ fn selected_change(
     }
 }
 
+/// Rows shown in the captures panel; the reader loads no more than this.
+const PROGRESS_ROWS: usize = 8;
+
+/// Pill colour and label of a capture's state.
+fn capture_pill(theme: &Theme, capture: &CaptureProgress) -> (gpui::Rgba, &'static str) {
+    let colors = &theme.colors;
+    let failed =
+        capture.state == CaptureState::Completed && capture.reason == AssessmentReason::Failed;
+    match capture.state {
+        CaptureState::Queued => (colors.status_info(), t::capture_state_queued()),
+        CaptureState::Running => (colors.accent_default(), t::capture_state_running()),
+        _ if failed => (colors.status_danger(), t::capture_state_failed()),
+        CaptureState::Completed => (colors.status_success(), t::capture_state_done()),
+        CaptureState::Failed => (colors.status_danger(), t::capture_state_failed()),
+        CaptureState::Skipped => (colors.status_warning(), t::capture_state_skipped()),
+        CaptureState::Cancelled => (colors.text_muted(), t::capture_state_cancelled()),
+        CaptureState::Unknown => (colors.text_muted(), t::capture_state_received()),
+    }
+}
+
+/// Joins the parts that exist; zero counts never appear.
+fn dot_joined(parts: Vec<String>) -> String {
+    parts.join(" · ")
+}
+
+/// One line over the loaded captures: only the non-zero parts.
+fn capture_summary(captures: &[CaptureProgress]) -> String {
+    let count = |keep: fn(&CaptureProgress) -> bool| captures.iter().filter(|c| keep(c)).count();
+    let waiting = count(|c| matches!(c.state, CaptureState::Queued | CaptureState::Running));
+    let analysed = count(|c| c.state == CaptureState::Completed);
+    let failed = count(|c| c.state == CaptureState::Failed);
+    let proposals: usize = captures.iter().map(|c| c.candidates.pending).sum();
+    let parts = [
+        (waiting, t::capture_waiting as fn(usize) -> String),
+        (analysed, t::capture_analysed),
+        (failed, t::capture_failed_count),
+        (proposals, t::capture_proposals),
+    ];
+    dot_joined(
+        parts
+            .into_iter()
+            .filter(|(n, _)| *n > 0)
+            .map(|(n, text)| text(n))
+            .collect(),
+    )
+}
+
+/// Time, adapter, model and the counts that are not zero.
+fn capture_facts(capture: &CaptureProgress) -> String {
+    let counts = &capture.candidates;
+    let mut parts = vec![relative(&capture.received_at)];
+    parts.extend(capture.adapter.clone());
+    parts.extend(capture.model.clone());
+    for (n, text) in [
+        (counts.pending, t::capture_proposals as fn(usize) -> String),
+        (counts.adopted, t::capture_confirmed),
+        (counts.dismissed, t::capture_rejected),
+        (counts.snoozed, t::capture_postponed),
+    ] {
+        if n > 0 {
+            parts.push(text(n));
+        }
+    }
+    if capture.attempts > 1 {
+        parts.push(t::capture_attempt(capture.attempts as usize));
+    }
+    dot_joined(parts)
+}
+
 pub(super) fn progress_copy(capture: &CaptureProgress) -> &'static str {
     match capture.state {
         CaptureState::Queued => t::progress_queued(),
@@ -2871,11 +2940,52 @@ mod tests {
     }
 
     #[test]
+    fn summary_and_facts_leave_out_zero_parts() {
+        let mut capture = CaptureProgress {
+            project_id: "p".into(),
+            capture_id: "c".into(),
+            received_at: "not a date".into(),
+            title: None,
+            adapter: Some("claude-code".into()),
+            job_id: None,
+            attempts: 1,
+            state: CaptureState::Queued,
+            reason: AssessmentReason::Unknown,
+            source: None,
+            model: None,
+            durable: 0,
+            detail: 0,
+            candidates: Default::default(),
+            can_retry: false,
+        };
+        assert_eq!(capture_facts(&capture), "not a date · claude-code");
+        assert_eq!(
+            capture_summary(&[capture.clone()]),
+            "1 waiting for analysis"
+        );
+        capture.state = CaptureState::Completed;
+        capture.attempts = 2;
+        capture.model = Some("m".into());
+        capture.candidates.pending = 2;
+        capture.candidates.adopted = 1;
+        assert_eq!(
+            capture_facts(&capture),
+            "not a date · claude-code · m · 2 proposals · 1 confirmed · attempt 2"
+        );
+        assert_eq!(
+            capture_summary(&[capture.clone(), capture]),
+            "2 analysed · 4 proposals"
+        );
+    }
+
+    #[test]
     fn capture_copy_does_not_reuse_old_assessment_while_running() {
         let mut capture = CaptureProgress {
             project_id: "p".into(),
             capture_id: "c".into(),
             received_at: "2026-10-04".into(),
+            title: None,
+            adapter: None,
             job_id: Some("j".into()),
             attempts: 2,
             state: CaptureState::Running,
