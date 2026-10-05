@@ -123,6 +123,12 @@ fn main() {
     };
 
     let mut jobs = application::jobs::Jobs::new(store.clone());
+    // Every job lane shares one cap on concurrent provider calls.
+    // "Análises em paralelo" is read once here; a change applies on restart.
+    let parallel = jobs
+        .parallel_analyses()
+        .unwrap_or(application::limiter::DEFAULT_PARALLEL);
+    let limiter = application::limiter::ProviderLimiter::new(usize::from(parallel));
 
     // AI settings: the profile file is seeded with the offline default so the
     // inbox keeps working without any provider (MVP-SPEC §7 line 404).
@@ -147,17 +153,17 @@ fn main() {
     // Capture analysis reloads the profile on every run, so a Settings change
     // takes effect without a restart. The offline fake stays the default; the
     // external provider is only reachable with consent and a stored key.
-    jobs.register(
-        application::jobs::ANALYZE_CAPTURE_KIND,
-        std::sync::Arc::new({
-            let analysis = application::analysis::AnalyzeCapture::new(
-                store.clone(),
-                settings.clone(),
-                ai_provider::ProviderFactory::new(chatgpt.clone()),
-            );
-            move |record: &application::jobs::JobRecord| analyze_capture(&analysis, record)
-        }),
-    );
+    let analyze = std::sync::Arc::new({
+        let analysis = application::analysis::AnalyzeCapture::new(
+            store.clone(),
+            settings.clone(),
+            ai_provider::ProviderFactory::new(chatgpt.clone()).with_limiter(limiter.clone()),
+        );
+        move |record: &application::jobs::JobRecord| analyze_capture(&analysis, record)
+    });
+    // Sessions and documentation share the handler but not the lane.
+    jobs.register(application::jobs::ANALYZE_CAPTURE_KIND, analyze.clone());
+    jobs.register(application::jobs::ANALYZE_DOCUMENT_KIND, analyze);
     // After an adoption, earlier decisions related to the new one are judged
     // by the configured provider and stored as suggestions.
     jobs.register(
@@ -166,13 +172,16 @@ fn main() {
             let finder = application::relation_suggestions::RelationFinder::new(
                 store.clone(),
                 settings.clone(),
-                ai_provider::ProviderFactory::new(chatgpt.clone()),
+                ai_provider::ProviderFactory::new(chatgpt.clone()).with_limiter(limiter.clone()),
             );
             move |record: &application::jobs::JobRecord| match finder.run(&record.payload) {
                 Ok(stored) => {
                     tracing::info!(stored, operation = "suggest_relations", "relations judged");
                     Ok(())
                 }
+                Err(application::relation_suggestions::RelationFindError::Deferred(
+                    retry_after,
+                )) => Err(application::jobs::JobFailure::Deferred { retry_after }),
                 Err(error) => {
                     tracing::warn!(error = %error, operation = "suggest_relations", "failed");
                     Ok(())
@@ -187,13 +196,16 @@ fn main() {
             let finder = application::claim_suggestions::ClaimFinder::new(
                 store.clone(),
                 settings.clone(),
-                ai_provider::ProviderFactory::new(chatgpt.clone()),
+                ai_provider::ProviderFactory::new(chatgpt.clone()).with_limiter(limiter.clone()),
             );
             move |record: &application::jobs::JobRecord| match finder.run(&record.payload) {
                 Ok(stored) => {
                     tracing::info!(stored, operation = "derive_claims", "context derived");
                     Ok(())
                 }
+                Err(application::claim_suggestions::ClaimSuggestionError::Deferred(
+                    retry_after,
+                )) => Err(application::jobs::JobFailure::Deferred { retry_after }),
                 Err(error) => {
                     tracing::warn!(error = %error, operation = "derive_claims", "failed");
                     Ok(())
@@ -230,7 +242,7 @@ fn main() {
                 operation = "recover_jobs",
                 "recovered interrupted jobs"
             );
-            Some(jobs.spawn_worker())
+            Some(jobs.spawn_workers(usize::from(parallel)))
         }
         Err(error) => {
             tracing::error!(
@@ -307,6 +319,8 @@ fn main() {
     if let Some(api) = api {
         api.shutdown();
     }
+    // Nobody waits on the provider limiter once the app is closing.
+    limiter.close();
     if let Some(worker) = worker {
         worker.stop();
         if let Err(error) = worker.join() {
@@ -759,7 +773,7 @@ fn analyze_capture(
                 operation = "analyze_capture",
                 "capture analysis failed"
             );
-            Err(application::jobs::JobFailure::Failed)
+            Err(error.job_failure())
         }
     }
 }

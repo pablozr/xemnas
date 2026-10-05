@@ -27,7 +27,7 @@ use crate::projects::ProjectRepository;
 use crate::relations::RelationStore;
 
 /// Job kind that derives context from one adopted decision.
-pub const CLAIM_JOB_KIND: &str = "derive_claims";
+pub const CLAIM_JOB_KIND: &str = crate::jobs::JobKind::DeriveClaims.as_str();
 /// Items proposed per decision, at most.
 pub const MAX_DERIVED: usize = 3;
 /// Longest statement accepted.
@@ -76,6 +76,8 @@ pub enum ClaimSuggestionError {
     Claim(String),
     /// The provider failed.
     Provider(String),
+    /// The provider asked for a pause or timed out; the job is requeued.
+    Deferred(Option<std::time::Duration>),
 }
 
 impl ClaimSuggestionError {
@@ -86,6 +88,7 @@ impl ClaimSuggestionError {
             Self::NotFound => "not_found",
             Self::Claim(_) => "claim",
             Self::Provider(_) => "provider",
+            Self::Deferred(_) => "deferred",
         }
     }
 }
@@ -97,6 +100,7 @@ impl std::fmt::Display for ClaimSuggestionError {
             Self::NotFound => formatter.write_str("sugestão não encontrada"),
             Self::Claim(detail) => write!(formatter, "regra: {detail}"),
             Self::Provider(detail) => write!(formatter, "provedor: {detail}"),
+            Self::Deferred(_) => formatter.write_str("provedor: pausa pedida"),
         }
     }
 }
@@ -478,7 +482,14 @@ where
         );
         let answer = model
             .complete(CLAIM_PROMPT, &user, "decision_context", &claim_schema())
-            .map_err(|error| ClaimSuggestionError::Provider(error.to_string()))?;
+            .map_err(|error| match error.job_failure() {
+                crate::jobs::JobFailure::Deferred { retry_after } => {
+                    ClaimSuggestionError::Deferred(retry_after)
+                }
+                crate::jobs::JobFailure::Failed => {
+                    ClaimSuggestionError::Provider(error.to_string())
+                }
+            })?;
         let existing: Vec<String> = self
             .store
             .project_claims(&decision.project_id)

@@ -253,7 +253,7 @@ fn exported_diagnostics_never_carry_content_markers() {
         );
     }
 
-    assert_eq!(document.schema.migrations_version, 22);
+    assert_eq!(document.schema.migrations_version, 24);
     assert!(
         json.contains("\"metrics\""),
         "the metrics section is part of the sanitized sweep"

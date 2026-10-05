@@ -1,7 +1,8 @@
 //! SQLite implementation of the Job persistence port.
 
 use application::jobs::{
-    JobError, JobRecord, JobRepository, JobState, RecoveryReport, INTERRUPTED_NON_IDEMPOTENT,
+    JobError, JobRecord, JobRepository, JobSettingsStore, JobState, RecoveryReport,
+    INTERRUPTED_NON_IDEMPOTENT,
 };
 use rusqlite::{params, params_from_iter, OptionalExtension, Row};
 
@@ -87,6 +88,33 @@ impl JobRepository for SqliteStore {
         Ok(records)
     }
 
+    fn counts(&self) -> Result<Vec<(String, JobState, usize)>, JobError> {
+        let connection = self.lock();
+        let mut statement = connection
+            .prepare("SELECT kind, state, COUNT(*) FROM jobs GROUP BY kind, state")
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(storage_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage_error)?;
+        rows.into_iter()
+            .map(|(kind, state, count)| {
+                Ok((
+                    kind,
+                    JobState::from_str(&state)?,
+                    usize::try_from(count).unwrap_or(0),
+                ))
+            })
+            .collect()
+    }
+
     fn claim_next(&self, registered_kinds: &[String]) -> Result<Option<JobRecord>, JobError> {
         if registered_kinds.is_empty() {
             return Ok(None);
@@ -94,10 +122,12 @@ impl JobRepository for SqliteStore {
         let placeholders = vec!["?"; registered_kinds.len()].join(", ");
         let sql = format!(
             "UPDATE jobs \
-             SET state = 'running', attempts = attempts + 1, updated_at = {TOUCH_UPDATED_AT} \
+             SET state = 'running', attempts = attempts + 1, run_after = NULL, \
+                 updated_at = {TOUCH_UPDATED_AT} \
              WHERE id = ( \
                  SELECT id FROM jobs \
                  WHERE state = 'queued' AND kind IN ({placeholders}) \
+                   AND (run_after IS NULL OR run_after <= {TOUCH_UPDATED_AT}) \
                  ORDER BY created_at ASC, id ASC LIMIT 1 \
              ) \
              RETURNING {JOB_COLUMNS}"
@@ -123,6 +153,28 @@ impl JobRepository for SqliteStore {
                      WHERE id = ?3 AND state = ?4"
                 ),
                 params![to.as_str(), last_error, id, from.as_str()],
+            )
+            .map_err(storage_error)?;
+        Ok(changed > 0)
+    }
+
+    fn defer(
+        &self,
+        id: &str,
+        delay: std::time::Duration,
+        last_error: &str,
+    ) -> Result<bool, JobError> {
+        let seconds = delay.as_secs().max(1);
+        let changed = self
+            .lock()
+            .execute(
+                &format!(
+                    "UPDATE jobs SET state = 'queued', last_error = ?1, \
+                     run_after = strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?2), \
+                     updated_at = {TOUCH_UPDATED_AT} \
+                     WHERE id = ?3 AND state = 'running'"
+                ),
+                params![last_error, format!("+{seconds} seconds"), id],
             )
             .map_err(storage_error)?;
         Ok(changed > 0)
@@ -156,5 +208,43 @@ impl JobRepository for SqliteStore {
 
         transaction.commit().map_err(storage_error)?;
         Ok(RecoveryReport { requeued, failed })
+    }
+}
+
+impl JobSettingsStore for SqliteStore {
+    fn parallel_analyses(&self) -> Result<Option<u8>, JobError> {
+        let value: Option<i64> = self
+            .lock()
+            .query_row(
+                "SELECT parallel_analyses FROM job_settings WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(storage_error)?;
+        Ok(value.and_then(|value| u8::try_from(value).ok()))
+    }
+
+    fn set_parallel_analyses(&self, value: u8) -> Result<(), JobError> {
+        self.lock()
+            .execute(
+                &format!(
+                    "INSERT INTO job_settings (id, parallel_analyses, updated_at) \
+                     VALUES (1, ?1, {TOUCH_UPDATED_AT}) \
+                     ON CONFLICT(id) DO UPDATE SET \
+                     parallel_analyses = excluded.parallel_analyses, \
+                     updated_at = excluded.updated_at"
+                ),
+                [i64::from(value)],
+            )
+            .map(|_| ())
+            .map_err(|error| match error {
+                rusqlite::Error::SqliteFailure(failure, _)
+                    if failure.code == rusqlite::ErrorCode::ConstraintViolation =>
+                {
+                    JobError::InvalidSetting
+                }
+                other => storage_error(other),
+            })
     }
 }

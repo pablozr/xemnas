@@ -27,6 +27,59 @@ pendente fica em `docs/pesquisas/listas-e-grafos-em-escala.md`.
    `%TEMP%\xemnas-perf.log`) e `XEMNAS_DEMO_SCALE=N` (semeia N decisões, N/4
    componentes, N/3 regras). Dizer o número e dizer o que não foi medido.
 
+## Fila de jobs
+
+Os jobs ficam em filas por assunto (`Lane` em `application::jobs`), cada uma
+com seus próprios workers, para que importar uma documentação grande nunca
+atrase a análise da sessão que o desenvolvedor acabou de encerrar.
+
+| Fila | Tipos | Workers |
+| --- | --- | --- |
+| `now` | `analyze_capture` (capturas de sessões de agentes) | até 2 |
+| `documents` | `analyze_document` (documentação importada) | até 2 |
+| `suggestions` | `suggest_relations`, `derive_claims` | 1 |
+
+- O tipo diz a fila: `JobKind::lane` é um `match` exaustivo, então um tipo
+  novo não compila sem fila. Cada worker só reivindica tipos da sua fila.
+- A reivindicação é um único `UPDATE … RETURNING` (atômico com WAL e várias
+  conexões; `concurrent_claims_never_hand_out_a_job_twice`).
+- A recuperação de jobs interrompidos roda antes de qualquer worker; ao sair,
+  `WorkerHandle::stop` + `join` param todos e quem estava no meio de um job
+  termina-o antes.
+- Contagens por fila (na fila, executando, falhou) vêm de uma consulta
+  agrupada (`Jobs::lane_summaries`), nunca de carregar as linhas.
+
+### Limite de chamadas ao provedor
+
+- Um `ProviderLimiter` (`application::limiter`) é compartilhado por todas as
+  filas: no máximo N chamadas ao provedor de IA ao mesmo tempo (padrão 2).
+  Chamadas de um worker da fila `now` passam à frente das que esperam nas
+  outras filas. Só os handlers de jobs usam o limitador
+  (`ProviderFactory::with_limiter`); Visão geral, revisão e aprovação
+  automática, disparadas pela pessoa, não esperam por ele.
+- HTTP 429 vira `ExtractError::RateLimited` com o `Retry-After` (em segundos,
+  até 15 min), sem nova tentativa dentro da chamada. O limitador pausa todo
+  mundo por esse tempo (20 s sem `Retry-After`); quem chega na pausa recebe o
+  tempo restante e devolve o job à fila em vez de segurar um worker.
+- Tempo esgotado, falha de conexão e 5xx seguem com três tentativas dentro da
+  chamada; esgotadas, viram `ExtractError::Unavailable`. Nos dois casos o job
+  volta para `queued` com `run_after` (`Retry-After`, ou 15 s · 2^(tentativas-1)
+  com ±25 % de variação, até 10 min) e não registra análise falha. Depois de 8
+  tentativas ele fica `failed` com mensagem própria e pode ser reprocessado:
+  nenhum job se perde. O limite de uso esgotado do plano ChatGPT continua sendo
+  erro com a mensagem do plano, porque esperar não resolve.
+- Ao fechar o app, `limiter.close()` libera quem espera vaga (o job volta à
+  fila) antes de `stop`/`join` dos workers.
+- **Análises em paralelo** (1 a 4, padrão 2) fica na tabela `job_settings`
+  (uma linha, como `approval_settings`), lida na partida: define o N do
+  limitador e os workers por fila (`Lane::workers`: até 2 em `now` e
+  `documents`, 1 em `suggestions`). Mudar vale no próximo início. Não fica no
+  perfil de IA porque o formulário de IA regrava o perfil inteiro e o
+  consentimento é amarrado a ele; `context_settings` é por projeto.
+- Ajustes → Diagnóstico mostra o cartão "Filas de análise": contagens por
+  fila e a escolha de análises em paralelo (`segmented`), com o aviso de que
+  vale no próximo início.
+
 ## Orçamentos
 
 | Coisa | Valor | Onde |

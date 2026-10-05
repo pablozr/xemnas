@@ -28,8 +28,8 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::{
-    build_user_content, output_schema, parse_model_output, Attempt, KeyringSecretStore,
-    RetryPolicy, MAX_RESPONSE_BYTES, SYSTEM_PROMPT,
+    build_user_content, output_schema, parse_model_output, retry_after, Attempt,
+    KeyringSecretStore, RetryPolicy, MAX_RESPONSE_BYTES, SYSTEM_PROMPT,
 };
 
 /// OpenID issuer of Sign in with ChatGPT.
@@ -726,6 +726,7 @@ impl ChatGptExtractor {
             if status.as_u16() == 401 {
                 self.session.invalidate();
             }
+            let wait = retry_after(response.headers());
             let code = response
                 .json::<serde_json::Value>()
                 .ok()
@@ -738,6 +739,10 @@ impl ChatGptExtractor {
                 .unwrap_or_default();
             if status.as_u16() == 503 || code == "subscription_sharing_usage_unavailable" {
                 return Attempt::Transient;
+            }
+            // A spent plan quota is not a pause: it keeps its own message.
+            if status.as_u16() == 429 && code != "subscription_sharing_usage_limit_exceeded" {
+                return Attempt::RateLimited(wait);
             }
             return Attempt::Fatal(if code.is_empty() {
                 ExtractError::Extractor(format!("o provedor respondeu {}", status.as_u16()))
@@ -828,11 +833,12 @@ impl ChatGptExtractor {
             match self.attempt(&body) {
                 Attempt::Success(text) => return Ok(text),
                 Attempt::Fatal(error) => return Err(error),
+                Attempt::RateLimited(retry_after) => {
+                    return Err(ExtractError::RateLimited { retry_after })
+                }
                 Attempt::Transient => {
                     if attempt >= self.retry.max_attempts {
-                        return Err(ExtractError::Extractor(format!(
-                            "o provedor falhou após {attempt} tentativa(s)"
-                        )));
+                        return Err(ExtractError::Unavailable { attempts: attempt });
                     }
                     std::thread::sleep(self.retry.delay_for(attempt));
                     attempt += 1;

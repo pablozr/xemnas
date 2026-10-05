@@ -17,8 +17,8 @@ use application::profile::{consent_status, AiProfile, ProfileKind, OPENCODE_GO_E
 use serde_json::json;
 
 use crate::{
-    build_user_content, output_schema, parse_model_output, sanitized_transport_error, Attempt,
-    RetryPolicy, MAX_RESPONSE_BYTES, SYSTEM_PROMPT,
+    build_user_content, output_schema, parse_model_output, retry_after, sanitized_transport_error,
+    Attempt, RetryPolicy, MAX_RESPONSE_BYTES, SYSTEM_PROMPT,
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -210,7 +210,10 @@ impl OpenCodeExtractor {
         };
         let status = response.status();
         if !status.is_success() {
-            if status.as_u16() == 429 || status.is_server_error() {
+            if status.as_u16() == 429 {
+                return Attempt::RateLimited(retry_after(response.headers()));
+            }
+            if status.is_server_error() {
                 return Attempt::Transient;
             }
             return Attempt::Fatal(ExtractError::Extractor(match status.as_u16() {
@@ -262,11 +265,12 @@ impl OpenCodeExtractor {
             match self.attempt(&url, &body) {
                 Attempt::Success(text) => return Ok(text),
                 Attempt::Fatal(error) => return Err(error),
+                Attempt::RateLimited(retry_after) => {
+                    return Err(ExtractError::RateLimited { retry_after })
+                }
                 Attempt::Transient => {
                     if attempt >= self.retry.max_attempts {
-                        return Err(ExtractError::Extractor(format!(
-                            "o OpenCode falhou após {attempt} tentativa(s)"
-                        )));
+                        return Err(ExtractError::Unavailable { attempts: attempt });
                     }
                     (self.sleep)(self.retry.delay_for(attempt));
                     attempt += 1;

@@ -170,7 +170,8 @@ fn upgrade_reapplies_the_missing_migrations() {
         let connection = Connection::open(&database).expect("open raw connection");
         connection
             .execute_batch(
-                "DROP TABLE auto_review_calls; \
+                "DROP TABLE job_settings; \
+                 DROP TABLE auto_review_calls; \
                  DROP TABLE auto_reviews; \
                  DROP TABLE approval_settings; \
                  DROP TABLE claim_suggestions; \
@@ -194,6 +195,7 @@ fn upgrade_reapplies_the_missing_migrations() {
                  DROP TABLE decision_candidates; \
                  DROP TABLE assessments; \
                  DROP TABLE adapter_checkpoints; \
+                 ALTER TABLE jobs DROP COLUMN run_after; \
                  DELETE FROM schema_migrations WHERE version >= 4;",
             )
             .expect("simulate an older version");
@@ -216,10 +218,10 @@ fn upgrade_reapplies_the_missing_migrations() {
         )
         .expect("count distinct migrations");
     assert_eq!(
-        versions, 21,
-        "0004, 0005, 0006 and 0008 to 0022 must be re-applied on upgrade"
+        versions, 23,
+        "0004, 0005, 0006 and 0008 to 0024 must be re-applied on upgrade"
     );
-    assert_eq!(distinct, 21);
+    assert_eq!(distinct, 23);
 
     let _ = std::fs::remove_dir_all(&root);
 }

@@ -367,7 +367,7 @@ fn worker_processes_enqueued_job_and_stops_cleanly() {
         }),
     );
 
-    let handle = jobs.spawn_worker();
+    let handle = jobs.spawn_workers(1);
     let job = jobs.enqueue("analysis", "{}", true).expect("enqueue");
 
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -430,6 +430,122 @@ fn reprocess_requeues_a_failed_job_and_clears_the_diagnostic() {
         })
     ));
     assert!(matches!(jobs.reprocess("missing"), Err(JobError::NotFound)));
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn concurrent_claims_never_hand_out_a_job_twice() {
+    let (store, root) = store_in("concurrent-claims");
+    const JOBS: usize = 200;
+    for index in 0..JOBS {
+        store
+            .insert(&record(
+                &format!("job-{index:03}"),
+                "analysis",
+                JobState::Queued,
+                true,
+                &format!("2026-01-01T00:00:{:02}Z", index % 60),
+            ))
+            .expect("insert queued job");
+    }
+
+    // Half of the workers share the store handle, the other half open their
+    // own connection to the same file, as a second process would.
+    let kinds = vec!["analysis".to_string()];
+    let workers: Vec<_> = (0..8)
+        .map(|worker| {
+            let store = if worker % 2 == 0 {
+                store.clone()
+            } else {
+                SqliteStore::open(root.join("app.db")).expect("open a second connection")
+            };
+            let kinds = kinds.clone();
+            std::thread::spawn(move || {
+                let mut claimed = Vec::new();
+                while let Some(job) = store.claim_next(&kinds).expect("claim") {
+                    assert!(store
+                        .transition(&job.id, JobState::Running, JobState::Completed, None)
+                        .expect("complete"));
+                    claimed.push(job.id);
+                }
+                claimed
+            })
+        })
+        .collect();
+
+    let mut claimed: Vec<String> = workers
+        .into_iter()
+        .flat_map(|worker| worker.join().expect("worker thread"))
+        .collect();
+    assert_eq!(claimed.len(), JOBS, "every job is claimed exactly once");
+    claimed.sort();
+    claimed.dedup();
+    assert_eq!(claimed.len(), JOBS, "no job was claimed twice");
+    assert!(store
+        .list()
+        .expect("list")
+        .iter()
+        .all(|job| job.state == JobState::Completed && job.attempts == 1));
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_deferred_job_is_not_claimable_until_its_time() {
+    let (store, root) = store_in("defer");
+    store
+        .insert(&record(
+            "later",
+            "analysis",
+            JobState::Queued,
+            true,
+            "2026-01-01T00:00:00Z",
+        ))
+        .expect("insert");
+    let kinds = vec!["analysis".to_string()];
+    store.claim_next(&kinds).expect("claim").expect("claimable");
+    assert!(store
+        .defer("later", Duration::from_secs(600), "pausa")
+        .expect("defer"));
+    let row = store.get("later").expect("get").expect("row");
+    assert_eq!(row.state, JobState::Queued);
+    assert_eq!(row.last_error.as_deref(), Some("pausa"));
+    assert!(
+        store.claim_next(&kinds).expect("claim").is_none(),
+        "a deferred job waits for its time"
+    );
+    assert!(
+        !store
+            .defer("later", Duration::from_secs(1), "pausa")
+            .expect("defer"),
+        "only a running job can be deferred"
+    );
+
+    let connection = rusqlite::Connection::open(root.join("app.db")).expect("raw");
+    connection
+        .execute(
+            "UPDATE jobs SET run_after = '2000-01-01T00:00:00Z' WHERE id = 'later'",
+            [],
+        )
+        .expect("move the time back");
+    let claimed = store.claim_next(&kinds).expect("claim").expect("due again");
+    assert_eq!(claimed.attempts, 2, "the deferral kept the attempt count");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn parallel_analyses_defaults_to_two_and_persists_within_range() {
+    let (store, root) = store_in("parallel");
+    let jobs = Jobs::new(store.clone());
+    assert_eq!(jobs.parallel_analyses().expect("read"), 2);
+    jobs.set_parallel_analyses(4).expect("save");
+    let reopened = Jobs::new(SqliteStore::open(root.join("app.db")).expect("reopen"));
+    assert_eq!(reopened.parallel_analyses().expect("read"), 4);
+    assert_eq!(jobs.set_parallel_analyses(0), Err(JobError::InvalidSetting));
+    assert_eq!(jobs.set_parallel_analyses(5), Err(JobError::InvalidSetting));
+    assert_eq!(jobs.parallel_analyses().expect("read"), 4);
 
     let _ = std::fs::remove_dir_all(&root);
 }
