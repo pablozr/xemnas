@@ -19,7 +19,7 @@ Control bloqueia o hash (o comportamento é o mesmo; só o hash muda) e imprime 
 
 | Portão | Onde | Mede | Piso ou teto | Linha de base (05/10/2026) |
 | --- | --- | --- | --- | --- |
-| Seleção de contexto | `storage-sqlite/tests/context_corpus.rs` (`context_quality_gate`) | precisão, cobertura e casos negativos contaminados do bloco entregue; p95 de `build_pack` | precisão ≥ 0,65; cobertura ≥ 0,94; contaminados ≤ 2; p95 ≤ 20 ms | 0,65 (17/26); 0,94 (17/18); 2 de 15; 1,0 a 1,7 ms |
+| Seleção de contexto | `storage-sqlite/tests/context_corpus.rs` (`context_quality_gate`), corpus v3: 29 famílias, 87 consultas, um terço em holdout | precisão, cobertura e casos negativos contaminados do bloco entregue, no geral e por divisão; p95 de `build_pack` | precisão ≥ 0,22; cobertura ≥ 0,75; contaminados ≤ 9; p95 ≤ 20 ms | 0,23 (50/222); 0,76 (50/66); 9 de 24; holdout 0,22 / 0,67 / 4 de 9; 1 ms |
 | Ligações por menção | `application/src/graph/mention.rs` (`mention_quality_gate`, `mention_matching_scales_to_a_large_project`) | precisão e cobertura em textos rotulados (com negativos de mesmo vocabulário); tempo para 2.000 decisões × 60 partes | precisão ≥ 0,92; cobertura = 1,0; ≤ 3 s | 0,93 (13/14); 1,0; 1,5 s |
 | Revisão automática | `storage-sqlite/tests/auto_approval.rs` | regras só aceitam com confiança calibrada; uma chamada por lote; limites diários; desfazer | todos passam | 8/8 |
 | Triagem automática | `application/src/auto_approval.rs` (testes de unidade) | repetição descartada, sem calibração nada aceito pelas regras | todos passam | 9/9 |
@@ -41,7 +41,10 @@ Control bloqueia o hash (o comportamento é o mesmo; só o hash muda) e imprime 
 
 ## Próximo alvo
 
-A precisão do contexto entregue é 0,65: cerca de um terço do bloco é ruído. Esse é o
+Com o corpus v3 (distratores do mesmo vocabulário, consultas em inglês e tarefas guiadas
+por arquivo), a precisão do contexto entregue é 0,23: três quartos do bloco são ruído. O
+corpus v2, menor, mostrava 0,65 e escondia o problema. O plano está em
+[precisão do contexto](../pesquisas/precisao-do-contexto.md). Esse é o
 ganho de assertividade mais valioso hoje. Melhorias candidatas, medidas por este portão:
 abster-se quando a relevância é fraca, priorizar o que o grafo liga aos arquivos da
 tarefa e penalizar correspondências lexicais soltas.

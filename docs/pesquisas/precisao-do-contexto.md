@@ -3,7 +3,7 @@
 **Data:** 05/10/2026.
 **Pergunta:** como reduzir o ruído do bloco `<xemnas-context>` sem perder o que o agente
 precisa, com custo baixo e medindo cada passo?
-**Status:** Aberta. Pesquisa e plano; nada implementado. A medição usa o portão de
+**Status:** Em implementação. Passo 1 (corpus v3) feito: linha de base 0,23 de precisão. A medição usa o portão de
 [qualidade do núcleo](../arquitetura/qualidade-do-nucleo.md).
 
 Complementa [medir a eficácia do contexto](medir-eficacia-do-contexto.md) (se o contexto

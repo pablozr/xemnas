@@ -1,4 +1,4 @@
-//! Synthetic retrieval baseline, not a quality gate or a human evaluation.
+//! Synthetic retrieval corpus (v3) with a quality gate; not a human evaluation.
 //! Entry points: ContextPacks::build_pack and render_compact (not prepare).
 
 #[path = "fixtures/context_corpus.rs"]
@@ -69,6 +69,120 @@ impl Fixture {
                 "p1",
                 "Qual banco de persistência?",
                 "Postgres",
+            ),
+            (
+                "outbox",
+                "p1",
+                "Como o hook entrega o turno ao app?",
+                "Gravar um arquivo JSON na pasta outbox quando o app estiver fechado",
+            ),
+            (
+                "transaction",
+                "p1",
+                "Como confirmar candidatos sem perder edições?",
+                "Uma transação com validação de versão",
+            ),
+            (
+                "retry",
+                "p1",
+                "Quando reenviar uma captura que falhou?",
+                "Só falhas transitórias, mantendo a chave de idempotência",
+            ),
+            (
+                "keychain",
+                "p1",
+                "Onde guardar a chave do provedor de IA?",
+                "No cofre de credenciais do sistema operacional",
+            ),
+            (
+                "migrations",
+                "p1",
+                "Como evoluir o esquema do banco?",
+                "Migrações só para frente, numeradas, sem editar as antigas",
+            ),
+            (
+                "redaction",
+                "p1",
+                "Como evitar que segredos cheguem ao provedor?",
+                "Redigir padrões conhecidos de segredo antes de qualquer envio",
+            ),
+            (
+                "budget",
+                "p1",
+                "Quanto contexto entregar ao agente?",
+                "Um bloco de até 300 tokens por tarefa",
+            ),
+            (
+                "virtual-list",
+                "p1",
+                "Como desenhar listas com milhares de itens?",
+                "Lista virtual do GPUI, desenhando só o que está na tela",
+            ),
+            (
+                "timestamps",
+                "p1",
+                "Em que formato guardar datas?",
+                "RFC 3339 em UTC",
+            ),
+            (
+                "release",
+                "p1",
+                "Como distribuir o app no Windows?",
+                "ZIP com scripts de instalação, sem instalador MSI",
+            ),
+            (
+                "mcp",
+                "p1",
+                "Como o agente consulta decisões sob demanda?",
+                "Servidor MCP somente leitura via stdio",
+            ),
+            (
+                "lanes",
+                "p1",
+                "Como evitar que documentos atrasem as capturas?",
+                "Filas separadas por tipo de job, capturas primeiro",
+            ),
+            (
+                "rate-limit",
+                "p1",
+                "O que fazer quando o provedor responde 429?",
+                "Pausar as chamadas pelo Retry-After e devolver o job à fila",
+            ),
+            (
+                "ci",
+                "p1",
+                "O que o CI precisa verificar?",
+                "fmt, clippy com -D warnings e os testes do workspace",
+            ),
+            (
+                "fonts",
+                "p1",
+                "Que fonte usar nos títulos?",
+                "Bricolage Grotesque embutida no app",
+            ),
+            (
+                "accent",
+                "p1",
+                "Qual cor de destaque usar na interface?",
+                "Lavanda só para seleção, foco e ação primária",
+            ),
+            (
+                "cache-invalidation",
+                "p1",
+                "Quando invalidar o cache semântico das observações?",
+                "Quando a fonte muda de hash",
+            ),
+            (
+                "log-retention",
+                "p1",
+                "Por quanto tempo manter os logs?",
+                "Sete dias, sem conteúdo de conversas",
+            ),
+            (
+                "pagination",
+                "p1",
+                "Como paginar respostas da API local?",
+                "Cursor opaco por data de criação e id",
             ),
         ] {
             let id = support::decision(&test.store, project, alias, question, choice);
@@ -154,6 +268,37 @@ impl Fixture {
                 entity_id: entity,
             })
             .expect("seed file link");
+        for (name, pattern, linked) in [
+            ("outbox", "adapters/outbox/**", &["outbox"][..]),
+            // Coarse on purpose: a whole-app component links unrelated UI
+            // decisions, which a file-led task must not all receive.
+            (
+                "desktop-ui",
+                "apps/desktop-gpui/**",
+                &["virtual-list", "fonts", "accent"][..],
+            ),
+        ] {
+            let component = graph
+                .create_entity(NewEntity {
+                    project_id: "p1".into(),
+                    kind: Some(EntityKind::Component),
+                    name: name.into(),
+                    patterns: vec![pattern.into()],
+                    ..NewEntity::default()
+                })
+                .expect("seed component")
+                .entity_id;
+            for alias in linked {
+                graph
+                    .link(LinkRequest {
+                        kind: EdgeKind::Affects,
+                        source_kind: NodeKind::Decision,
+                        source_id: aliases[*alias].clone(),
+                        entity_id: component.clone(),
+                    })
+                    .expect("seed file link");
+            }
+        }
         Self { test, aliases }
     }
 
@@ -189,23 +334,23 @@ fn selected(fixture: &Fixture, pack: &ContextPack) -> BTreeSet<String> {
 fn corpus_integrity_budgets_and_isolation() {
     let fixture = Fixture::seed("corpus-integrity");
     let packs = ContextPacks::new(fixture.test.store.clone());
-    assert_eq!(corpus::FAMILIES.len(), 10);
-    assert_eq!(corpus::FAMILIES.iter().filter(|f| f.positive).count(), 5);
+    assert_eq!(corpus::FAMILIES.len(), 29);
+    assert_eq!(corpus::FAMILIES.iter().filter(|f| f.positive).count(), 21);
     assert_eq!(
         corpus::FAMILIES
             .iter()
             .filter(|f| f.holdout && f.positive)
             .count(),
-        2
+        9
     );
     assert_eq!(
         corpus::FAMILIES
             .iter()
             .filter(|f| f.holdout && !f.positive)
             .count(),
-        2
+        3
     );
-    assert_eq!(fixture.aliases.len(), 10);
+    assert_eq!(fixture.aliases.len(), 29);
     let mut queries = BTreeSet::new();
     let mut names = BTreeSet::new();
     for family in corpus::FAMILIES {
@@ -246,7 +391,7 @@ fn corpus_integrity_budgets_and_isolation() {
             assert!(small.used_chars <= 700);
         }
     }
-    assert_eq!(queries.len(), 30);
+    assert_eq!(queries.len(), corpus::FAMILIES.len() * 3);
 }
 
 #[derive(Default)]
@@ -381,11 +526,13 @@ fn report_context_corpus() {
             }
         }
     }
-    assert_eq!(latency.len(), 300);
+    let samples = latency.len();
+    assert_eq!(samples, corpus::FAMILIES.len() * 3 * 10);
     latency.sort_unstable();
     println!(
-        "latency_build_pack_only samples=300 warmups=30 p50_us={} p95_us={}",
-        latency[149], latency[284]
+        "latency_build_pack_only samples={samples} p50_us={} p95_us={}",
+        latency[samples / 2],
+        latency[samples * 95 / 100]
     );
     for (stage, t) in [("pack", pack_totals), ("compact300", compact_totals)] {
         println!(
@@ -408,12 +555,14 @@ fn report_context_corpus() {
     }
 }
 
-/// Floors of the context selection on this corpus (the baseline measured on
-/// 2026-10-05). The gate fails on a regression; raise a floor whenever an
-/// improvement lands, so the next change cannot quietly give it back.
-const PRECISION_FLOOR: f64 = 0.65;
-const RECALL_FLOOR: f64 = 0.94;
-const CONTAMINATED_CASES_CEILING: usize = 2;
+/// Floors of the context selection on corpus v3 (baseline measured on
+/// 2026-10-05, before any precision work: OR match, no relevance cut). The
+/// gate fails on a regression; raise a floor whenever an improvement lands,
+/// so the next change cannot quietly give it back. Improvements are judged
+/// on the holdout families, which no tuning may look at.
+const PRECISION_FLOOR: f64 = 0.22;
+const RECALL_FLOOR: f64 = 0.75;
+const CONTAMINATED_CASES_CEILING: usize = 9;
 /// Generous on purpose: this runs on a developer's machine beside other work.
 const BUILD_PACK_P95_CEILING_US: u128 = 20_000;
 
@@ -422,6 +571,8 @@ fn context_quality_gate() {
     let fixture = Fixture::seed("corpus-gate");
     let packs = ContextPacks::new(fixture.test.store.clone());
     let mut totals = Totals::default();
+    let mut development = Totals::default();
+    let mut holdout = Totals::default();
     let mut latency = Vec::new();
     for family in corpus::FAMILIES {
         for (variant, task) in family.queries.iter().enumerate() {
@@ -432,15 +583,22 @@ fn context_quality_gate() {
                 .build_pack(request(family, task, 50_000))
                 .expect("reference");
             let upstream = selected(&fixture, &reference);
+            let tokens = pack.used_chars.div_ceil(4);
             score(
                 "gate",
                 family,
                 variant,
                 &items,
                 &upstream,
-                pack.used_chars.div_ceil(4),
+                tokens,
                 &mut totals,
             );
+            let split = if family.holdout {
+                &mut holdout
+            } else {
+                &mut development
+            };
+            score("split", family, variant, &items, &upstream, tokens, split);
             for _ in 0..3 {
                 let start = Instant::now();
                 packs.build_pack(req.clone()).expect("latency pack");
@@ -456,6 +614,15 @@ fn context_quality_gate() {
         "gate precision={precision:.4} recall={recall:.4} contaminated={}/{} p95_us={p95}",
         totals.contaminated, totals.negative_cases
     );
+    for (name, split) in [("development", &development), ("holdout", &holdout)] {
+        println!(
+            "gate {name} precision={} recall={} contaminated={}/{}",
+            ratio(split.tp, split.retrieved),
+            ratio(split.tp, split.expected),
+            split.contaminated,
+            split.negative_cases
+        );
+    }
     assert!(
         precision >= PRECISION_FLOOR,
         "context precision fell to {precision:.4} (floor {PRECISION_FLOOR})"
