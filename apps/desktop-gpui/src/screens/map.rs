@@ -33,8 +33,9 @@ use gpui::{
 };
 
 use super::context::OpenDecision;
-use super::format::{calendar_date, clipped, clock, day_heading, plural, short_date};
+use super::format::{calendar_date, clipped, clock, day_heading, short_date};
 use super::graph::{GraphCanvas, GraphEvent};
+use crate::i18n::map as t;
 use crate::ui::controls::{action_button, icon_action, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::list::{reveal_footer, scroll_thumb, ScrollMemory};
@@ -97,7 +98,7 @@ const PICK_LIMIT: usize = 100;
 const RECENT_FILES: usize = 6;
 /// Days an entity counts as recently active on the overview.
 const RECENT_DAYS: i64 = 14;
-/// Rows a long list builds first, and how many more "Mostrar mais" adds
+/// Rows a long list builds first, and how many more "Show more" adds
 /// (twice this).
 const LIST_PAGE: usize = 12;
 /// Parts a component block lists before counting the rest.
@@ -201,7 +202,7 @@ pub struct MapScreen<S: MapStores> {
     notice: Option<String>,
     focus: BTreeMap<String, FocusHandle>,
     /// How many rows of each long list are shown (by list key); the rest
-    /// waits behind "Mostrar mais". Every scroll step rebuilds the view, so
+    /// waits behind "Show more". Every scroll step rebuilds the view, so
     /// what is built is what scrolls: a long list is built a page at a time.
     shown: BTreeMap<String, usize>,
     /// The index's rows (views, headings, entities) and the virtual list
@@ -248,12 +249,12 @@ impl<S: MapStores> MapScreen<S> {
                 field
             })
         };
-        let name = field(cx, "Ex.: storage-sqlite");
-        let patterns = field(cx, "Ex.: crates/storage-sqlite/**, migrations/*.sql");
-        let aliases = field(cx, "Ex.: armazenamento, banco");
-        let description = field(cx, "Uma frase sobre o que é");
-        let path = field(cx, "Ex.: crates/storage-sqlite/src/store.rs");
-        let filter = field(cx, "Filtrar");
+        let name = field(cx, t::name_placeholder());
+        let patterns = field(cx, t::patterns_placeholder());
+        let aliases = field(cx, t::aliases_placeholder());
+        let description = field(cx, t::description_placeholder());
+        let path = field(cx, t::path_placeholder());
+        let filter = field(cx, t::filter_placeholder());
         let mut subscriptions: Vec<Subscription> =
             [&name, &patterns, &aliases, &description, &path, &filter]
                 .into_iter()
@@ -315,13 +316,13 @@ impl<S: MapStores> MapScreen<S> {
             GraphEvent::OpenDecision(id) => cx.emit(OpenDecision(id.clone())),
             GraphEvent::Confirm(edge) => {
                 let id = edge.clone();
-                self.mutate(cx, "Vínculo confirmado.", move |backend| {
+                self.mutate(cx, t::link_confirmed(), move |backend| {
                     backend.graph.confirm(&id).map(|_| None)
                 });
             }
             GraphEvent::Reject(edge) => {
                 let id = edge.clone();
-                self.mutate(cx, "Sugestão rejeitada; ela não volta.", move |backend| {
+                self.mutate(cx, t::suggestion_rejected(), move |backend| {
                     backend.graph.invalidate(&id).map(|_| None)
                 });
             }
@@ -491,13 +492,7 @@ impl<S: MapStores> MapScreen<S> {
                 self.data = Some(*data);
                 self.fill_graph(cx);
                 if assembled > 0 {
-                    self.show_notice(
-                        match assembled {
-                            1 => "Mapa montado a partir do workspace: 1 componente.".to_owned(),
-                            n => format!("Mapa montado a partir do workspace: {n} componentes."),
-                        },
-                        cx,
-                    );
+                    self.show_notice(t::assembled_from_workspace(assembled), cx);
                 }
                 if self.route.is_some() {
                     return self.follow_route(cx);
@@ -601,19 +596,14 @@ impl<S: MapStores> MapScreen<S> {
         self.run(
             cx,
             Box::new(move |backend| {
-                let detail = backend.graph.entity_detail(&id, None).map_err(|error| {
-                    failure(
-                        "entity_detail",
-                        error.code(),
-                        "Não foi possível abrir o item.",
-                    )
-                });
+                let detail = backend
+                    .graph
+                    .entity_detail(&id, None)
+                    .map_err(|error| failure("entity_detail", error.code(), t::cannot_open_item()));
                 let events = backend
                     .graph
                     .timeline(&project, Some(&id), None, None)
-                    .map_err(|error| {
-                        failure("timeline", error.code(), "Não foi possível ler a história.")
-                    });
+                    .map_err(|error| failure("timeline", error.code(), t::cannot_read_history()));
                 Outcome::Detail(detail.and_then(|detail| Ok(Box::new((detail, events?)))))
             }),
         );
@@ -634,11 +624,7 @@ impl<S: MapStores> MapScreen<S> {
                             Outcome::Timeline(
                                 backend.graph.timeline(&project, None, None, None).map_err(
                                     |error| {
-                                        failure(
-                                            "timeline",
-                                            error.code(),
-                                            "Não foi possível ler a linha do tempo.",
-                                        )
+                                        failure("timeline", error.code(), t::cannot_read_timeline())
                                     },
                                 ),
                             )
@@ -712,9 +698,9 @@ impl<S: MapStores> MapScreen<S> {
         self.mutate(
             cx,
             if editing.is_some() {
-                "Item atualizado."
+                t::item_updated()
             } else {
-                "Item criado. As sugestões foram atualizadas."
+                t::item_created()
             },
             move |backend| match editing {
                 Some(id) => backend
@@ -785,11 +771,11 @@ impl<S: MapStores> MapScreen<S> {
                 let result = change(backend)
                     .map(|_| None)
                     .map_err(|error| match error.code() {
-                        "not_found" => "A sugestão mudou. O mapa foi atualizado.".to_owned(),
-                        "claim" => "A regra não pôde ser criada; ela pode já existir.".to_owned(),
+                        "not_found" => t::suggestion_changed().to_owned(),
+                        "claim" => t::rule_not_created().to_owned(),
                         code => {
                             tracing::error!(code, operation = "claim_suggestion", "change failed");
-                            "Não foi possível salvar a regra.".to_owned()
+                            t::cannot_save_rule().to_owned()
                         }
                     });
                 let data = result
@@ -823,15 +809,11 @@ impl<S: MapStores> MapScreen<S> {
                 let result = change(backend)
                     .map(|_| None)
                     .map_err(|error| match error.code() {
-                        "invalid_relation" => {
-                            "Essa relação não cabe mais (ciclo ou já registrada).".to_owned()
-                        }
-                        "conflict" | "not_found" => {
-                            "Uma das decisões mudou. O mapa foi atualizado.".to_owned()
-                        }
+                        "invalid_relation" => t::relation_no_longer_fits().to_owned(),
+                        "conflict" | "not_found" => t::decision_changed().to_owned(),
                         code => {
                             tracing::error!(code, operation = "relation", "relation change failed");
-                            "Não foi possível registrar a relação.".to_owned()
+                            t::cannot_record_relation().to_owned()
                         }
                     });
                 let data = result
@@ -908,11 +890,7 @@ impl<S: MapStores> MapScreen<S> {
                                 .collect()
                         })
                         .map_err(|error| {
-                            failure(
-                                "pick_decisions",
-                                error.code(),
-                                "Não foi possível listar as decisões.",
-                            )
+                            failure("pick_decisions", error.code(), t::cannot_list_decisions())
                         }),
                     PickKind::Claim => backend
                         .claims
@@ -930,11 +908,7 @@ impl<S: MapStores> MapScreen<S> {
                                 .collect()
                         })
                         .map_err(|error| {
-                            failure(
-                                "pick_claims",
-                                error.code(),
-                                "Não foi possível listar as regras.",
-                            )
+                            failure("pick_claims", error.code(), t::cannot_list_rules())
                         }),
                     PickKind::Parent => Ok(components),
                 };
@@ -984,7 +958,7 @@ impl<S: MapStores> MapScreen<S> {
                 entity_id: id,
             },
         };
-        self.mutate(cx, "Vínculo registrado.", move |backend| {
+        self.mutate(cx, t::link_recorded(), move |backend| {
             backend.graph.link(request).map(|_| None)
         });
     }
@@ -1018,13 +992,7 @@ impl<S: MapStores> MapScreen<S> {
                         .graph
                         .file_lens(&project, &path, None)
                         .map(Box::new)
-                        .map_err(|error| {
-                            failure(
-                                "file_lens",
-                                error.code(),
-                                "Não foi possível ler esse caminho.",
-                            )
-                        }),
+                        .map_err(|error| failure("file_lens", error.code(), t::cannot_read_path())),
                 )
             }),
         );
@@ -1054,7 +1022,7 @@ impl<S: MapStores> MapScreen<S> {
             format!("map-more-{key}"),
             ButtonKind::Ghost,
             true,
-            format!("Mostrar mais {step}"),
+            t::show_more(step),
             move |this, cx| {
                 let shown = this.limit(key, first);
                 this.shown
@@ -1068,7 +1036,7 @@ impl<S: MapStores> MapScreen<S> {
                 format!("map-all-{key}"),
                 ButtonKind::Ghost,
                 true,
-                format!("Mostrar todas ({remaining})"),
+                t::show_all(remaining),
                 move |this, cx| {
                     this.shown.insert(key.to_owned(), usize::MAX);
                     cx.notify();
@@ -1186,9 +1154,9 @@ impl<S: MapStores> MapScreen<S> {
             self.index_rows = rows;
         }
         let new_focus = self.focus_for("map-new", cx);
-        let new_button = icon_action(theme, "map-new", "Novo componente ou tecnologia")
+        let new_button = icon_action(theme, "map-new", t::new_item())
             .track_focus(&new_focus)
-            .tooltip(tooltip("Novo componente ou tecnologia", None))
+            .tooltip(tooltip(t::new_item(), None))
             .on_click(cx.listener(|this, _, _, cx| this.open_view(View::Form(None), cx)))
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                 if matches!(event.keystroke.key.as_str(), "enter" | "space") {
@@ -1213,7 +1181,7 @@ impl<S: MapStores> MapScreen<S> {
                     .flex()
                     .items_center()
                     .gap(px(SpacingScale::S2))
-                    .child(panel_title(theme, "Mapa"))
+                    .child(panel_title(theme, t::map_title()))
                     .child(count_chip(theme, count.to_string()))
                     .child(div().flex_1())
                     .child(new_button),
@@ -1238,9 +1206,9 @@ impl<S: MapStores> MapScreen<S> {
                     .border_color(colors.hairline_divider())
                     .text_color(colors.text_muted())
                     .child(if self.busy {
-                        "Carregando…".to_owned()
+                        t::loading().to_owned()
                     } else {
-                        format!("Situação em {}", short_date(&as_of))
+                        t::status_as_of(&short_date(&as_of))
                     }),
             )
     }
@@ -1263,8 +1231,8 @@ impl<S: MapStores> MapScreen<S> {
                 .px(px(SpacingScale::S3))
                 .text_color(theme.colors.text_muted())
                 .child(match kind {
-                    EntityKind::Component => "Nenhum ainda. Crie um ou veja as sugestões.",
-                    EntityKind::Technology => "Nenhuma ainda.",
+                    EntityKind::Component => t::index_empty_components(),
+                    EntityKind::Technology => t::index_empty_technologies(),
                 })
                 .into_any_element(),
             IndexRow::Entity(position) => {
@@ -1291,13 +1259,13 @@ impl<S: MapStores> MapScreen<S> {
     ) -> Stateful<Div> {
         let colors = theme.colors;
         let (view, glyph, label, badge): (View, IconName, &str, Option<String>) = match position {
-            0 => (View::Overview, IconName::Graph, "Visão geral", None),
-            1 => (View::File, IconName::File, "Lente de arquivo", None),
-            _ => (View::Timeline, IconName::Clock, "Linha do tempo", None),
+            0 => (View::Overview, IconName::Graph, t::view_overview(), None),
+            1 => (View::File, IconName::File, t::view_file_lens(), None),
+            _ => (View::Timeline, IconName::Clock, t::view_timeline(), None),
         };
         let selected = self.view == view;
         self.row(
-            format!("map-view-{label}"),
+            format!("map-view-{position}"),
             selected,
             label,
             move |this, cx| this.open_view(view.clone(), cx),
@@ -1399,10 +1367,9 @@ impl<S: MapStores> MapScreen<S> {
             return empty_panel(
                 theme,
                 IconName::Lightbulb,
-                "Sugestões",
-                "Nada para revisar",
-                "Sugestões aparecem quando decisões confirmadas tocam arquivos ou adicionam \
-                 dependências. Crie componentes com padrões de caminho para ligá-los às decisões.",
+                t::suggestions_title(),
+                t::nothing_to_review(),
+                t::suggestions_empty_hint(),
             )
             .min_h(px(420.0))
             .into_any_element();
@@ -1413,8 +1380,8 @@ impl<S: MapStores> MapScreen<S> {
             .gap(px(SpacingScale::S8))
             .child(page_header(
                 theme,
-                "Sugestões",
-                "O que o trabalho capturado indica. Nada entra no mapa sem a sua confirmação.",
+                t::suggestions_title(),
+                t::suggestions_subtitle(),
             ));
         if !relations.is_empty() {
             let mut list = div().flex().flex_col();
@@ -1427,10 +1394,10 @@ impl<S: MapStores> MapScreen<S> {
                     format!("map-relation-confirm-{index}"),
                     ButtonKind::Secondary,
                     !self.busy,
-                    "Confirmar",
+                    t::confirm(),
                     move |this, cx| {
                         let id = confirm_id.clone();
-                        this.mutate_decisions(cx, "Relação registrada.", move |backend| {
+                        this.mutate_decisions(cx, t::relation_recorded(), move |backend| {
                             backend.relations.confirm(&id)
                         });
                     },
@@ -1440,21 +1407,19 @@ impl<S: MapStores> MapScreen<S> {
                     format!("map-relation-reject-{index}"),
                     ButtonKind::Ghost,
                     !self.busy,
-                    "Rejeitar",
+                    t::reject(),
                     move |this, cx| {
                         let id = reject_id.clone();
-                        this.mutate_decisions(
-                            cx,
-                            "Relação rejeitada; ela não volta.",
-                            move |backend| backend.relations.reject(&id),
-                        );
+                        this.mutate_decisions(cx, t::relation_rejected(), move |backend| {
+                            backend.relations.reject(&id)
+                        });
                     },
                     cx,
                 );
                 let verb = match record.kind {
-                    RelationKind::DependsOn => "depende de",
-                    RelationKind::ConflictsWith => "conflita com",
-                    RelationKind::Supersedes => "substitui",
+                    RelationKind::DependsOn => t::relation_depends_on(),
+                    RelationKind::ConflictsWith => t::relation_conflicts_with(),
+                    RelationKind::Supersedes => t::relation_supersedes(),
                 };
                 let (sentence, effect) = relation_wording(
                     record.kind,
@@ -1479,7 +1444,7 @@ impl<S: MapStores> MapScreen<S> {
                             .child(
                                 text_style(div(), TypeScale::META)
                                     .text_color(colors.text_muted())
-                                    .child("entre duas decisões"),
+                                    .child(t::between_two_decisions()),
                             ),
                     )
                     .child(rich_sentence(theme, &sentence, TypeScale::BODY))
@@ -1487,7 +1452,7 @@ impl<S: MapStores> MapScreen<S> {
                         lead.child(
                             text_style(div(), TypeScale::BODY_SMALL)
                                 .text_color(colors.text_muted())
-                                .child(format!("Por quê: {}", record.reason)),
+                                .child(t::reason_line(&record.reason)),
                         )
                     });
                 list = list.child(suggestion_card(
@@ -1512,10 +1477,8 @@ impl<S: MapStores> MapScreen<S> {
             }
             column = column.child(suggestion_section(
                 theme,
-                "Relações entre decisões",
-                "Ao ler as decisões confirmadas, o xemnas notou que algumas se apoiam, \
-                 substituem ou contradizem outras. Cada cartão diz quais duas decisões, \
-                 qual é a relação e o trecho em que ela aparece.",
+                t::relations_section_title(),
+                t::relations_section_hint(),
                 list,
             ));
         }
@@ -1532,14 +1495,12 @@ impl<S: MapStores> MapScreen<S> {
                     !self.busy
                         && application::qualifiers::decode(&record.qualifiers).is_ok()
                         && serde_json::from_str::<Vec<String>>(&record.inherited_scope).is_ok(),
-                    "Confirmar",
+                    t::confirm(),
                     move |this, cx| {
                         let id = confirm_id.clone();
-                        this.mutate_context(
-                            cx,
-                            "Regra criada a partir da decisão.",
-                            move |backend| backend.context.confirm(&id).map(|_| ()),
-                        );
+                        this.mutate_context(cx, t::context_rule_created(), move |backend| {
+                            backend.context.confirm(&id).map(|_| ())
+                        });
                     },
                     cx,
                 );
@@ -1547,14 +1508,12 @@ impl<S: MapStores> MapScreen<S> {
                     format!("map-context-reject-{index}"),
                     ButtonKind::Ghost,
                     !self.busy,
-                    "Rejeitar",
+                    t::reject(),
                     move |this, cx| {
                         let id = reject_id.clone();
-                        this.mutate_context(
-                            cx,
-                            "Sugestão rejeitada; ela não volta.",
-                            move |backend| backend.context.reject(&id),
-                        );
+                        this.mutate_context(cx, t::suggestion_rejected(), move |backend| {
+                            backend.context.reject(&id)
+                        });
                     },
                     cx,
                 );
@@ -1564,62 +1523,50 @@ impl<S: MapStores> MapScreen<S> {
                     (Ok(items), Ok(scope)) => {
                         super::review_editor::qualifier_reading(theme, &items)
                             .child(if scope.is_empty() {
-                                "Escopo herdado não informado.".into()
+                                t::inherited_scope_missing().into()
                             } else {
-                                format!("Escopo herdado: {}", scope.join("; "))
+                                t::inherited_scope(&scope.join("; "))
                             })
                             .into_any_element()
                     }
-                    _ => error_banner(
-                        theme,
-                        "Não foi possível ler qualificadores ou escopo. Confirmação indisponível.",
-                    )
-                    .id(gpui::ElementId::Name(
-                        format!("map-qualification-error-{index}").into(),
-                    ))
-                    .role(Role::Alert)
-                    .child(self.button(
-                        format!("map-qualification-retry-{index}"),
-                        ButtonKind::Ghost,
-                        !self.busy,
-                        "Tentar novamente",
-                        |this, cx| this.refresh(cx),
-                        cx,
-                    ))
-                    .into_any_element(),
+                    _ => error_banner(theme, t::qualification_error())
+                        .id(gpui::ElementId::Name(
+                            format!("map-qualification-error-{index}").into(),
+                        ))
+                        .role(Role::Alert)
+                        .child(self.button(
+                            format!("map-qualification-retry-{index}"),
+                            ButtonKind::Ghost,
+                            !self.busy,
+                            t::try_again_inline(),
+                            |this, cx| this.refresh(cx),
+                            cx,
+                        ))
+                        .into_any_element(),
                 };
                 let scope = if suggestion.scope.is_empty() {
-                    "Sem vínculos de escopo informados".to_owned()
+                    t::context_scope_none().to_owned()
                 } else {
-                    format!(
-                        "Vale em {}",
-                        suggestion
+                    t::context_scope_some(
+                        &suggestion
                             .scope
                             .iter()
                             .map(|(_, name)| name.as_str())
                             .collect::<Vec<_>>()
-                            .join(", ")
+                            .join(", "),
                     )
                 };
-                let kind_name = claim_label(record.kind.as_str());
+                let kind_name = t::claim_label(record.kind.as_str());
                 let lead = div()
                     .flex()
                     .flex_col()
                     .gap(px(SpacingScale::S2))
                     .child(rich_sentence(
                         theme,
-                        &[
-                            ("Da decisão".to_owned(), false),
-                            (format!("“{}”", suggestion.decision_question), true),
-                            (
-                                format!(
-                                    "o xemnas tirou {} {}:",
-                                    claim_article(record.kind.as_str()),
-                                    kind_name.to_lowercase()
-                                ),
-                                false,
-                            ),
-                        ],
+                        &t::spans(&t::context_lead(
+                            &suggestion.decision_question,
+                            record.kind.as_str(),
+                        )),
                         TypeScale::BODY_SMALL,
                     ))
                     .child(
@@ -1638,13 +1585,7 @@ impl<S: MapStores> MapScreen<S> {
                             ),
                     )
                     .child(qualification);
-                let effect = format!(
-                    "vira {} {} do projeto ({}) e o agente passa a recebê-{} no contexto.",
-                    claim_article(record.kind.as_str()),
-                    kind_name.to_lowercase(),
-                    scope.to_lowercase(),
-                    claim_pronoun(record.kind.as_str()),
-                );
+                let effect = t::context_effect(record.kind.as_str(), &scope);
                 list = list.child(suggestion_card(
                     theme,
                     lead,
@@ -1663,10 +1604,8 @@ impl<S: MapStores> MapScreen<S> {
             }
             column = column.child(suggestion_section(
                 theme,
-                "Contexto sugerido",
-                "Regras, premissas e restrições que parecem valer para o projeto, tiradas do \
-                 texto de decisões já confirmadas. Confirmar transforma a frase em uma regra \
-                 do projeto (aba Contexto); rejeitar descarta a frase e ela não volta.",
+                t::context_section_title(),
+                t::context_section_hint(),
                 list,
             ));
         }
@@ -1680,10 +1619,10 @@ impl<S: MapStores> MapScreen<S> {
                     format!("map-confirm-{index}"),
                     ButtonKind::Secondary,
                     !self.busy,
-                    "Confirmar",
+                    t::confirm(),
                     move |this, cx| {
                         let id = confirm_id.clone();
-                        this.mutate(cx, "Vínculo confirmado.", move |backend| {
+                        this.mutate(cx, t::link_confirmed(), move |backend| {
                             backend.graph.confirm(&id).map(|_| None)
                         });
                     },
@@ -1693,10 +1632,10 @@ impl<S: MapStores> MapScreen<S> {
                     format!("map-reject-{index}"),
                     ButtonKind::Ghost,
                     !self.busy,
-                    "Rejeitar",
+                    t::reject(),
                     move |this, cx| {
                         let id = reject_id.clone();
-                        this.mutate(cx, "Sugestão rejeitada; ela não volta.", move |backend| {
+                        this.mutate(cx, t::suggestion_rejected(), move |backend| {
                             backend.graph.invalidate(&id).map(|_| None)
                         });
                     },
@@ -1728,10 +1667,10 @@ impl<S: MapStores> MapScreen<S> {
                     "map-confirm-all",
                     ButtonKind::Secondary,
                     !self.busy,
-                    format!("Confirmar os {count}"),
+                    t::confirm_all(count),
                     move |this, cx| {
                         let ids = ids.clone();
-                        this.mutate(cx, "Vínculos confirmados.", move |backend| {
+                        this.mutate(cx, t::links_confirmed_all(), move |backend| {
                             for id in ids {
                                 backend.graph.confirm(&id)?;
                             }
@@ -1746,16 +1685,11 @@ impl<S: MapStores> MapScreen<S> {
                     .flex()
                     .flex_col()
                     .gap(px(SpacingScale::S3))
-                    .child(section_header(theme, "Vínculos sugeridos").children(all))
+                    .child(section_header(theme, t::links_section_title()).children(all))
                     .child(
                         text_style(div(), TypeScale::BODY_SMALL)
                             .text_color(colors.text_muted())
-                            .child(
-                                "Decisões e regras que tocaram arquivos ou dependências ligados a \
-                                 um componente ou tecnologia do Mapa. Confirmar liga os dois: a \
-                                 decisão aparece na página do componente e acompanha quem edita \
-                                 aqueles arquivos.",
-                            ),
+                            .child(t::links_section_hint()),
                     )
                     .child(list),
             );
@@ -1794,7 +1728,7 @@ impl<S: MapStores> MapScreen<S> {
                     format!("map-create-{index}"),
                     ButtonKind::Secondary,
                     !self.busy,
-                    "Criar",
+                    t::create(),
                     move |this, cx| {
                         let input = NewEntity {
                             project_id: project.clone(),
@@ -1804,11 +1738,9 @@ impl<S: MapStores> MapScreen<S> {
                             patterns: create_pattern.clone().into_iter().collect(),
                             ..NewEntity::default()
                         };
-                        this.mutate(
-                            cx,
-                            "Item criado. As sugestões foram atualizadas.",
-                            move |backend| backend.graph.create_entity(input).map(|_| None),
-                        );
+                        this.mutate(cx, t::item_created(), move |backend| {
+                            backend.graph.create_entity(input).map(|_| None)
+                        });
                     },
                     cx,
                 );
@@ -1865,10 +1797,10 @@ impl<S: MapStores> MapScreen<S> {
                     "map-create-declared",
                     ButtonKind::Secondary,
                     !self.busy,
-                    format!("Criar os {count} do workspace"),
+                    t::create_all_declared(count),
                     move |this, cx| {
                         let inputs = declared.clone();
-                        this.mutate(cx, "Componentes do workspace criados.", move |backend| {
+                        this.mutate(cx, t::workspace_components_created(), move |backend| {
                             for input in inputs {
                                 match backend.graph.create_entity(input) {
                                     Ok(_) | Err(application::graph::GraphError::DuplicateName) => {}
@@ -1886,7 +1818,7 @@ impl<S: MapStores> MapScreen<S> {
                     .flex()
                     .flex_col()
                     .gap(px(SpacingScale::S3))
-                    .child(section_header(theme, "Itens sugeridos").children(all))
+                    .child(section_header(theme, t::items_section_title()).children(all))
                     .child(list),
             );
         }
@@ -1916,7 +1848,7 @@ impl<S: MapStores> MapScreen<S> {
                 "map-link-decision",
                 ButtonKind::Secondary,
                 !busy,
-                "Vincular decisão",
+                t::link_decision(),
                 |this, cx| this.open_picker(PickKind::Decision, cx),
                 cx,
             )
@@ -1925,7 +1857,7 @@ impl<S: MapStores> MapScreen<S> {
                 "map-link-claim",
                 ButtonKind::Secondary,
                 !busy,
-                "Vincular regra",
+                t::link_rule(),
                 |this, cx| this.open_picker(PickKind::Claim, cx),
                 cx,
             )
@@ -1937,7 +1869,7 @@ impl<S: MapStores> MapScreen<S> {
                     "map-link-parent",
                     ButtonKind::Ghost,
                     !busy,
-                    "Faz parte de…",
+                    t::part_of_button(),
                     |this, cx| this.open_picker(PickKind::Parent, cx),
                     cx,
                 )
@@ -1950,7 +1882,7 @@ impl<S: MapStores> MapScreen<S> {
                 "map-edit",
                 ButtonKind::Ghost,
                 !busy,
-                "Editar",
+                t::edit(),
                 move |this, cx| this.open_view(View::Form(Some(edit_id.clone())), cx),
                 cx,
             )
@@ -1961,7 +1893,7 @@ impl<S: MapStores> MapScreen<S> {
                 "map-retire",
                 ButtonKind::Ghost,
                 !busy,
-                "Aposentar",
+                t::retire(),
                 |this, cx| {
                     this.confirm_retire = true;
                     cx.notify();
@@ -1973,15 +1905,31 @@ impl<S: MapStores> MapScreen<S> {
 
         let confirmation = self.confirm_retire.then(|| {
             let retire_id = entity.entity_id.clone();
-            let cancel = self.button("map-retire-cancel", ButtonKind::Ghost, true, "Cancelar", |this, cx| {
-                this.confirm_retire = false;
-                cx.notify();
-            }, cx);
-            let confirm = self.button("map-retire-confirm", ButtonKind::Secondary, !busy, "Aposentar item", move |this, cx| {
-                let id = retire_id.clone();
-                this.view = View::Overview;
-                this.mutate(cx, "Item aposentado; a história continua.", move |backend| backend.graph.retire_entity(&id).map(|_| None));
-            }, cx);
+            let cancel = self.button(
+                "map-retire-cancel",
+                ButtonKind::Ghost,
+                true,
+                t::cancel(),
+                |this, cx| {
+                    this.confirm_retire = false;
+                    cx.notify();
+                },
+                cx,
+            );
+            let confirm = self.button(
+                "map-retire-confirm",
+                ButtonKind::Secondary,
+                !busy,
+                t::retire_item(),
+                move |this, cx| {
+                    let id = retire_id.clone();
+                    this.view = View::Overview;
+                    this.mutate(cx, t::item_retired(), move |backend| {
+                        backend.graph.retire_entity(&id).map(|_| None)
+                    });
+                },
+                cx,
+            );
             div()
                 .id("map-retire-confirmation")
                 .flex()
@@ -1995,9 +1943,16 @@ impl<S: MapStores> MapScreen<S> {
                 .child(
                     text_style(div(), TypeScale::BODY_SMALL)
                         .text_color(colors.text_secondary())
-                        .child("Aposentar tira o item do mapa e desfaz os vínculos dele. Nada é apagado: a linha do tempo continua mostrando o que valeu."),
+                        .child(t::retire_warning()),
                 )
-                .child(div().flex().justify_end().gap(px(SpacingScale::S2)).child(cancel).child(confirm))
+                .child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap(px(SpacingScale::S2))
+                        .child(cancel)
+                        .child(confirm),
+                )
         });
 
         let picker = self.render_picker(theme, cx);
@@ -2028,7 +1983,7 @@ impl<S: MapStores> MapScreen<S> {
                     header.child(
                         text_style(div(), TypeScale::META)
                             .text_color(colors.text_muted())
-                            .child(format!("Também chamado de {}", entity.aliases.join(", "))),
+                            .child(t::also_called(&entity.aliases.join(", "))),
                     )
                 })
                 .child(
@@ -2044,16 +1999,16 @@ impl<S: MapStores> MapScreen<S> {
         );
 
         let diagram = self.neighborhood_diagram(theme, detail, cx);
-        column = column.child(section(theme, "Vizinhança", diagram));
+        column = column.child(section(theme, t::neighborhood(), diagram));
         let decisions = self.node_list(
             theme,
             "map-decisions",
             &detail.decisions,
             true,
-            "Nenhuma decisão ligada. Vincule uma ou confirme sugestões.",
+            t::no_linked_decisions(),
             cx,
         );
-        column = column.child(section(theme, "Decisões em vigor", decisions));
+        column = column.child(section(theme, t::decisions_in_force(), decisions));
         if !detail.conflicts.is_empty() {
             let mut list = div().flex().flex_col();
             for (index, (left, right)) in detail.conflicts.iter().enumerate() {
@@ -2075,17 +2030,17 @@ impl<S: MapStores> MapScreen<S> {
                         ),
                 );
             }
-            column = column.child(section(theme, "Conflitos neste item", list));
+            column = column.child(section(theme, t::conflicts_here(), list));
         }
         let claims = self.node_list(
             theme,
             "map-claims",
             &detail.claims,
             false,
-            "Nenhuma regra ligada.",
+            t::no_linked_rules(),
             cx,
         );
-        column = column.child(section(theme, "Regras que se aplicam", claims));
+        column = column.child(section(theme, t::rules_that_apply(), claims));
         if component {
             let mut structure = div().flex().flex_col();
             let parent: Vec<NodeSummary> = detail.parent.clone().into_iter().collect();
@@ -2093,7 +2048,7 @@ impl<S: MapStores> MapScreen<S> {
                 structure = structure.child(self.entity_list(
                     theme,
                     "map-parent",
-                    "Faz parte de",
+                    t::part_of_list(),
                     &parent,
                     cx,
                 ));
@@ -2102,22 +2057,18 @@ impl<S: MapStores> MapScreen<S> {
                 structure = structure.child(self.entity_list(
                     theme,
                     "map-parts",
-                    "Partes",
+                    t::parts(),
                     &detail.parts,
                     cx,
                 ));
             }
             if !parent.is_empty() || !detail.parts.is_empty() {
-                column = column.child(section(theme, "Estrutura", structure));
+                column = column.child(section(theme, t::structure(), structure));
             }
         }
         if !detail.impact.is_empty() {
             let impact = self.node_list(theme, "map-impact", &detail.impact, true, "", cx);
-            column = column.child(section(
-                theme,
-                "Impacto: decisões que dependem deste item",
-                impact,
-            ));
+            column = column.child(section(theme, t::impact_title(), impact));
         }
         let (timeline, hidden) = timeline_list(
             theme,
@@ -2129,7 +2080,7 @@ impl<S: MapStores> MapScreen<S> {
         } else {
             timeline
         };
-        column = column.child(section(theme, "Linha do tempo", timeline));
+        column = column.child(section(theme, t::view_timeline(), timeline));
         reading_page(format!("map-entity-{id}"), column).into_any_element()
     }
 
@@ -2139,15 +2090,15 @@ impl<S: MapStores> MapScreen<S> {
         let items = self.filtered(picker, cx);
         let kind = picker.kind;
         let title = match kind {
-            PickKind::Decision => "Escolha a decisão",
-            PickKind::Claim => "Escolha a regra",
-            PickKind::Parent => "Escolha o componente que contém este",
+            PickKind::Decision => t::pick_decision(),
+            PickKind::Claim => t::pick_rule(),
+            PickKind::Parent => t::pick_parent(),
         };
         let close = self.button(
             "map-picker-close",
             ButtonKind::Ghost,
             true,
-            "Fechar",
+            t::close(),
             |this, cx| {
                 this.picker = None;
                 cx.notify();
@@ -2166,7 +2117,7 @@ impl<S: MapStores> MapScreen<S> {
                 text_style(div(), TypeScale::BODY_SMALL)
                     .p(px(SpacingScale::S2))
                     .text_color(colors.text_muted())
-                    .child("Nada para vincular aqui."),
+                    .child(t::nothing_to_link()),
             );
         }
         for (index, (_, label, detail)) in items.iter().enumerate() {
@@ -2260,11 +2211,7 @@ impl<S: MapStores> MapScreen<S> {
                         .child(if decisions {
                             format!("{} · {}", row.detail, short_date(&row.at))
                         } else {
-                            format!(
-                                "{} · desde {}",
-                                claim_label(&row.detail),
-                                calendar_date(&row.at)
-                            )
+                            t::rule_since(t::claim_label(&row.detail), &calendar_date(&row.at))
                         }),
                 );
             if decisions {
@@ -2276,7 +2223,7 @@ impl<S: MapStores> MapScreen<S> {
                         move |_, cx| cx.emit(OpenDecision(id.clone())),
                         cx,
                     )
-                    .tooltip(tooltip("Abrir em Decisões", None))
+                    .tooltip(tooltip(t::open_in_decisions(), None))
                     .child(body)
                     .child(icon(IconName::ChevronRight, 14.0, colors.text_muted()));
                 list = list.child(element);
@@ -2339,7 +2286,7 @@ impl<S: MapStores> MapScreen<S> {
             "map-lens-run",
             ButtonKind::Primary,
             has_path && !self.busy,
-            "Ver o que vale",
+            t::show_what_applies(),
             |this, cx| this.open_lens(cx),
             cx,
         );
@@ -2349,8 +2296,8 @@ impl<S: MapStores> MapScreen<S> {
             .gap(px(SpacingScale::S8))
             .child(page_header(
                 theme,
-                "Lente de arquivo",
-                "O que vale para um arquivo: os componentes que o contêm, as decisões em vigor e as regras ligadas a eles.",
+                t::view_file_lens(),
+                t::file_lens_subtitle(),
             ))
             .child(
                 div()
@@ -2363,7 +2310,7 @@ impl<S: MapStores> MapScreen<S> {
                             .flex()
                             .flex_col()
                             .gap(px(SpacingScale::S2))
-                            .child(section_label(theme, "Caminho relativo ao projeto"))
+                            .child(section_label(theme, t::relative_path()))
                             .child(self.path.clone()),
                     )
                     .child(show),
@@ -2402,19 +2349,19 @@ impl<S: MapStores> MapScreen<S> {
                     ),
                 );
             }
-            column = column.child(section(theme, "Arquivos das últimas decisões", picks));
+            column = column.child(section(theme, t::recent_decision_files(), picks));
         }
         if let Some(lens) = self.lens.clone() {
             if lens.components.is_empty() {
                 column = column.child(
                     text_style(div(), TypeScale::BODY)
                         .text_color(colors.text_secondary())
-                        .child(format!("Nenhum componente cobre {}. Crie um com um padrão de caminho que o inclua.", lens.path)),
+                        .child(t::no_component_covers(&lens.path)),
                 );
             } else {
                 column = column.child(section(
                     theme,
-                    "Componentes",
+                    t::kind_components(),
                     div().child(
                         text_style(div(), TypeScale::BODY).child(
                             lens.components
@@ -2430,19 +2377,19 @@ impl<S: MapStores> MapScreen<S> {
                     "map-lens-decisions",
                     &lens.decisions,
                     true,
-                    "Nenhuma decisão em vigor ligada a esses componentes.",
+                    t::no_decisions_for_components(),
                     cx,
                 );
-                column = column.child(section(theme, "Decisões em vigor", decisions));
+                column = column.child(section(theme, t::decisions_in_force(), decisions));
                 let claims = self.node_list(
                     theme,
                     "map-lens-claims",
                     &lens.claims,
                     false,
-                    "Nenhuma regra ligada.",
+                    t::no_linked_rules(),
                     cx,
                 );
-                column = column.child(section(theme, "Regras", claims));
+                column = column.child(section(theme, t::lens_rules(), claims));
             }
         }
         reading_page("map-file", column).into_any_element()
@@ -2469,8 +2416,8 @@ impl<S: MapStores> MapScreen<S> {
             .gap(px(SpacingScale::S8))
             .child(page_header(
                 theme,
-                "Linha do tempo",
-                "O que passou a valer e o que deixou de valer no projeto, do mais recente ao mais antigo.",
+                t::view_timeline(),
+                t::timeline_subtitle(),
             ))
             .child(timeline);
         reading_page("map-timeline", column).into_any_element()
@@ -2489,7 +2436,11 @@ impl<S: MapStores> MapScreen<S> {
             "map-form-save",
             ButtonKind::Primary,
             named && !self.busy,
-            if editing.is_some() { "Salvar" } else { "Criar" },
+            if editing.is_some() {
+                t::save()
+            } else {
+                t::create()
+            },
             move |this, cx| this.save_form(save_editing.clone(), cx),
             cx,
         );
@@ -2498,7 +2449,7 @@ impl<S: MapStores> MapScreen<S> {
             "map-form-cancel",
             ButtonKind::Ghost,
             true,
-            "Cancelar",
+            t::cancel(),
             move |this, cx| {
                 let view = back.clone().map_or(View::Overview, View::Entity);
                 this.open_view(view, cx)
@@ -2561,12 +2512,8 @@ impl<S: MapStores> MapScreen<S> {
                                     text_style(div(), TypeScale::META)
                                         .text_color(colors.text_muted())
                                         .child(match kind {
-                                            EntityKind::Component => {
-                                                "Uma parte do projeto, achada por caminhos"
-                                            }
-                                            EntityKind::Technology => {
-                                                "Linguagem, biblioteca ou serviço usado"
-                                            }
+                                            EntityKind::Component => t::component_blurb(),
+                                            EntityKind::Technology => t::technology_blurb(),
                                         }),
                                 ),
                         ),
@@ -2595,25 +2542,41 @@ impl<S: MapStores> MapScreen<S> {
             .gap(px(SpacingScale::S6))
             .child(page_header(
                 theme,
-                if editing.is_some() { "Editar item" } else { "Novo item do mapa" },
-                "Componentes ligam decisões a caminhos do projeto; tecnologias, às dependências que elas adotam.",
+                if editing.is_some() {
+                    t::edit_item()
+                } else {
+                    t::new_map_item()
+                },
+                t::form_subtitle(),
             ))
-            .child(div().id("map-form-kind").flex().gap(px(SpacingScale::S3)).role(Role::RadioGroup).aria_label("Tipo").children(kinds))
-            .child(field("Nome", "Como o time chama esta parte.", self.name.clone()));
+            .child(
+                div()
+                    .id("map-form-kind")
+                    .flex()
+                    .gap(px(SpacingScale::S3))
+                    .role(Role::RadioGroup)
+                    .aria_label(t::kind_group())
+                    .children(kinds),
+            )
+            .child(field(t::name_label(), t::name_hint(), self.name.clone()));
         if self.form_kind == EntityKind::Component {
             column = column.child(field(
-                "Padrões de caminho",
-                "Separados por vírgula. * vale dentro de uma pasta, ** atravessa pastas; sem curinga, vale a pasta inteira.",
+                t::patterns_label(),
+                t::patterns_hint(),
                 self.patterns.clone(),
             ));
         }
         column = column
             .child(field(
-                "Apelidos",
-                "Outros nomes, separados por vírgula. Resolvem dependências com nome diferente.",
+                t::aliases_label(),
+                t::aliases_hint(),
                 self.aliases.clone(),
             ))
-            .child(field("Descrição", "Opcional.", self.description.clone()))
+            .child(field(
+                t::description_label(),
+                t::optional(),
+                self.description.clone(),
+            ))
             .child(
                 div()
                     .flex()
@@ -2638,9 +2601,14 @@ impl<S: MapStores> MapScreen<S> {
                 Layout::Blocks,
                 "map-layout-blocks",
                 IconName::Blocks,
-                "Blocos",
+                t::layout_blocks(),
             ),
-            (Layout::Graph, "map-layout-graph", IconName::Graph, "Grafo"),
+            (
+                Layout::Graph,
+                "map-layout-graph",
+                IconName::Graph,
+                t::layout_graph(),
+            ),
         ] {
             let focus = self.focus_for(id, cx);
             track = track.child(
@@ -2681,17 +2649,12 @@ impl<S: MapStores> MapScreen<S> {
                     .gap(px(SpacingScale::S4))
                     .child(div().flex_1().min_w(px(0.0)).child(page_header(
                         theme,
-                        "Mapa do projeto",
-                        "Cada ilha é um componente com o que vale nele. Passe o mouse para ver as ligações; clique para abrir.",
+                        t::project_map(),
+                        t::graph_subtitle(),
                     )))
                     .child(switch),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .child(self.graph.clone()),
-            )
+            .child(div().flex_1().min_h(px(0.0)).child(self.graph.clone()))
             .into_any_element()
     }
 
@@ -2706,7 +2669,7 @@ impl<S: MapStores> MapScreen<S> {
                 "map-overview-suggestions",
                 ButtonKind::Primary,
                 true,
-                "Ver sugestões",
+                t::see_suggestions(),
                 |_, cx| cx.emit(OpenSuggestions),
                 cx,
             );
@@ -2718,8 +2681,8 @@ impl<S: MapStores> MapScreen<S> {
                     .gap(px(SpacingScale::S4))
                     .child(page_header(
                         theme,
-                        "Mapa do projeto",
-                        "Ainda vazio. Componentes ligam as decisões às partes do código; comece pelas sugestões, que vêm dos arquivos que as decisões tocaram.",
+                        t::project_map(),
+                        t::overview_empty_subtitle(),
                     ))
                     .child(div().flex().child(open)),
             )
@@ -2782,16 +2745,16 @@ impl<S: MapStores> MapScreen<S> {
                     .gap(px(SpacingScale::S4))
                     .child(div().flex_1().min_w(px(0.0)).child(page_header(
                         &theme,
-                        "Mapa do projeto",
-                        "A arquitetura desenhada pelas decisões confirmadas. Abra um bloco para ver o que vale ali.",
+                        t::project_map(),
+                        t::blocks_subtitle(),
                     )))
                     .child(switch)
                     .into_any_element()
             }
-            OverviewRow::Label(label) => div()
+            OverviewRow::Label(kind) => div()
                 .pt(px(SpacingScale::S8))
                 .pb(px(SpacingScale::S3))
-                .child(section_label(&theme, label))
+                .child(section_label(&theme, kind_plural(kind)))
                 .into_any_element(),
             OverviewRow::Blocks(first) => {
                 let recent_since = (chrono::Utc::now() - chrono::Duration::days(RECENT_DAYS))
@@ -2859,7 +2822,7 @@ impl<S: MapStores> MapScreen<S> {
                 .child(legend_item(
                     &theme,
                     status_dot(colors.status_warning()),
-                    "decisões em conflito",
+                    t::conflict_legend(),
                 ))
                 .into_any_element(),
         };
@@ -2900,7 +2863,7 @@ impl<S: MapStores> MapScreen<S> {
             .last_activity
             .as_deref()
             .filter(|_| recent)
-            .map(|at| format!("mudou em {}", short_date(at)));
+            .map(|at| t::changed_on(&short_date(at)));
         let mut parts_row = div().flex().flex_wrap().gap(px(SpacingScale::S2));
         for part in parts.iter().take(PART_CHIPS) {
             let part_id = part.entity.entity_id.clone();
@@ -2930,7 +2893,7 @@ impl<S: MapStores> MapScreen<S> {
                     .px(px(SpacingScale::S2))
                     .py(px(SpacingScale::S2))
                     .text_color(colors.text_muted())
-                    .child(format!("+{} partes", parts.len() - PART_CHIPS)),
+                    .child(t::more_parts(parts.len() - PART_CHIPS)),
             );
         }
         div()
@@ -3082,7 +3045,7 @@ impl<S: MapStores> MapScreen<S> {
                     false,
                     cx,
                 )
-                .tooltip(tooltip("Abrir em Decisões", None))
+                .tooltip(tooltip(t::open_in_decisions(), None))
                 .on_click(cx.listener(move |_, _, _, cx| cx.emit(OpenDecision(id.clone()))));
             left_column = left_column.child(element);
         }
@@ -3090,7 +3053,7 @@ impl<S: MapStores> MapScreen<S> {
             left_column = left_column.child(
                 text_style(div(), TypeScale::META)
                     .text_color(colors.text_muted())
-                    .child("Nenhuma decisão ligada."),
+                    .child(t::no_linked_decisions_short()),
             );
         }
         let entity = &detail.entity;
@@ -3137,7 +3100,7 @@ impl<S: MapStores> MapScreen<S> {
                 theme,
                 format!("map-ego-right-{index}"),
                 &node.label,
-                claim_label(&node.detail),
+                t::claim_label(&node.detail),
                 true,
                 cx,
             ));
@@ -3146,7 +3109,7 @@ impl<S: MapStores> MapScreen<S> {
             right_column = right_column.child(
                 text_style(div(), TypeScale::META)
                     .text_color(colors.text_muted())
-                    .child("Nenhuma regra ligada."),
+                    .child(t::no_linked_rules()),
             );
         }
         div()
@@ -3162,10 +3125,7 @@ impl<S: MapStores> MapScreen<S> {
                     .flex()
                     .gap(px(COLUMN_GAP))
                     .role(Role::Group)
-                    .aria_label(format!(
-                        "{}: {} decisões à esquerda, {} regras à direita",
-                        entity.name, left_count, right_count
-                    ))
+                    .aria_label(t::diagram_label(&entity.name, left_count, right_count))
                     .child(edges)
                     .child(left_column)
                     .child(center)
@@ -3175,7 +3135,7 @@ impl<S: MapStores> MapScreen<S> {
                 diagram.child(
                     text_style(div(), TypeScale::META)
                         .text_color(colors.text_muted())
-                        .child(format!("Mais {hidden} nas listas abaixo.")),
+                        .child(t::more_in_lists(hidden)),
                 )
             })
     }
@@ -3279,9 +3239,9 @@ impl<S: MapStores> Render for MapScreen<S> {
                 empty_panel(
                     &theme,
                     IconName::Graph,
-                    "Mapa",
-                    "Não foi possível carregar o mapa",
-                    "Tente de novo; seus dados não foram alterados.",
+                    t::map_title(),
+                    t::map_load_failed_title(),
+                    t::map_load_failed_hint(),
                 )
                 .into_any_element()
             } else {
@@ -3302,9 +3262,9 @@ impl<S: MapStores> Render for MapScreen<S> {
         };
         let retry = self.error.is_some().then(|| {
             action_button(&theme, "map-retry", ButtonKind::Ghost, !self.busy)
-                .aria_label("Tentar de novo")
+                .aria_label(t::try_again())
                 .on_click(cx.listener(|this, _, _, cx| this.refresh(cx)))
-                .child("Tentar de novo")
+                .child(t::try_again())
         });
         div()
             .size_full()
@@ -3338,13 +3298,10 @@ impl<S: MapStores> Render for MapScreen<S> {
 
 fn load<S: MapStores>(backend: &MapServices<S>, project: &str) -> Result<MapData, String> {
     // An empty map assembles itself from what the project declares.
-    let assembled = backend.graph.assemble(project).map_err(|error| {
-        failure(
-            "assemble",
-            error.code(),
-            "Não foi possível montar o mapa a partir do projeto.",
-        )
-    })?;
+    let assembled = backend
+        .graph
+        .assemble(project)
+        .map_err(|error| failure("assemble", error.code(), t::cannot_assemble()))?;
     let proposals = backend
         .graph
         .refresh_suggestions(project)
@@ -3352,42 +3309,33 @@ fn load<S: MapStores>(backend: &MapServices<S>, project: &str) -> Result<MapData
             failure(
                 "refresh_suggestions",
                 error.code(),
-                "Não foi possível atualizar as sugestões.",
+                t::cannot_refresh_suggestions(),
             )
         })?;
     let map = backend
         .graph
         .project_map(project, None)
-        .map_err(|error| failure("project_map", error.code(), "Não foi possível ler o mapa."))?;
-    let suggestions = backend.graph.suggestions(project).map_err(|error| {
-        failure(
-            "suggestions",
-            error.code(),
-            "Não foi possível ler as sugestões.",
-        )
-    })?;
+        .map_err(|error| failure("project_map", error.code(), t::cannot_read_map()))?;
+    let suggestions = backend
+        .graph
+        .suggestions(project)
+        .map_err(|error| failure("suggestions", error.code(), t::cannot_read_suggestions()))?;
     let graph = backend
         .graph
         .project_graph(project, None)
-        .map_err(|error| {
-            failure(
-                "project_graph",
-                error.code(),
-                "Não foi possível ler o grafo.",
-            )
-        })?;
+        .map_err(|error| failure("project_graph", error.code(), t::cannot_read_graph()))?;
     let relations = backend.relations.pending(project).map_err(|error| {
         failure(
             "relation_suggestions",
             error.code(),
-            "Não foi possível ler as relações sugeridas.",
+            t::cannot_read_relation_suggestions(),
         )
     })?;
     let derived = backend.context.pending(project).map_err(|error| {
         failure(
             "claim_suggestions",
             error.code(),
-            "Não foi possível ler o contexto sugerido.",
+            t::cannot_read_context_suggestions(),
         )
     })?;
     let recent_files = backend
@@ -3397,7 +3345,7 @@ fn load<S: MapStores>(backend: &MapServices<S>, project: &str) -> Result<MapData
             failure(
                 "recent_files",
                 error.code(),
-                "Não foi possível ler os arquivos das decisões.",
+                t::cannot_read_decision_files(),
             )
         })?;
     Ok(MapData {
@@ -3421,25 +3369,20 @@ fn failure(operation: &'static str, code: &str, message: &str) -> String {
 /// Product copy for a failed change.
 fn change_failure(code: &str) -> String {
     match code {
-        "duplicate_name" => "Já existe um item desse tipo com esse nome ou apelido.".into(),
-        "duplicate_edge" => "Esse vínculo já existe.".into(),
-        "empty_name" => "Dê um nome com ao menos uma letra ou dígito.".into(),
-        "name_too_long" => "O nome passa de 80 caracteres.".into(),
-        "description_too_long" => "A descrição passa de 500 caracteres.".into(),
-        "invalid_pattern" => {
-            "Use caminhos relativos ao projeto, como crates/app/**, sem .. nem letra de disco."
-                .into()
-        }
-        "cycle" => "Esse vínculo criaria um ciclo de componentes.".into(),
-        "self_reference" => "Um componente não pode fazer parte de si mesmo.".into(),
-        "second_parent" => {
-            "Esse componente já faz parte de outro. Desfaça o vínculo antigo primeiro.".into()
-        }
-        "conflict" => "O item mudou enquanto você editava. O mapa foi atualizado.".into(),
-        "invalid_request" => "Use até 20 padrões e 20 apelidos por item.".into(),
+        "duplicate_name" => t::duplicate_name().into(),
+        "duplicate_edge" => t::duplicate_edge().into(),
+        "empty_name" => t::empty_name().into(),
+        "name_too_long" => t::name_too_long().into(),
+        "description_too_long" => t::description_too_long().into(),
+        "invalid_pattern" => t::invalid_pattern().into(),
+        "cycle" => t::cycle().into(),
+        "self_reference" => t::self_reference().into(),
+        "second_parent" => t::second_parent().into(),
+        "conflict" => t::edit_conflict().into(),
+        "invalid_request" => t::invalid_request().into(),
         _ => {
             tracing::error!(code, operation = "map_change", "map change failed");
-            "Não foi possível salvar a mudança no mapa.".into()
+            t::cannot_save_change().into()
         }
     }
 }
@@ -3492,8 +3435,8 @@ const TECH_ROW: usize = 4;
 enum OverviewRow {
     /// Title, subtitle and the layout switch.
     Header,
-    /// A section heading.
-    Label(&'static str),
+    /// The heading of a kind.
+    Label(EntityKind),
     /// Two component blocks, starting at this position in the roots.
     Blocks(usize),
     /// A row of technology chips, starting at this position.
@@ -3549,10 +3492,13 @@ impl OverviewIndex {
 
 /// The rows of the Blocos layout for an index.
 fn overview_rows(index: &OverviewIndex) -> Vec<OverviewRow> {
-    let mut rows = vec![OverviewRow::Header, OverviewRow::Label("Componentes")];
+    let mut rows = vec![
+        OverviewRow::Header,
+        OverviewRow::Label(EntityKind::Component),
+    ];
     rows.extend((0..index.tops.len()).step_by(2).map(OverviewRow::Blocks));
     if !index.technologies.is_empty() {
-        rows.push(OverviewRow::Label("Tecnologias"));
+        rows.push(OverviewRow::Label(EntityKind::Technology));
         rows.extend(
             (0..index.technologies.len())
                 .step_by(TECH_ROW)
@@ -3591,7 +3537,7 @@ fn section(theme: &Theme, label: &str, content: Div) -> Div {
         .child(content)
 }
 
-/// Upkeep names listed on a condensed line before "e mais N".
+/// Upkeep names listed on a condensed line before "and N more".
 const UPKEEP_SHOWN: usize = 4;
 /// Longest node name on a condensed line.
 const UPKEEP_CHARS: usize = 28;
@@ -3611,7 +3557,7 @@ fn timeline_list(theme: &Theme, events: &[TimelineEvent], limit: usize) -> (Div,
             list.child(
                 text_style(div(), TypeScale::BODY_SMALL)
                     .text_color(colors.text_muted())
-                    .child("Nada aconteceu aqui ainda."),
+                    .child(t::nothing_happened()),
             ),
             0,
         );
@@ -3663,9 +3609,9 @@ fn timeline_list(theme: &Theme, events: &[TimelineEvent], limit: usize) -> (Div,
                     text_style(div(), TypeScale::META)
                         .text_color(colors.text_muted())
                         .child(if changes == 0 {
-                            "manutenção do mapa".to_owned()
+                            t::map_upkeep().to_owned()
                         } else {
-                            plural(changes, "mudança", "mudanças")
+                            t::changes_count(changes)
                         }),
                 ),
         );
@@ -3796,16 +3742,14 @@ fn timeline_item(theme: &Theme, run: &[&TimelineEvent], last: bool) -> Div {
                 text_style(div(), TypeScale::META)
                     .text_color(colors.text_muted())
                     .child(if rest > 0 {
-                        format!("{shown} e mais {rest}")
+                        t::upkeep_more(&shown, rest)
                     } else {
                         shown
                     }),
             )
     } else {
         let detail = match (&first.other, first.kind) {
-            (Some(other), TimelineKind::DecisionSuperseded) => {
-                format!("Substituída por: {}", other.label)
-            }
+            (Some(other), TimelineKind::DecisionSuperseded) => t::superseded_by(&other.label),
             _ => first.node.detail.clone(),
         };
         div()
@@ -3847,7 +3791,7 @@ fn timeline_item(theme: &Theme, run: &[&TimelineEvent], last: bool) -> Div {
 /// A rule's detail is its kind literal; a decision's is its choice.
 fn claim_or_text(kind: TimelineKind, detail: &str) -> String {
     match kind {
-        TimelineKind::ClaimStarted | TimelineKind::ClaimEnded => claim_label(detail).to_owned(),
+        TimelineKind::ClaimStarted | TimelineKind::ClaimEnded => t::claim_label(detail).to_owned(),
         _ => detail.to_owned(),
     }
 }
@@ -3856,205 +3800,128 @@ fn timeline_copy(kind: TimelineKind, theme: &Theme) -> (&'static str, IconName, 
     let colors = theme.colors;
     match kind {
         TimelineKind::DecisionConfirmed => (
-            "Decisão confirmada",
+            t::timeline_decision_confirmed(),
             IconName::Check,
             colors.status_success(),
         ),
         TimelineKind::DecisionSuperseded => (
-            "Decisão substituída",
+            t::timeline_decision_superseded(),
             IconName::Rotate,
             colors.status_warning(),
         ),
         TimelineKind::ClaimStarted => (
-            "Regra passou a valer",
+            t::timeline_rule_started(),
             IconName::Shield,
             colors.status_info(),
         ),
         TimelineKind::ClaimEnded => (
-            "Regra deixou de valer",
+            t::timeline_rule_ended(),
             IconName::Shield,
             colors.text_muted(),
         ),
-        TimelineKind::EntityCreated => ("Entrou no mapa", IconName::Plus, colors.text_muted()),
-        TimelineKind::EntityRetired => ("Aposentado", IconName::Circle, colors.text_muted()),
-        TimelineKind::EdgeConfirmed => {
-            ("Ligações confirmadas", IconName::Link, colors.text_muted())
+        TimelineKind::EntityCreated => (
+            t::timeline_entered_map(),
+            IconName::Plus,
+            colors.text_muted(),
+        ),
+        TimelineKind::EntityRetired => {
+            (t::timeline_retired(), IconName::Circle, colors.text_muted())
         }
-        TimelineKind::EdgeInvalidated => {
-            ("Ligações desfeitas", IconName::Link, colors.text_muted())
-        }
+        TimelineKind::EdgeConfirmed => (
+            t::timeline_links_confirmed(),
+            IconName::Link,
+            colors.text_muted(),
+        ),
+        TimelineKind::EdgeInvalidated => (
+            t::timeline_links_undone(),
+            IconName::Link,
+            colors.text_muted(),
+        ),
     }
 }
 
-/// "8 itens entraram no mapa": a condensed run says how many, then what.
+/// "8 items entered the map": a condensed run says how many, then what.
 fn upkeep_headline(kind: TimelineKind, count: usize) -> String {
     match kind {
-        TimelineKind::EntityCreated => format!("{count} itens entraram no mapa"),
-        TimelineKind::EntityRetired => format!("{count} itens aposentados"),
-        TimelineKind::EdgeConfirmed => format!("{count} ligações confirmadas"),
-        TimelineKind::EdgeInvalidated => format!("{count} ligações desfeitas"),
-        _ => plural(count, "evento", "eventos"),
+        TimelineKind::EntityCreated => t::items_entered(count),
+        TimelineKind::EntityRetired => t::items_retired(count),
+        TimelineKind::EdgeConfirmed => t::links_confirmed_count(count),
+        TimelineKind::EdgeInvalidated => t::links_undone_count(count),
+        _ => t::events_count(count),
     }
 }
 
 fn weight(row: &MapEntity) -> String {
-    let mut parts = vec![plural(row.decisions, "decisão", "decisões")];
+    let mut parts = vec![t::decisions_count(row.decisions)];
     if row.claims > 0 {
-        parts.push(plural(row.claims, "regra", "regras"));
+        parts.push(t::rules_count(row.claims));
     }
     if row.conflicts > 0 {
-        parts.push(plural(row.conflicts, "conflito", "conflitos"));
+        parts.push(t::conflicts_count(row.conflicts));
     }
     parts.join(" · ")
-}
-
-/// "a" or "o" for a kind of rule, as the Portuguese sentence needs it.
-fn claim_article(kind: &str) -> &'static str {
-    match kind {
-        "assumption" => "uma",
-        "constraint" => "uma",
-        "goal" => "um",
-        "convention" => "uma",
-        _ => "uma",
-    }
-}
-
-/// The pronoun that goes with [`claim_article`] ("recebê-la", "recebê-lo").
-fn claim_pronoun(kind: &str) -> &'static str {
-    match claim_article(kind) {
-        "um" => "lo",
-        _ => "la",
-    }
-}
-
-/// A quoted name in the strong face.
-fn named(text: &str) -> (String, bool) {
-    (format!("“{}”", clipped(text, 90)), true)
-}
-
-fn plain(text: &str) -> (String, bool) {
-    (text.to_owned(), false)
 }
 
 /// What a relation between two decisions says in a sentence, and what
 /// confirming it changes.
 fn relation_wording(kind: RelationKind, from: &str, to: &str) -> (Vec<(String, bool)>, String) {
-    match kind {
+    let (from, to) = (clipped(from, 90), clipped(to, 90));
+    let (sentence, effect) = match kind {
         RelationKind::DependsOn => (
-            vec![
-                plain("A decisão"),
-                named(from),
-                plain("depende da decisão"),
-                named(to),
-                plain("só faz sentido porque a segunda foi tomada."),
-            ],
-            "a relação fica registrada na seção Relações das duas decisões, e quem ler a \
-             primeira vê de qual outra ela depende."
-                .to_owned(),
+            t::relation_depends(&from, &to),
+            t::relation_depends_effect(),
         ),
         RelationKind::ConflictsWith => (
-            vec![
-                plain("A decisão"),
-                named(from),
-                plain("parece contradizer a decisão"),
-                named(to),
-                plain("."),
-            ],
-            "a contradição fica registrada nas duas decisões; resolva substituindo uma delas."
-                .to_owned(),
+            t::relation_conflicts(&from, &to),
+            t::relation_conflicts_effect(),
         ),
         RelationKind::Supersedes => (
-            vec![
-                plain("A decisão"),
-                named(from),
-                plain("parece ter substituído a decisão"),
-                named(to),
-                plain("."),
-            ],
-            "a substituição fica registrada na seção Relações das duas decisões.".to_owned(),
+            t::relation_supersedes_sentence(&from, &to),
+            t::relation_supersedes_effect(),
         ),
-    }
+    };
+    (t::spans(&sentence), effect.to_owned())
 }
 
 /// What a suggested tie says in a sentence (by what it ties and why), and
 /// what confirming it changes.
 fn link_wording(suggestion: &Suggestion) -> (Vec<(String, bool)>, String) {
-    let source = &suggestion.source.label;
+    let source = clipped(&suggestion.source.label, 90);
     let target = &suggestion.entity.label;
+    let shown = clipped(target, 90);
     let rule = suggestion.source.node.kind == NodeKind::Claim;
-    let what = if rule { "A regra" } else { "A decisão" };
-    if let Some(quote) = application::graph::mention_quote(&suggestion.reason) {
-        let (kind, owner) = (
-            if suggestion.kind == EdgeKind::Uses {
-                "tecnologia usada"
-            } else {
-                "parte afetada"
-            },
-            if rule { "regra" } else { "decisão" },
-        );
+    let uses = suggestion.kind == EdgeKind::Uses;
+    let reason = suggestion.reason.as_str();
+    if let Some(quote) = application::graph::mention_quote(reason) {
+        let sentence = if rule {
+            t::link_mention_rule(&source, &shown, quote)
+        } else {
+            t::link_mention_decision(&source, &shown, quote)
+        };
         return (
-            vec![
-                plain(what),
-                named(source),
-                plain("cita"),
-                named(target),
-                plain("no próprio texto:"),
-                (format!("“{quote}”"), true),
-                plain("."),
-            ],
-            format!(
-                "{target} passa a constar como {kind} por essa {owner} no Mapa. A ligação veio \
-                 só do texto; confira o trecho antes de confirmar."
-            ),
+            t::spans(&sentence),
+            t::link_mention_effect(target, uses, rule),
         );
     }
-    match suggestion.kind {
+    let (sentence, effect) = match suggestion.kind {
+        EdgeKind::Uses if rule => (
+            t::link_uses_rule(&source, reason, &shown),
+            t::link_uses_effect(target),
+        ),
         EdgeKind::Uses => (
-            vec![
-                plain(what),
-                named(source),
-                plain("adicionou a dependência"),
-                (suggestion.reason.clone(), true),
-                plain("que é a tecnologia"),
-                named(target),
-                plain("do Mapa."),
-            ],
-            format!(
-                "{target} passa a constar como tecnologia usada por essa decisão, na página dela e \
-                 na do Mapa."
-            ),
+            t::link_uses_decision(&source, reason, &shown),
+            t::link_uses_effect(target),
         ),
         _ if rule => (
-            vec![
-                plain(what),
-                named(source),
-                plain("se aplica a mudanças em"),
-                (suggestion.reason.clone(), true),
-                plain(", arquivo que pertence ao componente"),
-                named(target),
-                plain("."),
-            ],
-            format!(
-                "a regra passa a valer em {target} e é entregue ao agente quando ele edita \
-                 arquivos desse componente."
-            ),
+            t::link_applies(&source, reason, &shown),
+            t::link_applies_effect(target),
         ),
         _ => (
-            vec![
-                plain(what),
-                named(source),
-                plain("mexeu em"),
-                (suggestion.reason.clone(), true),
-                plain(", arquivo que pertence ao componente"),
-                named(target),
-                plain("."),
-            ],
-            format!(
-                "a decisão passa a valer para {target}: aparece na página do componente e é \
-                 entregue ao agente quando ele edita arquivos dele."
-            ),
+            t::link_touched(&source, reason, &shown),
+            t::link_touched_effect(target),
         ),
-    }
+    };
+    (t::spans(&sentence), effect)
 }
 
 /// What a proposed component or technology says in a sentence, and what
@@ -4066,64 +3933,42 @@ fn item_wording(
     declared: Option<application::graph::WorkspaceKind>,
     decisions: usize,
 ) -> (Vec<(String, bool)>, String) {
-    match (kind, pattern, declared) {
-        (EntityKind::Component, Some(pattern), Some(source)) => (
-            vec![
-                plain("O"),
-                plain(source.label()),
-                plain("declara a parte"),
-                named(name),
-                plain("("),
-                (pattern.to_owned(), true),
-                plain("), mas ela ainda não está no Mapa."),
-            ],
-            "o componente entra no Mapa e as decisões que mexeram nesses arquivos passam a \
-             poder ser ligadas a ele."
-                .to_owned(),
-        ),
+    let (sentence, effect) = match (kind, pattern, declared) {
+        (EntityKind::Component, Some(pattern), Some(source)) => {
+            use application::graph::WorkspaceKind;
+            let workspace = match source {
+                WorkspaceKind::Cargo => t::workspace_cargo(),
+                WorkspaceKind::Npm => t::workspace_npm(),
+                WorkspaceKind::Pnpm => t::workspace_pnpm(),
+            };
+            (
+                t::item_declared(workspace, &clipped(name, 90), pattern),
+                t::item_declared_effect().to_owned(),
+            )
+        }
         (EntityKind::Component, pattern, _) => (
-            vec![
-                plain(&format!(
-                    "{} {} mexeu{} em arquivos de",
-                    if decisions == 1 { "Uma" } else { "Várias" },
-                    if decisions == 1 { "decisão" } else { "decisões" },
-                    if decisions == 1 { "" } else { "ram" },
-                )),
-                (pattern.unwrap_or(name).to_owned(), true),
-                plain("que nenhum componente do Mapa cobre."),
-            ],
-            format!(
-                "o componente {name} entra no Mapa e {} ligada{} a ele.",
-                plural(decisions, "decisão fica", "decisões ficam"),
-                if decisions == 1 { "" } else { "s" },
-            ),
+            t::item_uncovered(decisions, pattern.unwrap_or(name)),
+            t::item_uncovered_effect(decisions, name),
         ),
         (EntityKind::Technology, ..) => (
-            vec![
-                plain(&format!(
-                    "A dependência {name} foi adicionada em {}, mas ainda não é uma tecnologia do Mapa.",
-                    plural(decisions, "decisão", "decisões")
-                )),
-            ],
-            format!(
-                "{name} entra no Mapa como tecnologia e as decisões que a usam passam a estar \
-                 ligadas a ela."
-            ),
+            t::item_technology(decisions, name),
+            t::item_technology_effect(name),
         ),
-    }
+    };
+    (t::spans(&sentence), effect)
 }
 
 fn kind_label(kind: EntityKind) -> &'static str {
     match kind {
-        EntityKind::Component => "Componente",
-        EntityKind::Technology => "Tecnologia",
+        EntityKind::Component => t::kind_component(),
+        EntityKind::Technology => t::kind_technology(),
     }
 }
 
 fn kind_plural(kind: EntityKind) -> &'static str {
     match kind {
-        EntityKind::Component => "Componentes",
-        EntityKind::Technology => "Tecnologias",
+        EntityKind::Component => t::kind_components(),
+        EntityKind::Technology => t::kind_technologies(),
     }
 }
 
@@ -4131,16 +3976,6 @@ fn kind_icon(kind: EntityKind) -> IconName {
     match kind {
         EntityKind::Component => IconName::Component,
         EntityKind::Technology => IconName::Cpu,
-    }
-}
-
-fn claim_label(kind: &str) -> &'static str {
-    match kind {
-        "assumption" => "Premissa",
-        "constraint" => "Restrição",
-        "goal" => "Objetivo",
-        "convention" => "Convenção",
-        _ => "Regra",
     }
 }
 
@@ -4155,8 +3990,8 @@ mod tests {
         for code in [
             "duplicate_name",
             "invalid_pattern",
-            "cycle",
-            "conflict",
+            "self_reference",
+            "second_parent",
             "storage",
         ] {
             assert!(!change_failure(code).contains(code));
@@ -4183,6 +4018,6 @@ mod tests {
             last_activity: None,
             conflicts: 0,
         };
-        assert_eq!(weight(&row), "1 decisão · 2 regras");
+        assert_eq!(weight(&row), "1 decision · 2 rules");
     }
 }
