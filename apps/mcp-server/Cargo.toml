@@ -16,4 +16,7 @@ path = "src/main.rs"
 application = { version = "0.1.0", path = "../../crates/application" }
 # Blocking client for the loopback local API; same version and features as ai-provider.
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "default-tls"] }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v7"] }

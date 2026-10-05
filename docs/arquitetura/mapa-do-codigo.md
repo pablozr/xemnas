@@ -48,6 +48,11 @@ Com desktop fechado, [adapter/outbox.ts](../../adapters/opencode/src/outbox.ts)
 grava o envelope; [application/outbox.rs](../../crates/application/src/outbox.rs)
 o importa pela mesma ingestão (testes unitários nesse arquivo).
 
+No Claude Code, os hooks do módulo [mcp-server/src/hook](../../apps/mcp-server/src/hook/mod.rs)
+(`prompt.rs` injeção, `transcript.rs` leitura incremental do transcript, `envelope.rs`,
+`stop.rs` ponto de retomada, `deliver.rs` API ou outbox) usam os mesmos `/v1/context` e
+`/v1/captures`.
+
 `~/.config/opencode/plugins/xemnas.ts` é o wrapper instalado que reexporta o build,
 não a fonte versionada. Client nativo, ativação e limites de fallback têm uma
 única referência: [integração OpenCode](../operacao/operacao-e-referencia.md#integração-com-o-opencode).
