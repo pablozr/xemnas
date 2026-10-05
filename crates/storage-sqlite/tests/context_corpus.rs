@@ -448,10 +448,15 @@ fn report_context_corpus() {
 /// 0.95 / 1, holdout 0.80 / 0.89 / 0. Relative coverage (when the best
 /// lexical match covers 4 concepts or more, the others must match it):
 /// 0.83 / 0.95 / 1, holdout 0.92 / 0.89 / 0. A bar from 3 concepts gave
-/// 0.88 but recall 0.92 (same holdout), so 4 was kept.
-const PRECISION_FLOOR: f64 = 0.82;
+/// 0.88 but recall 0.92 (same holdout), so 4 was kept. Main clause (a
+/// match must stand on the task's main clause, as much as the best match
+/// does): 0.94 / 0.95 / 0, holdout 0.96 / 0.89 / 0. Demanding two main
+/// concepts always gave recall 0.92 (outbox-delivery, whose subordinate
+/// clause carries the subject). The corpus's distractor variants are
+/// written as subordinate clauses, so this gain is likely optimistic.
+const PRECISION_FLOOR: f64 = 0.93;
 const RECALL_FLOOR: f64 = 0.95;
-const CONTAMINATED_CASES_CEILING: usize = 1;
+const CONTAMINATED_CASES_CEILING: usize = 0;
 /// Generous on purpose: this runs on a developer's machine beside other work.
 const BUILD_PACK_P95_CEILING_US: u128 = 20_000;
 

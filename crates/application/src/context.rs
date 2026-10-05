@@ -316,6 +316,11 @@ where
         // Plurals and English/Portuguese pairs meet (`crate::terms`), so a
         // task in one language finds what was decided in the other.
         let task_words = TaskTerms::new(&meaningful_words(&task));
+        // The main clause names the subject; a subordinate one ("quando o
+        // cache da API enche", "sem mudar a cor") adds circumstance.
+        let main = main_clause(&task);
+        let main_words = TaskTerms::new(&meaningful_words(main));
+        let has_subordinate = main.len() < task.len() && !main_words.is_empty();
         let query = task_words.match_query();
         let lexical_decisions = match &query {
             Some(query) => self
@@ -368,8 +373,11 @@ where
             .filter(|claim| claim.is_valid_at(&as_of))
             .map(|claim| (claim.claim_id.as_str(), claim))
             .collect();
-        let coverage = |text: &str| task_words.covered_by(&meaningful_words(text));
-        let claim_coverage: BTreeMap<&str, usize> = ranked_claims
+        let coverage = |text: &str| {
+            let words = meaningful_words(text);
+            (task_words.covered_by(&words), main_words.covered_by(&words))
+        };
+        let claim_coverage: BTreeMap<&str, (usize, usize)> = ranked_claims
             .iter()
             .filter(|id| !linked_claims.contains(*id))
             .filter_map(|id| {
@@ -400,7 +408,7 @@ where
         } else {
             self.store.decision_search_terms(&request.project_id)?
         };
-        let decision_coverage: BTreeMap<String, usize> = in_force_decisions
+        let decision_coverage: BTreeMap<String, (usize, usize)> = in_force_decisions
             .iter()
             .filter(|decision| !linked_decisions.contains(&decision.decision_id))
             .map(|decision| {
@@ -420,11 +428,29 @@ where
         let best = decision_coverage
             .values()
             .chain(claim_coverage.values())
-            .copied()
+            .map(|(covered, _)| *covered)
             .max()
             .unwrap_or(0);
         let floor = if best >= CLEAR_LEAD { best } else { needed };
-        let lexical_ok = |covered: usize| !task_words.is_empty() && covered >= floor;
+        // With a subordinate clause, a match must also stand on the main
+        // one: "trocar a fonte dos títulos sem mudar a cor de destaque" does
+        // not bring the decision about the accent color. As much of it as
+        // the best match covers (up to two concepts): when the subordinate
+        // clause carries the subject ("entrega capturas quando o app está
+        // fechado"), touching the main clause once is enough.
+        let main_best = decision_coverage
+            .values()
+            .chain(claim_coverage.values())
+            .filter(|(covered, _)| *covered >= floor)
+            .map(|(_, in_main)| *in_main)
+            .max()
+            .unwrap_or(0);
+        let main_needed = main_words.len().min(2).min(main_best).max(1);
+        let lexical_ok = |(covered, in_main): (usize, usize)| {
+            !task_words.is_empty()
+                && covered >= floor
+                && (!has_subordinate || in_main >= main_needed)
+        };
         let matched_claims: BTreeSet<&str> = ranked_claims
             .iter()
             .map(String::as_str)
@@ -783,6 +809,43 @@ fn meaningful_words(text: &str) -> BTreeSet<String> {
 /// to be about it: at least two of its meaningful words (the only one when
 /// the task has one). One shared word ("cache", "terminal") is how unrelated
 /// decisions of the same project got in.
+/// The task up to its first subordinate clause: "sem", "quando",
+/// "enquanto", "para" before a verb, "usado por" and their English
+/// counterparts. The whole task when it has none.
+fn main_clause(task: &str) -> &str {
+    let words: Vec<(usize, String)> = task
+        .split_inclusive(|character: char| !(character.is_alphanumeric() || character == '_'))
+        .scan(0, |offset, piece| {
+            let start = *offset;
+            *offset += piece.len();
+            Some((start, piece))
+        })
+        .map(|(start, piece)| {
+            let word = piece.trim_end_matches(|c: char| !(c.is_alphanumeric() || c == '_'));
+            (start, fold_word(word))
+        })
+        .filter(|(_, word)| !word.is_empty())
+        .collect();
+    for (index, (start, word)) in words.iter().enumerate() {
+        let next = words.get(index + 1).map_or("", |(_, next)| next.as_str());
+        let verb = next.chars().count() > 3
+            && (next.ends_with("ar") || next.ends_with("er") || next.ends_with("ir"));
+        let marker = match word.as_str() {
+            "sem" | "quando" | "enquanto" | "without" | "when" | "while" | "unless" => true,
+            "para" => verb,
+            "usado" | "usada" | "usados" | "usadas" => {
+                matches!(next, "pelo" | "pela" | "pelos" | "pelas" | "por")
+            }
+            "used" => next == "by",
+            _ => false,
+        };
+        if marker && index > 0 {
+            return task[..*start].trim_end();
+        }
+    }
+    task
+}
+
 /// Concepts a lexical match must cover before it sets the bar for the rest.
 const CLEAR_LEAD: usize = 4;
 
@@ -895,6 +958,31 @@ mod tests {
         snapshot.sources[0].last_check_status = CheckStatus::Verified;
         snapshot.sources[0].sha256 = Some("changed".into());
         assert!(super::select_observations(&snapshot, "p", "serde", &[]).is_empty());
+    }
+
+    #[test]
+    fn the_main_clause_stops_at_a_subordinate_one() {
+        use super::main_clause;
+        assert_eq!(
+            main_clause("Trocar a fonte dos títulos sem mudar a cor"),
+            "Trocar a fonte dos títulos"
+        );
+        assert_eq!(
+            main_clause("Escolher cor do terminal para visualizar contadores"),
+            "Escolher cor do terminal"
+        );
+        assert_eq!(
+            main_clause("Impedir que segredos vazem para o provedor de IA"),
+            "Impedir que segredos vazem para o provedor de IA"
+        );
+        assert_eq!(
+            main_clause("Salvar a chave usada pelo cache"),
+            "Salvar a chave"
+        );
+        assert_eq!(
+            main_clause("When to rebuild the cache"),
+            "When to rebuild the cache"
+        );
     }
 
     #[test]
