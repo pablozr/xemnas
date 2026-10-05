@@ -79,6 +79,8 @@ pub enum IconName {
     Search,
     /// Palette switch.
     Contrast,
+    /// The interface language.
+    Globe,
     /// Version history.
     Clock,
     /// What the agent receives: the Context destination.
@@ -260,6 +262,9 @@ impl IconName {
             Self::Close => glyph!(r#"<path d="M6 6l12 12M18 6 6 18"/>"#),
             Self::Fit => glyph!(
                 r#"<path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4"/>"#
+            ),
+            Self::Globe => glyph!(
+                r#"<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5a13 13 0 0 1 0 17 13 13 0 0 1 0-17z"/>"#
             ),
             Self::Compass => {
                 glyph!(r#"<circle cx="12" cy="12" r="8.5"/><path d="m15.5 8.5-2 5-5 2 2-5z"/>"#)

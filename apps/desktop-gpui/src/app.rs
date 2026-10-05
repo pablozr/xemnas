@@ -769,6 +769,7 @@ impl<
         if let Some(rest) = route.strip_prefix("settings") {
             let section = match rest.trim_start_matches(':') {
                 "appearance" => SettingsSection::Appearance,
+                "language" => SettingsSection::Language,
                 "opencode" => SettingsSection::OpenCode,
                 "diagnostics" => SettingsSection::Diagnostics,
                 _ => SettingsSection::Ai,
@@ -1211,6 +1212,16 @@ impl<
                     command: Command::SettingsAt(section),
                 });
             }
+            items.push(PaletteItem {
+                group: "Configurações",
+                label: crate::i18n::settings::language_palette().into(),
+                detail: Some(crate::i18n::settings::settings_at(
+                    crate::i18n::settings::language_title(),
+                )),
+                glyph: IconName::Globe,
+                shortcut: None,
+                command: Command::SettingsAt(SettingsSection::Language),
+            });
         }
         items
     }

@@ -327,7 +327,7 @@ fn preview(mode: ThemeMode) -> Div {
         )
 }
 
-fn radio_mark(theme: &Theme, selected: bool) -> Div {
+pub(super) fn radio_mark(theme: &Theme, selected: bool) -> Div {
     let colors = theme.colors;
     div()
         .size(px(16.0))

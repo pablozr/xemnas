@@ -164,12 +164,14 @@ where
 
 mod appearance;
 mod diagnostics;
+mod language;
 mod opencode;
 mod parts;
 mod providers;
 
 pub use appearance::AppearancePanel;
 pub use diagnostics::{DiagnosticsBackend, DiagnosticsPanel, DiagnosticsService};
+pub use language::LanguagePanel;
 pub use opencode::{IntegrationBackend, IntegrationService, OpenCodePanel};
 
 use parts::{card, card_body, card_footer, status_hero, step};
@@ -255,6 +257,8 @@ pub enum SettingsSection {
     Diagnostics,
     /// Theme and background.
     Appearance,
+    /// The interface language.
+    Language,
 }
 
 impl SettingsSection {
@@ -264,6 +268,7 @@ impl SettingsSection {
             Self::OpenCode => "settings-section-opencode",
             Self::Diagnostics => "settings-section-diagnostics",
             Self::Appearance => "settings-section-appearance",
+            Self::Language => "settings-section-language",
         }
     }
     fn title(self) -> &'static str {
@@ -272,6 +277,7 @@ impl SettingsSection {
             Self::OpenCode => "OpenCode",
             Self::Diagnostics => "Diagnóstico",
             Self::Appearance => "Aparência",
+            Self::Language => crate::i18n::settings::language_title(),
         }
     }
     fn subtitle(self) -> &'static str {
@@ -280,6 +286,7 @@ impl SettingsSection {
             Self::OpenCode => "Se as capturas do OpenCode estão chegando e, se não, por quê.",
             Self::Diagnostics => "Como o pipeline está indo e o que se perdeu no caminho.",
             Self::Appearance => "O tema do app e o fundo atrás das superfícies.",
+            Self::Language => crate::i18n::settings::language_subtitle(),
         }
     }
     fn glyph(self) -> IconName {
@@ -288,6 +295,7 @@ impl SettingsSection {
             Self::OpenCode => IconName::Link,
             Self::Diagnostics => IconName::Activity,
             Self::Appearance => IconName::Contrast,
+            Self::Language => IconName::Globe,
         }
     }
 }
@@ -298,6 +306,7 @@ pub struct SettingsScreen {
     opencode: Option<Entity<OpenCodePanel>>,
     diagnostics: Option<Entity<DiagnosticsPanel>>,
     appearance: Entity<AppearancePanel>,
+    language: Entity<LanguagePanel>,
     backend: Option<Box<dyn AiBackend>>,
     catalog: Option<Arc<dyn ModelCatalog>>,
     account: Option<Arc<dyn PlanAccount>>,
@@ -352,6 +361,7 @@ impl SettingsScreen {
         let opencode = integration.map(|backend| cx.new(|_| OpenCodePanel::new(backend)));
         let diagnostics = diagnostics.map(|backend| cx.new(|_| DiagnosticsPanel::new(backend)));
         let appearance = cx.new(|_| AppearancePanel::default());
+        let language = cx.new(|_| LanguagePanel);
         let fields = std::array::from_fn(|index| {
             cx.new(|cx| {
                 let mut field = SearchField::new(cx);
@@ -376,6 +386,7 @@ impl SettingsScreen {
             opencode,
             diagnostics,
             appearance,
+            language,
             backend: Some(backend),
             catalog,
             account,
@@ -450,7 +461,7 @@ impl SettingsScreen {
                     panel.update(cx, |panel, cx| panel.refresh(cx));
                 }
             }
-            SettingsSection::Appearance => {}
+            SettingsSection::Appearance | SettingsSection::Language => {}
         }
         cx.notify();
     }
@@ -464,6 +475,7 @@ impl SettingsScreen {
             sections.push(SettingsSection::Diagnostics);
         }
         sections.push(SettingsSection::Appearance);
+        sections.push(SettingsSection::Language);
         sections
     }
 
@@ -1438,6 +1450,7 @@ impl Render for SettingsScreen {
             SettingsSection::OpenCode => self.opencode.clone().map(|p| p.into_any_element()),
             SettingsSection::Diagnostics => self.diagnostics.clone().map(|p| p.into_any_element()),
             SettingsSection::Appearance => Some(self.appearance.clone().into_any_element()),
+            SettingsSection::Language => Some(self.language.clone().into_any_element()),
         };
         let body: AnyElement = if let Some(panel) = panel {
             panel

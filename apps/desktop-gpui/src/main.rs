@@ -708,8 +708,8 @@ fn run_shell_mode(
             Bounds::centered(None, dimensions, cx)
         };
         // The saved appearance applies before the first window, so the app
-        // never flashes the default theme. The demo saves nothing and takes
-        // `--theme <id>` instead.
+        // never flashes the default theme or language. The demo saves nothing
+        // and takes `--theme <id>` and `--language <tag>` instead.
         let mut appearance = if demo {
             xemnas_desktop::ui::appearance::Appearance::default()
         } else {
@@ -731,9 +731,14 @@ fn run_shell_mode(
             if let Some(id) = argument_after("--wallpaper") {
                 appearance.wallpaper = xemnas_desktop::ui::appearance::Wallpaper::Builtin(id);
             }
+            if let Some(language) = argument_after("--language")
+                .as_deref()
+                .and_then(xemnas_desktop::i18n::Language::from_id)
+            {
+                appearance.language = language;
+            }
         }
-        cx.set_global(appearance.theme);
-        cx.set_global(appearance);
+        xemnas_desktop::ui::appearance::apply(cx, appearance);
         // When each project was last looked at (the Revisão's briefing); the
         // demo pretends the last look was before its sample data.
         if demo {
