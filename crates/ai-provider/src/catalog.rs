@@ -7,6 +7,7 @@ use application::profile::{AiProfile, ProfileKind, CHATGPT_API_BASE};
 use application::providers::{ModelCatalog, ModelInfo, ProviderError};
 
 use crate::chatgpt::ChatGptSession;
+use crate::claude_code::claude_code_models;
 use crate::opencode::opencode_wire;
 
 const TIMEOUT: Duration = Duration::from_secs(15);
@@ -100,6 +101,7 @@ impl ModelCatalog for HttpModelCatalog {
         let secret = secret.filter(|secret| !secret.is_empty());
         match profile.kind {
             ProfileKind::Fake => Ok(Vec::new()),
+            ProfileKind::ClaudeCode => Ok(claude_code_models()),
             ProfileKind::OpenAiCompatible => {
                 let endpoint = profile
                     .endpoint

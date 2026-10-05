@@ -858,6 +858,7 @@ impl application::providers::ModelCatalog for SampleCatalog {
                 ("deepseek-v4-pro", "deepseek-v4-pro"),
                 ("big-pickle", "big-pickle"),
             ],
+            ProfileKind::ClaudeCode => ai_provider::claude_code::CLAUDE_CODE_MODELS,
         };
         Ok(sample
             .iter()

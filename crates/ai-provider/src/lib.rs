@@ -1,14 +1,17 @@
 //! AI provider adapters: OpenAI-compatible endpoints (API key or local
-//! model), the ChatGPT plan and the OpenCode Zen/Go gateway (ADR-0004).
+//! model), the ChatGPT plan, the OpenCode Zen/Go gateway and the local
+//! Claude Code CLI (ADR-0004).
 
 #![warn(missing_docs)]
 
 pub mod catalog;
 pub mod chatgpt;
+pub mod claude_code;
 pub mod opencode;
 
 pub use catalog::HttpModelCatalog;
 pub use chatgpt::{ChatGptExtractor, ChatGptSession, MANAGE_USAGE_URL, PLAN_SCOPE};
+pub use claude_code::{find_claude_code, ClaudeCodeExtractor, LocalClaudeCode};
 pub use opencode::{opencode_wire, OpenCodeExtractor, Wire};
 
 use std::fmt;
@@ -193,6 +196,8 @@ enum Backend {
     ChatGpt(ChatGptExtractor),
     /// OpenCode Zen or Go with the user's key.
     OpenCode(OpenCodeExtractor),
+    /// The Claude Code CLI signed in on this machine.
+    ClaudeCode(ClaudeCodeExtractor),
 }
 
 impl ProviderExtractor {
@@ -233,6 +238,7 @@ impl CandidateExtractor for ProviderExtractor {
             Backend::OpenAiCompatible(e) => &e.profile,
             Backend::ChatGpt(e) => e.profile(),
             Backend::OpenCode(e) => e.profile(),
+            Backend::ClaudeCode(e) => e.profile(),
         };
         let user = build_user_content(profile, input, signals, background);
         let answer = application::overview::StructuredModel::complete_authorized(
@@ -265,6 +271,7 @@ impl CandidateExtractor for ProviderExtractor {
             }
             Backend::ChatGpt(extractor) => extractor.extract_with(input, signals, background),
             Backend::OpenCode(extractor) => extractor.extract_with(input, signals, background),
+            Backend::ClaudeCode(extractor) => extractor.extract_with(input, signals, background),
         })
     }
 }
@@ -288,6 +295,9 @@ impl application::overview::StructuredModel for ProviderExtractor {
             Backend::OpenCode(e) => {
                 e.complete_checked(system, user, name, schema, Some(authorization))
             }
+            Backend::ClaudeCode(e) => {
+                e.complete_checked(system, user, name, schema, Some(authorization))
+            }
         })
     }
     fn complete(
@@ -301,6 +311,7 @@ impl application::overview::StructuredModel for ProviderExtractor {
             Backend::OpenAiCompatible(model) => model.complete(system, user, schema_name, schema),
             Backend::ChatGpt(model) => model.complete(system, user, schema_name, schema),
             Backend::OpenCode(model) => model.complete(system, user, schema_name, schema),
+            Backend::ClaudeCode(model) => model.complete(system, user, schema_name, schema),
         })
     }
 }
@@ -321,6 +332,7 @@ impl ExtractorFactory for ProviderFactory {
                 ChatGptExtractor::new(self.chatgpt.clone(), profile).map(Backend::ChatGpt)
             }
             ProfileKind::OpenCode => OpenCodeExtractor::new(profile, secret).map(Backend::OpenCode),
+            ProfileKind::ClaudeCode => ClaudeCodeExtractor::new(profile).map(Backend::ClaudeCode),
             ProfileKind::Fake => Err(ExtractError::Extractor(
                 "a heurística local não usa provedor externo".to_string(),
             )),

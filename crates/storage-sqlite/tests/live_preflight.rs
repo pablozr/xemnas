@@ -36,6 +36,7 @@ fn live_profile_preflight() {
         ProfileKind::OpenAiCompatible => "open_ai_compatible",
         ProfileKind::ChatGptPlan => "chat_gpt_plan",
         ProfileKind::OpenCode => "open_code",
+        ProfileKind::ClaudeCode => "claude_code",
     };
     let status = match consent_status(&profile) {
         Ok(()) => "valid",

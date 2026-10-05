@@ -154,6 +154,7 @@ fn profile_adapter(profile: &AiProfile) -> &'static str {
         ProfileKind::OpenAiCompatible => "openai-compatible",
         ProfileKind::ChatGptPlan => "chatgpt-plan",
         ProfileKind::OpenCode => "opencode",
+        ProfileKind::ClaudeCode => "claude-code",
     }
 }
 
@@ -165,6 +166,7 @@ pub fn policy_snapshot(profile: &AiProfile) -> String {
             ProfileKind::OpenAiCompatible => "open_ai_compatible",
             ProfileKind::ChatGptPlan => "chat_gpt_plan",
             ProfileKind::OpenCode => "open_code",
+            ProfileKind::ClaudeCode => "claude_code",
         },
         "max_input_chars": profile.max_input_chars,
         "redaction_on_ingest": true,

@@ -65,7 +65,7 @@ impl Credentials {
     /// Whether the credential of `kind` is stored.
     fn stored(self, kind: ProfileKind) -> bool {
         match kind {
-            ProfileKind::Fake => false,
+            ProfileKind::Fake | ProfileKind::ClaudeCode => false,
             ProfileKind::OpenAiCompatible => self.api_key,
             ProfileKind::ChatGptPlan => self.chatgpt,
             ProfileKind::OpenCode => self.opencode,
@@ -982,6 +982,7 @@ impl SettingsScreen {
             ProfileKind::OpenAiCompatible => ("settings-kind-external", IconName::Cloud),
             ProfileKind::ChatGptPlan => ("settings-kind-chatgpt", IconName::User),
             ProfileKind::OpenCode => ("settings-kind-opencode", IconName::Link),
+            ProfileKind::ClaudeCode => ("settings-kind-claude-code", IconName::Link),
         };
         let focus = self
             .focus

@@ -35,6 +35,9 @@ pub const CHATGPT_API_BASE: &str = "https://api.openai.com/v1";
 pub const OPENCODE_ZEN_ENDPOINT: &str = "https://opencode.ai/zen/v1";
 /// OpenCode Go: the monthly subscription over the same gateway.
 pub const OPENCODE_GO_ENDPOINT: &str = "https://opencode.ai/zen/go/v1";
+/// Where the local Claude Code sends the requests (ADR-0004); named in the
+/// consent preview, never called by xemnas itself.
+pub const CLAUDE_CODE_DESTINATION: &str = "https://api.anthropic.com";
 
 /// Which extractor a profile selects (ADR-0004).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,6 +53,9 @@ pub enum ProfileKind {
     /// OpenCode Zen or OpenCode Go, the model gateway of OpenCode, with the
     /// user's OpenCode API key.
     OpenCode,
+    /// The Claude Code CLI installed and signed in on this machine; xemnas
+    /// runs it and never sees its credentials.
+    ClaudeCode,
 }
 
 /// Non-secret facts about the connected ChatGPT account. The refresh token
@@ -146,17 +152,28 @@ impl AiProfile {
                 }
                 Ok(())
             }
+            ProfileKind::ClaudeCode => {
+                require_model(&self.model)?;
+                if self.endpoint.is_some() {
+                    return Err(ProfileError::Invalid(
+                        "o Claude Code usa a própria configuração".to_string(),
+                    ));
+                }
+                Ok(())
+            }
         }
     }
 
     /// The account under which this profile's credential lives in the
     /// secret store: the API key, the ChatGPT refresh token or the OpenCode
-    /// API key. Separate names keep switching kinds from mixing them.
+    /// API key. Separate names keep switching kinds from mixing them. Claude
+    /// Code keeps its own login, so nothing is stored under its name.
     pub fn credential_account(&self) -> String {
         match self.kind {
             ProfileKind::Fake | ProfileKind::OpenAiCompatible => self.id.clone(),
             ProfileKind::ChatGptPlan => chatgpt_account(self),
             ProfileKind::OpenCode => format!("{}.opencode", self.id),
+            ProfileKind::ClaudeCode => format!("{}.claude_code", self.id),
         }
     }
 
@@ -164,7 +181,7 @@ impl AiProfile {
     /// model on loopback needs none.
     pub fn credential_required(&self) -> bool {
         match self.kind {
-            ProfileKind::Fake => false,
+            ProfileKind::Fake | ProfileKind::ClaudeCode => false,
             ProfileKind::OpenCode => true,
             ProfileKind::OpenAiCompatible => {
                 !self.endpoint.as_deref().is_some_and(is_loopback_endpoint)
@@ -413,10 +430,12 @@ pub fn build_preview(profile: &AiProfile) -> ConsentPreview {
         })
         .collect();
     let total_approximate_chars = profile.max_input_chars.saturating_mul(categories.len());
-    // The ChatGPT plan always goes to the OpenAI API, whatever the profile
-    // file says; the preview names that destination and the account.
+    // The ChatGPT plan always goes to the OpenAI API and Claude Code to
+    // Anthropic's, whatever the profile file says; the preview names that
+    // destination (and the ChatGPT account).
     let destination = match profile.kind {
         ProfileKind::ChatGptPlan => Some(CHATGPT_API_BASE),
+        ProfileKind::ClaudeCode => Some(CLAUDE_CODE_DESTINATION),
         _ => profile.endpoint.as_deref(),
     };
     ConsentPreview {
@@ -425,6 +444,7 @@ pub fn build_preview(profile: &AiProfile) -> ConsentPreview {
             ProfileKind::OpenAiCompatible => "open_ai_compatible".to_string(),
             ProfileKind::ChatGptPlan => "chat_gpt_plan".to_string(),
             ProfileKind::OpenCode => "open_code".to_string(),
+            ProfileKind::ClaudeCode => "claude_code".to_string(),
         },
         endpoint_host: destination.and_then(endpoint_host),
         endpoint_fingerprint: destination.and_then(|endpoint| {

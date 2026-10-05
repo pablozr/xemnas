@@ -64,6 +64,7 @@ pub(super) fn analysed_by(profile: &AiProfile) -> String {
         ),
         ProfileKind::ChatGptPlan => format!("pelo seu plano do ChatGPT ({})", profile.model),
         ProfileKind::OpenCode => format!("pelo {} com {}", opencode_plan(profile), profile.model),
+        ProfileKind::ClaudeCode => format!("pelo Claude Code desta máquina ({})", profile.model),
     }
 }
 
@@ -154,6 +155,11 @@ pub(super) fn consent_steps(
             (ready, "Chave no cofre", "Guardada no sistema"),
             consent,
         ],
+        ProfileKind::ClaudeCode => vec![
+            (saved, "Modelo salvo", "Modelo e limite"),
+            (ready, "Claude Code conectado", "Login feito no terminal"),
+            consent,
+        ],
     }
 }
 
@@ -173,6 +179,8 @@ impl SettingsScreen {
                         .is_some_and(|account| account.plan_usage)
             }
             ProfileKind::OpenCode => self.credentials.opencode,
+            // Claude Code keeps its own login; xemnas stores nothing.
+            ProfileKind::ClaudeCode => true,
         }
     }
 

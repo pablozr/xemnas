@@ -327,7 +327,7 @@ fn response_text(wire: Wire, value: &serde_json::Value) -> Option<String> {
 }
 
 /// The JSON object inside a reply that may wrap it in a code fence or prose.
-fn json_object(text: &str) -> &str {
+pub(crate) fn json_object(text: &str) -> &str {
     match (text.find('{'), text.rfind('}')) {
         (Some(start), Some(end)) if start < end => &text[start..=end],
         _ => text,

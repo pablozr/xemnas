@@ -1,6 +1,6 @@
-//! Ports for choosing an AI provider (ADR-0004): the model catalog and the
-//! ChatGPT account sign-in. Implementations live in `ai-provider`; the desktop
-//! reaches them only through these traits.
+//! Ports for choosing an AI provider (ADR-0004): the model catalog, the
+//! ChatGPT account sign-in and the local Claude Code check. Implementations
+//! live in `ai-provider`; the desktop reaches them only through these traits.
 
 use std::time::Duration;
 
@@ -34,6 +34,8 @@ pub enum ProviderError {
     InvalidResponse,
     /// The secret store could not be read or written.
     Keystore,
+    /// The Claude Code CLI was not found on this machine.
+    NotInstalled,
 }
 
 impl ProviderError {
@@ -46,6 +48,7 @@ impl ProviderError {
             Self::Cancelled => "O login foi cancelado ou expirou.",
             Self::InvalidResponse => "O provedor respondeu num formato inesperado.",
             Self::Keystore => "Não foi possível acessar o cofre do sistema.",
+            Self::NotInstalled => "O Claude Code não foi encontrado nesta máquina.",
         }
     }
 }
@@ -101,4 +104,31 @@ pub trait PlanAccount: Send + Sync {
         account: &ChatGptAccount,
         refresh_token: Option<String>,
     ) -> Result<(), ProviderError>;
+}
+
+/// The command that signs Claude Code in; the user runs it in a terminal.
+pub const CLAUDE_CODE_LOGIN_COMMAND: &str = "claude auth login";
+
+/// What the local Claude Code reports about its own login. Never carries a
+/// credential: Claude Code keeps it, xemnas only runs the CLI.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ClaudeCodeStatus {
+    /// Version the CLI reports, for the settings screen.
+    pub version: Option<String>,
+    /// Whether the CLI has a usable login.
+    pub signed_in: bool,
+    /// How it signs in (`claude.ai` for a plan, or an API key).
+    pub auth_method: Option<String>,
+    /// E-mail of the signed-in account.
+    pub email: Option<String>,
+    /// Plan of the signed-in account (`pro`, `max`…).
+    pub subscription: Option<String>,
+}
+
+/// Checks the Claude Code installed on this machine without spending tokens.
+/// Blocking; callers run it off the UI thread.
+pub trait ClaudeCodeProbe: Send + Sync {
+    /// Installation and login state; [`ProviderError::NotInstalled`] when the
+    /// CLI is missing.
+    fn status(&self) -> Result<ClaudeCodeStatus, ProviderError>;
 }
