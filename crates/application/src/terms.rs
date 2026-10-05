@@ -258,20 +258,29 @@ pub(crate) fn variants(word: &str) -> BTreeSet<String> {
     out
 }
 
-/// What a task asks about: one concept per distinct meaningful word, each
-/// with the forms that count as speaking of it.
+/// What a task asks about: one concept per meaningful word, each with the
+/// forms that count as speaking of it. Words the glossary makes synonyms
+/// ("trocar" and "mudar", "registrar" and "logs") are one concept, so a
+/// task does not ask twice for the same idea.
 pub(crate) struct TaskTerms {
     concepts: Vec<BTreeSet<String>>,
 }
 
 impl TaskTerms {
     pub(crate) fn new(words: &BTreeSet<String>) -> Self {
-        let mut seen = BTreeSet::new();
-        let concepts = words
-            .iter()
-            .filter(|word| seen.insert(base(word)))
-            .map(|word| variants(word))
-            .collect();
+        let mut concepts: Vec<BTreeSet<String>> = Vec::new();
+        for word in words {
+            let mut forms = variants(word);
+            // Absorb every concept this word's forms meet.
+            let (meeting, apart): (Vec<_>, Vec<_>) = concepts
+                .into_iter()
+                .partition(|concept| !concept.is_disjoint(&forms));
+            for concept in meeting {
+                forms.extend(concept);
+            }
+            concepts = apart;
+            concepts.push(forms);
+        }
         Self { concepts }
     }
 
@@ -283,13 +292,18 @@ impl TaskTerms {
         self.concepts.is_empty()
     }
 
-    /// How many of the task's concepts a text's (folded) words speak of.
+    /// How many of the task's concepts a text's (folded) words speak of;
+    /// one word of the text answers for one concept at most.
     pub(crate) fn covered_by(&self, words: &BTreeSet<String>) -> usize {
-        let bases: BTreeSet<String> = words.iter().map(|word| base(word)).collect();
-        self.concepts
-            .iter()
-            .filter(|forms| !forms.is_disjoint(&bases))
-            .count()
+        let mut unused: BTreeSet<String> = words.iter().map(|word| base(word)).collect();
+        let mut covered = 0;
+        for forms in &self.concepts {
+            if let Some(word) = unused.iter().find(|word| forms.contains(*word)).cloned() {
+                unused.remove(&word);
+                covered += 1;
+            }
+        }
+        covered
     }
 
     /// FTS5 `MATCH` for any form of any concept: a prefix query for stems
@@ -353,6 +367,12 @@ mod tests {
         assert_eq!(terms.len(), 2);
         let text = ["senhas", "caches"].map(String::from).into();
         assert_eq!(terms.covered_by(&text), 2);
+
+        let synonyms = ["trocar", "mudar", "fonte"].map(String::from).into();
+        let terms = TaskTerms::new(&synonyms);
+        assert_eq!(terms.len(), 2, "trocar and mudar are one idea");
+        let one_word = ["mudar"].map(String::from).into();
+        assert_eq!(terms.covered_by(&one_word), 1);
     }
 
     #[test]

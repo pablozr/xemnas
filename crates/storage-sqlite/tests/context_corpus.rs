@@ -301,7 +301,7 @@ fn score(
     totals.negative_cases += usize::from(!family.positive);
     totals.contaminated += usize::from(!family.positive && contamination > 0);
     println!(
-        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},\"{}\"",
+        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},\"{}\",\"{}\"",
         stage,
         family.name,
         variant,
@@ -325,6 +325,11 @@ fn score(
             .intersection(&partial)
             .cloned()
             .collect::<Vec<_>>()
+            .join("|"),
+        topical
+            .difference(&required)
+            .cloned()
+            .collect::<Vec<_>>()
             .join("|")
     );
 }
@@ -345,7 +350,7 @@ fn report_context_corpus() {
     println!("precision=strict_required/topical partial_related=reported_not_true_positive");
     println!(concat!(
         "stage,family,variant,split,positive,tp,retrieved,expected,precision,recall,",
-        "standing,negative_items,estimated_tokens,oracle_misses,budget_misses,partial_related"
+        "standing,negative_items,estimated_tokens,oracle_misses,budget_misses,partial_related,noise"
     ));
     for family in corpus::FAMILIES {
         for (variant, task) in family.queries.iter().enumerate() {
@@ -438,7 +443,10 @@ fn report_context_corpus() {
 /// 0.95 / 1, so they are a last resort, used only when no decision speaks
 /// of the task in its own words: 0.76 / 0.95 / 1, holdout 0.73 / 0.89 / 0.
 /// The last-resort rule was chosen after seeing which families regressed.
-const PRECISION_FLOOR: f64 = 0.75;
+/// Synonyms of the task are one concept and a word of the text answers for
+/// one concept ("mudar" no longer covers both "trocar" and "mudar"): 0.79 /
+/// 0.95 / 1, holdout 0.80 / 0.89 / 0.
+const PRECISION_FLOOR: f64 = 0.78;
 const RECALL_FLOOR: f64 = 0.95;
 const CONTAMINATED_CASES_CEILING: usize = 1;
 /// Generous on purpose: this runs on a developer's machine beside other work.
