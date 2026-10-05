@@ -3950,6 +3950,31 @@ fn link_wording(suggestion: &Suggestion) -> (Vec<(String, bool)>, String) {
     let target = &suggestion.entity.label;
     let rule = suggestion.source.node.kind == NodeKind::Claim;
     let what = if rule { "A regra" } else { "A decisão" };
+    if let Some(quote) = application::graph::mention_quote(&suggestion.reason) {
+        let (kind, owner) = (
+            if suggestion.kind == EdgeKind::Uses {
+                "tecnologia usada"
+            } else {
+                "parte afetada"
+            },
+            if rule { "regra" } else { "decisão" },
+        );
+        return (
+            vec![
+                plain(what),
+                named(source),
+                plain("cita"),
+                named(target),
+                plain("no próprio texto:"),
+                (format!("“{quote}”"), true),
+                plain("."),
+            ],
+            format!(
+                "{target} passa a constar como {kind} por essa {owner} no Mapa. A ligação veio \
+                 só do texto; confira o trecho antes de confirmar."
+            ),
+        );
+    }
     match suggestion.kind {
         EdgeKind::Uses => (
             vec![

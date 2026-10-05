@@ -1279,6 +1279,8 @@ mod tests {
             decision_id: id.into(),
             question: format!("pergunta {id}"),
             choice: String::new(),
+            rationale: String::new(),
+            context: vec![],
             confirmed_at: confirmed_at.into(),
             files: vec![],
             diffs: vec![],
