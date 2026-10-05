@@ -267,4 +267,155 @@ mod tests {
         assert_eq!(mention_quote(&reason), Some(quote.as_str()));
         assert_eq!(mention_quote("crates/core/src/lib.rs"), None);
     }
+
+    /// The map of a small project and labelled decision texts: which parts
+    /// each text is really about. Negatives use the same words in other
+    /// senses, so precision measures what a wrong link would cost.
+    fn corpus() -> (
+        Vec<(&'static str, EntityRecord)>,
+        Vec<(&'static str, Vec<&'static str>)>,
+    ) {
+        let map = vec![
+            (
+                "storage",
+                entity(
+                    "storage-sqlite",
+                    &["sqlite store"],
+                    &["crates/storage-sqlite/**"],
+                ),
+            ),
+            ("core", entity("core", &["núcleo"], &["crates/core/**"])),
+            ("outbox", entity("outbox", &[], &["adapters/outbox/**"])),
+            (
+                "app",
+                entity("app desktop", &["gpui app"], &["apps/desktop-gpui/**"]),
+            ),
+            (
+                "api",
+                entity("api", &["local api"], &["crates/local-api/**"]),
+            ),
+            (
+                "mcp",
+                entity("mcp server", &["xemnas-mcp"], &["apps/mcp-server/**"]),
+            ),
+            (
+                "hooks",
+                entity("hooks", &["opencode plugin"], &["adapters/opencode/**"]),
+            ),
+        ];
+        let texts = vec![
+            (
+                "O core grava cada captura pela outbox antes de responder.",
+                vec!["core", "outbox"],
+            ),
+            (
+                "O storage-sqlite usa WAL para leituras durante gravações.",
+                vec!["storage"],
+            ),
+            ("A `api` local só escuta em loopback.", vec!["api"]),
+            ("A API local exige token por sessão.", vec!["api"]),
+            ("O xemnas-mcp responde get_decision em stdio.", vec!["mcp"]),
+            (
+                "Os arquivos em crates/core/src mudam juntos com o núcleo.",
+                vec!["core"],
+            ),
+            (
+                "O plugin grava em adapters/outbox/pending quando o app desktop fecha.",
+                vec!["outbox", "app"],
+            ),
+            ("A janela da gpui app mostra a Revisão.", vec!["app"]),
+            (
+                "Retentar só falhas transitórias, com a mesma chave.",
+                vec![],
+            ),
+            (
+                "A api de pagamentos de terceiros não entra no escopo.",
+                vec![],
+            ),
+            (
+                // Figurative "núcleo": a known false positive of the rule.
+                "O núcleo do problema é a ordem das mensagens.",
+                vec![],
+            ),
+            ("Usar storage separado por projeto foi descartado.", vec![]),
+            (
+                "O mcp server lê o mesmo banco do app desktop.",
+                vec!["mcp", "app"],
+            ),
+            (
+                "Hooks do opencode plugin capturam cada turno.",
+                vec!["hooks"],
+            ),
+        ];
+        (map, texts)
+    }
+
+    /// Floors measured on 2026-10-05; raise them when the rule improves.
+    const MENTION_PRECISION_FLOOR: f64 = 0.92;
+    const MENTION_RECALL_FLOOR: f64 = 1.0;
+
+    #[test]
+    fn mention_quality_gate() {
+        let (map, texts) = corpus();
+        let (mut tp, mut found, mut expected) = (0usize, 0usize, 0usize);
+        for (text, truth) in &texts {
+            let folded = Folded::new(text);
+            let hits: Vec<&str> = map
+                .iter()
+                .filter(|(_, entity)| {
+                    entity_terms(entity)
+                        .iter()
+                        .any(|term| folded.mention(term).is_some())
+                })
+                .map(|(label, _)| *label)
+                .collect();
+            tp += hits.iter().filter(|hit| truth.contains(hit)).count();
+            found += hits.len();
+            expected += truth.len();
+        }
+        let precision = tp as f64 / found.max(1) as f64;
+        let recall = tp as f64 / expected.max(1) as f64;
+        println!(
+            "mention precision={precision:.3} ({tp}/{found}) recall={recall:.3} ({tp}/{expected})"
+        );
+        assert!(
+            precision >= MENTION_PRECISION_FLOOR,
+            "mention precision {precision:.3}"
+        );
+        assert!(recall >= MENTION_RECALL_FLOOR, "mention recall {recall:.3}");
+    }
+
+    #[test]
+    fn mention_matching_scales_to_a_large_project() {
+        // 2.000 decisions of ~300 characters against a 60-part map.
+        let map: Vec<EntityRecord> = (0..60)
+            .map(|index| {
+                entity(
+                    &format!("component{index}"),
+                    &[&format!("alias{index}")],
+                    &[&format!("crates/component{index}/**")],
+                )
+            })
+            .collect();
+        let terms: Vec<Vec<Term>> = map.iter().map(entity_terms).collect();
+        let text = "A decisão grava cada captura numa transação, valida a versão e só                     então confirma; o component7 recebe o resultado e o alias12 registra                     a ocorrência em crates/component33/src/lib.rs para a próxima sessão."
+            .repeat(2);
+        let start = std::time::Instant::now();
+        let mut hits = 0usize;
+        for _ in 0..2_000 {
+            let folded = Folded::new(&text);
+            hits += terms
+                .iter()
+                .filter(|terms| terms.iter().any(|term| folded.mention(term).is_some()))
+                .count();
+        }
+        let elapsed = start.elapsed();
+        println!("mention 2000x60 elapsed_ms={}", elapsed.as_millis());
+        assert_eq!(hits, 2_000 * 3);
+        assert!(
+            elapsed.as_millis() < 3_000,
+            "mention matching took {}ms for 2000 decisions",
+            elapsed.as_millis()
+        );
+    }
 }

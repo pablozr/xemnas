@@ -36,5 +36,6 @@ Antes de criar ou alterar qualquer tela em `apps/desktop-gpui`, leia `docs/desig
 # Validação
 
 - Backend: `cargo fmt --all -- --check`, `cargo clippy --locked -p <crates alterados> --all-targets -- -D warnings` e `cargo test --locked -p <crates alterados> -p architecture`.
+- Núcleo (captura, extração, grafo, observações, revisão, aprovação automática, seleção e entrega de contexto): toda mudança inclui ou atualiza um portão de assertividade e um de desempenho e roda `python tools/core-quality.py`; ao melhorar um número, suba o piso no mesmo commit. Detalhes em `docs/arquitetura/qualidade-do-nucleo.md`.
 - Front: além do acima, `cargo check -p desktop-gpui` no Windows. Em container Linux o GPUI não compila; registre a limitação.
 - `rustfmt` desiste em silêncio de expressões longas demais: `fmt --check` verde não garante código formatado; revise linhas acima de 100 colunas.

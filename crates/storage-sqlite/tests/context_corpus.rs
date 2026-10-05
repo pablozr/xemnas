@@ -407,3 +407,70 @@ fn report_context_corpus() {
         );
     }
 }
+
+/// Floors of the context selection on this corpus (the baseline measured on
+/// 2026-10-05). The gate fails on a regression; raise a floor whenever an
+/// improvement lands, so the next change cannot quietly give it back.
+const PRECISION_FLOOR: f64 = 0.65;
+const RECALL_FLOOR: f64 = 0.94;
+const CONTAMINATED_CASES_CEILING: usize = 2;
+/// Generous on purpose: this runs on a developer's machine beside other work.
+const BUILD_PACK_P95_CEILING_US: u128 = 20_000;
+
+#[test]
+fn context_quality_gate() {
+    let fixture = Fixture::seed("corpus-gate");
+    let packs = ContextPacks::new(fixture.test.store.clone());
+    let mut totals = Totals::default();
+    let mut latency = Vec::new();
+    for family in corpus::FAMILIES {
+        for (variant, task) in family.queries.iter().enumerate() {
+            let req = request(family, task, 12_000);
+            let pack = packs.build_pack(req.clone()).expect("pack");
+            let items = selected(&fixture, &pack);
+            let reference = packs
+                .build_pack(request(family, task, 50_000))
+                .expect("reference");
+            let upstream = selected(&fixture, &reference);
+            score(
+                "gate",
+                family,
+                variant,
+                &items,
+                &upstream,
+                pack.used_chars.div_ceil(4),
+                &mut totals,
+            );
+            for _ in 0..3 {
+                let start = Instant::now();
+                packs.build_pack(req.clone()).expect("latency pack");
+                latency.push(start.elapsed().as_micros());
+            }
+        }
+    }
+    latency.sort_unstable();
+    let p95 = latency[latency.len() * 95 / 100];
+    let precision = totals.tp as f64 / totals.retrieved.max(1) as f64;
+    let recall = totals.tp as f64 / totals.expected.max(1) as f64;
+    println!(
+        "gate precision={precision:.4} recall={recall:.4} contaminated={}/{} p95_us={p95}",
+        totals.contaminated, totals.negative_cases
+    );
+    assert!(
+        precision >= PRECISION_FLOOR,
+        "context precision fell to {precision:.4} (floor {PRECISION_FLOOR})"
+    );
+    assert!(
+        recall >= RECALL_FLOOR,
+        "context recall fell to {recall:.4} (floor {RECALL_FLOOR})"
+    );
+    assert!(
+        totals.contaminated <= CONTAMINATED_CASES_CEILING,
+        "{} negative cases received context (ceiling {CONTAMINATED_CASES_CEILING})",
+        totals.contaminated
+    );
+    assert!(
+        p95 <= BUILD_PACK_P95_CEILING_US,
+        "build_pack p95 {p95}us above {BUILD_PACK_P95_CEILING_US}us"
+    );
+}
