@@ -531,6 +531,22 @@ strings! {
         de: "Neueste Erfassungen des Projekts", it: "Ultime acquisizioni del progetto",
         ja: "プロジェクトの最近のキャプチャ", zh: "项目最近的捕获",
         ko: "프로젝트의 최근 캡처", ru: "Последние захваты проекта" }
+    /// Capture pill: waiting for analysis.
+    capture_state_queued { en: "Waiting", pt: "Aguardando", es: "En espera", fr: "En attente", de: "Wartet", it: "In attesa", ja: "待機中", zh: "等待中", ko: "대기 중", ru: "Ожидает" }
+    /// Capture pill: being analysed.
+    capture_state_running { en: "Analysing", pt: "Analisando", es: "Analizando", fr: "Analyse en cours", de: "Wird analysiert", it: "In analisi", ja: "分析中", zh: "分析中", ko: "분석 중", ru: "Анализ" }
+    /// Capture pill: analysis complete.
+    capture_state_done { en: "Analysed", pt: "Analisada", es: "Analizada", fr: "Analysée", de: "Analysiert", it: "Analizzata", ja: "分析済み", zh: "已分析", ko: "분석됨", ru: "Проанализирован" }
+    /// Capture pill: analysis failed.
+    capture_state_failed { en: "Failed", pt: "Falhou", es: "Falló", fr: "Échec", de: "Fehlgeschlagen", it: "Non riuscita", ja: "失敗", zh: "失败", ko: "실패", ru: "Ошибка" }
+    /// Capture pill: analysis not run.
+    capture_state_skipped { en: "Skipped", pt: "Ignorada", es: "Omitida", fr: "Ignorée", de: "Übersprungen", it: "Saltata", ja: "スキップ", zh: "已跳过", ko: "건너뜀", ru: "Пропущен" }
+    /// Capture pill: analysis cancelled.
+    capture_state_cancelled { en: "Cancelled", pt: "Cancelada", es: "Cancelada", fr: "Annulée", de: "Abgebrochen", it: "Annullata", ja: "キャンセル", zh: "已取消", ko: "취소됨", ru: "Отменён" }
+    /// Capture pill: received, state not reported.
+    capture_state_received { en: "Received", pt: "Recebida", es: "Recibida", fr: "Reçue", de: "Empfangen", it: "Ricevuta", ja: "受信済み", zh: "已收到", ko: "수신됨", ru: "Получен" }
+    /// Title of a capture without a user prompt.
+    capture_untitled { en: "Capture without a prompt", pt: "Captura sem prompt", es: "Captura sin prompt", fr: "Capture sans prompt", de: "Erfassung ohne Prompt", it: "Acquisizione senza prompt", ja: "プロンプトのないキャプチャ", zh: "没有提示词的捕获", ko: "프롬프트 없는 캡처", ru: "Захват без запроса" }
     /// Error when a capture could not be reprocessed.
     reprocess_error { en: "Couldn't reprocess this capture.",
         pt: "Não foi possível reprocessar esta captura.",
@@ -603,11 +619,6 @@ strings! {
         zh: "此项目尚未收到捕获。已捕获的会话会在审阅前显示在这里。",
         ko: "이 프로젝트에서 받은 캡처가 없어요. 캡처한 세션은 검토 전에 여기에 나타나요.",
         ru: "В этом проекте пока нет захватов. Захваченные сессии появляются здесь до проверки." }
-    /// A capture whose source adapter was not recorded.
-    progress_source_unknown { en: "Source not provided", pt: "Fonte não informada",
-        es: "Fuente no informada", fr: "Source non renseignée",
-        de: "Quelle nicht angegeben", it: "Fonte non indicata", ja: "ソース不明",
-        zh: "未提供来源", ko: "출처 정보 없음", ru: "Источник не указан" }
     /// Screen-reader label of the reprocess button of a capture.
     reprocess_aria { en: "Reprocess capture", pt: "Reprocessar captura",
         es: "Reprocesar captura", fr: "Retraiter la capture",
@@ -1209,19 +1220,6 @@ formats! {
         zh: "地图上没有对应组件：{shown} 等另外 {more} 个。请在地图中创建，下次即可关联。",
         ko: "맵에 컴포넌트가 없어요: {shown} 외 {more}개. 맵에서 만들면 다음에 연결할 수 있어요.",
         ru: "На карте нет компонента: {shown} и ещё {more}. Создайте его на Карте, чтобы связать в следующий раз." }
-    /// Metadata line of one capture.
-    capture_meta(date: &str, source: &str, model: &str, attempts: i64, pending: usize,
-        hidden: usize, adopted: usize, dismissed: usize, snoozed: usize) {
-        en: "{date} · {source}{model} · attempt {attempts} · {pending} pending · {hidden} low relevance · {adopted} confirmed · {dismissed} rejected · {snoozed} postponed",
-        pt: "{date} · {source}{model} · tentativa {attempts} · {pending} pendentes · {hidden} de baixa relevância · {adopted} confirmados · {dismissed} rejeitados · {snoozed} adiados",
-        es: "{date} · {source}{model} · intento {attempts} · {pending} pendientes · {hidden} de baja relevancia · {adopted} confirmados · {dismissed} rechazados · {snoozed} aplazados",
-        fr: "{date} · {source}{model} · tentative {attempts} · {pending} en attente · {hidden} de faible pertinence · {adopted} confirmés · {dismissed} rejetés · {snoozed} reportés",
-        de: "{date} · {source}{model} · Versuch {attempts} · {pending} ausstehend · {hidden} mit geringer Relevanz · {adopted} bestätigt · {dismissed} abgelehnt · {snoozed} zurückgestellt",
-        it: "{date} · {source}{model} · tentativo {attempts} · {pending} in attesa · {hidden} di bassa rilevanza · {adopted} confermati · {dismissed} rifiutati · {snoozed} rimandati",
-        ja: "{date} · {source}{model} · {attempts} 回目 · 未処理 {pending} · 関連度低 {hidden} · 確定 {adopted} · 却下 {dismissed} · 保留 {snoozed}",
-        zh: "{date} · {source}{model} · 第 {attempts} 次尝试 · 待处理 {pending} · 低相关度 {hidden} · 已确认 {adopted} · 已拒绝 {dismissed} · 已推迟 {snoozed}",
-        ko: "{date} · {source}{model} · {attempts}번째 시도 · 대기 {pending} · 관련도 낮음 {hidden} · 확인 {adopted} · 거부 {dismissed} · 미룸 {snoozed}",
-        ru: "{date} · {source}{model} · попытка {attempts} · ожидают: {pending} · малорелевантные: {hidden} · подтверждено: {adopted} · отклонено: {dismissed} · отложено: {snoozed}" }
     /// Line of why a candidate matters.
     why_it_matters(criteria: &str) { en: "Why it matters: {criteria}",
         pt: "Por que importa: {criteria}", es: "Por qué importa: {criteria}",
@@ -1317,6 +1315,62 @@ plurals! {
         it: ["{count} fonte", "{count} fonti"],
         ja: "ソース {count} 件", zh: "{count} 个来源", ko: "출처 {count}개",
         ru: ["{count} источник", "{count} источника", "{count} источников"] }
+    /// Proposals still waiting for review.
+    capture_proposals(count) {
+        en: ["{count} proposal", "{count} proposals"], pt: ["{count} proposta", "{count} propostas"],
+        es: ["{count} propuesta", "{count} propuestas"], fr: ["{count} proposition", "{count} propositions"],
+        de: ["{count} Vorschlag", "{count} Vorschläge"], it: ["{count} proposta", "{count} proposte"],
+        ja: "提案 {count} 件", zh: "{count} 条提案", ko: "제안 {count}개",
+        ru: ["{count} предложение", "{count} предложения", "{count} предложений"] }
+    /// Proposals confirmed.
+    capture_confirmed(count) {
+        en: ["{count} confirmed", "{count} confirmed"], pt: ["{count} confirmada", "{count} confirmadas"],
+        es: ["{count} confirmada", "{count} confirmadas"], fr: ["{count} confirmée", "{count} confirmées"],
+        de: ["{count} bestätigt", "{count} bestätigt"], it: ["{count} confermata", "{count} confermate"],
+        ja: "確定 {count} 件", zh: "已确认 {count} 条", ko: "확인 {count}개",
+        ru: ["подтверждено: {count}", "подтверждено: {count}", "подтверждено: {count}"] }
+    /// Proposals rejected.
+    capture_rejected(count) {
+        en: ["{count} rejected", "{count} rejected"], pt: ["{count} rejeitada", "{count} rejeitadas"],
+        es: ["{count} rechazada", "{count} rechazadas"], fr: ["{count} rejetée", "{count} rejetées"],
+        de: ["{count} abgelehnt", "{count} abgelehnt"], it: ["{count} rifiutata", "{count} rifiutate"],
+        ja: "却下 {count} 件", zh: "已拒绝 {count} 条", ko: "거부 {count}개",
+        ru: ["отклонено: {count}", "отклонено: {count}", "отклонено: {count}"] }
+    /// Proposals postponed.
+    capture_postponed(count) {
+        en: ["{count} postponed", "{count} postponed"], pt: ["{count} adiada", "{count} adiadas"],
+        es: ["{count} aplazada", "{count} aplazadas"], fr: ["{count} reportée", "{count} reportées"],
+        de: ["{count} zurückgestellt", "{count} zurückgestellt"], it: ["{count} rimandata", "{count} rimandate"],
+        ja: "保留 {count} 件", zh: "已推迟 {count} 条", ko: "미룸 {count}개",
+        ru: ["отложено: {count}", "отложено: {count}", "отложено: {count}"] }
+    /// Summary: captures waiting for analysis.
+    capture_waiting(count) {
+        en: ["{count} waiting for analysis", "{count} waiting for analysis"], pt: ["{count} aguardando análise", "{count} aguardando análise"],
+        es: ["{count} esperando análisis", "{count} esperando análisis"], fr: ["{count} en attente d’analyse", "{count} en attente d’analyse"],
+        de: ["{count} wartet auf Analyse", "{count} warten auf Analyse"], it: ["{count} in attesa di analisi", "{count} in attesa di analisi"],
+        ja: "分析待ち {count} 件", zh: "{count} 条等待分析", ko: "분석 대기 {count}개",
+        ru: ["ожидает анализа: {count}", "ожидает анализа: {count}", "ожидает анализа: {count}"] }
+    /// Summary: captures analysed.
+    capture_analysed(count) {
+        en: ["{count} analysed", "{count} analysed"], pt: ["{count} analisada", "{count} analisadas"],
+        es: ["{count} analizada", "{count} analizadas"], fr: ["{count} analysée", "{count} analysées"],
+        de: ["{count} analysiert", "{count} analysiert"], it: ["{count} analizzata", "{count} analizzate"],
+        ja: "分析済み {count} 件", zh: "已分析 {count} 条", ko: "분석됨 {count}개",
+        ru: ["проанализировано: {count}", "проанализировано: {count}", "проанализировано: {count}"] }
+    /// Summary: captures whose analysis failed.
+    capture_failed_count(count) {
+        en: ["{count} failed", "{count} failed"], pt: ["{count} falhou", "{count} falharam"],
+        es: ["{count} falló", "{count} fallaron"], fr: ["{count} échec", "{count} échecs"],
+        de: ["{count} fehlgeschlagen", "{count} fehlgeschlagen"], it: ["{count} non riuscita", "{count} non riuscite"],
+        ja: "失敗 {count} 件", zh: "{count} 条失败", ko: "실패 {count}개",
+        ru: ["ошибок: {count}", "ошибок: {count}", "ошибок: {count}"] }
+    /// Attempt number, shown only after a retry.
+    capture_attempt(count) {
+        en: ["attempt {count}", "attempt {count}"], pt: ["tentativa {count}", "tentativa {count}"],
+        es: ["intento {count}", "intento {count}"], fr: ["tentative {count}", "tentative {count}"],
+        de: ["Versuch {count}", "Versuch {count}"], it: ["tentativo {count}", "tentativo {count}"],
+        ja: "{count} 回目", zh: "第 {count} 次尝试", ko: "{count}번째 시도",
+        ru: ["попытка {count}", "попытка {count}", "попытка {count}"] }
 }
 
 /// Deliveries to the agent with the sessions that made them.
