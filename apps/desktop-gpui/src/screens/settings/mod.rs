@@ -22,6 +22,7 @@ use gpui::{
 };
 
 use super::format::{date_time, thousands};
+use crate::i18n::settings as t;
 use crate::ui::controls::{action_button, button_foreground, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
@@ -30,19 +31,6 @@ use crate::ui::patterns::{
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{tint, SpacingScale, TypeScale};
-
-/// Product copy too long to sit inside the element chains.
-const REVOKE_WARNING: &str = "Isso desliga as chamadas externas e apaga a chave do cofre. \
-                              O endereço e o modelo continuam salvos.";
-const REVOKE_ONLY_WARNING: &str =
-    "Isso desliga as chamadas externas. A configuração e a conta continuam salvas.";
-const PAGE_SUBTITLE: &str = "Como as capturas viram candidatos e o que pode sair desta máquina.";
-const LOCAL_ONLY: &str = "Com o extrator local, nenhum conteúdo das capturas sai desta máquina.";
-const KEY_DESCRIPTION: &str =
-    "Fica no Gerenciador de Credenciais do sistema, nunca em arquivo, e não é exibida aqui.";
-const CONSENT_INVALIDATION: &str =
-    "Salvar muda a prévia: o consentimento atual deixa de valer até você consentir de novo.";
-const REDACTION_ON: &str = "Segredos são redigidos na captura, antes de qualquer envio.";
 
 /// Width of the section navigation.
 const NAV_WIDTH: f32 = 220.0;
@@ -273,20 +261,20 @@ impl SettingsSection {
     }
     fn title(self) -> &'static str {
         match self {
-            Self::Ai => "IA e privacidade",
+            Self::Ai => t::section_ai_title(),
             Self::OpenCode => "OpenCode",
-            Self::Diagnostics => "Diagnóstico",
-            Self::Appearance => "Aparência",
-            Self::Language => crate::i18n::settings::language_title(),
+            Self::Diagnostics => t::section_diagnostics_title(),
+            Self::Appearance => t::section_appearance_title(),
+            Self::Language => t::language_title(),
         }
     }
     fn subtitle(self) -> &'static str {
         match self {
-            Self::Ai => PAGE_SUBTITLE,
-            Self::OpenCode => "Se as capturas do OpenCode estão chegando e, se não, por quê.",
-            Self::Diagnostics => "Como o pipeline está indo e o que se perdeu no caminho.",
-            Self::Appearance => "O tema do app e o fundo atrás das superfícies.",
-            Self::Language => crate::i18n::settings::language_subtitle(),
+            Self::Ai => t::section_ai_subtitle(),
+            Self::OpenCode => t::section_opencode_subtitle(),
+            Self::Diagnostics => t::section_diagnostics_subtitle(),
+            Self::Appearance => t::section_appearance_subtitle(),
+            Self::Language => t::language_subtitle(),
         }
     }
     fn glyph(self) -> IconName {
@@ -336,17 +324,23 @@ pub struct SettingsScreen {
 
 impl EventEmitter<CloseSettings> for SettingsScreen {}
 
-const FIELD_PLACEHOLDERS: [&str; 3] = [
-    "https://api.exemplo.com/v1",
-    "Nome do modelo no provedor",
-    "8192",
-];
+/// Placeholder of the provider form field `index` (address, model, limit).
+fn field_placeholder(index: usize) -> &'static str {
+    match index {
+        0 => t::field_endpoint_placeholder(),
+        1 => t::field_model_placeholder(),
+        _ => "8192",
+    }
+}
 
-const FIELD_LABELS: [&str; 3] = [
-    "Endereço do provedor",
-    "Modelo",
-    "Limite de caracteres por item",
-];
+/// Label of the provider form field `index` (address, model, limit).
+fn field_label(index: usize) -> &'static str {
+    match index {
+        0 => t::field_endpoint_label(),
+        1 => t::field_model_label(),
+        _ => t::field_limit_label(),
+    }
+}
 
 impl SettingsScreen {
     /// Mounts the page; nothing is read until [`Self::open`].
@@ -366,14 +360,14 @@ impl SettingsScreen {
             cx.new(|cx| {
                 let mut field = SearchField::new(cx);
                 field.stretch();
-                field.set_context(FIELD_PLACEHOLDERS[index], cx);
+                field.set_context(field_placeholder(index), cx);
                 field
             })
         });
         let key = cx.new(|cx| {
             let mut field = SearchField::new(cx);
             field.secret();
-            field.set_context("Chave de API do provedor", cx);
+            field.set_context(t::field_key_placeholder(), cx);
             field
         });
         let subscriptions = fields
@@ -552,9 +546,9 @@ impl SettingsScreen {
 
     fn key_placeholder(&mut self, cx: &mut Context<Self>) {
         let placeholder = if self.kind == ProfileKind::OpenCode {
-            "Chave de API do OpenCode"
+            t::field_opencode_key_placeholder()
         } else {
-            "Chave de API do provedor"
+            t::field_key_placeholder()
         };
         self.key
             .update(cx, |field, cx| field.set_context(placeholder, cx));
@@ -587,7 +581,7 @@ impl SettingsScreen {
         let mut profile = self
             .stored
             .clone()
-            .ok_or_else(|| "Configuração ainda não carregada.".to_owned())?;
+            .ok_or_else(|| t::ai_err_not_loaded().to_owned())?;
         profile.kind = self.kind;
         if self.kind != ProfileKind::Fake {
             let endpoint = self.value(0, cx);
@@ -597,7 +591,7 @@ impl SettingsScreen {
             profile.max_input_chars = self
                 .value(2, cx)
                 .parse()
-                .map_err(|_| "O limite por item deve ser um número inteiro positivo.".to_owned())?;
+                .map_err(|_| t::ai_err_limit().to_owned())?;
         }
         Ok(profile)
     }
@@ -732,9 +726,9 @@ impl SettingsScreen {
                     }
                 };
                 let notice = if profile.kind == ProfileKind::Fake {
-                    "Extração local ativada. Nenhum conteúdo sai desta máquina."
+                    t::ai_notice_local_on()
                 } else {
-                    "Configuração salva. Revise a prévia e consinta para ativar."
+                    t::ai_notice_saved()
                 };
                 self.confirm_revoke = false;
                 self.run(
@@ -755,7 +749,7 @@ impl SettingsScreen {
                 }
                 let account = as_kind(stored, self.kind).credential_account();
                 let key = key.to_owned();
-                let notice = "Chave guardada no cofre do sistema.";
+                let notice = t::ai_notice_key_stored();
                 self.key_placeholder(cx);
                 self.keeping_form(
                     Box::new(move |backend| {
@@ -776,7 +770,7 @@ impl SettingsScreen {
                         backend.grant(&stored, &build_preview(&stored), &now)?;
                         backend.load()
                     }),
-                    Some("Consentimento registrado. O provedor externo está ativo."),
+                    Some(t::ai_notice_consent_granted()),
                     cx,
                 );
             }
@@ -788,9 +782,9 @@ impl SettingsScreen {
                 };
                 self.confirm_revoke = false;
                 let notice = if stored.kind == ProfileKind::OpenAiCompatible {
-                    "Chamadas externas desligadas e chave apagada do cofre."
+                    t::ai_notice_revoked_with_key()
                 } else {
-                    "Chamadas externas desligadas."
+                    t::ai_notice_revoked()
                 };
                 self.run(
                     Box::new(move |backend| {
@@ -862,7 +856,7 @@ impl SettingsScreen {
                 "settings-close",
                 ButtonKind::Ghost,
                 true,
-                "Voltar aos projetos".into(),
+                t::nav_back_to_projects().into(),
                 Action::Close,
                 cx,
             )
@@ -871,7 +865,7 @@ impl SettingsScreen {
                 14.0,
                 button_foreground(theme, ButtonKind::Ghost, true),
             ))
-            .child("Projetos");
+            .child(t::nav_projects());
         div()
             .w(px(NAV_WIDTH))
             .flex_none()
@@ -889,7 +883,7 @@ impl SettingsScreen {
                     .px(px(SpacingScale::S2))
                     .pb(px(SpacingScale::S2))
                     .text_color(theme.colors.text_muted())
-                    .child("CONFIGURAÇÕES"),
+                    .child(t::nav_settings_label()),
             )
             .children(self.sections().into_iter().map(|section| {
                 let selected = section == self.section;
@@ -956,25 +950,20 @@ impl SettingsScreen {
         let (color, title, body): (_, &str, String) = match choose_extractor(Some(stored)) {
             ExtractorChoice::OfflineFake => (
                 theme.colors.text_muted(),
-                "Extração local, sem rede",
-                "Candidatos são extraídos nesta máquina. Nenhum conteúdo das capturas é enviado."
-                    .into(),
+                t::ai_status_local_title(),
+                t::ai_status_local_body().into(),
             ),
             ExtractorChoice::ExternalEnabled => (
                 theme.colors.status_success(),
-                "Provedor externo ativo",
-                format!(
-                    "Capturas são analisadas {}, dentro dos limites da prévia.",
-                    providers::analysed_by(stored)
-                ),
+                t::ai_status_active_title(),
+                t::ai_status_active_body(&providers::analysed_by(stored)),
             ),
             ExtractorChoice::ExternalBlocked => (
                 theme.colors.status_warning(),
-                "Provedor externo bloqueado",
-                format!(
-                    "{} Até lá, nenhuma captura é enviada nem analisada.",
-                    blocked_reason(consent_status(stored).err().unwrap_or_default())
-                ),
+                t::ai_status_blocked_title(),
+                t::ai_status_blocked_body(&blocked_reason(
+                    consent_status(stored).err().unwrap_or_default(),
+                )),
             ),
         };
         status_hero(theme, "settings-status", color, title, body)
@@ -1034,26 +1023,26 @@ impl SettingsScreen {
             .is_some_and(|stored| consent_status(stored).is_ok());
         let local = self.kind_option(
             ProfileKind::Fake,
-            "Local",
-            "Heurística offline. Nada sai desta máquina.",
+            t::ai_kind_local_title(),
+            t::ai_kind_local_body(),
             cx,
         );
         let remote = self.kind_option(
             ProfileKind::OpenAiCompatible,
-            "Modelo local ou API",
-            "Ollama, LM Studio ou um endereço compatível com OpenAI.",
+            t::ai_kind_remote_title(),
+            t::ai_kind_remote_body(),
             cx,
         );
         let chatgpt = self.kind_option(
             ProfileKind::ChatGptPlan,
-            "Conta ChatGPT",
-            "Usa o seu plano do ChatGPT, sem chave de API.",
+            t::ai_kind_chatgpt_title(),
+            t::ai_kind_chatgpt_body(),
             cx,
         );
         let opencode = self.kind_option(
             ProfileKind::OpenCode,
-            "OpenCode Zen ou Go",
-            "Cole a chave do OpenCode e escolha um modelo.",
+            t::ai_kind_opencode_title(),
+            t::ai_kind_opencode_body(),
             cx,
         );
         let save = self.button(
@@ -1061,9 +1050,9 @@ impl SettingsScreen {
             ButtonKind::Primary,
             !self.busy && edited && draft.is_ok(),
             if self.busy {
-                "Salvando…"
+                t::ai_saving()
             } else {
-                "Salvar configuração"
+                t::ai_save()
             },
             Action::Save,
             cx,
@@ -1073,21 +1062,18 @@ impl SettingsScreen {
             (Err(message), true) if typed => Some((message.clone(), theme.colors.status_danger())),
             (Err(_), true) => Some((
                 match self.kind {
-                    ProfileKind::ChatGptPlan => "Escolha um modelo do plano para salvar.",
-                    ProfileKind::OpenCode => "Escolha um modelo do OpenCode para salvar.",
-                    _ => "Informe o endereço e o modelo do provedor para salvar.",
+                    ProfileKind::ChatGptPlan => t::ai_hint_pick_plan_model(),
+                    ProfileKind::OpenCode => t::ai_hint_pick_opencode_model(),
+                    _ => t::ai_hint_fill_provider(),
                 }
                 .to_owned(),
                 theme.colors.text_muted(),
             )),
             (Ok(_), true) if consent_active => Some((
-                CONSENT_INVALIDATION.to_owned(),
+                t::ai_consent_invalidation().to_owned(),
                 theme.colors.status_warning(),
             )),
-            (Ok(_), true) => Some((
-                "Alterações não salvas.".to_owned(),
-                theme.colors.text_muted(),
-            )),
+            (Ok(_), true) => Some((t::ai_hint_unsaved().to_owned(), theme.colors.text_muted())),
             _ => None,
         };
         let fields = (self.kind != ProfileKind::Fake).then(|| self.render_fields(theme, cx));
@@ -1103,33 +1089,29 @@ impl SettingsScreen {
                 )
                 .child(save)
         });
-        card(
-            theme,
-            "Extrator",
-            "Quem lê as capturas para propor candidatos a decisão.",
-        )
-        .child(
-            card_body()
-                .child(
-                    div()
-                        .id("settings-kind")
-                        .w_full()
-                        .flex()
-                        .flex_col()
-                        .rounded(theme.radius.control())
-                        .border_1()
-                        .border_color(theme.colors.hairline_divider())
-                        .overflow_hidden()
-                        .role(Role::RadioGroup)
-                        .aria_label("Extrator")
-                        .child(local)
-                        .child(remote)
-                        .child(chatgpt)
-                        .child(opencode),
-                )
-                .children(fields),
-        )
-        .children(footer)
+        card(theme, t::ai_extractor_title(), t::ai_extractor_body())
+            .child(
+                card_body()
+                    .child(
+                        div()
+                            .id("settings-kind")
+                            .w_full()
+                            .flex()
+                            .flex_col()
+                            .rounded(theme.radius.control())
+                            .border_1()
+                            .border_color(theme.colors.hairline_divider())
+                            .overflow_hidden()
+                            .role(Role::RadioGroup)
+                            .aria_label(t::ai_extractor_title())
+                            .child(local)
+                            .child(remote)
+                            .child(chatgpt)
+                            .child(opencode),
+                    )
+                    .children(fields),
+            )
+            .children(footer)
     }
 
     fn render_preview(&self, theme: &Theme, cx: &App) -> Div {
@@ -1143,25 +1125,22 @@ impl SettingsScreen {
             match profile {
                 Some(profile) if profile.kind != ProfileKind::Fake => {
                     let preview = build_preview(&profile);
-                    let unset = || "Não configurado".to_owned();
+                    let unset = || t::ai_not_set().to_owned();
                     let note = providers::destination_note(&profile);
                     let stats = [
                         (
-                            "Destino",
+                            t::ai_preview_destination(),
                             providers::destination(&profile, &preview).unwrap_or_else(unset),
                         ),
                         (
-                            "Modelo",
+                            t::field_model_label(),
                             Some(preview.model.clone())
                                 .filter(|model| !model.is_empty())
                                 .unwrap_or_else(unset),
                         ),
                         (
-                            "Por análise",
-                            format!(
-                                "≈ {} caracteres",
-                                thousands(preview.total_approximate_chars)
-                            ),
+                            t::ai_preview_per_analysis(),
+                            t::ai_preview_chars(&thousands(preview.total_approximate_chars)),
                         ),
                     ];
                     div()
@@ -1222,10 +1201,9 @@ impl SettingsScreen {
                                             .child(
                                                 text_style(div(), TypeScale::BODY_SMALL)
                                                     .text_color(theme.colors.text_muted())
-                                                    .child(format!(
-                                                        "até {} por item",
-                                                        thousands(category.max_chars_per_item)
-                                                    )),
+                                                    .child(t::ai_preview_up_to(&thousands(
+                                                        category.max_chars_per_item,
+                                                    ))),
                                             )
                                     }),
                             ),
@@ -1248,9 +1226,9 @@ impl SettingsScreen {
                                     text_style(div(), TypeScale::BODY_SMALL)
                                         .text_color(theme.colors.text_secondary())
                                         .child(if preview.redaction_on_ingest {
-                                            REDACTION_ON
+                                            t::ai_redaction_on()
                                         } else {
-                                            "Sem redação de segredos na captura."
+                                            t::ai_redaction_off()
                                         }),
                                 ),
                         )
@@ -1280,16 +1258,11 @@ impl SettingsScreen {
                     .child(
                         text_style(div(), TypeScale::BODY_SMALL)
                             .text_color(theme.colors.text_secondary())
-                            .child(LOCAL_ONLY),
+                            .child(t::ai_local_only()),
                     )
                     .into_any_element(),
             };
-        card(
-            theme,
-            "O que sai da máquina",
-            "Prévia exata do que o provedor pode receber. O consentimento fica ligado a ela.",
-        )
-        .child(card_body().child(body))
+        card(theme, t::ai_preview_title(), t::ai_preview_body()).child(card_body().child(body))
     }
 
     fn render_consent(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Div {
@@ -1326,10 +1299,7 @@ impl SettingsScreen {
                             .flex_1()
                             .min_w(px(0.0))
                             .text_color(theme.colors.text_secondary())
-                            .child(format!(
-                                "Consentido em {granted} para a prévia acima. \
-                                 Mudar a configuração exige consentir de novo."
-                            )),
+                            .child(t::ai_consent_given(&granted)),
                     ),
             );
         } else {
@@ -1351,7 +1321,7 @@ impl SettingsScreen {
                 "settings-grant",
                 ButtonKind::Primary,
                 !self.busy && saved && ready,
-                "Consentir e ativar",
+                t::ai_grant(),
                 Action::Grant,
                 cx,
             )
@@ -1366,9 +1336,9 @@ impl SettingsScreen {
                 ButtonKind::Ghost,
                 !self.busy,
                 if active {
-                    "Revogar consentimento"
+                    t::ai_revoke_consent()
                 } else {
-                    "Apagar chave do cofre"
+                    t::ai_delete_key()
                 },
                 Action::AskRevoke,
                 cx,
@@ -1379,7 +1349,7 @@ impl SettingsScreen {
                 "settings-revoke-cancel",
                 ButtonKind::Ghost,
                 true,
-                "Cancelar",
+                t::action_cancel(),
                 Action::CancelRevoke,
                 cx,
             );
@@ -1388,9 +1358,9 @@ impl SettingsScreen {
                 ButtonKind::Secondary,
                 !self.busy,
                 if deletes_key {
-                    "Desligar e apagar chave"
+                    t::ai_revoke_and_delete()
                 } else {
-                    "Desligar chamadas externas"
+                    t::ai_revoke_calls()
                 },
                 Action::Revoke,
                 cx,
@@ -1410,9 +1380,9 @@ impl SettingsScreen {
                     text_style(div(), TypeScale::BODY_SMALL)
                         .text_color(theme.colors.text_secondary())
                         .child(if deletes_key {
-                            REVOKE_WARNING
+                            t::ai_revoke_warning()
                         } else {
-                            REVOKE_ONLY_WARNING
+                            t::ai_revoke_only_warning()
                         }),
                 )
                 .child(
@@ -1424,19 +1394,15 @@ impl SettingsScreen {
                         .child(confirm),
                 )
         });
-        card(
-            theme,
-            "Consentimento",
-            "Nada é enviado antes deste passo, e você pode revogar a qualquer momento.",
-        )
-        .child(body.children(confirmation))
-        .when(grant.is_some() || revoke.is_some(), |card| {
-            card.child(
-                card_footer(theme)
-                    .child(div().flex_1().children(revoke))
-                    .children(grant),
-            )
-        })
+        card(theme, t::ai_consent_title(), t::ai_consent_body())
+            .child(body.children(confirmation))
+            .when(grant.is_some() || revoke.is_some(), |card| {
+                card.child(
+                    card_footer(theme)
+                        .child(div().flex_1().children(revoke))
+                        .children(grant),
+                )
+            })
     }
 }
 
@@ -1463,7 +1429,7 @@ impl Render for SettingsScreen {
                         "settings-retry",
                         ButtonKind::Secondary,
                         !self.busy,
-                        "Tentar de novo",
+                        t::action_try_again(),
                         Action::Retry,
                         cx,
                     );
@@ -1473,10 +1439,7 @@ impl Render for SettingsScreen {
                         .gap(px(SpacingScale::S3))
                         .id("settings-load-error")
                         .role(Role::Alert)
-                        .child(
-                            text_style(div(), TypeScale::HEADING_3)
-                                .child("Não foi possível carregar as configurações"),
-                        )
+                        .child(text_style(div(), TypeScale::HEADING_3).child(t::ai_load_failed()))
                         .child(
                             text_style(div(), TypeScale::BODY_SMALL)
                                 .text_color(theme.colors.text_secondary())
@@ -1587,7 +1550,7 @@ fn failure(error: ProfileError) -> String {
                 operation = "ai_settings",
                 "AI settings operation failed"
             );
-            "Não foi possível acessar as configurações ou o cofre do sistema. Tente de novo.".into()
+            t::ai_err_io().into()
         }
     }
 }
@@ -1595,15 +1558,9 @@ fn failure(error: ProfileError) -> String {
 /// Actionable copy for [`consent_status`]'s sanitized reasons.
 fn blocked_reason(reason: &str) -> String {
     match reason {
-        "chamadas externas desativadas" | "consentimento ausente" => {
-            "Falta consentir com a prévia abaixo.".into()
-        }
-        "a configuração mudou após o consentimento" => {
-            "A configuração mudou depois do consentimento; consinta de novo.".into()
-        }
-        "configuração do provedor inválida" => {
-            "A configuração do provedor está incompleta ou inválida.".into()
-        }
+        "chamadas externas desativadas" | "consentimento ausente" => t::ai_blocked_consent().into(),
+        "a configuração mudou após o consentimento" => t::ai_blocked_changed().into(),
+        "configuração do provedor inválida" => t::ai_blocked_invalid().into(),
         other => format!("{}.", capitalize(other)),
     }
 }
@@ -1618,20 +1575,20 @@ fn capitalize(text: &str) -> String {
 
 fn category_label(kind: &str) -> &'static str {
     match kind {
-        "user_text" => "Mensagens que você escreveu",
-        "assistant_text" => "Respostas do assistente",
-        "diff_hunk" => "Trechos de diff",
-        "tool_summary" => "Resumos de ferramentas",
-        "document" => "Documentos do projeto",
-        "document_metadata" => "Caminhos e metadados dos documentos",
-        "decision_fields" => "Campos, escopo e qualificadores das decisões",
-        "confirmed_examples" => "Exemplos confirmados na revisão",
-        "rejected_examples" => "Exemplos rejeitados na revisão",
-        "rules" => "Regras e seus qualificadores",
-        "project_map" => "Itens e vínculos do mapa do projeto",
-        "knowledge_review" => "Fontes e achados da revisão de conhecimento",
-        "context_routing" => "Tarefa, arquivos e memória selecionada para avaliar relevância",
-        _ => "Outro conteúdo",
+        "user_text" => t::ai_cat_user_text(),
+        "assistant_text" => t::ai_cat_assistant_text(),
+        "diff_hunk" => t::ai_cat_diff_hunk(),
+        "tool_summary" => t::ai_cat_tool_summary(),
+        "document" => t::ai_cat_document(),
+        "document_metadata" => t::ai_cat_document_metadata(),
+        "decision_fields" => t::ai_cat_decision_fields(),
+        "confirmed_examples" => t::ai_cat_confirmed_examples(),
+        "rejected_examples" => t::ai_cat_rejected_examples(),
+        "rules" => t::ai_cat_rules(),
+        "project_map" => t::ai_cat_project_map(),
+        "knowledge_review" => t::ai_cat_knowledge_review(),
+        "context_routing" => t::ai_cat_context_routing(),
+        _ => t::ai_cat_other(),
     }
 }
 
@@ -1643,7 +1600,7 @@ mod tests {
     #[test]
     fn every_preview_category_has_product_copy() {
         for kind in PREVIEW_CATEGORIES {
-            assert_ne!(category_label(kind), "Outro conteúdo", "{kind}");
+            assert_ne!(category_label(kind), "Other content", "{kind}");
         }
     }
 
@@ -1657,7 +1614,7 @@ mod tests {
         let reason = consent_status(&profile).unwrap_err();
         assert_eq!(
             super::blocked_reason(reason),
-            "Falta consentir com a prévia abaixo."
+            "You still need to consent to the preview below."
         );
         assert_eq!(super::blocked_reason("algo novo"), "Algo novo.");
     }

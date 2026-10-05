@@ -12,6 +12,7 @@ use gpui::{
 };
 
 use super::parts::{card, card_body};
+use crate::i18n::settings as t;
 use crate::ui::appearance::{self, Level, Wallpaper};
 use crate::ui::controls::focus_ring;
 use crate::ui::icons::{icon, IconName};
@@ -101,7 +102,7 @@ impl AppearancePanel {
         grid = grid.child(Self::tile(
             theme,
             "wallpaper-none",
-            "Sem fundo".into(),
+            t::appearance_no_background().into(),
             div()
                 .size_full()
                 .bg(colors.canvas())
@@ -111,7 +112,7 @@ impl AppearancePanel {
                 .child(
                     text_style(div(), TypeScale::META)
                         .text_color(colors.text_muted())
-                        .child("Só o tema"),
+                        .child(t::appearance_theme_only()),
                 )
                 .into_any_element(),
             *current == Wallpaper::None,
@@ -158,7 +159,7 @@ impl AppearancePanel {
                 .child(
                     text_style(div(), TypeScale::META)
                         .text_color(colors.text_muted())
-                        .child("Escolher imagem"),
+                        .child(t::appearance_choose_image()),
                 )
                 .into_any_element(),
         };
@@ -168,7 +169,7 @@ impl AppearancePanel {
             custom
                 .as_ref()
                 .map(|path| wallpaper::custom_name(path))
-                .unwrap_or_else(|| "Sua imagem".into()),
+                .unwrap_or_else(|| t::appearance_your_image().into()),
             picture,
             custom.is_some(),
             |_, cx| pick_image(cx),
@@ -369,31 +370,43 @@ impl Render for AppearancePanel {
             background = background.child(
                 text_style(div(), TypeScale::BODY_SMALL)
                     .text_color(theme.colors.status_warning())
-                    .child("Não foi possível abrir essa imagem. Escolha outra ou volte a um fundo do app."),
+                    .child(t::appearance_image_failed()),
             );
         }
         if current.wallpaper != Wallpaper::None {
             background = background
                 .child(self.level_row(
                     &theme,
-                    "Desfoque",
-                    ["Leve", "Médio", "Forte"],
+                    t::appearance_blur(),
+                    [
+                        t::appearance_level_light(),
+                        t::appearance_level_medium(),
+                        t::appearance_level_strong(),
+                    ],
                     current.blur,
                     |appearance, level| appearance.blur = level,
                     cx,
                 ))
                 .child(self.level_row(
                     &theme,
-                    "Escurecer",
-                    ["Pouco", "Médio", "Bastante"],
+                    t::appearance_dim(),
+                    [
+                        t::appearance_dim_little(),
+                        t::appearance_level_medium(),
+                        t::appearance_dim_a_lot(),
+                    ],
                     current.dim,
                     |appearance, level| appearance.dim = level,
                     cx,
                 ))
                 .child(self.level_row(
                     &theme,
-                    "Superfícies",
-                    ["Mais vidro", "Equilibradas", "Mais sólidas"],
+                    t::appearance_surfaces(),
+                    [
+                        t::appearance_more_glass(),
+                        t::appearance_balanced(),
+                        t::appearance_more_solid(),
+                    ],
                     current.solidity,
                     |appearance, level| appearance.solidity = level,
                     cx,
@@ -406,16 +419,16 @@ impl Render for AppearancePanel {
             .child(
                 card(
                     &theme,
-                    "Tema",
-                    "Cores de todo o app. Muda na hora e fica salvo para a próxima vez.",
+                    t::appearance_theme_title(),
+                    t::appearance_theme_body(),
                 )
                 .child(card_body().child(themes)),
             )
             .child(
                 card(
                     &theme,
-                    "Fundo",
-                    "Uma imagem atrás das superfícies, desfocada e escurecida para o texto seguir legível. Os fundos do app são inspirados na Organização.",
+                    t::appearance_background_title(),
+                    t::appearance_background_body(),
                 )
                 .child(background),
             )
@@ -429,8 +442,8 @@ fn pick_image(cx: &mut Context<AppearancePanel>) {
             .background_executor()
             .spawn(async move {
                 rfd::FileDialog::new()
-                    .set_title("Escolher imagem de fundo")
-                    .add_filter("Imagens", &["png", "jpg", "jpeg", "webp"])
+                    .set_title(t::appearance_pick_title())
+                    .add_filter(t::appearance_pick_filter(), &["png", "jpg", "jpeg", "webp"])
                     .pick_file()
             })
             .await;
