@@ -564,8 +564,10 @@ fn report_context_corpus() {
 /// coverage (two meaningful words in common) and fuller stopwords: 0.63 /
 /// 0.58 / 1. Recall was traded for precision on purpose (a wrong item
 /// costs the agent more than a missing one); the PT/EN bridge must win it
-/// back.
-const PRECISION_FLOOR: f64 = 0.63;
+/// back. Graph focus (a wide component's items that share nothing with the
+/// task go when others do): 0.70 / 0.58 / 1; its motivating case, big-list,
+/// is a holdout family, so it no longer counts as independent evidence.
+const PRECISION_FLOOR: f64 = 0.70;
 const RECALL_FLOOR: f64 = 0.57;
 const CONTAMINATED_CASES_CEILING: usize = 1;
 /// Generous on purpose: this runs on a developer's machine beside other work.

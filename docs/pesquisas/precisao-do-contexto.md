@@ -8,7 +8,11 @@ Passo 2: peso por campo e cobertura mínima de termos (duas palavras significati
 lista de palavras ignoradas ampliada) levaram a precisão a 0,63 e a contaminação de 9 para
 1 de 24, com cobertura de 0,76 para 0,58 (troca intencional; a ponte PT/EN deve recuperar).
 O corte relativo ao melhor resultado não mudou nenhum número no desenvolvimento e ficou de
-fora. A busca que o agente pede sob demanda é exploratória e não usa o corte. A medição usa o portão de
+fora. A busca que o agente pede sob demanda é exploratória e não usa o corte.
+Passo 3: foco do grafo (num componente largo, itens que não falam da tarefa saem quando
+outros falam) levou a precisão a 0,70 (holdout 0,73). O caso que motivou a regra é do
+holdout, que nesse ponto deixa de ser prova independente. Regras com escopo ficam para
+quando o portão medir regras permanentes. A medição usa o portão de
 [qualidade do núcleo](../arquitetura/qualidade-do-nucleo.md).
 
 Complementa [medir a eficácia do contexto](medir-eficacia-do-contexto.md) (se o contexto

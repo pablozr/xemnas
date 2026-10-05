@@ -316,6 +316,33 @@ where
             None => Vec::new(),
         };
         let task_words = meaningful_words(&task);
+        // What the graph ties to the task's files is the strongest signal,
+        // but a component can be wide (a whole app): when some of its items
+        // also speak of the task, the ones that share nothing with it go.
+        let mut decision_texts = BTreeMap::new();
+        for id in &by_file_decisions {
+            if let Some(decision) = DecisionStore::get(&self.store, id)? {
+                decision_texts.insert(
+                    id.clone(),
+                    format!(
+                        "{} {} {}",
+                        decision.question, decision.choice, decision.rationale
+                    ),
+                );
+            }
+        }
+        let by_file_decisions = focus_on_task(by_file_decisions, &task_words, |id| {
+            decision_texts.get(id).cloned().unwrap_or_default()
+        });
+        let claim_texts: BTreeMap<String, String> = self
+            .store
+            .project_claims(&request.project_id)?
+            .into_iter()
+            .map(|claim| (claim.claim_id, claim.statement))
+            .collect();
+        let by_file_claims = focus_on_task(by_file_claims, &task_words, |id| {
+            claim_texts.get(id).cloned().unwrap_or_default()
+        });
         let linked_decisions: BTreeSet<String> = by_file_decisions.iter().cloned().collect();
         let linked_claims: BTreeSet<String> = by_file_claims.iter().cloned().collect();
         let ranked_decisions = first_unique(by_file_decisions, lexical_decisions);
@@ -716,6 +743,29 @@ fn covers_task(task_words: &BTreeSet<String>, text: &str) -> bool {
     let matched = task_words.intersection(&words).count();
     let needed = task_words.len().min(2);
     matched >= needed
+}
+
+/// Graph-linked ids narrowed to those that speak of the task, when at least
+/// one does; all of them otherwise (nothing to tell them apart, as for a
+/// task written in another language or with no text at all).
+fn focus_on_task(
+    linked: Vec<String>,
+    task_words: &BTreeSet<String>,
+    text_of: impl Fn(&str) -> String,
+) -> Vec<String> {
+    if task_words.is_empty() {
+        return linked;
+    }
+    let speaking: Vec<String> = linked
+        .iter()
+        .filter(|id| !task_words.is_disjoint(&meaningful_words(&text_of(id))))
+        .cloned()
+        .collect();
+    if speaking.is_empty() {
+        linked
+    } else {
+        speaking
+    }
 }
 
 /// FTS5 `MATCH` for any meaningful word of `task`, or `None` when none remain.
