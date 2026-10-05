@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use application::adoption::{Adoption, AdoptionApi};
 use application::analysis::ExtractorFactory;
 use application::auto_approval::{
-    ApprovalStore, Approvals, ApprovalsApi, By, ItemKind, Mode, ReviewError, Verdict, BATCH,
+    Approvals, ApprovalsApi, By, ItemKind, Mode, ReviewError, Verdict, BATCH,
 };
 use application::extract::{
     CandidateExtractor, CandidateProposal, DecisionCandidateRecord, DecisionEvidence, ExtractError,
