@@ -221,6 +221,16 @@ pub trait ContextStore {
         match_query: &str,
         limit: usize,
     ) -> Result<Vec<String>, ContextError>;
+
+    /// Search terms of a project's decisions (`crate::search_terms`), by
+    /// decision id, joined in one text; decisions without terms are absent.
+    /// Read only when no decision speaks of the task in its own words.
+    fn decision_search_terms(
+        &self,
+        _project_id: &str,
+    ) -> Result<BTreeMap<String, String>, ContextError> {
+        Ok(BTreeMap::new())
+    }
 }
 
 /// Builds Context Packs.
@@ -322,16 +332,16 @@ where
         // What the graph ties to the task's files is the strongest signal,
         // but a component can be wide (a whole app): when some of its items
         // also speak of the task, the ones that share nothing with it go.
+        let decision_text = |decision: &StoredDecision| {
+            format!(
+                "{} {} {}",
+                decision.question, decision.choice, decision.rationale
+            )
+        };
         let mut decision_texts = BTreeMap::new();
         for id in &by_file_decisions {
             if let Some(decision) = DecisionStore::get(&self.store, id)? {
-                decision_texts.insert(
-                    id.clone(),
-                    format!(
-                        "{} {} {}",
-                        decision.question, decision.choice, decision.rationale
-                    ),
-                );
+                decision_texts.insert(id.clone(), decision_text(&decision));
             }
         }
         let by_file_decisions = focus_on_task(by_file_decisions, &task_words, |id| {
@@ -370,23 +380,40 @@ where
             })
             .collect();
 
-        let mut decisions = Vec::new();
+        let mut in_force_decisions = Vec::new();
         for id in &ranked_decisions {
-            let Some(decision) = DecisionStore::get(&self.store, id)? else {
-                continue;
-            };
-            if !in_force(&decision, &relations, &as_of) {
-                continue;
+            if let Some(decision) = DecisionStore::get(&self.store, id)? {
+                if in_force(&decision, &relations, &as_of) {
+                    in_force_decisions.push(decision);
+                }
             }
+        }
+        let speaks = |decision: &StoredDecision| {
+            linked_decisions.contains(&decision.decision_id)
+                || covers_task(&task_words, &decision_text(decision))
+        };
+        // Search terms (`crate::search_terms`) are a last resort: they count
+        // only when no decision speaks of the task in its own words, the
+        // paraphrase case ("integração contínua" for "CI"). Counted always,
+        // their generic words let near-miss decisions in (measured: precision
+        // 0.75 -> 0.66 on the context corpus).
+        let search_terms = if in_force_decisions.iter().any(&speaks) {
+            BTreeMap::new()
+        } else {
+            self.store.decision_search_terms(&request.project_id)?
+        };
+        let mut decisions = Vec::new();
+        for decision in in_force_decisions {
             if !self.exploratory
-                && !linked_decisions.contains(id)
-                && !covers_task(
-                    &task_words,
-                    &format!(
-                        "{} {} {}",
-                        decision.question, decision.choice, decision.rationale
-                    ),
-                )
+                && !speaks(&decision)
+                && !search_terms
+                    .get(&decision.decision_id)
+                    .is_some_and(|terms| {
+                        covers_task(
+                            &task_words,
+                            &format!("{} {terms}", decision_text(&decision)),
+                        )
+                    })
             {
                 continue;
             }

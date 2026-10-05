@@ -150,6 +150,8 @@ const PURGE_STATEMENTS: &[&str] = &[
     "DELETE FROM decision_relations WHERE from_decision_id IN \
      (SELECT decision_id FROM engineering_decisions WHERE project_id = ?1) \
      OR to_decision_id IN (SELECT decision_id FROM engineering_decisions WHERE project_id = ?1)",
+    "DELETE FROM decision_search_terms WHERE decision_id IN \
+     (SELECT decision_id FROM engineering_decisions WHERE project_id = ?1)",
     "DELETE FROM decisions_fts WHERE decision_id IN \
      (SELECT decision_id FROM engineering_decisions WHERE project_id = ?1)",
     "DELETE FROM decision_revisions WHERE decision_id IN \

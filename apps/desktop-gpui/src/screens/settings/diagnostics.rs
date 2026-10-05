@@ -1137,6 +1137,7 @@ fn job_kind(kind: &str) -> String {
         application::jobs::ANALYZE_DOCUMENT_KIND => "Análise de documento".into(),
         application::relation_suggestions::RELATION_JOB_KIND => "Relações sugeridas".into(),
         application::claim_suggestions::CLAIM_JOB_KIND => "Regras sugeridas".into(),
+        application::search_terms::SEARCH_TERMS_JOB_KIND => "Termos de busca".into(),
         other => other.replace('_', " "),
     }
 }

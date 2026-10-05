@@ -29,6 +29,7 @@ mod projects;
 mod relation_suggestions;
 mod relations;
 mod review_exception;
+mod search_terms;
 mod store;
 
 pub use store::{default_data_dir, default_db_path, SqliteStore, StorageError};

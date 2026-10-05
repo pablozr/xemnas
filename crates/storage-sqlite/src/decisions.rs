@@ -265,8 +265,11 @@ impl DecisionStore for SqliteStore {
             .map_err(storage_error)?;
         transaction
             .execute(
-                "INSERT INTO decisions_fts (decision_id, question, choice, rationale) \
-                 VALUES (?1, ?2, ?3, ?4)",
+                // The decision keeps the search terms it was given.
+                "INSERT INTO decisions_fts \
+                 (decision_id, question, choice, rationale, search_terms) \
+                 VALUES (?1, ?2, ?3, ?4, \
+                 (SELECT group_concat(j.value, ' ; ') FROM decision_search_terms t, json_each(t.terms) j WHERE t.decision_id = ?1))",
                 params![id, content.question, content.choice, content.rationale],
             )
             .map_err(storage_error)?;

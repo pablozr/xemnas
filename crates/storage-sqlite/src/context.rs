@@ -1,5 +1,7 @@
 //! SQLite FTS5 ranking for Context Packs.
 
+use std::collections::BTreeMap;
+
 use application::context::{ContextError, ContextStore};
 use rusqlite::params;
 
@@ -26,11 +28,33 @@ impl ContextStore for SqliteStore {
             "SELECT f.decision_id FROM decisions_fts f \
              JOIN engineering_decisions d ON d.decision_id = f.decision_id \
              WHERE decisions_fts MATCH ?1 AND d.project_id = ?2 \
-             ORDER BY bm25(decisions_fts, 0.0, 3.0, 2.0, 1.0), f.decision_id LIMIT ?3",
+             ORDER BY bm25(decisions_fts, 0.0, 3.0, 2.0, 1.0, 1.0), f.decision_id LIMIT ?3",
             project_id,
             match_query,
             limit,
         )
+    }
+
+    fn decision_search_terms(
+        &self,
+        project_id: &str,
+    ) -> Result<BTreeMap<String, String>, ContextError> {
+        let connection = self.lock();
+        let mut statement = connection
+            .prepare(
+                "SELECT t.decision_id, group_concat(j.value, ' ') \
+                 FROM decision_search_terms t \
+                 JOIN engineering_decisions d ON d.decision_id = t.decision_id, \
+                 json_each(t.terms) j \
+                 WHERE d.project_id = ?1 GROUP BY t.decision_id",
+            )
+            .map_err(storage_error)?;
+        let terms = statement
+            .query_map([project_id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(storage_error)?
+            .collect::<Result<BTreeMap<String, String>, _>>()
+            .map_err(storage_error)?;
+        Ok(terms)
     }
 
     fn rank_claims(

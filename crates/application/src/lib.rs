@@ -43,6 +43,7 @@ pub mod redact;
 pub mod relation_suggestions;
 pub mod relations;
 pub mod review_exception;
+pub mod search_terms;
 
 pub use agent_access::{AgentAccess, AgentAccessError, AgentApi, AgentStore};
 pub use analysis::{AnalysisOutcome, AnalyzeCapture, ExtractorFactory};

@@ -337,6 +337,7 @@ where
                 // They are suggestions; the adoption stands either way.
                 let _ = queued;
             }
+            crate::search_terms::queue_search_terms(&self.store, &project);
         }
         Ok(AdoptOutcome {
             id: confirmed.decision_id,

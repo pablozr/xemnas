@@ -30,6 +30,15 @@ fn columns(db: &Connection, table: &str) -> Vec<String> {
         .collect()
 }
 
+fn is_virtual(db: &Connection, table: &str) -> bool {
+    db.query_row(
+        "SELECT sql LIKE 'CREATE VIRTUAL TABLE%' FROM sqlite_master WHERE name = ?1",
+        [table],
+        |row| row.get(0),
+    )
+    .unwrap_or(false)
+}
+
 /// The schema after migrations `1..=version`, in memory.
 fn schema_at(version: i64) -> Connection {
     let early = Connection::open_in_memory().expect("in-memory database");
@@ -102,6 +111,32 @@ pub fn rewind(connection: &Connection, version: i64) {
     }
     for table in &keep_tables {
         let original = columns(&early, table);
+        if columns(connection, table) != original && is_virtual(&early, table) {
+            // A virtual table (FTS5) cannot drop a column: rebuild it with
+            // the earlier definition, keeping the rows of the shared columns.
+            let shared = original
+                .iter()
+                .map(|column| format!("\"{column}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let definition: String = early
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    [table],
+                    |row| row.get(0),
+                )
+                .expect("virtual table definition");
+            connection
+                .execute_batch(&format!(
+                    "CREATE TEMP TABLE rewind_rows AS SELECT {shared} FROM \"{table}\";\n\
+                     DROP TABLE \"{table}\";\n\
+                     {definition};\n\
+                     INSERT INTO \"{table}\" ({shared}) SELECT {shared} FROM rewind_rows;\n\
+                     DROP TABLE rewind_rows;"
+                ))
+                .expect("rebuild virtual table");
+            continue;
+        }
         for column in columns(connection, table) {
             if !original.contains(&column) {
                 connection

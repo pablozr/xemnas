@@ -301,17 +301,20 @@ pub enum JobKind {
     RefreshObservations,
     /// Optional AI relevance judgement for ambiguous context.
     ContextRouting,
+    /// Search terms for a project's adopted decisions.
+    DeriveSearchTerms,
 }
 
 impl JobKind {
     /// Every product kind.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::AnalyzeCapture,
         Self::AnalyzeDocument,
         Self::SuggestRelations,
         Self::DeriveClaims,
         Self::RefreshObservations,
         Self::ContextRouting,
+        Self::DeriveSearchTerms,
     ];
 
     /// Literal persisted in the `kind` column.
@@ -323,6 +326,7 @@ impl JobKind {
             Self::DeriveClaims => "derive_claims",
             Self::RefreshObservations => crate::observations::refresh::REFRESH_OBSERVATIONS_KIND,
             Self::ContextRouting => crate::context_routing::CONTEXT_ROUTING_KIND,
+            Self::DeriveSearchTerms => "derive_search_terms",
         }
     }
 
@@ -339,7 +343,10 @@ impl JobKind {
             // Local and cheap: it keeps descriptive memory fresh for the
             // capture that just arrived.
             Self::RefreshObservations => Lane::Now,
-            Self::SuggestRelations | Self::DeriveClaims | Self::ContextRouting => Lane::Suggestions,
+            Self::SuggestRelations
+            | Self::DeriveClaims
+            | Self::ContextRouting
+            | Self::DeriveSearchTerms => Lane::Suggestions,
         }
     }
 }

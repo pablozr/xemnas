@@ -74,7 +74,7 @@ fn original_28_upgrades_preserving_cache_and_erasing_unowned_work() {
             r.get(0)
         })
         .unwrap();
-    assert_eq!(version, 39);
+    assert_eq!(version, 40);
     // Fresh and upgraded databases have exactly the same ownership contract.
     let fresh = support::open("routing-fresh-29", &["p1"]);
     let fresh_db = Connection::open(fresh.root.join("app.db")).unwrap();

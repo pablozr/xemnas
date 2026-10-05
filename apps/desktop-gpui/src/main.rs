@@ -234,6 +234,30 @@ fn main() {
             }
         }),
     );
+    // Adopted decisions get the search terms their own text lacks.
+    jobs.register(
+        application::search_terms::SEARCH_TERMS_JOB_KIND,
+        std::sync::Arc::new({
+            let finder = application::search_terms::SearchTermFinder::new(
+                store.clone(),
+                settings.clone(),
+                ai_provider::ProviderFactory::new(chatgpt.clone()).with_limiter(limiter.clone()),
+            );
+            move |record: &application::jobs::JobRecord| match finder.run(&record.payload) {
+                Ok(written) => {
+                    tracing::info!(written, operation = "derive_search_terms", "terms written");
+                    Ok(())
+                }
+                Err(application::search_terms::SearchTermError::Deferred(retry_after)) => {
+                    Err(application::jobs::JobFailure::Deferred { retry_after })
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, operation = "derive_search_terms", "failed");
+                    Ok(())
+                }
+            }
+        }),
+    );
     jobs.observe_with(|event| match event {
         application::jobs::JobEvent::Finished(outcome) => {
             tracing::info!(
