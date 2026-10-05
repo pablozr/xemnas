@@ -4,6 +4,7 @@
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Div, Rgba, Role, Stateful};
 
+use crate::i18n::settings as t;
 use crate::ui::icons::{icon, IconName};
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{RadiusScale, SpacingScale, TypeScale};
@@ -92,7 +93,11 @@ pub(super) fn step(
         .role(Role::ListItem)
         .aria_label(format!(
             "{title}: {}",
-            if done { "concluído" } else { "pendente" }
+            if done {
+                t::step_done()
+            } else {
+                t::step_pending()
+            }
         ))
         .child(if done {
             icon(IconName::CheckCircle, 16.0, colors.status_success())

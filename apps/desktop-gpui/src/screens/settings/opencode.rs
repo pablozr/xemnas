@@ -16,7 +16,8 @@ use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Context, Div, Render, Role, Window};
 
 use super::parts::{card, card_body, card_footer, kv_row, stat_tile, status_hero};
-use crate::screens::format::{date_time, plural};
+use crate::i18n::settings as t;
+use crate::screens::format::date_time;
 use crate::ui::controls::{action_button, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{error_banner, skeleton_list, status_pill, toast, TOAST_DURATION};
@@ -53,19 +54,19 @@ impl<S: IntegrationStore + Send + 'static> IntegrationBackend for IntegrationSer
     fn status(&self) -> Result<IntegrationStatus, String> {
         self.integration.status().map_err(|error| {
             tracing::error!(error = %error, operation = "integration_status", "status failed");
-            "Não foi possível ler o estado da integração.".to_owned()
+            t::opencode_err_status().to_owned()
         })
     }
     fn check(&self) -> Result<Vec<IntegrationCheck>, String> {
         self.integration.check().map_err(|error| {
             tracing::error!(error = %error, operation = "integration_check", "check failed");
-            "Não foi possível executar o teste de conexão.".to_owned()
+            t::opencode_err_check().to_owned()
         })
     }
     fn retry_stalled(&self) -> Result<usize, String> {
         retry_stalled(&self.outbox_dir).map_err(|error| {
             tracing::error!(error = %error, operation = "outbox_retry", "retry failed");
-            "Não foi possível mover as capturas paradas.".to_owned()
+            t::opencode_err_retry().to_owned()
         })
     }
 }
@@ -133,13 +134,7 @@ impl OpenCodePanel {
                         this.refresh(cx);
                     }
                     Outcome::Retried(Ok(moved)) => {
-                        this.show_notice(
-                            format!(
-                                "{moved} captura(s) voltaram para a fila e serão importadas na \
-                                 próxima abertura."
-                            ),
-                            cx,
-                        );
+                        this.show_notice(t::opencode_retried(moved), cx);
                         this.refresh(cx);
                     }
                     Outcome::Status(Err(error))
@@ -173,31 +168,26 @@ impl OpenCodePanel {
                 theme,
                 "opencode-state",
                 theme.colors.status_success(),
-                "Recebendo capturas",
-                format!(
-                    "O OpenCode está enviando capturas para este app. A última chegou em {}.",
-                    latest
+                t::opencode_receiving_title(),
+                t::opencode_receiving_body(
+                    &latest
                         .map(|adapter| date_time(&adapter.last_received_at))
-                        .unwrap_or_default()
+                        .unwrap_or_default(),
                 ),
             ),
             IntegrationState::AwaitingFirstCapture => status_hero(
                 theme,
                 "opencode-state",
                 theme.colors.status_info(),
-                "Aguardando a primeira captura",
-                "A API local está ativa. Conclua um turno no OpenCode, com o plugin do \
-                 xemnas, dentro de um projeto cadastrado."
-                    .into(),
+                t::opencode_awaiting_title(),
+                t::opencode_awaiting_body().into(),
             ),
             IntegrationState::ApiUnavailable => status_hero(
                 theme,
                 "opencode-state",
                 theme.colors.status_danger(),
-                "API local inativa",
-                "As capturas esperam na outbox e são importadas na próxima abertura do app. \
-                 Reinicie o xemnas para reativar a API."
-                    .into(),
+                t::opencode_api_down_title(),
+                t::opencode_api_down_body().into(),
             ),
         }
     }
@@ -212,27 +202,21 @@ impl OpenCodePanel {
                     .filter(|check| check.outcome == outcome)
                     .count()
             };
-            let mut parts = vec![format!("{} ok", count(CheckOutcome::Ok))];
+            let mut parts = vec![t::opencode_summary_ok(count(CheckOutcome::Ok))];
             let warnings = count(CheckOutcome::Warning);
             if warnings > 0 {
-                parts.push(format!("{warnings} com atenção"));
+                parts.push(t::opencode_summary_warnings(warnings));
             }
             let failures = count(CheckOutcome::Failed);
             if failures > 0 {
-                parts.push(format!(
-                    "{failures} {}",
-                    if failures == 1 { "falha" } else { "falhas" }
-                ));
+                parts.push(t::opencode_summary_failures(failures));
             }
             parts.join(" · ")
         });
         let body = match &checks {
             None => text_style(div(), TypeScale::BODY_SMALL)
                 .text_color(colors.text_secondary())
-                .child(
-                    "Verifica a API local, o arquivo de descoberta, o token de sessão, a \
-                     outbox e as capturas recebidas.",
-                )
+                .child(t::opencode_test_body())
                 .into_any_element(),
             Some(checks) => div()
                 .id("opencode-checks")
@@ -248,23 +232,23 @@ impl OpenCodePanel {
                 .into_any_element(),
         };
         let button = action_button(theme, "opencode-test", ButtonKind::Primary, !self.busy)
-            .aria_label("Testar conexão")
+            .aria_label(t::opencode_test())
             .on_click(cx.listener(|this, _, _, cx| {
                 if !this.busy {
                     this.run(|backend| Outcome::Checked(backend.check()), cx);
                 }
             }))
             .child(if self.busy && checks.is_none() {
-                "Testando…"
+                t::opencode_testing()
             } else if checks.is_some() {
-                "Testar de novo"
+                t::opencode_test_again()
             } else {
-                "Testar conexão"
+                t::opencode_test()
             });
         card(
             theme,
-            "Teste de conexão",
-            "O caminho que uma captura percorre do OpenCode até este app.",
+            t::opencode_test_title(),
+            t::opencode_test_card_body(),
         )
         .child(card_body().child(body))
         .child(
@@ -284,7 +268,7 @@ impl OpenCodePanel {
         let body: AnyElement = if adapters.is_empty() {
             text_style(div(), TypeScale::BODY_SMALL)
                 .text_color(colors.text_secondary())
-                .child("Nenhum adapter enviou capturas ainda.")
+                .child(t::opencode_no_adapters())
                 .into_any_element()
         } else {
             div()
@@ -326,22 +310,21 @@ impl OpenCodePanel {
                                             Compatibility::Compatible => status_pill(
                                                 theme,
                                                 colors.status_success(),
-                                                "Compatível",
+                                                t::opencode_compatible(),
                                             ),
                                             Compatibility::Unknown => status_pill(
                                                 theme,
                                                 colors.text_muted(),
-                                                "Versão não informada",
+                                                t::opencode_version_unknown(),
                                             ),
                                         }),
                                 )
                                 .child(
                                     text_style(div(), TypeScale::BODY_SMALL)
                                         .text_color(colors.text_muted())
-                                        .child(format!(
-                                            "{} · última captura em {}",
-                                            plural(adapter.sessions as usize, "sessão", "sessões"),
-                                            date_time(&adapter.last_received_at)
+                                        .child(t::opencode_adapter_meta(
+                                            &t::sessions_count(adapter.sessions as usize),
+                                            &date_time(&adapter.last_received_at),
                                         )),
                                 ),
                         )
@@ -350,8 +333,8 @@ impl OpenCodePanel {
         };
         card(
             theme,
-            "Adapters",
-            "Integrações que já entregaram capturas a este app.",
+            t::opencode_adapters_title(),
+            t::opencode_adapters_body(),
         )
         .child(card_body().child(body))
     }
@@ -365,59 +348,73 @@ impl OpenCodePanel {
         let outbox = &status.outbox;
         let colors = theme.colors;
         let tiles = [
-            ("Pendentes", outbox.pending, colors.status_info()),
-            ("Aceitas", outbox.accepted, colors.status_success()),
-            ("Rejeitadas", outbox.rejected, colors.status_danger()),
-            ("Paradas", outbox.stalled, colors.status_warning()),
+            (
+                t::opencode_outbox_pending(),
+                outbox.pending,
+                colors.status_info(),
+            ),
+            (
+                t::opencode_outbox_accepted(),
+                outbox.accepted,
+                colors.status_success(),
+            ),
+            (
+                t::opencode_outbox_rejected(),
+                outbox.rejected,
+                colors.status_danger(),
+            ),
+            (
+                t::opencode_outbox_stalled(),
+                outbox.stalled,
+                colors.status_warning(),
+            ),
         ];
         let stalled = outbox.stalled;
-        card(
-            theme,
-            "Fila de arquivos",
-            "Onde o adapter guarda capturas enquanto o app está fechado.",
-        )
-        .child(
-            card_body()
-                .child(
-                    div()
-                        .flex()
-                        .gap(px(SpacingScale::S3))
-                        .children(tiles.into_iter().map(|(label, value, accent)| {
-                            stat_tile(
-                                theme,
-                                label,
-                                value.to_string(),
-                                (value > 0).then_some(accent),
-                            )
-                        })),
-                )
-                .child(
-                    text_style(div(), TypeScale::META)
-                        .font_family(Theme::font_mono())
-                        .text_color(colors.text_muted())
-                        .truncate()
-                        .child(if outbox.exists {
-                            outbox.path.display().to_string()
-                        } else {
-                            format!("{} (ainda não criada)", outbox.path.display())
-                        }),
-                ),
-        )
-        .when(stalled > 0, |card| {
-            card.child(
-                card_footer(theme)
+        card(theme, t::opencode_outbox_title(), t::opencode_outbox_body())
+            .child(
+                card_body()
                     .child(
-                        text_style(div(), TypeScale::BODY_SMALL)
-                            .flex_1()
-                            .text_color(colors.text_muted())
-                            .child(
-                                "Paradas são capturas de projetos não cadastrados. Cadastre o \
-                                 projeto e mande-as de volta para a fila.",
-                            ),
+                        div()
+                            .flex()
+                            .gap(px(SpacingScale::S3))
+                            .children(tiles.into_iter().map(|(label, value, accent)| {
+                                stat_tile(
+                                    theme,
+                                    label,
+                                    value.to_string(),
+                                    (value > 0).then_some(accent),
+                                )
+                            })),
                     )
                     .child(
-                        action_button(theme, "opencode-retry", ButtonKind::Secondary, !self.busy)
-                            .aria_label("Reenviar capturas paradas")
+                        text_style(div(), TypeScale::META)
+                            .font_family(Theme::font_mono())
+                            .text_color(colors.text_muted())
+                            .truncate()
+                            .child(if outbox.exists {
+                                outbox.path.display().to_string()
+                            } else {
+                                t::opencode_outbox_missing(&outbox.path.display().to_string())
+                            }),
+                    ),
+            )
+            .when(stalled > 0, |card| {
+                card.child(
+                    card_footer(theme)
+                        .child(
+                            text_style(div(), TypeScale::BODY_SMALL)
+                                .flex_1()
+                                .text_color(colors.text_muted())
+                                .child(t::opencode_stalled_hint()),
+                        )
+                        .child(
+                            action_button(
+                                theme,
+                                "opencode-retry",
+                                ButtonKind::Secondary,
+                                !self.busy,
+                            )
+                            .aria_label(t::opencode_retry_label())
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if !this.busy {
                                     this.run(
@@ -426,41 +423,41 @@ impl OpenCodePanel {
                                     );
                                 }
                             }))
-                            .child("Reenviar paradas"),
-                    ),
-            )
-        })
+                            .child(t::opencode_retry()),
+                        ),
+                )
+            })
     }
 
     fn render_connection(theme: &Theme, status: &IntegrationStatus) -> Div {
-        card(theme, "Conexão local", "Como o adapter encontra este app.").child(
+        card(
+            theme,
+            t::opencode_connection_title(),
+            t::opencode_connection_body(),
+        )
+        .child(
             card_body()
                 .gap(px(0.0))
                 .child(kv_row(
                     theme,
-                    "API local",
+                    t::opencode_local_api(),
                     status
                         .api
-                        .map(|api| {
-                            format!(
-                                "127.0.0.1:{} · protocolo v{}",
-                                api.port, api.protocol_version
-                            )
-                        })
-                        .unwrap_or_else(|| "Inativa".into()),
+                        .map(|api| t::opencode_api_value(api.port, api.protocol_version))
+                        .unwrap_or_else(|| t::opencode_inactive().into()),
                     true,
                     false,
                 ))
                 .child(kv_row(
                     theme,
-                    "Contrato de captura",
+                    t::opencode_contract(),
                     format!("v{}", status.contract_version),
                     true,
                     true,
                 ))
                 .child(kv_row(
                     theme,
-                    "Pasta de dados",
+                    t::opencode_data_dir(),
                     status.data_dir.display().to_string(),
                     true,
                     true,
@@ -492,9 +489,9 @@ impl Render for OpenCodePanel {
         };
         let retry = self.error.is_some().then(|| {
             action_button(&theme, "opencode-reload", ButtonKind::Ghost, !self.busy)
-                .aria_label("Tentar de novo")
+                .aria_label(t::action_try_again())
                 .on_click(cx.listener(|this, _, _, cx| this.refresh(cx)))
-                .child("Tentar de novo")
+                .child(t::action_try_again())
         });
         div()
             .relative()
@@ -518,10 +515,26 @@ impl Render for OpenCodePanel {
 fn check_row(theme: &Theme, index: usize, check: &IntegrationCheck) -> Div {
     let colors = theme.colors;
     let (glyph, color, label) = match check.outcome {
-        CheckOutcome::Ok => (IconName::CheckCircle, colors.status_success(), "OK"),
-        CheckOutcome::Warning => (IconName::Info, colors.status_warning(), "Atenção"),
-        CheckOutcome::Failed => (IconName::Info, colors.status_danger(), "Falha"),
-        CheckOutcome::Skipped => (IconName::Circle, colors.text_muted(), "Não se aplica"),
+        CheckOutcome::Ok => (
+            IconName::CheckCircle,
+            colors.status_success(),
+            t::opencode_check_ok(),
+        ),
+        CheckOutcome::Warning => (
+            IconName::Info,
+            colors.status_warning(),
+            t::opencode_check_warning(),
+        ),
+        CheckOutcome::Failed => (
+            IconName::Info,
+            colors.status_danger(),
+            t::opencode_check_failed(),
+        ),
+        CheckOutcome::Skipped => (
+            IconName::Circle,
+            colors.text_muted(),
+            t::opencode_check_skipped(),
+        ),
     };
     div()
         .flex()
@@ -557,7 +570,7 @@ fn check_row(theme: &Theme, index: usize, check: &IntegrationCheck) -> Div {
                     text_style(div(), TypeScale::BODY_SMALL)
                         .text_color(colors.text_secondary())
                         .child(match &check.at {
-                            Some(at) => format!("{} Última em {}.", check.message, date_time(at)),
+                            Some(at) => t::opencode_check_message(&check.message, &date_time(at)),
                             None => check.message.clone(),
                         }),
                 ),
@@ -566,11 +579,11 @@ fn check_row(theme: &Theme, index: usize, check: &IntegrationCheck) -> Div {
 
 fn check_label(kind: CheckKind) -> &'static str {
     match kind {
-        CheckKind::LocalApi => "API local",
-        CheckKind::Discovery => "Arquivo de descoberta",
-        CheckKind::Token => "Token de sessão",
-        CheckKind::Outbox => "Outbox",
-        CheckKind::Captures => "Capturas recebidas",
+        CheckKind::LocalApi => t::opencode_local_api(),
+        CheckKind::Discovery => t::opencode_check_discovery(),
+        CheckKind::Token => t::opencode_check_token(),
+        CheckKind::Outbox => t::opencode_check_outbox(),
+        CheckKind::Captures => t::opencode_check_captures(),
     }
 }
 

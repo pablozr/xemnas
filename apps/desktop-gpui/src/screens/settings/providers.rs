@@ -15,7 +15,8 @@ use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Context, Div, Role, Toggled};
 
 use super::parts::{card, card_body, card_footer, field_row};
-use super::{as_kind, Action, Models, SettingsScreen, SignIn, FIELD_LABELS, KEY_DESCRIPTION};
+use super::{as_kind, field_label, Action, Models, SettingsScreen, SignIn};
+use crate::i18n::settings as t;
 use crate::ui::controls::{button_foreground, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{mark_selected, skeleton_list, status_pill};
@@ -33,37 +34,26 @@ const PRESET_IDS: [&str; 2] = ["settings-preset-ollama", "settings-preset-lmstud
 pub(super) const OPENCODE_KEYS_URL: &str = "https://opencode.ai/auth";
 
 /// The two OpenCode plans: (is Go, title, one-line description).
-const OPENCODE_PLANS: [(bool, &str, &str); 2] = [
-    (false, "Zen", "Paga por uso; inclui modelos gratuitos."),
-    (true, "Go", "Assinatura mensal de modelos abertos."),
-];
+fn opencode_plans() -> [(bool, &'static str, &'static str); 2] {
+    [
+        (false, "Zen", t::plan_zen_body()),
+        (true, "Go", t::plan_go_body()),
+    ]
+}
 
 /// How long the browser sign-in may take before it gives up.
 const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
-const ACCOUNT_DESCRIPTION: &str = "Entre com a sua conta para extrair com o seu plano do \
-                                   ChatGPT, sem chave de API. Só um token de renovação fica \
-                                   no cofre do sistema.";
-const PLAN_NOTICE: &str = "As análises da xemnas contam no uso do seu plano, como conversas \
-                           no ChatGPT. Acompanhe em Gerenciar uso.";
-const OPENCODE_KEY_DESCRIPTION: &str = "A mesma chave serve para o Zen e o Go. Fica no \
-                                        Gerenciador de Credenciais do sistema e não é \
-                                        exibida aqui.";
-const WAITING_BROWSER: &str =
-    "Conclua o login no navegador. Esta tela atualiza sozinha quando você voltar.";
-
 /// Who analyses the captures of an active profile, for the status card.
 pub(super) fn analysed_by(profile: &AiProfile) -> String {
     match profile.kind {
-        ProfileKind::Fake => "nesta máquina".to_owned(),
-        ProfileKind::OpenAiCompatible => format!(
-            "por {}",
-            build_preview(profile)
-                .endpoint_host
-                .unwrap_or_else(|| "provedor configurado".into())
-        ),
-        ProfileKind::ChatGptPlan => format!("pelo seu plano do ChatGPT ({})", profile.model),
-        ProfileKind::OpenCode => format!("pelo {} com {}", opencode_plan(profile), profile.model),
+        ProfileKind::Fake => t::analysed_here().to_owned(),
+        ProfileKind::OpenAiCompatible => match build_preview(profile).endpoint_host {
+            Some(host) => t::analysed_by_host(&host),
+            None => t::analysed_by_host(t::analysed_configured_provider()),
+        },
+        ProfileKind::ChatGptPlan => t::analysed_by_chatgpt(&profile.model),
+        ProfileKind::OpenCode => t::analysed_by_opencode(opencode_plan(profile), &profile.model),
     }
 }
 
@@ -95,19 +85,10 @@ pub(super) fn destination_note(profile: &AiProfile) -> Option<(IconName, &'stati
                 .as_deref()
                 .is_some_and(is_loopback_endpoint) =>
         {
-            Some((
-                IconName::Cpu,
-                "Endereço local: os trechos não saem desta máquina.",
-            ))
+            Some((IconName::Cpu, t::destination_local_note()))
         }
-        ProfileKind::ChatGptPlan => Some((
-            IconName::User,
-            "Cada análise conta no uso do seu plano do ChatGPT.",
-        )),
-        ProfileKind::OpenCode => Some((
-            IconName::Link,
-            "O OpenCode repassa os trechos ao provedor do modelo escolhido.",
-        )),
+        ProfileKind::ChatGptPlan => Some((IconName::User, t::destination_chatgpt_note())),
+        ProfileKind::OpenCode => Some((IconName::Link, t::destination_opencode_note())),
         _ => None,
     }
 }
@@ -129,29 +110,33 @@ pub(super) fn consent_steps(
     ready: bool,
     stored: &AiProfile,
 ) -> Vec<(bool, &'static str, &'static str)> {
-    let consent = (false, "Consentimento", "Liga as chamadas externas");
+    let consent = (false, t::step_consent_title(), t::step_consent_hint());
     match kind {
         ProfileKind::Fake => Vec::new(),
         ProfileKind::OpenAiCompatible => {
             let key = if saved && !stored.credential_required() {
-                (true, "Sem chave", "Endereço local")
+                (true, t::step_no_key_title(), t::step_no_key_hint())
             } else {
-                (ready, "Chave no cofre", "Guardada no sistema")
+                (ready, t::step_key_title(), t::step_key_hint())
             };
             vec![
-                (saved, "Configuração salva", "Endereço, modelo e limite"),
+                (saved, t::step_saved_title(), t::step_saved_hint_address()),
                 key,
                 consent,
             ]
         }
         ProfileKind::ChatGptPlan => vec![
-            (saved, "Modelo salvo", "Modelo e limite"),
-            (ready, "Conta conectada", "Uso do plano permitido"),
+            (
+                saved,
+                t::step_model_saved_title(),
+                t::step_model_saved_hint(),
+            ),
+            (ready, t::step_account_title(), t::step_account_hint()),
             consent,
         ],
         ProfileKind::OpenCode => vec![
-            (saved, "Configuração salva", "Plano e modelo"),
-            (ready, "Chave no cofre", "Guardada no sistema"),
+            (saved, t::step_saved_title(), t::step_saved_hint_plan()),
+            (ready, t::step_key_title(), t::step_key_hint()),
             consent,
         ],
     }
@@ -308,7 +293,7 @@ impl SettingsScreen {
                 match outcome {
                     Ok(signed_in) => this.finish_sign_in(signed_in, first, cx),
                     Err(ProviderError::Cancelled) => {
-                        this.show_notice("Login não concluído.".to_owned(), cx)
+                        this.show_notice(t::account_sign_in_cancelled().to_owned(), cx)
                     }
                     Err(error) => this.error = Some(error.message().to_owned()),
                 }
@@ -325,7 +310,7 @@ impl SettingsScreen {
         if self.backend.is_none() {
             // Another operation holds the settings; the token is dropped
             // rather than stored half-way.
-            self.error = Some("O login terminou durante outra operação. Entre de novo.".into());
+            self.error = Some(t::account_err_busy().into());
             return;
         }
         let edited = self.kind == ProfileKind::ChatGptPlan && self.edited(cx);
@@ -335,7 +320,7 @@ impl SettingsScreen {
                 backend.store_sign_in(&stored, signed_in)?;
                 backend.load()
             }),
-            Some("Conta ChatGPT conectada."),
+            Some(t::account_notice_connected()),
             Some(Box::new(move |this, cx| {
                 this.switch_kind(ProfileKind::ChatGptPlan, cx);
                 if edited {
@@ -376,10 +361,9 @@ impl SettingsScreen {
             Some(Box::new(move |this, cx| {
                 this.switch_kind(ProfileKind::ChatGptPlan, cx);
                 let notice = if unconfirmed.load(Ordering::Relaxed) {
-                    "Conta desconectada aqui. A OpenAI não confirmou a revogação; \
-                     remova o acesso também em chatgpt.com."
+                    t::account_notice_signed_out_unconfirmed()
                 } else {
-                    "Conta ChatGPT desconectada e token apagado do cofre."
+                    t::account_notice_signed_out()
                 };
                 this.show_notice(notice.to_owned(), cx);
             })),
@@ -412,14 +396,14 @@ impl SettingsScreen {
                 .child(
                     text_style(div(), TypeScale::BODY_SMALL)
                         .text_color(theme.colors.text_muted())
-                        .child("Modelo nesta máquina:"),
+                        .child(t::models_on_this_machine()),
                 )
                 .children(buttons)
         });
         let endpoint = (kind == ProfileKind::OpenAiCompatible).then(|| {
             field_row(
                 theme,
-                FIELD_LABELS[0],
+                field_label(0),
                 self.fields[0].clone().into_any_element(),
             )
         });
@@ -437,9 +421,9 @@ impl SettingsScreen {
                 ButtonKind::Secondary,
                 !self.busy && !loading && reachable,
                 if loading {
-                    "Buscando…"
+                    t::models_searching()
                 } else {
-                    "Listar modelos"
+                    t::models_list()
                 },
                 Action::ListModels,
                 cx,
@@ -462,15 +446,15 @@ impl SettingsScreen {
                     .child(div().flex_1().min_w(px(0.0)).child(field_row(
                         theme,
                         match kind {
-                            ProfileKind::ChatGptPlan => "Modelo do plano",
-                            _ => FIELD_LABELS[1],
+                            ProfileKind::ChatGptPlan => t::field_plan_model_label(),
+                            _ => field_label(1),
                         },
                         self.fields[1].clone().into_any_element(),
                     )))
                     .children(list)
                     .child(div().w(px(180.0)).flex_none().child(field_row(
                         theme,
-                        FIELD_LABELS[2],
+                        field_label(2),
                         self.fields[2].clone().into_any_element(),
                     ))),
             )
@@ -481,9 +465,9 @@ impl SettingsScreen {
     fn render_plans(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Div {
         let go = self.value(0, cx) == OPENCODE_GO_ENDPOINT;
         let colors = theme.colors;
-        let options: Vec<_> = OPENCODE_PLANS
-            .iter()
-            .map(|&(plan, title, body)| {
+        let options: Vec<_> = opencode_plans()
+            .into_iter()
+            .map(|(plan, title, body)| {
                 let selected = plan == go;
                 let id = if plan {
                     "settings-opencode-go"
@@ -551,7 +535,7 @@ impl SettingsScreen {
             .child(
                 text_style(div(), TypeScale::LABEL)
                     .text_color(colors.text_secondary())
-                    .child("Plano"),
+                    .child(t::models_plan_label()),
             )
             .child(
                 div()
@@ -559,7 +543,7 @@ impl SettingsScreen {
                     .flex()
                     .gap(px(SpacingScale::S3))
                     .role(Role::RadioGroup)
-                    .aria_label("Plano do OpenCode")
+                    .aria_label(t::models_plan_group_label())
                     .children(options),
             )
     }
@@ -582,7 +566,7 @@ impl SettingsScreen {
                         .child(
                             text_style(div(), TypeScale::BODY_SMALL)
                                 .text_color(theme.colors.text_secondary())
-                                .child(format!("{message} Você ainda pode digitar o modelo.")),
+                                .child(t::models_failed(message)),
                         )
                         .into_any_element(),
                 );
@@ -591,7 +575,7 @@ impl SettingsScreen {
                 return Some(
                     text_style(div(), TypeScale::BODY_SMALL)
                         .text_color(theme.colors.text_muted())
-                        .child("Nenhum modelo disponível nesse destino. Digite o nome do modelo.")
+                        .child(t::models_none())
                         .into_any_element(),
                 );
             }
@@ -663,10 +647,7 @@ impl SettingsScreen {
                 .child(
                     text_style(div(), TypeScale::META)
                         .text_color(colors.text_muted())
-                        .child(match models.len() {
-                            1 => "1 MODELO DISPONÍVEL".to_owned(),
-                            count => format!("{count} MODELOS DISPONÍVEIS"),
-                        }),
+                        .child(t::models_available_count(models.len())),
                 )
                 .child(
                     div()
@@ -681,7 +662,7 @@ impl SettingsScreen {
                         .border_color(colors.hairline_divider())
                         .bg(colors.glass_fill_low())
                         .role(Role::RadioGroup)
-                        .aria_label("Modelos disponíveis")
+                        .aria_label(t::models_group_label())
                         .children(rows),
                 )
                 .into_any_element(),
@@ -702,25 +683,25 @@ impl SettingsScreen {
             ButtonKind::Secondary,
             !self.busy && typed,
             if stored {
-                "Substituir chave"
+                t::key_replace()
             } else {
-                "Guardar no cofre"
+                t::key_store()
             },
             Action::StoreKey,
             cx,
         );
         let (color, state) = match (stored, optional) {
-            (true, _) => (theme.colors.status_success(), "Guardada no cofre"),
-            (false, true) => (theme.colors.text_muted(), "Opcional neste endereço"),
-            (false, false) => (theme.colors.text_muted(), "Nenhuma chave"),
+            (true, _) => (theme.colors.status_success(), t::key_state_stored()),
+            (false, true) => (theme.colors.text_muted(), t::key_state_optional()),
+            (false, false) => (theme.colors.text_muted(), t::key_state_none()),
         };
         let (title, description) = if opencode {
-            ("Chave do OpenCode", OPENCODE_KEY_DESCRIPTION)
+            (t::key_opencode_title(), t::key_opencode_description())
         } else {
-            ("Chave do provedor", KEY_DESCRIPTION)
+            (t::key_provider_title(), t::ai_key_description())
         };
         let console = opencode.then(|| {
-            let label = "Criar uma chave";
+            let label = t::key_create();
             self.button_frame(
                 "settings-opencode-console",
                 ButtonKind::Ghost,
@@ -775,7 +756,7 @@ impl SettingsScreen {
                 "settings-plan-notice",
                 ButtonKind::Secondary,
                 true,
-                "Entendi",
+                t::account_got_it(),
                 Action::DismissPlanNotice,
                 cx,
             );
@@ -801,12 +782,12 @@ impl SettingsScreen {
                             .gap(px(2.0))
                             .child(
                                 text_style(div(), TypeScale::ROW_TITLE)
-                                    .child("Você está usando o seu plano do ChatGPT"),
+                                    .child(t::account_plan_notice_title()),
                             )
                             .child(
                                 text_style(div(), TypeScale::BODY_SMALL)
                                     .text_color(colors.text_secondary())
-                                    .child(PLAN_NOTICE),
+                                    .child(t::account_plan_notice()),
                             ),
                     )
                     .child(dismiss),
@@ -827,14 +808,14 @@ impl SettingsScreen {
                         .child(
                             text_style(div(), TypeScale::BODY_SMALL)
                                 .text_color(colors.text_secondary())
-                                .child(WAITING_BROWSER),
+                                .child(t::account_waiting_browser()),
                         ),
                 );
                 let reopen = self.button(
                     "settings-sign-in-reopen",
                     ButtonKind::Ghost,
                     true,
-                    "Abrir o navegador de novo",
+                    t::account_reopen_browser(),
                     Action::ReopenBrowser,
                     cx,
                 );
@@ -842,7 +823,7 @@ impl SettingsScreen {
                     "settings-sign-in-cancel",
                     ButtonKind::Secondary,
                     true,
-                    "Cancelar",
+                    t::action_cancel(),
                     Action::CancelSignIn,
                     cx,
                 );
@@ -855,9 +836,9 @@ impl SettingsScreen {
         } else if connected {
             {
                 let (pill_color, pill) = if account.plan_usage {
-                    (colors.status_success(), "Usando o plano do ChatGPT")
+                    (colors.status_success(), t::account_pill_plan_on())
                 } else {
-                    (colors.status_warning(), "Uso do plano não permitido")
+                    (colors.status_warning(), t::account_pill_plan_off())
                 };
                 body = body.child(
                     div()
@@ -879,7 +860,7 @@ impl SettingsScreen {
                                         account
                                             .email
                                             .clone()
-                                            .unwrap_or_else(|| "Conta conectada".to_owned()),
+                                            .unwrap_or_else(|| t::account_connected().to_owned()),
                                     ),
                                 )
                                 .child(div().flex().child(status_pill(theme, pill_color, pill))),
@@ -889,18 +870,18 @@ impl SettingsScreen {
                     body = body.child(
                         text_style(div(), TypeScale::BODY_SMALL)
                             .text_color(colors.text_secondary())
-                            .child("Entre de novo e permita o uso do plano para extrair com ele."),
+                            .child(t::account_sign_in_again_hint()),
                     );
                 }
                 let sign_out = self.button(
                     "settings-sign-out",
                     ButtonKind::Ghost,
                     !self.busy && available,
-                    "Sair da conta",
+                    t::account_sign_out(),
                     Action::SignOut,
                     cx,
                 );
-                let usage_label = "Gerenciar uso";
+                let usage_label = t::account_manage_usage();
                 let usage = self
                     .button_frame(
                         "settings-manage-usage",
@@ -921,7 +902,7 @@ impl SettingsScreen {
                         "settings-sign-in",
                         ButtonKind::Primary,
                         !self.busy && available && !starting,
-                        "Entrar de novo",
+                        t::account_sign_in_again(),
                         Action::SignIn,
                         cx,
                     )
@@ -938,16 +919,16 @@ impl SettingsScreen {
                 body = body.child(
                     text_style(div(), TypeScale::BODY_SMALL)
                         .text_color(colors.text_secondary())
-                        .child(ACCOUNT_DESCRIPTION),
+                        .child(t::account_description()),
                 );
                 let sign_in = self.button(
                     "settings-sign-in",
                     ButtonKind::Primary,
                     !self.busy && available && !starting,
                     if starting {
-                        "Abrindo o navegador…"
+                        t::account_opening_browser()
                     } else {
-                        "Continuar com o ChatGPT"
+                        t::account_continue()
                     },
                     Action::SignIn,
                     cx,
@@ -959,20 +940,14 @@ impl SettingsScreen {
                                 .flex_1()
                                 .min_w(px(0.0))
                                 .text_color(colors.text_muted())
-                                .when(!available, |hint| {
-                                    hint.child("O login com o ChatGPT não está disponível aqui.")
-                                }),
+                                .when(!available, |hint| hint.child(t::account_unavailable())),
                         )
                         .child(sign_in),
                 )
             }
         };
-        card(
-            theme,
-            "Conta ChatGPT",
-            "O login acontece no navegador; a senha nunca passa pela xemnas.",
-        )
-        .child(body)
-        .children(footer)
+        card(theme, t::account_title(), t::account_body())
+            .child(body)
+            .children(footer)
     }
 }
