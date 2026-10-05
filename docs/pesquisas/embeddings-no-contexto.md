@@ -3,8 +3,9 @@
 **Data:** 05/10/2026.
 **Pergunta:** um modelo de embeddings local, barato o bastante para rodar a cada prompt,
 tira a seleção de contexto do teto lexical medido no corpus v4?
-**Status:** Aberta. Desenho e protocolo; nenhum modelo baixado ou medido ainda. Continua o
-passo 5 de [precisão do contexto](precisao-do-contexto.md).
+**Status:** Aberta. `potion-multilingual-128M` medido e reprovado no v4 (0,67 / 0,60 / 4 de 21,
+aceite 0,70 / 0,70); o `multilingual-e5-small` é o próximo, pendente de autorização para o
+download. Continua o passo 5 de [precisão do contexto](precisao-do-contexto.md).
 
 ## Ponto de partida
 
@@ -68,9 +69,43 @@ própria e é opcional: sem modelo, a seleção é a de hoje.
   usuário.
 - Se nenhuma variante passar, o resultado é registrado e o modelo não entra.
 
-## Para começar
+## Resultado do `potion-multilingual-128M` (05/10/2026)
 
-Baixar o `model2vec-rs` e dependências do crates.io e, do Hugging Face,
-`minishlab/potion-multilingual-128M` (`model.safetensors` 512 MB, `tokenizer.json`
-18,6 MB, `config.json`) para uma pasta fora do repositório. Os downloads dependem de
-autorização do usuário.
+Gerador em `tools/context-embeddings` (crate fora do workspace; `model2vec-rs` 0.3.0 sem
+recursos nativos). Fixture `storage-sqlite/tests/fixtures/context_corpus_vectors.json`:
+29 itens (pergunta e escolha de cada decisão, enunciado de cada claim) e as 159 tarefas,
+vetores normalizados guardados como `i8`, 110 KB. A geração é determinística (mesmo hash
+em duas execuções). A simulação aplica o veto e o resgate sobre a seleção lexical de hoje,
+em `context_corpus.rs` (`report_semantic_variants_v3`, `report_similarity_v3`,
+`report_semantic_candidates_v4`, ignorados); ligações do grafo passam sem veto.
+
+- **Custo:** vetor de uma tarefa em 101 a 129 µs no p50 e 319 a 433 µs no p95 (três
+  execuções, release, uma thread); carga do modelo em 2,6 a 3,7 s, com pico de 1,5 GB de
+  memória durante a carga. A memória em repouso depois da carga não foi medida.
+- **Sinal fraco:** no v3, negativos chegam a 0,48 de similaridade com a decisão mais
+  parecida, e decisões exigidas ficam a 0,08 (`title-font`), 0,11 (`ci-gate`) e 0,04
+  (`provider-429`), atrás de outras. Um piso absoluto de 0,1 já derruba a cobertura do v3
+  para 0,91 a 0,92.
+- **Escolhidas só pelo v3, antes de abrir o v4:** o melhor veto (fração 0,8 da melhor
+  similaridade, sem piso: v3 0,95 / 0,94 / 0), um resgate com piso 0,5 e folga 0,1 (que
+  nenhum negativo do v3 alcança) e os dois juntos.
+
+| Variante | v3 | v4 selado |
+| --- | --- | --- |
+| Só lexical (hoje) | 0,94 / 0,95 / 0 de 24 | 0,58 / 0,62 / 4 de 21 |
+| Veto 0,8 | 0,95 / 0,94 / 0 | 0,67 / 0,60 / 4 |
+| Resgate 0,5 e 0,1 | 0,94 / 0,95 / 0 | 0,58 / 0,62 / 4 (nunca disparou) |
+| Veto e resgate | 0,95 / 0,94 / 0 | 0,67 / 0,60 / 4 |
+
+O veto ganha nove pontos de precisão no v4, mas a cobertura cai e os quatro negativos
+contaminados continuam: com um só candidato lexical, a fração do melhor não corta nada, e
+um piso absoluto que os cortasse custaria cobertura já no v3. Nenhuma variante chega ao
+aceite; o modelo estático não entra. O resultado confirma o risco anotado nos candidatos:
+sem atenção, o vetor é quase uma média de palavras e repete as falhas do léxico.
+
+## Próximo passo
+
+Medir o `multilingual-e5-small` do mesmo jeito (mesmo fixture, mesmas variantes escolhidas
+pelo v3, v4 lido uma vez). Rodar sem DLL nativa pede Candle (Rust puro) em vez do ONNX
+Runtime. O download (`model.safetensors` de cerca de 470 MB, tokenizador e configuração,
+do Hugging Face `intfloat/multilingual-e5-small`) depende de autorização do usuário.

@@ -60,33 +60,14 @@ impl Fixture {
         DecisionRelations::new(test.store.clone())
             .supersede(&aliases["storage"], &aliases["superseded"])
             .expect("supersede synthetic decision");
-        for (alias, kind, statement, until) in [
-            (
-                "standing",
-                ClaimKind::Convention,
-                "Mensagens de erro em português",
-                None,
-            ),
-            (
-                "rate",
-                ClaimKind::Assumption,
-                "API cache suporta dez pedidos por segundo",
-                None,
-            ),
-            (
-                "expired",
-                ClaimKind::Constraint,
-                "Suportar fax legado",
-                Some("2021-01-01"),
-            ),
-        ] {
+        for (alias, kind, statement, until) in CLAIMS {
             let id = Claims::new(test.store.clone())
                 .create(NewClaim {
                     source_version: None,
                     qualifiers: Vec::new(),
                     project_id: "p1".into(),
-                    kind,
-                    statement: statement.into(),
+                    kind: *kind,
+                    statement: (*statement).into(),
                     valid_from: Some("2020-01-01".into()),
                     valid_until: until.map(str::to_string),
                     source_decision_id: None,
@@ -96,45 +77,18 @@ impl Fixture {
             aliases.insert(alias.to_string(), id);
         }
         let graph = KnowledgeGraph::new(test.store.clone());
-        let entity = graph
-            .create_entity(NewEntity {
-                project_id: "p1".into(),
-                kind: Some(EntityKind::Component),
-                name: "storage".into(),
-                patterns: vec!["crates/storage/**".into()],
-                ..NewEntity::default()
-            })
-            .expect("seed component")
-            .entity_id;
-        graph
-            .link(LinkRequest {
-                kind: EdgeKind::Affects,
-                source_kind: NodeKind::Decision,
-                source_id: aliases["storage"].clone(),
-                entity_id: entity,
-            })
-            .expect("seed file link");
-        for (name, pattern, linked) in [
-            ("outbox", "adapters/outbox/**", &["outbox"][..]),
-            // Coarse on purpose: a whole-app component links unrelated UI
-            // decisions, which a file-led task must not all receive.
-            (
-                "desktop-ui",
-                "apps/desktop-gpui/**",
-                &["virtual-list", "fonts", "accent"][..],
-            ),
-        ] {
+        for (name, pattern, linked) in LINKS {
             let component = graph
                 .create_entity(NewEntity {
                     project_id: "p1".into(),
                     kind: Some(EntityKind::Component),
-                    name: name.into(),
-                    patterns: vec![pattern.into()],
+                    name: (*name).into(),
+                    patterns: vec![(*pattern).into()],
                     ..NewEntity::default()
                 })
                 .expect("seed component")
                 .entity_id;
-            for alias in linked {
+            for alias in *linked {
                 graph
                     .link(LinkRequest {
                         kind: EdgeKind::Affects,
@@ -160,6 +114,41 @@ impl Fixture {
             .clone()
     }
 }
+
+/// Seeded claims: (alias, kind, statement, valid until).
+const CLAIMS: &[(&str, ClaimKind, &str, Option<&str>)] = &[
+    (
+        "standing",
+        ClaimKind::Convention,
+        "Mensagens de erro em português",
+        None,
+    ),
+    (
+        "rate",
+        ClaimKind::Assumption,
+        "API cache suporta dez pedidos por segundo",
+        None,
+    ),
+    (
+        "expired",
+        ClaimKind::Constraint,
+        "Suportar fax legado",
+        Some("2021-01-01"),
+    ),
+];
+
+/// Seeded components: (name, file pattern, decisions linked to it).
+const LINKS: &[(&str, &str, &[&str])] = &[
+    ("storage", "crates/storage/**", &["storage"]),
+    ("outbox", "adapters/outbox/**", &["outbox"]),
+    // Coarse on purpose: a whole-app component links unrelated UI
+    // decisions, which a file-led task must not all receive.
+    (
+        "desktop-ui",
+        "apps/desktop-gpui/**",
+        &["virtual-list", "fonts", "accent"],
+    ),
+];
 
 /// Whether decisions carry the search terms a live model generated for them
 /// (`fixtures/context_corpus_terms.json`, see `application::search_terms`).
@@ -611,4 +600,274 @@ fn sealed_v4_quality_gate() {
         V4_RECALL_FLOOR,
         V4_CONTAMINATED_CASES_CEILING,
     );
+}
+
+/// Texts the vector fixture is generated from: each decision's question and
+/// choice, each claim's statement and every v3 and v4 task. Input of
+/// `tools/context-embeddings`.
+#[test]
+#[ignore = "writes the embedding input; run with XEMNAS_EMBED_TEXTS=<file>"]
+fn export_embedding_texts() {
+    let path = std::env::var_os("XEMNAS_EMBED_TEXTS").expect("set XEMNAS_EMBED_TEXTS");
+    let items: serde_json::Map<String, serde_json::Value> = corpus::DECISIONS
+        .iter()
+        .map(|(alias, _, question, choice)| (alias.to_string(), format!("{question} {choice}")))
+        .chain(
+            CLAIMS
+                .iter()
+                .map(|(alias, _, statement, _)| (alias.to_string(), statement.to_string())),
+        )
+        .map(|(alias, text)| (alias, text.into()))
+        .collect();
+    let tasks: BTreeSet<&str> = corpus::FAMILIES
+        .iter()
+        .chain(corpus_v4::FAMILIES_V4)
+        .flat_map(|family| family.queries)
+        .collect();
+    let json = serde_json::json!({ "items": items, "tasks": tasks });
+    std::fs::write(path, serde_json::to_string_pretty(&json).expect("json")).expect("write");
+}
+
+/// Static embeddings of the corpus texts (`fixtures/context_corpus_vectors.json`,
+/// generated by `tools/context-embeddings`), for the experiment in
+/// `docs/pesquisas/embeddings-no-contexto.md`.
+struct Vectors {
+    items: BTreeMap<String, Vec<f32>>,
+    tasks: BTreeMap<String, Vec<f32>>,
+}
+
+impl Vectors {
+    fn load() -> Self {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/context_corpus_vectors.json"))
+                .expect("vectors fixture");
+        let decode = |hex: &serde_json::Value| -> Vec<f32> {
+            let hex = hex.as_str().expect("hex vector");
+            (0..hex.len())
+                .step_by(2)
+                .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).expect("hex") as i8 as f32)
+                .collect()
+        };
+        let table = |field: &str| {
+            fixture[field]
+                .as_object()
+                .expect("vector table")
+                .iter()
+                .map(|(key, hex)| (key.clone(), decode(hex)))
+                .collect()
+        };
+        Self {
+            items: table("items"),
+            tasks: table("tasks"),
+        }
+    }
+
+    fn similarity(&self, task: &str, alias: &str) -> f32 {
+        let (a, b) = (&self.tasks[task], &self.items[alias]);
+        let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+        let norm = |v: &[f32]| v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        dot / (norm(a) * norm(b))
+    }
+}
+
+/// A semantic pass over the lexical selection. `floor`/`fraction`: an item
+/// found only by text stays when its similarity reaches the floor and that
+/// fraction of the best one. `rescue`: when nothing is left, the most similar
+/// item enters if it reaches `rescue` with `margin` over the second.
+#[derive(Clone, Copy, Debug)]
+struct Semantic {
+    floor: f32,
+    fraction: f32,
+    rescue: Option<(f32, f32)>,
+}
+
+fn graph_linked(family: &corpus::Family) -> BTreeSet<String> {
+    LINKS
+        .iter()
+        .filter(|(_, pattern, _)| {
+            let prefix = pattern.trim_end_matches("**");
+            family.files.iter().any(|file| file.starts_with(prefix))
+        })
+        .flat_map(|(_, _, linked)| linked.iter().map(|alias| (*alias).to_string()))
+        .collect()
+}
+
+fn apply_semantic(
+    vectors: &Vectors,
+    family: &corpus::Family,
+    task: &str,
+    items: &BTreeSet<String>,
+    semantic: Semantic,
+) -> BTreeSet<String> {
+    let standing: BTreeSet<String> = corpus::STANDING.iter().map(|s| (*s).into()).collect();
+    let graph = graph_linked(family);
+    let lexical: Vec<&String> = items
+        .iter()
+        .filter(|alias| !standing.contains(*alias) && !graph.contains(*alias))
+        .collect();
+    let best = lexical
+        .iter()
+        .map(|alias| vectors.similarity(task, alias))
+        .fold(f32::MIN, f32::max);
+    let mut kept: BTreeSet<String> = items
+        .iter()
+        .filter(|alias| {
+            !lexical.contains(alias) || {
+                let similarity = vectors.similarity(task, alias);
+                similarity >= semantic.floor && similarity >= semantic.fraction * best
+            }
+        })
+        .cloned()
+        .collect();
+
+    let Some((rescue, margin)) = semantic.rescue else {
+        return kept;
+    };
+    if kept.difference(&standing).next().is_some() {
+        return kept;
+    }
+    let forbidden: BTreeSet<&str> = corpus::FORBIDDEN.iter().copied().collect();
+    let mut ranked: Vec<(f32, &String)> = vectors
+        .items
+        .keys()
+        .filter(|alias| !forbidden.contains(alias.as_str()) && !standing.contains(*alias))
+        .map(|alias| (vectors.similarity(task, alias), alias))
+        .collect();
+    ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
+    if ranked[0].0 >= rescue && ranked[0].0 - ranked[1].0 >= margin {
+        kept.insert(ranked[0].1.clone());
+    }
+    kept
+}
+
+fn measure_semantic(tag: &str, families: &[corpus::Family], variants: &[Semantic]) {
+    let fixture = Fixture::seed(tag);
+    let packs = ContextPacks::new(fixture.test.store.clone());
+    let vectors = Vectors::load();
+    let mut cases = Vec::new();
+    for family in families {
+        for task in family.queries {
+            let pack = packs
+                .build_pack(request(family, task, 12_000))
+                .expect("pack");
+            cases.push((family, task, selected(&fixture, &pack)));
+        }
+    }
+    for semantic in variants {
+        let mut totals = Totals::default();
+        for (family, task, items) in &cases {
+            let kept = apply_semantic(&vectors, family, task, items, *semantic);
+            score("semantic", family, 0, &kept, items, 0, &mut totals);
+        }
+        println!(
+            "variant {tag} {semantic:?} precision={} recall={} contaminated={}/{}",
+            ratio(totals.tp, totals.retrieved),
+            ratio(totals.tp, totals.expected),
+            totals.contaminated,
+            totals.negative_cases
+        );
+    }
+}
+
+/// Variants chosen on v3 alone before v4 was read: the best v3 veto (0.95 /
+/// 0.94 / 0), a rescue whose floor and margin no v3 negative reaches, and both.
+const SEMANTIC_CANDIDATES: &[Semantic] = &[
+    Semantic {
+        floor: -1.0,
+        fraction: 0.0,
+        rescue: None,
+    },
+    Semantic {
+        floor: 0.0,
+        fraction: 0.8,
+        rescue: None,
+    },
+    Semantic {
+        floor: -1.0,
+        fraction: 0.0,
+        rescue: Some((0.5, 0.1)),
+    },
+    Semantic {
+        floor: 0.0,
+        fraction: 0.8,
+        rescue: Some((0.5, 0.1)),
+    },
+];
+
+/// Tunes the semantic pass on v3 only; prints one line per variant.
+#[test]
+#[ignore = "embedding experiment on v3; run with --nocapture"]
+fn report_semantic_variants_v3() {
+    let mut variants = SEMANTIC_CANDIDATES.to_vec();
+    for floor in [0.0, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35] {
+        for fraction in [0.0, 0.6, 0.7, 0.8] {
+            for rescue in [
+                None,
+                Some((0.3, 0.0)),
+                Some((0.4, 0.0)),
+                Some((0.4, 0.05)),
+                Some((0.5, 0.05)),
+            ] {
+                variants.push(Semantic {
+                    floor,
+                    fraction,
+                    rescue,
+                });
+            }
+        }
+    }
+    measure_semantic("semantic-v3", corpus::FAMILIES, &variants);
+}
+
+/// The v3-chosen variants on the sealed v4, read once, in aggregate.
+#[test]
+#[ignore = "embedding experiment on sealed v4; run with --nocapture"]
+fn report_semantic_candidates_v4() {
+    measure_semantic("semantic-v4", corpus_v4::FAMILIES_V4, SEMANTIC_CANDIDATES);
+}
+
+/// Similarity of each v3 task to its required items and to the best other
+/// item, to place the floors of the semantic pass.
+#[test]
+#[ignore = "embedding experiment on v3; run with --nocapture"]
+fn report_similarity_v3() {
+    let vectors = Vectors::load();
+    let skip: BTreeSet<&str> = corpus::FORBIDDEN
+        .iter()
+        .chain(corpus::STANDING)
+        .copied()
+        .collect();
+    for family in corpus::FAMILIES {
+        for task in family.queries {
+            let mut ranked: Vec<(f32, &str)> = vectors
+                .items
+                .keys()
+                .filter(|alias| !skip.contains(alias.as_str()))
+                .map(|alias| (vectors.similarity(task, alias), alias.as_str()))
+                .collect();
+            ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
+            let rank = |alias: &str| ranked.iter().position(|(_, a)| *a == alias).unwrap_or(99);
+            let required: Vec<String> = family
+                .required
+                .iter()
+                .map(|alias| {
+                    format!(
+                        "{alias}:{:.2}#{}",
+                        vectors.similarity(task, alias),
+                        rank(alias)
+                    )
+                })
+                .collect();
+            println!(
+                "sim {} positive={} top={}:{:.2} second={}:{:.2} required={}",
+                family.name,
+                family.positive,
+                ranked[0].1,
+                ranked[0].0,
+                ranked[1].1,
+                ranked[1].0,
+                required.join(",")
+            );
+        }
+    }
 }
