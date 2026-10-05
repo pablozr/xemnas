@@ -565,7 +565,10 @@ fn changes_during_provider_block_publication_and_revoke_blocks_consumption() {
             .unwrap();
         assert_eq!(count(&test,"SELECT COUNT(*) FROM context_routing_entries WHERE result_json IS NOT NULL OR request_json IS NOT NULL"),0, "{mutation}");
         if mutation == "profile" {
-            assert_eq!(packs.build_pack(request()).unwrap(), before);
+            // `as_of` is the build's clock and may cross a second boundary.
+            let mut after = packs.build_pack(request()).unwrap();
+            after.as_of = before.as_of.clone();
+            assert_eq!(after, before);
         }
     }
 }
