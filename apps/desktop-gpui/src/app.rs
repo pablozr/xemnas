@@ -30,13 +30,15 @@ use crate::screens::map::{MapScreen, MapServices};
 use crate::screens::overview::OverviewScreen;
 use crate::screens::projects::{ProjectChanged, ProjectsScreen};
 use crate::screens::settings::{CloseSettings, SettingsScreen, SettingsSection, SettingsServices};
+use crate::startup_error::{self, StartupError};
 use crate::ui::controls::icon_action;
-use crate::ui::feedback::error_state;
 use crate::ui::glass::focus_ring;
 use crate::ui::icons::{icon, IconName};
 use crate::ui::motion::glide::SlideIndicator;
 use crate::ui::motion::{menu_in, menu_out};
-use crate::ui::patterns::{count_chip, fade_in, kbd, section_label, track_hover};
+use crate::ui::patterns::{
+    count_chip, fade_in, kbd, section_label, toast, track_hover, TOAST_DURATION,
+};
 use crate::ui::popup::{reap, Popup};
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Backdrop, Theme, ThemeMode};
@@ -257,6 +259,10 @@ pub struct Shell<
     _inbox_subscription: Option<Subscription>,
     _inbox_opens: Option<Subscription>,
     projects: Option<Entity<ProjectsScreen<R>>>,
+    /// Why there is no database, when the app started without one.
+    startup_error: Option<StartupError>,
+    /// The "Details copied" toast of the startup error screen.
+    startup_notice: Option<String>,
     inbox: Option<Entity<InboxScreen<R>>>,
     decisions: Option<Entity<DecisionsScreen<R>>>,
     settings: Option<Entity<SettingsScreen>>,
@@ -323,22 +329,26 @@ impl<
     /// Mounts both use cases once, retaining their state across navigation.
     pub fn new(
         cx: &mut Context<Self>,
-        projects: Result<Projects<R>, String>,
+        projects: Result<Projects<R>, StartupError>,
         inbox: Option<Inbox<R>>,
         decisions: Option<DecisionsServices<R>>,
         context: Option<ContextServices<R>>,
         map: Option<MapServices<R>>,
         settings: Option<SettingsServices>,
     ) -> Self {
-        let screen = match projects {
+        let (screen, startup_error) = match projects {
             Ok(projects) => {
                 let screen = cx.new(|cx| ProjectsScreen::new(cx, projects));
                 screen.update(cx, |screen, cx| screen.start(cx, ""));
-                Some(screen)
+                (Some(screen), None)
             }
-            Err(detail) => {
-                tracing::error!(error = %detail, operation = "open_database", "could not open projects database");
-                None
+            Err(error) => {
+                tracing::error!(
+                    error = %error.detail(),
+                    operation = "open_database",
+                    "could not open projects database"
+                );
+                (None, Some(error))
             }
         };
         let search = cx.new(SearchField::new);
@@ -527,6 +537,8 @@ impl<
             _assistant_subscription: assistant_subscription,
             _assistant_toggled: assistant_toggled,
             pending_go: None,
+            startup_error,
+            startup_notice: None,
         }
     }
 
@@ -931,6 +943,69 @@ impl<
                     ),
             )
             .child(div().flex_1().min_h(px(0.0)).child(body))
+            .into_any_element()
+    }
+
+    fn copy_startup_details(&mut self, cx: &mut Context<Self>) {
+        let Some(error) = &self.startup_error else {
+            return;
+        };
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(error.technical_line()));
+        let message = t::startup_error_copied().to_owned();
+        self.startup_notice = Some(message.clone());
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(TOAST_DURATION).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.startup_notice.as_deref() == Some(message.as_str()) {
+                    this.startup_notice = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// The failure screen, as a card over the wallpaper like the content
+    /// of the app, with the real ways out.
+    fn render_startup_error(
+        &self,
+        theme: &Theme,
+        error: &StartupError,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let card = startup_error::view(
+            theme,
+            error,
+            |_, _, cx| {
+                let dir = application::AppPaths::from_env().data_dir;
+                // The folder may not exist yet when the failure is "cannot open".
+                let _ = std::fs::create_dir_all(&dir);
+                cx.open_with_system(&dir);
+            },
+            cx.listener(|this, _, _, cx| this.copy_startup_details(cx)),
+        );
+        div()
+            .size_full()
+            .p(px(SpacingScale::S2))
+            .child(
+                div()
+                    .id("startup-error")
+                    .relative()
+                    .size_full()
+                    .rounded(theme.radius.surface())
+                    .border_1()
+                    .border_color(theme.colors.hairline_divider())
+                    .bg(theme.colors.content())
+                    .role(Role::Alert)
+                    .aria_label(t::startup_error_eyebrow())
+                    .child(card)
+                    .children(
+                        self.startup_notice
+                            .as_deref()
+                            .map(|notice| toast(theme, notice, 24.0)),
+                    ),
+            )
             .into_any_element()
     }
 
@@ -2404,14 +2479,10 @@ impl<
                 )
                 .into_any_element()
         } else {
-            error_state(
-                &theme,
-                "startup-error",
-                t::startup_error_title(),
-                t::startup_error_detail(),
-                t::startup_error_hint(),
-            )
-            .into_any_element()
+            match self.startup_error.clone() {
+                Some(error) => self.render_startup_error(&theme, &error, cx),
+                None => div().into_any_element(),
+            }
         };
 
         let palette = self.render_palette(cx);

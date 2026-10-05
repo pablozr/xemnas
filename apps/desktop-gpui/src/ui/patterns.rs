@@ -445,6 +445,38 @@ pub fn empty_panel(theme: &Theme, glyph: IconName, eyebrow: &str, title: &str, b
         eyebrow,
         title,
         body,
+        None,
+    )
+}
+
+/// [`empty_panel`] with the actions that get out of the state, left-aligned
+/// under the text: the blocking surface that has no screen behind it (the
+/// startup failure), where "nothing to show" still needs a real way forward.
+pub fn empty_panel_actions(
+    theme: &Theme,
+    glyph: IconName,
+    eyebrow: &str,
+    title: &str,
+    body: &str,
+    actions: impl IntoElement,
+) -> Div {
+    empty_panel_with(
+        theme,
+        div()
+            .size(px(40.0))
+            .mb(px(SpacingScale::S2))
+            .rounded(theme.radius.surface())
+            .border_1()
+            .border_color(theme.colors.hairline_divider())
+            .bg(theme.colors.surface())
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(icon(glyph, 20.0, theme.colors.text_secondary())),
+        eyebrow,
+        title,
+        body,
+        Some(actions.into_any_element()),
     )
 }
 
@@ -464,6 +496,7 @@ pub fn empty_panel_mascot(
         eyebrow,
         title,
         body,
+        None,
     )
 }
 
@@ -473,6 +506,7 @@ fn empty_panel_with(
     eyebrow: &str,
     title: &str,
     body: &str,
+    actions: Option<AnyElement>,
 ) -> Div {
     div()
         .size_full()
@@ -498,7 +532,8 @@ fn empty_panel_with(
                     text_style(div(), TypeScale::BODY)
                         .text_color(theme.colors.text_secondary())
                         .child(body.to_owned()),
-                ),
+                )
+                .children(actions.map(|actions| div().mt(px(SpacingScale::S2)).child(actions))),
         )
 }
 
