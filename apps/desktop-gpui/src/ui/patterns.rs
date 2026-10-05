@@ -11,6 +11,7 @@ use gpui::{
     Role, SharedString, SpringAnimation, Stateful, Toggled,
 };
 
+use crate::i18n::common as t;
 use crate::ui::icons::{icon, IconName};
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{
@@ -116,7 +117,7 @@ pub fn suggestion_card(
                     .child(
                         text_style(div(), TypeScale::META)
                             .text_color(colors.text_muted())
-                            .child("Trecho que originou a sugestão"),
+                            .child(t::suggestion_source()),
                     )
                     .child(
                         text_style(div(), TypeScale::BODY_SMALL)
@@ -146,7 +147,7 @@ pub fn suggestion_card(
                         .flex_1()
                         .min_w(px(0.0))
                         .text_color(colors.text_secondary())
-                        .child(format!("Ao confirmar, {effect}")),
+                        .child(t::on_confirm(effect)),
                 ),
         )
         .child(
@@ -402,7 +403,7 @@ pub fn skeleton_list(theme: &Theme, id: &'static str, rows: usize) -> AnyElement
         .flex()
         .flex_col()
         .role(gpui::Role::Status)
-        .aria_label("Carregando")
+        .aria_label(t::loading())
         .children((0..rows).map(|row| {
             let wide = [0.86, 0.72, 0.8, 0.64][row % 4];
             div()

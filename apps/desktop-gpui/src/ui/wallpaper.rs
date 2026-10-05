@@ -16,14 +16,14 @@ use std::sync::Arc;
 
 use gpui::{App, Global, Image, ImageFormat};
 
+use crate::i18n::common as t;
 use crate::ui::appearance::{self, Level, Wallpaper};
 
-/// A shipped background: id, title and the full and thumbnail images.
+/// A shipped background: id and the full and thumbnail images; its name is
+/// [`Builtin::title`], in the interface language.
 pub struct Builtin {
     /// Stable id saved in the preference.
     pub id: &'static str,
-    /// Name shown in the picker.
-    pub title: &'static str,
     /// The 2560×1440 JPEG.
     full: &'static [u8],
     /// The 320×180 JPEG for the picker.
@@ -31,10 +31,9 @@ pub struct Builtin {
 }
 
 macro_rules! builtin {
-    ($id:literal, $title:literal) => {
+    ($id:literal) => {
         Builtin {
             id: $id,
-            title: $title,
             full: include_bytes!(concat!("../../assets/wallpapers/", $id, ".jpg")),
             thumb: include_bytes!(concat!("../../assets/wallpapers/", $id, "-thumb.jpg")),
         }
@@ -44,13 +43,23 @@ macro_rules! builtin {
 /// The backgrounds shipped with the app, inspired by the Organization's
 /// world (original images rendered by `tools/wallpapers/render.py`).
 pub const BUILTINS: [Builtin; 4] = [
-    builtin!("never", "A cidade que nunca existiu"),
-    builtin!("castle", "O castelo"),
-    builtin!("thirteen", "Onde nada se reúne"),
-    builtin!("chain", "Corrente"),
+    builtin!("never"),
+    builtin!("castle"),
+    builtin!("thirteen"),
+    builtin!("chain"),
 ];
 
 impl Builtin {
+    /// Name shown in the picker, in the interface language.
+    pub fn title(&self) -> &'static str {
+        match self.id {
+            "never" => t::wallpaper_never(),
+            "castle" => t::wallpaper_castle(),
+            "thirteen" => t::wallpaper_thirteen(),
+            _ => t::wallpaper_chain(),
+        }
+    }
+
     /// The picker thumbnail.
     pub fn thumbnail(&self) -> Arc<Image> {
         Arc::new(Image::from_bytes(ImageFormat::Jpeg, self.thumb.to_vec()))

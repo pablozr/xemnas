@@ -30,8 +30,12 @@ local é somente leitura; veja o [fluxo consultivo](../operacao/operacao-e-refer
 - [main.rs](../../apps/desktop-gpui/src/main.rs): composition root, serviços e atalhos.
 - [app.rs](../../apps/desktop-gpui/src/app.rs): `Destination`, navegação do shell.
 - [settings/mod.rs](../../apps/desktop-gpui/src/screens/settings/mod.rs):
-  `SettingsSection::{Ai, OpenCode, Diagnostics}`; configuração de IA está aqui,
-  não em um suposto `settings/ai.rs`.
+  `SettingsSection::{Ai, OpenCode, Diagnostics, Appearance, Language}`;
+  configuração de IA está aqui, não em um suposto `settings/ai.rs`.
+- [i18n/mod.rs](../../apps/desktop-gpui/src/i18n/mod.rs): `Language`,
+  `strings!`/`formats!`; o texto de cada tela fica em `i18n/<área>.rs` e a
+  preferência em [ui/appearance.rs](../../apps/desktop-gpui/src/ui/appearance.rs)
+  ([regras](../design/idiomas.md)).
 - [ui/tokens.rs](../../apps/desktop-gpui/src/ui/tokens.rs),
   [ui/controls.rs](../../apps/desktop-gpui/src/ui/controls.rs),
   [ui/patterns.rs](../../apps/desktop-gpui/src/ui/patterns.rs): tokens e reutilização.

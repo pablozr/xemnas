@@ -738,8 +738,8 @@ fn run_shell_mode(
             Bounds::centered(None, dimensions, cx)
         };
         // The saved appearance applies before the first window, so the app
-        // never flashes the default theme. The demo saves nothing and takes
-        // `--theme <id>` instead.
+        // never flashes the default theme or language. The demo saves nothing
+        // and takes `--theme <id>` and `--language <tag>` instead.
         let mut appearance = if demo {
             xemnas_desktop::ui::appearance::Appearance::default()
         } else {
@@ -761,9 +761,14 @@ fn run_shell_mode(
             if let Some(id) = argument_after("--wallpaper") {
                 appearance.wallpaper = xemnas_desktop::ui::appearance::Wallpaper::Builtin(id);
             }
+            if let Some(language) = argument_after("--language")
+                .as_deref()
+                .and_then(xemnas_desktop::i18n::Language::from_id)
+            {
+                appearance.language = language;
+            }
         }
-        cx.set_global(appearance.theme);
-        cx.set_global(appearance);
+        xemnas_desktop::ui::appearance::apply(cx, appearance);
         // When each project was last looked at (the Revisão's briefing); the
         // demo pretends the last look was before its sample data.
         if demo {
@@ -791,7 +796,7 @@ fn run_shell_mode(
                 Arc::new(move |project| reader.recent(project, 8));
             let retry: xemnas_desktop::screens::inbox::ProgressRetry = Arc::new(move |job| {
                 jobs.reprocess(job)
-                    .map_err(|_| "Não foi possível reprocessar a captura.".into())
+                    .map_err(|_| xemnas_desktop::i18n::app::reprocess_failed().into())
             });
             (read, retry)
         });
@@ -867,7 +872,7 @@ fn run_shell_mode(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
-                    title: Some("xemnas — Projetos".into()),
+                    title: Some(xemnas_desktop::i18n::app::window_title_projects().into()),
                     // The key change in this pass. The app draws its own
                     // 48 px title row — mark, wordmark, breadcrumb and search —
                     // and the OS was drawing *its* title bar above it, so the

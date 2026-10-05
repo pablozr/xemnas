@@ -1,5 +1,6 @@
 //! Ephemeral read-only review; the application owns all checks and provider policy.
 use super::context::OpenDecision;
+use crate::i18n::knowledge_review as t;
 use crate::ui::{
     controls::{action_button, ButtonKind},
     icons::IconName,
@@ -149,16 +150,19 @@ impl KnowledgeReviewScreen {
         cx.notify();
     }
     fn content(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Div {
-        let mut page = div().flex().flex_col().gap(px(SpacingScale::S4))
-            .child(text_style(div(), TypeScale::HEADING_1).child("Revisar conhecimento"))
-            .child("Revisão consultiva, sem alterar conhecimento. Tensão não é conflito comprovado; citar não garante uma inferência correta.");
+        let mut page = div()
+            .flex()
+            .flex_col()
+            .gap(px(SpacingScale::S4))
+            .child(text_style(div(), TypeScale::HEADING_1).child(t::title()))
+            .child(t::advisory());
         if !self.available() || self.project.is_none() {
             page = page.child(empty_panel(
                 theme,
                 IconName::Layers,
-                "Revisão",
-                "Revisão indisponível",
-                "Selecione um projeto com armazenamento disponível.",
+                t::panel_label(),
+                t::unavailable_title(),
+                t::unavailable_body(),
             ));
         } else if self.busy {
             page = page
@@ -168,9 +172,9 @@ impl KnowledgeReviewScreen {
                         .as_ref()
                         .is_some_and(ReviewCancellation::is_cancelled)
                     {
-                        "Cancelando… aguardando a chamada em curso retornar."
+                        t::cancelling()
                     } else {
-                        "Verificando conhecimento…"
+                        t::checking()
                     },
                 )
                 .child(skeleton_list(theme, "knowledge-review-loading", 3));
@@ -178,59 +182,53 @@ impl KnowledgeReviewScreen {
             page = page.child(empty_panel(
                 theme,
                 IconName::Layers,
-                "Revisão",
-                "Verifique o conhecimento registrado",
-                "Verificar localmente não envia textos. A IA exige confirmação explícita.",
+                t::panel_label(),
+                t::idle_title(),
+                t::idle_body(),
             ));
         }
         if self.error {
-            page = page.child(error_banner(
-                theme,
-                "Não foi possível ler o conhecimento. Tente verificar localmente novamente.",
-            ));
+            page = page.child(error_banner(theme, t::read_failed()));
         }
         if let Some(report) = self.report.clone() {
             let i = report.coverage.inventory;
             page = page
-                .child(section_header(theme, "Verificações locais"))
-                .child(format!(
-                    "{} decisões em vigor · {} substituídas · {} regras válidas · {} relações",
-                    i.current_decisions, i.superseded_decisions, i.valid_rules, i.relations
+                .child(section_header(theme, t::local_checks()))
+                .child(t::inventory(
+                    i.current_decisions,
+                    i.superseded_decisions,
+                    i.valid_rules,
+                    i.relations,
                 ))
-                .child(format!(
-                    "Propostas pendentes: {} relações · {} regras · {} vínculos",
+                .child(t::pending_proposals(
                     i.pending_relation_proposals,
                     i.pending_claim_proposals,
-                    i.pending_edge_proposals
+                    i.pending_edge_proposals,
                 ))
                 .child(if report.coverage.deterministic_complete {
-                    "Verificações locais concluídas."
+                    t::local_done()
                 } else {
-                    "Verificações locais incompletas."
+                    t::local_incomplete()
                 })
-                .child(section_header(theme, "Revisão IA"))
+                .child(section_header(theme, t::ai_review()))
                 .child(match report.semantic_status {
-                    SemanticStatus::NotRequested => "Não solicitada; nenhum texto enviado.",
-                    SemanticStatus::Completed => "Concluída dentro da cobertura selecionada.",
-                    SemanticStatus::Partial => "Parcial; nem todo o conhecimento foi revisado.",
-                    SemanticStatus::Unavailable => {
-                        "Indisponível; confira provedor e consentimento em Configurações."
-                    }
-                    SemanticStatus::Failed => {
-                        "Falha ou resposta inválida; achados locais preservados."
-                    }
-                    SemanticStatus::Cancelled => "Cancelada; achados locais preservados.",
+                    SemanticStatus::NotRequested => t::status_not_requested(),
+                    SemanticStatus::Completed => t::status_completed(),
+                    SemanticStatus::Partial => t::status_partial(),
+                    SemanticStatus::Unavailable => t::status_unavailable(),
+                    SemanticStatus::Failed => t::status_failed(),
+                    SemanticStatus::Cancelled => t::status_cancelled(),
                 });
             if let Some(p) = report.provenance {
-                page = page.child(format!("Provedor: {} · modelo: {}", p.adapter, p.model));
+                page = page.child(t::provider_model(&p.adapter, &p.model));
             }
             for origin in [FindingOrigin::Deterministic, FindingOrigin::Semantic] {
                 page = page.child(section_header(
                     theme,
                     if origin == FindingOrigin::Deterministic {
-                        "Achados locais"
+                        t::local_findings()
                     } else {
-                        "Hipóteses consultivas"
+                        t::hypotheses()
                     },
                 ));
                 let findings: Vec<_> = report
@@ -239,9 +237,7 @@ impl KnowledgeReviewScreen {
                     .filter(|f| f.origin == origin)
                     .collect();
                 if findings.is_empty() {
-                    page = page.child(
-                        "Sem achados nesta cobertura. Isso não comprova ausência de problemas.",
-                    );
+                    page = page.child(t::no_findings());
                 }
                 for (n, finding) in findings.iter().enumerate() {
                     page = page
@@ -252,15 +248,14 @@ impl KnowledgeReviewScreen {
                             .child(
                                 text_style(div(), TypeScale::META)
                                     .text_color(theme.colors.text_muted())
-                                    .child(format!(
-                                        "{} · versão {} · campo {}",
-                                        evidence.source.title,
-                                        evidence
+                                    .child(t::evidence_meta(
+                                        &evidence.source.title,
+                                        &evidence
                                             .source
                                             .version
                                             .map(|v| v.to_string())
                                             .unwrap_or_else(|| "—".into()),
-                                        evidence.field
+                                        &evidence.field,
                                     )),
                             )
                             .child(format!("“{}”", evidence.quote));
@@ -281,22 +276,21 @@ impl KnowledgeReviewScreen {
                                         true,
                                     )
                                     .track_focus(&focus)
-                                    .aria_label("Abrir decisão citada")
+                                    .aria_label(t::open_decision_aria())
                                     .on_click(cx.listener(move |_, _, _, cx| {
                                         cx.emit(OpenDecision(id.clone()))
                                     }))
-                                    .child("Abrir decisão"),
+                                    .child(t::open_decision()),
                                 );
                         }
                     }
                 }
             }
             page = page
-                .child(section_header(theme, "Cobertura"))
-                .child(format!(
-                    "{} unidades selecionadas · {} achados descartados",
+                .child(section_header(theme, t::coverage()))
+                .child(t::coverage_summary(
                     report.coverage.semantic_units.len(),
-                    report.coverage.discarded_findings
+                    report.coverage.discarded_findings,
                 ));
             for unit in report.coverage.semantic_units {
                 page = page.child(format!(
@@ -307,15 +301,14 @@ impl KnowledgeReviewScreen {
                 ));
             }
             for omission in report.coverage.omissions {
-                page = page.child(format!(
-                    "Não revisado: {} · {}",
-                    omission.reason,
-                    omission.subject_ids.join(", ")
+                page = page.child(t::not_reviewed(
+                    &omission.reason,
+                    &omission.subject_ids.join(", "),
                 ));
             }
         }
         if self.confirm {
-            page = page.child("Enviar ao provedor configurado textos de decisões, regras, propostas e vínculos selecionados? Não envia código nem a pasta. Não substitui o consentimento vigente em Configurações.");
+            page = page.child(t::confirm_prompt());
         }
         page
     }
@@ -418,14 +411,14 @@ impl Render for KnowledgeReviewScreen {
                     .child(
                         action_button(&theme, "review-local", ButtonKind::Secondary, enabled)
                             .track_focus(&self.focus[0])
-                            .aria_label("Verificar localmente")
+                            .aria_label(t::check_locally())
                             .on_click(cx.listener(|this, _, _, cx| this.run(false, cx)))
-                            .child("Verificar localmente"),
+                            .child(t::check_locally()),
                     )
                     .child(
                         action_button(&theme, "review-ai", ButtonKind::Primary, enabled)
                             .track_focus(&self.focus[1])
-                            .aria_label("Revisar com IA após confirmação")
+                            .aria_label(t::review_ai_aria())
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if this.confirm {
                                     this.run(true, cx);
@@ -435,9 +428,9 @@ impl Render for KnowledgeReviewScreen {
                                 }
                             }))
                             .child(if self.confirm {
-                                "Confirmar envio e revisar"
+                                t::confirm_send()
                             } else {
-                                "Revisar com IA…"
+                                t::review_ai()
                             }),
                     )
                     .child(
@@ -448,7 +441,7 @@ impl Render for KnowledgeReviewScreen {
                             self.busy || self.confirm,
                         )
                         .track_focus(&self.focus[2])
-                        .aria_label("Cancelar revisão ou confirmação")
+                        .aria_label(t::cancel_aria())
                         .on_click(cx.listener(|this, _, _, cx| {
                             if let Some(token) = &this.token {
                                 token.cancel();
@@ -456,13 +449,10 @@ impl Render for KnowledgeReviewScreen {
                             this.confirm = false;
                             cx.notify();
                         }))
-                        .child("Cancelar"),
+                        .child(t::cancel()),
                     ),
             )
-            .children(
-                self.notice
-                    .then(|| toast(&theme, "Revisão concluída; nenhum dado alterado.", 24.0)),
-            )
+            .children(self.notice.then(|| toast(&theme, t::done_toast(), 24.0)))
     }
 }
 

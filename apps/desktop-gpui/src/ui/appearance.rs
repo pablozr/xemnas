@@ -1,6 +1,7 @@
-//! The person's appearance choices: theme and background, saved beside the
-//! other settings (`settings/appearance.json` in the data folder) and read
-//! before the first window opens, so the app never flashes the default.
+//! The person's appearance choices: theme, background and interface
+//! language, saved beside the other settings (`settings/appearance.json` in
+//! the data folder) and read before the first window opens, so the app never
+//! flashes the default.
 //!
 //! This is a preference of the interface, not product data: it lives in the
 //! desktop app, as a JSON file the composition root points at.
@@ -9,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use gpui::{App, Global};
 
+use crate::i18n::{self, Language};
 use crate::ui::theme::ThemeMode;
 
 /// What sits behind the window's surfaces.
@@ -65,6 +67,8 @@ pub struct Appearance {
     pub dim: Level,
     /// How solid the surfaces over it are.
     pub solidity: Level,
+    /// The interface language; English until the person picks another.
+    pub language: Language,
 }
 
 impl Global for Appearance {}
@@ -99,6 +103,9 @@ impl Appearance {
             blur: level("blur"),
             dim: level("dim"),
             solidity: level("solidity"),
+            language: field("language")
+                .and_then(Language::from_id)
+                .unwrap_or_default(),
         }
     }
 
@@ -115,6 +122,7 @@ impl Appearance {
             "blur": self.blur.id(),
             "dim": self.dim.id(),
             "solidity": self.solidity.id(),
+            "language": self.language.id(),
         })
     }
 
@@ -133,18 +141,25 @@ pub fn current(cx: &App) -> Appearance {
     cx.try_global::<Appearance>().cloned().unwrap_or_default()
 }
 
-/// Applies `change`, makes the theme follow it, saves it and repaints every
-/// window. A failed save is logged; the change still applies for this run.
+/// Makes the theme and the language follow `appearance`, without saving.
+pub fn apply(cx: &mut App, appearance: Appearance) {
+    cx.set_global(appearance.theme);
+    i18n::set(appearance.language);
+    cx.set_global(appearance);
+}
+
+/// Applies `change`, makes the theme and language follow it, saves it and
+/// repaints every window. A failed save is logged; the change still applies
+/// for this run.
 pub fn update(cx: &mut App, change: impl FnOnce(&mut Appearance)) {
     let mut appearance = current(cx);
     change(&mut appearance);
-    cx.set_global(appearance.theme);
     if let Some(file) = cx.try_global::<AppearanceFile>() {
         if let Err(error) = appearance.save(&file.0) {
             tracing::warn!(error = %error, operation = "save_appearance", "could not save");
         }
     }
-    cx.set_global(appearance);
+    apply(cx, appearance);
     cx.refresh_windows();
 }
 
@@ -162,6 +177,7 @@ mod tests {
             blur: Level::High,
             dim: Level::Low,
             solidity: Level::Medium,
+            language: Language::Japanese,
         };
         appearance.save(&path).expect("save");
         assert_eq!(Appearance::load(&path), appearance);

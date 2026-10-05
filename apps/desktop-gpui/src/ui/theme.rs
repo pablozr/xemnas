@@ -4,6 +4,7 @@
 //! instead of reaching for loose values. Every palette applies to every screen;
 //! navigation never changes the user's selected mode.
 
+use crate::i18n::common as t;
 use std::sync::OnceLock;
 
 use gpui::{App, Global, SharedString, Styled};
@@ -43,22 +44,22 @@ impl ThemeMode {
     /// Label shown in the theme picker.
     pub fn label(self) -> &'static str {
         match self {
-            Self::QuietGlass => "Quiet Glass",
-            Self::Charcoal => "Carvão",
-            Self::Organization => "Organização",
-            Self::Moss => "Musgo",
-            Self::Midnight => "Meia-noite",
+            Self::QuietGlass => t::theme_quiet_glass(),
+            Self::Charcoal => t::theme_charcoal(),
+            Self::Organization => t::theme_organization(),
+            Self::Moss => t::theme_moss(),
+            Self::Midnight => t::theme_midnight(),
         }
     }
 
     /// One line on what the theme feels like.
     pub fn blurb(self) -> &'static str {
         match self {
-            Self::QuietGlass => "Grafite azulado com lavanda. O original.",
-            Self::Charcoal => "Carvão neutro, editorial, com lavanda.",
-            Self::Organization => "Preto profundo e prata fria, como os casacos.",
-            Self::Moss => "Verde-tinta com sálvia. Calmo e orgânico.",
-            Self::Midnight => "Azul-marinho com um ciano frio e discreto.",
+            Self::QuietGlass => t::theme_quiet_glass_blurb(),
+            Self::Charcoal => t::theme_charcoal_blurb(),
+            Self::Organization => t::theme_organization_blurb(),
+            Self::Moss => t::theme_moss_blurb(),
+            Self::Midnight => t::theme_midnight_blurb(),
         }
     }
 

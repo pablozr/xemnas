@@ -43,7 +43,8 @@ use gpui::{
     Window,
 };
 
-use super::format::{calendar_date, clock, day_heading, plural, short_date, thousands};
+use super::format::{calendar_date, clock, day_heading, short_date, thousands};
+use crate::i18n::context as t;
 use crate::ui::controls::{action_button, button_foreground, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
@@ -156,10 +157,10 @@ impl Group {
 
     fn label(self) -> &'static str {
         match self {
-            Self::Overview => "Visão geral",
-            Self::Sources => "Fontes",
-            Self::Deliveries => "Entregas",
-            Self::Settings => "Ajustes",
+            Self::Overview => t::group_overview(),
+            Self::Sources => t::group_sources(),
+            Self::Deliveries => t::group_deliveries(),
+            Self::Settings => t::group_settings(),
         }
     }
 
@@ -227,14 +228,14 @@ impl Section {
     /// The word on the group's switch.
     fn tab(self) -> &'static str {
         match self {
-            Self::Decisions => "Decisões",
-            Self::Rules => "Regras",
-            Self::Documents => "Documentação",
-            Self::KnowledgeReview => "Revisar com IA",
-            Self::Deliveries => "Histórico",
-            Self::Test => "Testar uma tarefa",
-            Self::Overview => "Visão geral",
-            Self::Mode => "Modo de entrega",
+            Self::Decisions => t::tab_decisions(),
+            Self::Rules => t::tab_rules(),
+            Self::Documents => t::tab_documents(),
+            Self::KnowledgeReview => t::tab_knowledge_review(),
+            Self::Deliveries => t::tab_history(),
+            Self::Test => t::tab_test_task(),
+            Self::Overview => t::group_overview(),
+            Self::Mode => t::tab_delivery_mode(),
         }
     }
 }
@@ -366,9 +367,9 @@ impl<S: ContextStores> ContextScreen<S> {
                 field
             })
         };
-        let budget = field(cx, "Padrão do servidor (300)");
-        let statement = field(cx, "Ex.: toda migração é forward-only");
-        let task = field(cx, "Ex.: adicionar exportação em CSV das decisões");
+        let budget = field(cx, t::budget_placeholder());
+        let statement = field(cx, t::rule_placeholder());
+        let task = field(cx, t::task_placeholder());
         let subscriptions = [&budget, &statement, &task]
             .into_iter()
             .map(|field| cx.subscribe(field, |_, _, _: &SearchChanged, cx| cx.notify()))
@@ -422,9 +423,8 @@ impl<S: ContextStores> ContextScreen<S> {
         self.confirm_retire = None;
         self.error = None;
         self.notice = None;
-        self.task.update(cx, |field, cx| {
-            field.set_context("Ex.: adicionar exportação em CSV das decisões", cx)
-        });
+        self.task
+            .update(cx, |field, cx| field.set_context(t::task_placeholder(), cx));
         cx.notify();
     }
 
@@ -493,7 +493,7 @@ impl<S: ContextStores> ContextScreen<S> {
                 if let Some(snapshot) = &mut self.snapshot {
                     snapshot.settings = settings;
                 }
-                self.show_notice("Modo de contexto salvo.".into(), cx);
+                self.show_notice(t::mode_saved().into(), cx);
             }
             Outcome::Claims(Ok(claims), message) => {
                 if let Some(snapshot) = &mut self.snapshot {
@@ -504,7 +504,7 @@ impl<S: ContextStores> ContextScreen<S> {
             }
             Outcome::Pack(Ok(pack)) => self.pack = Some(*pack),
             Outcome::Exported(Ok(Some(path))) => {
-                self.show_notice(format!("Prévia exportada para {}", path.display()), cx)
+                self.show_notice(t::preview_exported(&path.display().to_string()), cx)
             }
             Outcome::Exported(Ok(None)) => {}
             Outcome::Documents(Ok((index, documents))) => {
@@ -514,11 +514,9 @@ impl<S: ContextStores> ContextScreen<S> {
                 let changed = index.changed + index.removed;
                 self.show_notice(
                     match (index.total, changed) {
-                        (0, _) => "Nenhum documento encontrado na pasta do projeto.".into(),
-                        (total, 0) => format!("Documentação lida: {total}, sem mudanças."),
-                        (total, changed) => {
-                            format!("Documentação lida: {total}, {changed} com mudanças.")
-                        }
+                        (0, _) => t::no_documents_found().into(),
+                        (total, 0) => t::documents_read_unchanged(total),
+                        (total, changed) => t::documents_read_changed(total, changed),
                     },
                     cx,
                 );
@@ -556,9 +554,7 @@ impl<S: ContextStores> ContextScreen<S> {
             .ok()
             .filter(|budget| (MIN_BUDGET_TOKENS..=MAX_BUDGET_TOKENS).contains(budget))
             .map(Some)
-            .ok_or_else(|| {
-                format!("Use um número entre {MIN_BUDGET_TOKENS} e {MAX_BUDGET_TOKENS} tokens.")
-            })
+            .ok_or_else(|| t::budget_out_of_range(MIN_BUDGET_TOKENS, MAX_BUDGET_TOKENS))
     }
 
     fn settings_edited(&self, cx: &Context<Self>) -> bool {
@@ -577,7 +573,7 @@ impl<S: ContextStores> ContextScreen<S> {
         self.run(cx, move |backend| {
             Outcome::SettingsSaved(backend.settings.set(&project, mode, budget).map_err(|error| {
                 tracing::error!(error = %error, operation = "context_settings", "save failed");
-                "Não foi possível salvar o modo de contexto.".to_owned()
+                t::save_mode_failed().to_owned()
             }))
         });
     }
@@ -591,9 +587,8 @@ impl<S: ContextStores> ContextScreen<S> {
             return;
         }
         let kind = self.claim_kind;
-        self.statement.update(cx, |field, cx| {
-            field.set_context("Ex.: toda migração é forward-only", cx)
-        });
+        self.statement
+            .update(cx, |field, cx| field.set_context(t::rule_placeholder(), cx));
         self.run(cx, move |backend| {
             let created = backend.claims.create(NewClaim {
                 source_version: None,
@@ -609,7 +604,7 @@ impl<S: ContextStores> ContextScreen<S> {
                 created
                     .map_err(|error| claim_failure(error.code()))
                     .and_then(|_| list_claims(backend, &project)),
-                "Regra adicionada.",
+                t::rule_added(),
             )
         });
     }
@@ -625,7 +620,7 @@ impl<S: ContextStores> ContextScreen<S> {
                     .retire(&claim_id, None)
                     .map_err(|error| claim_failure(error.code()))
                     .and_then(|_| list_claims(backend, &project)),
-                "Regra encerrada. Ela continua no histórico.",
+                t::rule_ended(),
             )
         });
     }
@@ -652,8 +647,7 @@ impl<S: ContextStores> ContextScreen<S> {
                     .map(Box::new)
                     .map_err(|error| {
                         tracing::error!(error = %error, operation = "context_pack", "build failed");
-                        "Não foi possível montar a prévia. Descreva a tarefa com outras palavras."
-                            .to_owned()
+                        t::pack_failed().to_owned()
                     }),
             )
         });
@@ -666,18 +660,16 @@ impl<S: ContextStores> ContextScreen<S> {
         self.run(cx, move |_| {
             let document = match preview_pack(&pack, format) {
                 Ok(document) => document,
-                Err(_) => {
-                    return Outcome::Exported(Err("Não foi possível gerar o arquivo.".into()))
-                }
+                Err(_) => return Outcome::Exported(Err(t::export_render_failed().into())),
             };
             let extension = match format {
                 ExportFormat::Markdown => "md",
                 ExportFormat::Json => "json",
             };
             let Some(path) = rfd::FileDialog::new()
-                .set_title("Exportar prévia de contexto")
-                .add_filter("Documento", &[extension])
-                .set_file_name(format!("contexto.{extension}"))
+                .set_title(t::export_dialog_title())
+                .add_filter(t::export_filter(), &[extension])
+                .set_file_name(format!("{}.{extension}", t::export_file_stem()))
                 .save_file()
             else {
                 return Outcome::Exported(Ok(None));
@@ -685,7 +677,7 @@ impl<S: ContextStores> ContextScreen<S> {
             Outcome::Exported(
                 write_pack(&document, &path, true)
                     .map(|_| Some(path))
-                    .map_err(|_| "Não foi possível salvar o arquivo nesse destino.".into()),
+                    .map_err(|_| t::export_save_failed().into()),
             )
         });
     }
@@ -695,20 +687,20 @@ impl<S: ContextStores> ContextScreen<S> {
         let options = [
             (
                 ContextMode::Off,
-                "Desligado",
-                "Nada é calculado nem enviado ao agente.",
+                t::mode_off(),
+                t::mode_off_body(),
                 IconName::Circle,
             ),
             (
                 ContextMode::Shadow,
-                "Medir",
-                "Calcula o bloco e registra quanto seria enviado, sem enviar.",
+                t::mode_measure(),
+                t::mode_measure_body(),
                 IconName::Eye,
             ),
             (
                 ContextMode::Inject,
-                "Ativo",
-                "Anexa um bloco compacto de decisões e regras ao pedido do agente.",
+                t::mode_active(),
+                t::mode_active_body(),
                 IconName::CheckCircle,
             ),
         ];
@@ -724,7 +716,7 @@ impl<S: ContextStores> ContextScreen<S> {
             .gap(px(SpacingScale::S3))
             .child(
                 radio_list(theme, "context-mode")
-                    .aria_label("Modo de contexto")
+                    .aria_label(t::mode_aria())
                     .children(options.into_iter().enumerate().map(
                         |(index, (mode, title, body, glyph))| {
                             let selected = self.mode == mode;
@@ -764,7 +756,7 @@ impl<S: ContextStores> ContextScreen<S> {
                             .child(
                                 text_style(div(), TypeScale::LABEL)
                                     .text_color(colors.text_secondary())
-                                    .child("Tokens por bloco"),
+                                    .child(t::tokens_per_block()),
                             )
                             .child(self.budget.clone()),
                     )
@@ -778,10 +770,8 @@ impl<S: ContextStores> ContextScreen<S> {
                                 colors.text_muted()
                             })
                             .child(budget_error.unwrap_or_else(|| match saved_at {
-                                Some(at) if !edited => format!("Salvo em {}.", short_date(&at)),
-                                _ => {
-                                    format!("Vazio usa o padrão de {DEFAULT_BUDGET_TOKENS} tokens.")
-                                }
+                                Some(at) if !edited => t::saved_on(&short_date(&at)),
+                                _ => t::budget_default(DEFAULT_BUDGET_TOKENS),
                             })),
                     )
                     .when(edited, |row| {
@@ -792,9 +782,9 @@ impl<S: ContextStores> ContextScreen<S> {
                                 ButtonKind::Primary,
                                 !self.busy && self.budget_value(cx).is_ok(),
                             )
-                            .aria_label("Salvar modo de contexto")
+                            .aria_label(t::save_mode_aria())
                             .on_click(cx.listener(|this, _, _, cx| this.save_settings(cx)))
-                            .child("Salvar"),
+                            .child(t::save()),
                         )
                     }),
             )
@@ -814,7 +804,7 @@ impl<S: ContextStores> ContextScreen<S> {
             .child(if decisions.is_empty() {
                 text_style(div(), TypeScale::BODY_SMALL)
                     .text_color(colors.text_secondary())
-                    .child("Nenhuma decisão confirmada ainda. Confirme candidatos em Revisão.")
+                    .child(t::no_decisions())
                     .into_any_element()
             } else {
                 div()
@@ -842,7 +832,7 @@ impl<S: ContextStores> ContextScreen<S> {
                             .hover(move |style| style.bg(colors.glass_fill_medium()))
                             .active(move |style| style.bg(colors.glass_fill_strong()))
                             .role(Role::Button)
-                            .aria_label(format!("Abrir decisão: {}", decision.question))
+                            .aria_label(t::open_decision_aria(&decision.question))
                             .on_click(
                                 cx.listener(move |_, _, _, cx| cx.emit(OpenDecision(id.clone()))),
                             )
@@ -908,10 +898,10 @@ impl<S: ContextStores> ContextScreen<S> {
     ) -> Div {
         let colors = theme.colors;
         let reread = action_button(theme, "context-docs-reread", ButtonKind::Ghost, !self.busy)
-            .aria_label("Ler a documentação de novo")
+            .aria_label(t::reread_docs_aria())
             .on_click(cx.listener(|this, _, _, cx| this.reindex(cx)))
             .child(icon(IconName::Rotate, 13.0, colors.text_secondary()))
-            .child("Ler de novo");
+            .child(t::reread());
         let header = div()
             .flex()
             .items_center()
@@ -921,13 +911,9 @@ impl<S: ContextStores> ContextScreen<S> {
                     .flex_1()
                     .text_color(colors.text_muted())
                     .child(if documents.is_empty() {
-                        "Nenhum documento lido ainda.".to_owned()
+                        t::no_documents_read().to_owned()
                     } else {
-                        plural(
-                            documents.len(),
-                            "documento lido da pasta do projeto",
-                            "documentos lidos da pasta do projeto",
-                        )
+                        t::documents_read(documents.len())
                     }),
             )
             .child(reread);
@@ -940,10 +926,7 @@ impl<S: ContextStores> ContextScreen<S> {
                 .child(
                     text_style(div(), TypeScale::BODY_SMALL)
                         .text_color(colors.text_secondary())
-                        .child(
-                            "Nenhum documento encontrado. Arquivos Markdown em docs/, specs/, \
-                             adr/ e o README da raiz aparecem aqui.",
-                        ),
+                        .child(t::documents_empty()),
                 );
         }
         let groups = DocumentKind::ALL.into_iter().filter_map(|kind| {
@@ -994,10 +977,9 @@ impl<S: ContextStores> ContextScreen<S> {
                                         row.child(
                                             text_style(div(), TypeScale::META)
                                                 .text_color(colors.text_muted())
-                                                .child(match document.headings.len() {
-                                                    1 => "· 1 seção".to_owned(),
-                                                    n => format!("· {n} seções"),
-                                                }),
+                                                .child(t::document_sections(
+                                                    document.headings.len(),
+                                                )),
                                         )
                                     }),
                             )
@@ -1007,7 +989,7 @@ impl<S: ContextStores> ContextScreen<S> {
                             text_style(div(), TypeScale::META)
                                 .pl(px(SpacingScale::S6 - 2.0))
                                 .text_color(colors.text_muted())
-                                .child(format!("E mais {more}")),
+                                .child(t::more_documents(more)),
                         )
                     })
             }));
@@ -1030,10 +1012,7 @@ impl<S: ContextStores> ContextScreen<S> {
         let list: AnyElement = if claims.is_empty() {
             text_style(div(), TypeScale::BODY_SMALL)
                 .text_color(colors.text_secondary())
-                .child(
-                    "Sem regras ainda. Premissas, restrições, objetivos e convenções valem para \
-                     todas as tarefas do projeto e entram no contexto do agente.",
-                )
+                .child(t::rules_empty())
                 .into_any_element()
         } else {
             div()
@@ -1071,7 +1050,7 @@ impl<S: ContextStores> ContextScreen<S> {
                                         ButtonKind::Ghost,
                                         true,
                                     )
-                                    .aria_label(format!("Mostrar mais {hidden} regras"))
+                                    .aria_label(t::show_more_rules_aria(hidden))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         *this
                                             .shown_rules
@@ -1079,7 +1058,7 @@ impl<S: ContextStores> ContextScreen<S> {
                                             .or_insert(RULES_PAGE) += 2 * RULES_PAGE;
                                         cx.notify();
                                     }))
-                                    .child(format!("Mostrar mais {hidden}")),
+                                    .child(t::show_more(hidden)),
                                 ),
                             )
                         })
@@ -1109,7 +1088,7 @@ impl<S: ContextStores> ContextScreen<S> {
                             .flex_wrap()
                             .gap(px(SpacingScale::S1))
                             .role(Role::RadioGroup)
-                            .aria_label("Tipo da regra")
+                            .aria_label(t::rule_kind_aria())
                             .children(ClaimKind::ALL.into_iter().map(|kind| {
                                 let selected = self.claim_kind == kind;
                                 action_button(
@@ -1158,14 +1137,14 @@ impl<S: ContextStores> ContextScreen<S> {
                                     ButtonKind::Secondary,
                                     typed && !self.busy,
                                 )
-                                .aria_label("Adicionar regra")
+                                .aria_label(t::add_rule_aria())
                                 .on_click(cx.listener(|this, _, _, cx| this.add_claim(cx)))
                                 .child(icon(
                                     IconName::Plus,
                                     14.0,
                                     button_foreground(theme, ButtonKind::Secondary, typed),
                                 ))
-                                .child("Adicionar"),
+                                .child(t::add()),
                             ),
                     ),
             )
@@ -1185,31 +1164,28 @@ impl<S: ContextStores> ContextScreen<S> {
         let qualification = match (&qualifiers, &scope) {
             (Ok(items), Ok(scope)) => super::review_editor::qualifier_reading(theme, items)
                 .child(if scope.is_empty() {
-                    "Escopo herdado não informado.".into()
+                    t::inherited_scope_missing().into()
                 } else {
-                    format!("Escopo herdado: {}", scope.join("; "))
+                    t::inherited_scope(&scope.join("; "))
                 })
                 .into_any_element(),
-            _ => error_banner(
-                theme,
-                "Não foi possível ler os qualificadores ou o escopo desta regra.",
-            )
-            .id(gpui::ElementId::Name(
-                format!("claim-qualification-error-{id}").into(),
-            ))
-            .role(Role::Alert)
-            .child(
-                action_button(
-                    theme,
-                    gpui::ElementId::Name(format!("claim-qualification-retry-{id}").into()),
-                    ButtonKind::Ghost,
-                    !self.busy,
+            _ => error_banner(theme, t::qualifiers_unreadable())
+                .id(gpui::ElementId::Name(
+                    format!("claim-qualification-error-{id}").into(),
+                ))
+                .role(Role::Alert)
+                .child(
+                    action_button(
+                        theme,
+                        gpui::ElementId::Name(format!("claim-qualification-retry-{id}").into()),
+                        ButtonKind::Ghost,
+                        !self.busy,
+                    )
+                    .aria_label(t::retry_qualifiers_aria())
+                    .on_click(cx.listener(|this, _, _, cx| this.refresh(cx)))
+                    .child(t::try_again_long()),
                 )
-                .aria_label("Tentar ler qualificadores e escopo novamente")
-                .on_click(cx.listener(|this, _, _, cx| this.refresh(cx)))
-                .child("Tentar novamente"),
-            )
-            .into_any_element(),
+                .into_any_element(),
         };
         let row = div()
             .flex()
@@ -1237,20 +1213,18 @@ impl<S: ContextStores> ContextScreen<S> {
                                 line.child(status_pill(
                                     theme,
                                     colors.status_warning(),
-                                    "Revisar",
+                                    t::review_pill(),
                                 ))
                             })
                             .child(
                                 text_style(div(), TypeScale::META)
                                     .text_color(colors.text_muted())
                                     .child(if confirming {
-                                        "Encerrar hoje? Ela deixa de valer e fica no histórico."
-                                            .to_owned()
+                                        t::retire_confirm().to_owned()
                                     } else if review {
-                                        "A decisão de origem foi substituída; confira se ainda vale."
-                                            .to_owned()
+                                        t::source_superseded().to_owned()
                                     } else {
-                                        format!("Vale desde {}", calendar_date(&claim.valid_from))
+                                        t::valid_since(&calendar_date(&claim.valid_from))
                                     }),
                             ),
                     ),
@@ -1259,12 +1233,12 @@ impl<S: ContextStores> ContextScreen<S> {
             let retire_id = id.clone();
             row.child(
                 action_button(theme, "context-claim-cancel", ButtonKind::Ghost, true)
-                    .aria_label("Cancelar")
+                    .aria_label(t::cancel())
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.confirm_retire = None;
                         cx.notify();
                     }))
-                    .child("Cancelar"),
+                    .child(t::cancel()),
             )
             .child(
                 action_button(
@@ -1273,13 +1247,13 @@ impl<S: ContextStores> ContextScreen<S> {
                     ButtonKind::Secondary,
                     !self.busy && readable,
                 )
-                .aria_label("Encerrar regra")
+                .aria_label(t::retire_rule_aria())
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if readable && !this.busy {
                         this.retire_claim(retire_id.clone(), cx);
                     }
                 }))
-                .child("Encerrar"),
+                .child(t::retire()),
             )
             .into_any_element()
         } else {
@@ -1290,7 +1264,7 @@ impl<S: ContextStores> ContextScreen<S> {
                     ButtonKind::Ghost,
                     !self.busy && readable,
                 )
-                .aria_label("Encerrar regra")
+                .aria_label(t::retire_rule_aria())
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if !readable || this.busy {
                         return;
@@ -1298,7 +1272,7 @@ impl<S: ContextStores> ContextScreen<S> {
                     this.confirm_retire = Some(id.clone());
                     cx.notify();
                 }))
-                .child("Encerrar"),
+                .child(t::retire()),
             )
             .into_any_element()
         }
@@ -1330,10 +1304,10 @@ impl<S: ContextStores> ContextScreen<S> {
                                 .flex_1()
                                 .child(format!(
                                     "{} · {}{}",
-                                    plural(decisions, "decisão", "decisões"),
-                                    plural(claims, "regra", "regras"),
+                                    t::pack_decisions(decisions),
+                                    t::pack_rules(claims),
                                     if pack.omitted > 0 {
-                                        format!(" · {} fora do orçamento", pack.omitted)
+                                        format!(" · {}", t::pack_omitted(pack.omitted))
                                     } else {
                                         String::new()
                                     }
@@ -1342,10 +1316,9 @@ impl<S: ContextStores> ContextScreen<S> {
                         .child(
                             text_style(div(), TypeScale::META)
                                 .text_color(colors.text_muted())
-                                .child(format!(
-                                    "{} de {} caracteres",
-                                    thousands(pack.used_chars),
-                                    thousands(pack.budget_chars)
+                                .child(t::chars_of(
+                                    &thousands(pack.used_chars),
+                                    &thousands(pack.budget_chars),
                                 )),
                         ),
                 )
@@ -1367,10 +1340,7 @@ impl<S: ContextStores> ContextScreen<S> {
                     card.child(
                         text_style(div(), TypeScale::BODY_SMALL)
                             .text_color(colors.text_secondary())
-                            .child(
-                                "Nada deste projeto casou com a tarefa. O agente não receberia \
-                                 contexto para ela.",
-                            ),
+                            .child(t::pack_no_match()),
                     )
                 })
                 .children(pack.decisions.iter().map(|decision| {
@@ -1401,9 +1371,9 @@ impl<S: ContextStores> ContextScreen<S> {
                                             &decision.qualifiers,
                                         ))
                                         .child(if decision.scope.is_empty() {
-                                            "Escopo não informado.".into()
+                                            t::scope_missing().into()
                                         } else {
-                                            format!("Escopo: {}", decision.scope.join("; "))
+                                            t::scope(&decision.scope.join("; "))
                                         }),
                                 ),
                         )
@@ -1432,19 +1402,22 @@ impl<S: ContextStores> ContextScreen<S> {
                                     &claim.qualifiers,
                                 ))
                                 .child(if claim.inherited_scope.is_empty() {
-                                    "Escopo herdado não informado.".into()
+                                    t::inherited_scope_missing().into()
                                 } else {
-                                    format!("Escopo herdado: {}", claim.inherited_scope.join("; "))
+                                    t::inherited_scope(&claim.inherited_scope.join("; "))
                                 }),
                         )
                         .child(
                             text_style(div(), TypeScale::META)
                                 .text_color(colors.text_muted())
-                                .child(format!(
-                                    "{}{}",
-                                    kind.map(kind_label).unwrap_or("Regra"),
-                                    if claim.matched { " · casou" } else { "" }
-                                )),
+                                .child({
+                                    let label = kind.map(kind_label).unwrap_or(t::rule_word());
+                                    if claim.matched {
+                                        t::kind_matched(label)
+                                    } else {
+                                        label.to_owned()
+                                    }
+                                }),
                         )
                 }))
                 .child(
@@ -1457,7 +1430,7 @@ impl<S: ContextStores> ContextScreen<S> {
                         .border_color(colors.hairline_divider())
                         .child(
                             action_button(theme, "context-pack-md", ButtonKind::Ghost, !self.busy)
-                                .aria_label("Exportar em Markdown")
+                                .aria_label(t::export_markdown_aria())
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.export_pack(ExportFormat::Markdown, cx)
                                 }))
@@ -1475,7 +1448,7 @@ impl<S: ContextStores> ContextScreen<S> {
                                 ButtonKind::Ghost,
                                 !self.busy,
                             )
-                            .aria_label("Exportar em JSON")
+                            .aria_label(t::export_json_aria())
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.export_pack(ExportFormat::Json, cx)
                             }))
@@ -1505,9 +1478,9 @@ impl<S: ContextStores> ContextScreen<S> {
                             ButtonKind::Primary,
                             typed && !self.busy,
                         )
-                        .aria_label("Montar prévia")
+                        .aria_label(t::build_preview())
                         .on_click(cx.listener(|this, _, _, cx| this.build_pack(cx)))
-                        .child("Montar prévia"),
+                        .child(t::build_preview()),
                     ),
             )
             .children(result)
@@ -1596,8 +1569,8 @@ impl<S: ContextStores> ContextScreen<S> {
                     text_style(div(), TypeScale::META)
                         .text_color(colors.text_muted())
                         .child(match mode {
-                            ContextMode::Off => "Desligado".to_owned(),
-                            mode => format!("{} · até {budget} tokens", mode_word(mode)),
+                            ContextMode::Off => t::mode_off().to_owned(),
+                            mode => t::rail_foot(mode_word(mode), budget),
                         }),
                 )
         });
@@ -1671,45 +1644,38 @@ impl<S: ContextStores> ContextScreen<S> {
         let (title, subtitle, body): (&str, &str, Div) = match section {
             Section::KnowledgeReview => unreachable!("independent read-only view"),
             Section::Overview => (
-                "Contexto do agente",
-                "O que o agente de código recebe deste projeto, de onde vem e como chega a ele.",
+                t::overview_title(),
+                t::overview_subtitle(),
                 self.render_overview(theme, &settings, &decisions, &claims, &deliveries, cx),
             ),
             Section::Deliveries => (
-                "Entregas",
-                "Cada bloco calculado para o agente: se foi enviado ou só medido, quanto \
-                 ocupou e o que ficou de fora do orçamento.",
+                t::group_deliveries(),
+                t::deliveries_subtitle(),
                 self.render_deliveries(theme, &settings, &deliveries, cx),
             ),
             Section::Test => (
-                "Testar uma tarefa",
-                "Descreva uma tarefa como pediria ao agente e veja quais decisões e regras \
-                 entrariam no contexto dela.",
+                t::tab_test_task(),
+                t::test_subtitle(),
                 self.render_pack(theme, cx),
             ),
             Section::Decisions => (
-                "Decisões em vigor",
-                "Confirmadas e não substituídas: entram no contexto quando a tarefa toca \
-                 no que decidem. Abra uma para ver o histórico.",
+                t::decisions_title(),
+                t::decisions_subtitle(),
                 self.render_in_force(theme, &decisions, cx),
             ),
             Section::Rules => (
-                "Regras",
-                "Premissas, restrições, objetivos e convenções que valem para todas as \
-                 tarefas do projeto.",
+                t::tab_rules(),
+                t::rules_subtitle(),
                 self.render_rules(theme, &claims, cx),
             ),
             Section::Documents => (
-                "Documentação",
-                "Capturada e indexada da pasta do projeto (docs/, specs/, ADRs e README). \
-                  Alimenta a Visão como fonte e pode gerar candidatos após análise. \
-                  Decisões e regras só são criadas após confirmação na Revisão; \
-                  o documento não é enviado diretamente ao agente.",
+                t::tab_documents(),
+                t::documents_subtitle(),
                 self.render_documents(theme, &documents, cx),
             ),
             Section::Mode => (
-                "Modo de entrega",
-                "Quando o agente recebe contexto e quanto cabe em cada bloco.",
+                t::tab_delivery_mode(),
+                t::mode_subtitle(),
                 self.render_mode(theme, cx),
             ),
         };
@@ -1776,13 +1742,13 @@ impl<S: ContextStores> ContextScreen<S> {
             )
             .child(
                 action_button(theme, "context-change-mode", ButtonKind::Secondary, true)
-                    .aria_label("Mudar o modo de entrega")
+                    .aria_label(t::change_mode_aria())
                     .track_focus(&change)
                     .on_click(cx.listener(|this, _, _, cx| this.go(Section::Mode, cx)))
                     .child(if mode == ContextMode::Off {
-                        "Ativar"
+                        t::activate()
                     } else {
-                        "Mudar modo"
+                        t::change_mode()
                     }),
             );
 
@@ -1830,29 +1796,26 @@ impl<S: ContextStores> ContextScreen<S> {
             .gap(px(SpacingScale::S5))
             .child(stage(
                 "I",
-                "Fontes",
+                t::group_sources(),
                 vec![
-                    plural(decisions.len(), "decisão em vigor", "decisões em vigor"),
-                    plural(claims.len(), "regra do projeto", "regras do projeto"),
+                    t::decisions_in_force(decisions.len()),
+                    t::project_rules(claims.len()),
                 ],
                 true,
             ))
             .child(stage(
                 "II",
-                "Seleção",
+                t::stage_selection(),
                 vec![
-                    "No pedido: o texto e os arquivos citados.".to_owned(),
-                    "Na edição: o que o mapa liga ao arquivo.".to_owned(),
+                    t::stage_on_request().to_owned(),
+                    t::stage_on_edit().to_owned(),
                 ],
                 false,
             ))
             .child(stage(
                 "III",
-                "Entrega",
-                vec![
-                    format!("Até {budget} tokens por bloco."),
-                    "Sem repetir o que a sessão já recebeu.".to_owned(),
-                ],
+                t::stage_delivery(),
+                vec![t::stage_budget(budget), t::stage_no_repeat().to_owned()],
                 false,
             ));
 
@@ -1914,15 +1877,15 @@ impl<S: ContextStores> ContextScreen<S> {
             .border_color(colors.hairline_divider())
             .child(figure(
                 summary.deliveries,
-                "Entregas",
-                format!("{} enviadas · {measured} medidas", summary.sent),
+                t::group_deliveries(),
+                t::deliveries_detail(summary.sent, measured),
                 true,
                 Some(sparkline(&per_day, 56.0, 22.0, colors.accent_default()).into_any_element()),
             ))
             .child(figure(
                 summary.sessions,
-                "Sessões do agente",
-                "conversas que receberam".to_owned(),
+                t::figure_sessions(),
+                t::sessions_detail().to_owned(),
                 false,
                 Some(
                     sparkline(&sessions_per_day, 56.0, 22.0, colors.status_info())
@@ -1931,8 +1894,8 @@ impl<S: ContextStores> ContextScreen<S> {
             ))
             .child(figure(
                 summary.average_tokens(),
-                "Tokens por bloco",
-                format!("média · limite {budget}"),
+                t::tokens_per_block(),
+                t::tokens_detail(budget),
                 false,
                 Some(
                     ring(
@@ -1946,8 +1909,8 @@ impl<S: ContextStores> ContextScreen<S> {
             ))
             .child(figure(
                 summary.omitted,
-                "Fora do orçamento",
-                "itens que não couberam".to_owned(),
+                t::figure_omitted(),
+                t::omitted_detail().to_owned(),
                 false,
                 Some(
                     ring(
@@ -1972,15 +1935,15 @@ impl<S: ContextStores> ContextScreen<S> {
             .child(
                 div()
                     .flex_1()
-                    .child(section_label(theme, "Entregas recentes")),
+                    .child(section_label(theme, t::recent_deliveries())),
             )
             .when(!deliveries.is_empty(), |row| {
                 row.child(
                     action_button(theme, "context-see-deliveries", ButtonKind::Ghost, true)
-                        .aria_label("Ver todas as entregas")
+                        .aria_label(t::see_all_aria())
                         .track_focus(&see_all)
                         .on_click(cx.listener(|this, _, _, cx| this.go(Section::Deliveries, cx)))
-                        .child("Ver todas")
+                        .child(t::see_all())
                         .child(icon(IconName::ChevronRight, 13.0, colors.text_secondary())),
                 )
             });
@@ -2014,7 +1977,7 @@ impl<S: ContextStores> ContextScreen<S> {
                     .flex()
                     .flex_col()
                     .gap(px(SpacingScale::S3))
-                    .child(section_label(theme, "Como chega ao agente"))
+                    .child(section_label(theme, t::how_it_arrives()))
                     .child(pipeline),
             )
             .child(
@@ -2022,7 +1985,7 @@ impl<S: ContextStores> ContextScreen<S> {
                     .flex()
                     .flex_col()
                     .gap(px(SpacingScale::S3))
-                    .child(section_label(theme, "Últimos 7 dias"))
+                    .child(section_label(theme, t::last_seven_days()))
                     .child(metrics),
             )
             .child(
@@ -2065,10 +2028,10 @@ impl<S: ContextStores> ContextScreen<S> {
                         ButtonKind::Secondary,
                         true,
                     )
-                    .aria_label("Escolher o modo de entrega")
+                    .aria_label(t::choose_mode_aria())
                     .track_focus(&focus)
                     .on_click(cx.listener(|this, _, _, cx| this.go(Section::Mode, cx)))
-                    .child("Escolher modo"),
+                    .child(t::choose_mode()),
                 );
         }
         let mut days: Vec<(String, Vec<&Delivery>)> = Vec::new();
@@ -2120,7 +2083,7 @@ impl<S: ContextStores> ContextScreen<S> {
                             .child(
                                 text_style(div(), TypeScale::META)
                                     .text_color(colors.text_muted())
-                                    .child(plural(rows.len(), "entrega", "entregas")),
+                                    .child(t::deliveries_count(rows.len())),
                             ),
                     )
                     .child(list),
@@ -2150,6 +2113,11 @@ impl<S: ContextStores> ContextScreen<S> {
         let fill = (delivery.tokens as f32 / budget.max(1) as f32).clamp(0.0, 1.0);
         let open = self.open_delivery.as_deref() == Some(delivery.injection_id.as_str());
         let _ = cx;
+        let status = if sent {
+            t::delivery_sent()
+        } else {
+            t::delivery_measured()
+        };
         div()
             .id(gpui::SharedString::from(format!(
                 "context-delivery-{}",
@@ -2166,13 +2134,12 @@ impl<S: ContextStores> ContextScreen<S> {
             .cursor_pointer()
             .hover(move |style| style.bg(colors.glass_fill_medium()))
             .role(Role::Button)
-            .aria_label(format!(
-                "{} às {}: {} itens, {} tokens, sessão {}",
-                if sent { "Enviado" } else { "Medido" },
-                clock(&delivery.created_at).unwrap_or_default(),
+            .aria_label(t::delivery_aria(
+                status,
+                &clock(&delivery.created_at).unwrap_or_default(),
                 delivery.items.len(),
                 delivery.tokens,
-                short_ref(&delivery.session_id)
+                &short_ref(&delivery.session_id),
             ))
             .child(
                 text_style(div(), TypeScale::META)
@@ -2182,11 +2149,12 @@ impl<S: ContextStores> ContextScreen<S> {
                     .text_color(colors.text_muted())
                     .child(clock(&delivery.created_at).unwrap_or_default()),
             )
-            .child(div().w(px(78.0)).flex_none().child(status_pill(
-                theme,
-                tint,
-                if sent { "Enviado" } else { "Medido" },
-            )))
+            .child(
+                div()
+                    .w(px(78.0))
+                    .flex_none()
+                    .child(status_pill(theme, tint, status)),
+            )
             .child(
                 div()
                     .flex_1()
@@ -2205,9 +2173,9 @@ impl<S: ContextStores> ContextScreen<S> {
                             .text_color(colors.text_muted())
                             .child(format!(
                                 "{}{}",
-                                plural(delivery.items.len(), "item", "itens"),
+                                t::items_count(delivery.items.len()),
                                 if delivery.omitted > 0 {
-                                    format!(" · {} fora do orçamento", delivery.omitted)
+                                    format!(" · {}", t::pack_omitted(delivery.omitted))
                                 } else {
                                     String::new()
                                 }
@@ -2224,7 +2192,7 @@ impl<S: ContextStores> ContextScreen<S> {
                     .child(
                         text_style(div(), TypeScale::META)
                             .text_color(colors.text_muted())
-                            .child(format!("{} / {budget} tokens", delivery.tokens)),
+                            .child(t::tokens_of(delivery.tokens, budget)),
                     )
                     .child(meter(theme, fill, tint)),
             )
@@ -2288,7 +2256,7 @@ fn delivery_items(theme: &Theme, delivery: &Delivery) -> Div {
                             colors.text_secondary()
                         })
                         .child(if item.label.is_empty() {
-                            "Item que não existe mais".to_owned()
+                            t::item_missing().to_owned()
                         } else {
                             item.label.clone()
                         }),
@@ -2297,8 +2265,8 @@ fn delivery_items(theme: &Theme, delivery: &Delivery) -> Div {
                     text_style(div(), TypeScale::META)
                         .text_color(colors.text_muted())
                         .child(match item.kind {
-                            ItemKind::Decision => format!("decisão v{}", item.version),
-                            ItemKind::Claim => "regra".to_owned(),
+                            ItemKind::Decision => t::item_decision(item.version),
+                            ItemKind::Claim => t::item_rule().to_owned(),
                         }),
                 )
         }))
@@ -2306,16 +2274,13 @@ fn delivery_items(theme: &Theme, delivery: &Delivery) -> Div {
             list.child(
                 text_style(div(), TypeScale::BODY_SMALL)
                     .text_color(colors.text_muted())
-                    .child("Nada do projeto casou com o pedido; o bloco saiu vazio."),
+                    .child(t::block_empty()),
             )
         })
         .child(
             text_style(div(), TypeScale::META)
                 .text_color(colors.text_muted())
-                .child(format!(
-                    "Sessão do agente {}",
-                    short_ref(&delivery.session_id)
-                )),
+                .child(t::agent_session(&short_ref(&delivery.session_id))),
         )
 }
 
@@ -2328,17 +2293,17 @@ fn delivery_headline(delivery: &Delivery) -> String {
         .filter(|label| !label.is_empty())
         .collect();
     match named.as_slice() {
-        [] => "Bloco vazio".to_owned(),
+        [] => t::empty_block().to_owned(),
         [only] => (*only).to_owned(),
-        [first, rest @ ..] => format!("{first} e mais {}", rest.len()),
+        [first, rest @ ..] => t::first_and_more(first, rest.len()),
     }
 }
 
 fn mode_word(mode: ContextMode) -> &'static str {
     match mode {
-        ContextMode::Off => "Desligado",
-        ContextMode::Shadow => "Medindo",
-        ContextMode::Inject => "Ativo",
+        ContextMode::Off => t::mode_off(),
+        ContextMode::Shadow => t::mode_measuring(),
+        ContextMode::Inject => t::mode_active(),
     }
 }
 
@@ -2352,30 +2317,16 @@ fn mode_color(theme: &Theme, mode: ContextMode) -> gpui::Rgba {
 
 fn mode_sentence(mode: ContextMode, budget: usize) -> String {
     match mode {
-        ContextMode::Off => "Nada é calculado nem enviado. Ative para que o agente receba, a \
-                             cada pedido, as decisões e regras que importam para a tarefa."
-            .to_owned(),
-        ContextMode::Shadow => format!(
-            "O bloco é calculado e registrado em Entregas, mas não vai para o agente. Use \
-             para ver o que seria enviado (até {budget} tokens) antes de ativar."
-        ),
-        ContextMode::Inject => format!(
-            "A cada pedido e a cada edição, o agente recebe um bloco de até {budget} tokens \
-             com as decisões e regras que valem para aquela tarefa."
-        ),
+        ContextMode::Off => t::mode_sentence_off().to_owned(),
+        ContextMode::Shadow => t::mode_sentence_shadow(budget),
+        ContextMode::Inject => t::mode_sentence_active(budget),
     }
 }
 
 fn empty_deliveries(mode: ContextMode) -> &'static str {
     match mode {
-        ContextMode::Off => {
-            "Nenhuma entrega: o modo está desligado. Escolha Medir para ver o que seria \
-             enviado, ou Ativo para enviar."
-        }
-        _ => {
-            "Nenhuma entrega ainda. Elas aparecem quando o agente fizer um pedido neste \
-             projeto com o plugin conectado."
-        }
+        ContextMode::Off => t::deliveries_empty_off(),
+        _ => t::deliveries_empty_on(),
     }
 }
 
@@ -2415,9 +2366,9 @@ impl<S: ContextStores> Render for ContextScreen<S> {
             None => empty_panel(
                 &theme,
                 IconName::Layers,
-                "Contexto",
-                "Não foi possível carregar o contexto",
-                "Tente de novo; seus dados não foram alterados.",
+                t::context_word(),
+                t::load_failed_title(),
+                t::load_failed_body(),
             )
             .into_any_element(),
             Some(_) => {
@@ -2437,9 +2388,9 @@ impl<S: ContextStores> Render for ContextScreen<S> {
         };
         let retry = self.error.is_some().then(|| {
             action_button(&theme, "context-retry", ButtonKind::Ghost, !self.busy)
-                .aria_label("Tentar de novo")
+                .aria_label(t::retry())
                 .on_click(cx.listener(|this, _, _, cx| this.refresh(cx)))
-                .child("Tentar de novo")
+                .child(t::retry())
         });
         div()
             .size_full()
@@ -2476,7 +2427,7 @@ fn load_snapshot<S: ContextStores>(
 ) -> Result<Snapshot, String> {
     let settings = backend.settings.get(project).map_err(|error| {
         tracing::error!(error = %error, operation = "context_settings", "read failed");
-        "Não foi possível ler o modo de contexto.".to_owned()
+        t::read_mode_failed().to_owned()
     })?;
     let decisions = backend
         .decisions
@@ -2488,7 +2439,7 @@ fn load_snapshot<S: ContextStores>(
         })
         .map_err(|error| {
             tracing::error!(error = %error, operation = "context_decisions", "list failed");
-            "Não foi possível ler as decisões em vigor.".to_owned()
+            t::read_decisions_failed().to_owned()
         })?
         .decisions;
     let claims = list_claims(backend, project)?;
@@ -2503,11 +2454,11 @@ fn load_snapshot<S: ContextStores>(
         .recent(project, DELIVERIES_LIMIT)
         .map_err(|error| {
             tracing::error!(error = %error, operation = "deliveries", "list failed");
-            "Não foi possível ler as entregas ao agente.".to_owned()
+            t::read_deliveries_failed().to_owned()
         })?;
     let review = backend.derived.to_review(project).map_err(|error| {
         tracing::error!(error = %error, operation = "claims_to_review", "read failed");
-        "Não foi possível ler as regras do projeto.".to_owned()
+        t::read_rules_failed().to_owned()
     })?;
     Ok(Snapshot {
         settings,
@@ -2525,7 +2476,7 @@ fn list_documents<S: ContextStores>(
 ) -> Result<Vec<ProjectDocument>, String> {
     backend.documents.list(project).map_err(|error| {
         tracing::error!(error = ?error, operation = "documents", "list failed");
-        "Não foi possível ler a documentação do projeto.".to_owned()
+        t::read_documents_failed().to_owned()
     })
 }
 
@@ -2533,23 +2484,21 @@ fn list_documents<S: ContextStores>(
 fn document_failure(error: application::documents::DocumentError) -> String {
     use application::documents::DocumentError;
     match error {
-        DocumentError::FolderUnavailable => {
-            "A pasta do projeto não está acessível; a última leitura continua valendo.".into()
-        }
-        DocumentError::ProjectNotFound => "Projeto não encontrado.".into(),
+        DocumentError::FolderUnavailable => t::folder_unavailable().into(),
+        DocumentError::ProjectNotFound => t::project_not_found().into(),
         DocumentError::Storage(detail) => {
             tracing::error!(error = %detail, operation = "documents_index", "storage failed");
-            "Não foi possível ler a documentação. Tente de novo.".into()
+            t::index_documents_failed().into()
         }
     }
 }
 
 fn document_kind_plural(kind: DocumentKind) -> &'static str {
     match kind {
-        DocumentKind::Adr => "Registros de decisão (ADR)",
-        DocumentKind::Spec => "Especificações",
-        DocumentKind::Readme => "READMEs",
-        DocumentKind::Guide => "Guias e notas",
+        DocumentKind::Adr => t::kind_adr(),
+        DocumentKind::Spec => t::kind_spec(),
+        DocumentKind::Readme => t::kind_readme(),
+        DocumentKind::Guide => t::kind_guide(),
     }
 }
 
@@ -2559,37 +2508,35 @@ fn list_claims<S: ContextStores>(
 ) -> Result<Vec<ClaimRecord>, String> {
     backend.claims.list(project, None).map_err(|error| {
         tracing::error!(error = %error, operation = "claims", "list failed");
-        "Não foi possível ler as regras do projeto.".to_owned()
+        t::read_rules_failed().to_owned()
     })
 }
 
 /// Product copy for a claim failure code.
 fn claim_failure(code: &str) -> String {
     match code {
-        "empty_statement" => "Escreva a regra antes de adicionar.".into(),
-        "statement_too_long" => "A regra ficou longa demais; resuma em uma frase.".into(),
-        "already_ended" | "conflict" => {
-            "A regra mudou enquanto você editava. A lista foi atualizada.".into()
-        }
-        _ => "Não foi possível salvar a regra.".into(),
+        "empty_statement" => t::rule_empty().into(),
+        "statement_too_long" => t::rule_too_long().into(),
+        "already_ended" | "conflict" => t::rule_changed().into(),
+        _ => t::rule_save_failed().into(),
     }
 }
 
 fn kind_label(kind: ClaimKind) -> &'static str {
     match kind {
-        ClaimKind::Assumption => "Premissa",
-        ClaimKind::Constraint => "Restrição",
-        ClaimKind::Goal => "Objetivo",
-        ClaimKind::Convention => "Convenção",
+        ClaimKind::Assumption => t::kind_assumption(),
+        ClaimKind::Constraint => t::kind_constraint(),
+        ClaimKind::Goal => t::kind_goal(),
+        ClaimKind::Convention => t::kind_convention(),
     }
 }
 
 fn kind_plural(kind: ClaimKind) -> &'static str {
     match kind {
-        ClaimKind::Assumption => "Premissas",
-        ClaimKind::Constraint => "Restrições",
-        ClaimKind::Goal => "Objetivos",
-        ClaimKind::Convention => "Convenções",
+        ClaimKind::Assumption => t::kinds_assumption(),
+        ClaimKind::Constraint => t::kinds_constraint(),
+        ClaimKind::Goal => t::kinds_goal(),
+        ClaimKind::Convention => t::kinds_convention(),
     }
 }
 

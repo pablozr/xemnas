@@ -12,7 +12,7 @@
 //!
 //! It stays light at any size (the project's pillar is performance). A
 //! component with more decisions or rules than the drawing can show keeps a
-//! handful and folds the rest into one group node ("+590 decisões") that
+//! handful and folds the rest into one group node ("+590 decisions") that
 //! opens the component's page, where the full lists live; counts stay true.
 //! Painting only visits what is on screen and drops to a cheap mode (straight
 //! single-stroke links, no signal, flat nodes) when many links are in view.
@@ -34,6 +34,7 @@ use gpui::{
 };
 
 use super::format::clipped;
+use crate::i18n::graph as t;
 use crate::ui::controls::{action_button, focus_ring, icon_action, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::theme::{text_style, Theme};
@@ -121,10 +122,10 @@ enum Kind {
 impl Kind {
     fn label(self) -> &'static str {
         match self {
-            Self::Component => "Componente",
-            Self::Technology => "Tecnologia",
-            Self::Decision => "Decisão",
-            Self::Rule => "Regra",
+            Self::Component => t::kind_component(),
+            Self::Technology => t::kind_technology(),
+            Self::Decision => t::kind_decision(),
+            Self::Rule => t::kind_rule(),
         }
     }
 }
@@ -170,8 +171,8 @@ impl Node {
     /// What the node is, for the card and screen readers.
     fn caption(&self) -> &'static str {
         match (self.folded > 0, self.kind) {
-            (true, Kind::Rule) => "Regras agrupadas",
-            (true, _) => "Decisões agrupadas",
+            (true, Kind::Rule) => t::caption_rules_grouped(),
+            (true, _) => t::caption_decisions_grouped(),
             _ => self.kind.label(),
         }
     }
@@ -778,25 +779,25 @@ impl GraphCanvas {
             .count();
         let chips = [
             (
-                "Decisões",
+                t::chip_decisions(),
                 count(Kind::Decision),
                 self.layers.decisions,
                 colors.graph_decision(),
             ),
             (
-                "Regras",
+                t::chip_rules(),
                 count(Kind::Rule),
                 self.layers.rules,
                 colors.status_info(),
             ),
             (
-                "Tecnologias",
+                t::chip_technologies(),
                 count(Kind::Technology),
                 self.layers.technologies,
                 colors.graph_technology(),
             ),
             (
-                "Sugestões",
+                t::chip_suggestions(),
                 suggested,
                 self.layers.suggestions,
                 colors.status_warning(),
@@ -826,10 +827,11 @@ impl GraphCanvas {
                 })
                 .cursor_pointer()
                 .role(Role::Switch)
-                .aria_label(format!(
-                    "{label}: {}",
-                    if on { "visíveis" } else { "ocultas" }
-                ))
+                .aria_label(if on {
+                    t::layer_visible(label)
+                } else {
+                    t::layer_hidden(label)
+                })
                 .focus_visible(focus_ring(theme))
                 .child(div().size(px(7.0)).rounded_full().bg(if on {
                     color
@@ -866,9 +868,9 @@ impl GraphCanvas {
             .border_color(colors.glass_border())
             .bg(colors.canvas_deep().alpha(0.88));
         for (id, glyph, label, key) in [
-            ("graph-zoom-in", IconName::Plus, "Aproximar", "+"),
-            ("graph-zoom-out", IconName::Minus, "Afastar", "-"),
-            ("graph-fit", IconName::Fit, "Enquadrar tudo", "0"),
+            ("graph-zoom-in", IconName::Plus, t::zoom_in(), "+"),
+            ("graph-zoom-out", IconName::Minus, t::zoom_out(), "-"),
+            ("graph-fit", IconName::Fit, t::fit_all(), "0"),
         ] {
             let button = icon_action(theme, id, label)
                 .tooltip(tooltip(label, Some(key)))
@@ -924,7 +926,7 @@ impl GraphCanvas {
                     .border_1()
                     .border_color(colors.graph_component())
                     .bg(colors.graph_component().alpha(0.25)),
-                "Componente",
+                t::kind_component(),
             ))
             .child(item(
                 div()
@@ -933,14 +935,14 @@ impl GraphCanvas {
                     .border_1()
                     .border_color(colors.graph_technology())
                     .bg(colors.graph_technology().alpha(0.25)),
-                "Tecnologia",
+                t::kind_technology(),
             ))
             .child(item(
                 div()
                     .size(px(7.0))
                     .rounded_full()
                     .bg(colors.graph_decision()),
-                "Decisão",
+                t::kind_decision(),
             ))
             .child(item(
                 div()
@@ -955,7 +957,7 @@ impl GraphCanvas {
                             .rounded_full()
                             .bg(colors.graph_decision()),
                     ),
-                "Agrupadas",
+                t::legend_grouped(),
             ))
             .child(item(
                 div()
@@ -963,20 +965,20 @@ impl GraphCanvas {
                     .rounded(px(1.0))
                     .border_1()
                     .border_color(colors.status_info()),
-                "Regra",
+                t::kind_rule(),
             ))
             .child(item(
                 div()
                     .size(px(7.0))
                     .rounded_full()
                     .bg(colors.status_warning()),
-                "Em conflito",
+                t::legend_conflict(),
             ))
             .child(item(
                 div().flex().gap(px(2.0)).children(
                     (0..3).map(|_| div().w(px(3.0)).h(px(1.5)).bg(colors.status_warning())),
                 ),
-                "Sugestão",
+                t::legend_suggestion(),
             ))
     }
 
@@ -998,8 +1000,8 @@ impl GraphCanvas {
         }
         ties.sort_by_key(|(other, _)| (kind_order(self.nodes[*other].kind), *other));
 
-        let close = icon_action(theme, "graph-card-close", "Fechar")
-            .tooltip(tooltip("Fechar", Some("Esc")))
+        let close = icon_action(theme, "graph-card-close", t::close())
+            .tooltip(tooltip(t::close(), Some("Esc")))
             .child(icon(IconName::Close, 14.0, colors.text_muted()));
         let close = self.pressable(
             close,
@@ -1063,8 +1065,8 @@ impl GraphCanvas {
                 ButtonKind::Secondary,
                 true,
             )
-            .aria_label("Confirmar ligação")
-            .child("Confirmar");
+            .aria_label(t::confirm_link_aria())
+            .child(t::confirm());
             let confirm = self.pressable(
                 confirm,
                 &format!("graph-confirm-{row_index}"),
@@ -1077,8 +1079,8 @@ impl GraphCanvas {
                 ButtonKind::Ghost,
                 true,
             )
-            .aria_label("Rejeitar ligação")
-            .child("Rejeitar");
+            .aria_label(t::reject_link_aria())
+            .child(t::reject());
             let reject = self.pressable(
                 reject,
                 &format!("graph-reject-{row_index}"),
@@ -1098,10 +1100,7 @@ impl GraphCanvas {
                     .child(
                         text_style(div(), TypeScale::BODY_SMALL)
                             .text_color(colors.text_secondary())
-                            .child(format!(
-                                "Ligar a {}?",
-                                clipped(&self.nodes[*other].label, 40)
-                            )),
+                            .child(t::link_to(&clipped(&self.nodes[*other].label, 40))),
                     )
                     .child(
                         div()
@@ -1115,15 +1114,15 @@ impl GraphCanvas {
 
         let (open_label, open_event) = match (&node.home, node.kind) {
             (Some(home), _) => (
-                Some("Ver todas no Mapa"),
+                Some(t::open_all_in_map()),
                 Some(GraphEvent::OpenEntity(home.to_string())),
             ),
             (_, Kind::Component | Kind::Technology) => (
-                Some("Abrir no Mapa"),
+                Some(t::open_in_map()),
                 Some(GraphEvent::OpenEntity(node.node.id.clone())),
             ),
             (_, Kind::Decision) => (
-                Some("Abrir em Decisões"),
+                Some(t::open_in_decisions()),
                 Some(GraphEvent::OpenDecision(node.node.id.clone())),
             ),
             (_, Kind::Rule) => (None, None),
@@ -1189,7 +1188,7 @@ impl GraphCanvas {
                                         text_style(div(), TypeScale::META)
                                             .text_color(colors.text_muted())
                                             .child(if node.conflict {
-                                                format!("{} · em conflito", node.caption())
+                                                t::caption_conflict(node.caption())
                                             } else {
                                                 node.caption().to_owned()
                                             }),
@@ -1227,7 +1226,7 @@ impl GraphCanvas {
                                 .flex()
                                 .flex_col()
                                 .gap(px(SpacingScale::S2))
-                                .child(card_label(theme, "Sugestões"))
+                                .child(card_label(theme, t::chip_suggestions()))
                                 .child(proposals),
                         )
                     })
@@ -1239,9 +1238,9 @@ impl GraphCanvas {
                             .child(div().px(px(SpacingScale::S2)).child(card_label(
                                 theme,
                                 if ties.is_empty() {
-                                    "Sem ligações confirmadas"
+                                    t::card_no_links()
                                 } else {
-                                    "Ligações"
+                                    t::card_links()
                                 },
                             )))
                             .child(list)
@@ -1250,7 +1249,7 @@ impl GraphCanvas {
                                     text_style(div(), TypeScale::META)
                                         .px(px(SpacingScale::S2))
                                         .text_color(colors.text_muted())
-                                        .child(format!("E mais {more}")),
+                                        .child(t::and_more(more)),
                                 )
                             }),
                     ),
@@ -1357,15 +1356,14 @@ impl Render for GraphCanvas {
                 .pt(px(5.0))
                 .text_color(colors.text_muted())
                 .child(if self.pending && self.nodes.is_empty() {
-                    "Organizando o mapa…".to_owned()
+                    t::hint_organizing().to_owned()
                 } else if omitted > 0 {
-                    format!("Panorama · {omitted} decisões e regras ocultas · aproxime para vê-las")
+                    t::hint_panorama(omitted)
                 } else {
-                    "Clique para focar · arraste para mover · role para aproximar".to_owned()
+                    t::hint_default().to_owned()
                 })
         });
-        let summary = format!(
-            "Grafo do projeto: {} componentes, {} decisões, {} regras, {} tecnologias.",
+        let summary = t::summary(
             self.nodes
                 .iter()
                 .filter(|n| n.kind == Kind::Component)
@@ -2053,21 +2051,19 @@ fn swatch(theme: &Theme, node: &Node) -> Div {
     div().w(px(12.0)).flex().justify_center().child(mark)
 }
 
-/// "2 decisões · 1 regra", or "sem decisões".
+/// "2 decisions · 1 rule", or "no decisions".
 fn weight_line((decisions, rules): (usize, usize)) -> String {
     let mut parts = Vec::new();
     match decisions {
         0 => {}
-        1 => parts.push("1 decisão".to_owned()),
-        n => parts.push(format!("{n} decisões")),
+        n => parts.push(t::decisions_count(n)),
     }
     match rules {
         0 => {}
-        1 => parts.push("1 regra".to_owned()),
-        n => parts.push(format!("{n} regras")),
+        n => parts.push(t::rules_count(n)),
     }
     if parts.is_empty() {
-        "sem decisões".to_owned()
+        t::no_decisions().to_owned()
     } else {
         parts.join(" · ")
     }
@@ -2081,18 +2077,18 @@ fn card_label(theme: &Theme, label: &'static str) -> Div {
 
 fn tie_label(kind: &LinkKind, outgoing: bool) -> &'static str {
     match (kind, outgoing) {
-        (LinkKind::PartOf, true) => "faz parte de",
-        (LinkKind::PartOf, false) => "parte deste componente",
-        (LinkKind::Affects, true) => "muda este componente",
-        (LinkKind::Affects, false) => "decisão que muda este item",
-        (LinkKind::Uses, true) => "usa esta tecnologia",
-        (LinkKind::Uses, false) => "decisão que usa esta tecnologia",
-        (LinkKind::AppliesTo, true) => "vale para",
-        (LinkKind::AppliesTo, false) => "regra que vale aqui",
-        (LinkKind::Conflict, _) => "em conflito",
-        (LinkKind::Relation, true) => "depende de",
-        (LinkKind::Relation, false) => "depende desta",
-        (LinkKind::Suggested(_), _) => "sugerida",
+        (LinkKind::PartOf, true) => t::tie_part_of_out(),
+        (LinkKind::PartOf, false) => t::tie_part_of_in(),
+        (LinkKind::Affects, true) => t::tie_affects_out(),
+        (LinkKind::Affects, false) => t::tie_affects_in(),
+        (LinkKind::Uses, true) => t::tie_uses_out(),
+        (LinkKind::Uses, false) => t::tie_uses_in(),
+        (LinkKind::AppliesTo, true) => t::tie_applies_out(),
+        (LinkKind::AppliesTo, false) => t::tie_applies_in(),
+        (LinkKind::Conflict, _) => t::tie_conflict(),
+        (LinkKind::Relation, true) => t::tie_relation_out(),
+        (LinkKind::Relation, false) => t::tie_relation_in(),
+        (LinkKind::Suggested(_), _) => t::tie_suggested(),
     }
 }
 
@@ -2174,13 +2170,13 @@ fn build(graph: &ProjectGraph) -> (Vec<Node>, Vec<Link>) {
                 ),
             },
             kind: if rule { Kind::Rule } else { Kind::Decision },
-            label: format!(
-                "+{} {}",
-                crowd.count,
-                if rule { "regras" } else { "decisões" }
-            )
+            label: if rule {
+                t::group_rules_label(crowd.count)
+            } else {
+                t::group_decisions_label(crowd.count)
+            }
             .into(),
-            detail: "Agrupadas para manter o grafo leve. Abra o componente para ver todas.".into(),
+            detail: t::group_detail().into(),
             folded: crowd.count,
             home: Some(crowd.home.id.clone().into()),
             cluster: None,
@@ -2350,11 +2346,11 @@ fn fold_crowds(graph: &ProjectGraph) -> (BTreeSet<NodeRef>, Vec<Crowd>) {
 
 fn rule_kind(literal: &str) -> &'static str {
     match literal {
-        "assumption" => "Premissa",
-        "constraint" => "Restrição",
-        "goal" => "Objetivo",
-        "convention" => "Convenção",
-        _ => "Regra",
+        "assumption" => t::rule_assumption(),
+        "constraint" => t::rule_constraint(),
+        "goal" => t::rule_goal(),
+        "convention" => t::rule_convention(),
+        _ => t::kind_rule(),
     }
 }
 
@@ -3061,7 +3057,7 @@ mod tests {
         );
         assert_eq!(nodes[2].kind, Kind::Technology);
         assert_eq!(nodes[2].cluster, None, "technologies float between islands");
-        assert_eq!(nodes[4].detail, "Convenção");
+        assert_eq!(nodes[4].detail, "Convention");
         assert!(links
             .iter()
             .any(|link| link.kind == LinkKind::Suggested("edge-9".into())));

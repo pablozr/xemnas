@@ -614,6 +614,10 @@ diz o que ela é e o que confirmar faz, e cada sugestão é um cartão
   (OK, Atenção, Falha, Não se aplica) e as mensagens do backend; Diagnóstico
   mostra medianas, perdas, tarefas com reprocessar/cancelar e exporta o JSON
   sanitizado.
+- **Idioma** é a última seção: dez idiomas em linhas de rádio, cada um pelo
+  nome nativo e, ao lado, atenuado, pelo nome no idioma atual (para quem caiu
+  numa interface que não lê achar o caminho de volta). Muda na hora; regras
+  de texto e glossário em [idiomas.md](idiomas.md).
 - Painel do projeto: **Apagar dados…** mede o impacto real e só libera Apagar
   tudo depois de digitar o nome do projeto; a pasta no disco não é tocada.
 

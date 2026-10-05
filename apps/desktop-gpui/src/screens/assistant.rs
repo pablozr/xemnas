@@ -18,6 +18,7 @@ use gpui::{
 };
 
 use super::mascot::{self, Pose};
+use crate::i18n::assistant as t;
 
 use crate::ui::controls::{focus_ring, icon_action};
 use crate::ui::icons::{icon, IconName};
@@ -332,7 +333,7 @@ impl AssistantScreen {
     fn whisper(&self) -> String {
         match self.briefing.pending {
             Some(0) | None => "Xemnas".to_owned(),
-            Some(count) => format!("{count} para revisar"),
+            Some(count) => t::whisper_pending(count),
         }
     }
 
@@ -361,13 +362,13 @@ impl AssistantScreen {
             })
             .role(Role::Button)
             .aria_label(if self.panel.is_open() {
-                "Fechar o assistente Xemnas"
+                t::dock_close_aria()
             } else {
-                "Abrir o assistente Xemnas"
+                t::dock_open_aria()
             })
             .track_focus(&self.focus)
             .focus_visible(focus_ring(&theme))
-            .tooltip(tooltip("Xemnas, o assistente do projeto", None))
+            .tooltip(tooltip(t::dock_tooltip(), None))
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                 this.hovered = *hovered;
                 cx.notify();
@@ -430,17 +431,11 @@ impl AssistantScreen {
         let theme = Theme::current(cx);
         let colors = theme.colors;
         let greeting = match (&self.briefing.project, self.briefing.pending) {
-            (None, _) => "Escolha um projeto na lateral e eu mostro o que ele guarda.".to_owned(),
-            (Some(project), Some(0)) => {
-                format!("Nada esperando revisão em {project}. As decisões estão em ordem.")
-            }
-            (Some(project), Some(1)) => {
-                format!("Há 1 candidato esperando a sua revisão em {project}.")
-            }
-            (Some(project), Some(count)) => {
-                format!("Há {count} candidatos esperando a sua revisão em {project}.")
-            }
-            (Some(project), None) => format!("Estou acompanhando {project}."),
+            (None, _) => t::pick_project().to_owned(),
+            (Some(project), Some(0)) => t::all_clear(project),
+            (Some(project), Some(1)) => t::pending_one(project),
+            (Some(project), Some(count)) => t::pending_many(count, project),
+            (Some(project), None) => t::following(project),
         };
         let has_project = self.briefing.project.is_some();
         let pending = self.briefing.pending.unwrap_or(0);
@@ -449,35 +444,35 @@ impl AssistantScreen {
                 AssistantRoute::Review,
                 IconName::Inbox,
                 if pending > 0 {
-                    format!("Revisar os {pending} candidatos")
+                    t::route_review_pending(pending)
                 } else {
-                    "Abrir a Revisão".to_owned()
+                    t::route_open_review().to_owned()
                 },
-                "Confirmar, ajustar ou rejeitar o que foi capturado",
+                t::route_review_body(),
             ),
             (
                 AssistantRoute::Overview,
                 IconName::Compass,
-                "Ler a Visão do projeto".to_owned(),
-                "O resumo e os principais fluxos, com fontes",
+                t::route_overview().to_owned(),
+                t::route_overview_body(),
             ),
             (
                 AssistantRoute::Timeline,
                 IconName::Clock,
-                "Ver o que mudou".to_owned(),
-                "A linha do tempo das decisões e regras",
+                t::route_timeline().to_owned(),
+                t::route_timeline_body(),
             ),
             (
                 AssistantRoute::Suggestions,
                 IconName::Lightbulb,
-                "Ver as sugestões do mapa".to_owned(),
-                "Relações, contexto e vínculos à espera",
+                t::route_suggestions().to_owned(),
+                t::route_suggestions_body(),
             ),
             (
                 AssistantRoute::TestTask,
                 IconName::Flask,
-                "Testar o contexto de uma tarefa".to_owned(),
-                "O que o agente receberia para um pedido",
+                t::route_test_task().to_owned(),
+                t::route_test_task_body(),
             ),
         ];
         let mut list = div().flex().flex_col();
@@ -523,8 +518,8 @@ impl AssistantScreen {
                     .child(icon(IconName::ChevronRight, 14.0, colors.text_disabled())),
             );
         }
-        let close = icon_action(&theme, "assistant-close", "Fechar o assistente")
-            .tooltip(tooltip("Fechar", Some("Esc")))
+        let close = icon_action(&theme, "assistant-close", t::close_aria())
+            .tooltip(tooltip(t::close(), Some("Esc")))
             .on_click(cx.listener(|this, _, _, cx| this.close(cx)))
             .child(icon(IconName::Close, 14.0, colors.text_secondary()));
         let panel = div()
@@ -543,7 +538,7 @@ impl AssistantScreen {
             ))
             .overflow_hidden()
             .role(Role::Dialog)
-            .aria_label("Assistente Xemnas")
+            .aria_label(t::panel_aria())
             .occlude()
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                 if event.keystroke.key == "escape" {
@@ -576,7 +571,7 @@ impl AssistantScreen {
                                 text_style(div(), TypeScale::META)
                                     .font_family(Theme::font_mono())
                                     .text_color(colors.organization_silver())
-                                    .child("Nº I · assistente do projeto"),
+                                    .child(t::panel_subtitle()),
                             ),
                     )
                     .child(close),
@@ -611,7 +606,7 @@ impl AssistantScreen {
                                 .child(
                                     div()
                                         .px(px(SpacingScale::S3))
-                                        .child(section_label(&theme, "Posso levar você a")),
+                                        .child(section_label(&theme, t::take_you_to())),
                                 )
                                 .child(list),
                         )
@@ -625,10 +620,7 @@ impl AssistantScreen {
                     .border_t_1()
                     .border_color(colors.hairline_divider())
                     .text_color(colors.text_muted())
-                    .child(
-                        "Por enquanto eu guio pelo app. Perguntas em linguagem natural \
-                         chegam quando o assistente for ligado ao provedor de IA.",
-                    ),
+                    .child(t::footer()),
             );
         Some(match exit {
             None => panel_in("assistant-panel-in", panel).into_any_element(),

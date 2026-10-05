@@ -19,7 +19,8 @@ use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Context, Div, Render, Role, Window};
 
 use super::parts::{card, card_body, card_footer, stat_tile};
-use crate::screens::format::{date_time, plural};
+use crate::i18n::settings as t;
+use crate::screens::format::date_time;
 use crate::ui::controls::{action_button, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
@@ -67,37 +68,37 @@ where
     fn document(&self) -> Result<DiagnosticsDocument, String> {
         self.diagnostics.export().map_err(|error| {
             tracing::error!(error = %error, operation = "diagnostics", "export failed");
-            "Não foi possível montar o diagnóstico.".to_owned()
+            t::diag_err_document().to_owned()
         })
     }
     fn reprocess(&self, job_id: &str) -> Result<(), String> {
         self.jobs.reprocess(job_id).map_err(|error| {
             tracing::error!(error = %error, operation = "job_reprocess", "reprocess failed");
-            "Não foi possível reprocessar a tarefa; ela pode já ter mudado de estado.".to_owned()
+            t::diag_err_reprocess().to_owned()
         })
     }
     fn cancel(&self, job_id: &str) -> Result<(), String> {
         self.jobs.cancel(job_id).map_err(|error| {
             tracing::error!(error = %error, operation = "job_cancel", "cancel failed");
-            "Não foi possível cancelar a tarefa; ela pode já ter começado.".to_owned()
+            t::diag_err_cancel().to_owned()
         })
     }
     fn lanes(&self) -> Result<Vec<(Lane, JobSummary)>, String> {
         self.jobs.lane_summaries().map_err(|error| {
             tracing::error!(error = %error, operation = "job_lanes", "lane counts failed");
-            "Não foi possível contar as filas de análise.".to_owned()
+            t::diag_err_lanes().to_owned()
         })
     }
     fn parallel(&self) -> Result<u8, String> {
         self.jobs.parallel_analyses().map_err(|error| {
             tracing::error!(error = %error, operation = "job_parallel", "read failed");
-            "Não foi possível ler as análises em paralelo.".to_owned()
+            t::diag_err_parallel_read().to_owned()
         })
     }
     fn set_parallel(&self, value: u8) -> Result<(), String> {
         self.jobs.set_parallel_analyses(value).map_err(|error| {
             tracing::error!(error = %error, operation = "job_parallel", "save failed");
-            "Não foi possível salvar as análises em paralelo.".to_owned()
+            t::diag_err_parallel_save().to_owned()
         })
     }
 }
@@ -250,7 +251,7 @@ impl DiagnosticsPanel {
                         result.is_ok(),
                     );
                     if result.is_ok() {
-                        this.show_notice("Captura reenfileirada para análise.".into(), cx);
+                        this.show_notice(t::diag_capture_requeued().into(), cx);
                         this.poll_progress(cx);
                     }
                 }
@@ -298,7 +299,7 @@ impl DiagnosticsPanel {
                         this.refresh(cx);
                     }
                     Outcome::Saved(Ok(Some(path))) => {
-                        this.show_notice(format!("Diagnóstico salvo em {}", path.display()), cx)
+                        this.show_notice(t::diag_saved_at(&path.display().to_string()), cx)
                     }
                     Outcome::Saved(Ok(None)) => {}
                     Outcome::Loaded(Err(error))
@@ -336,14 +337,12 @@ impl DiagnosticsPanel {
                         json.push('\n');
                         json
                     }
-                    Err(_) => {
-                        return Outcome::Saved(Err("Não foi possível gerar o arquivo.".into()))
-                    }
+                    Err(_) => return Outcome::Saved(Err(t::diag_err_file().into())),
                 };
                 let Some(path) = rfd::FileDialog::new()
-                    .set_title("Exportar diagnóstico")
+                    .set_title(t::diag_export_title())
                     .add_filter("JSON", &["json"])
-                    .set_file_name("xemnas-diagnostico.json")
+                    .set_file_name(t::diag_file_name())
                     .save_file()
                 else {
                     return Outcome::Saved(Ok(None));
@@ -362,7 +361,7 @@ impl DiagnosticsPanel {
                 Outcome::Saved(
                     written
                         .map(|_| Some(path))
-                        .map_err(|_| "Não foi possível salvar o arquivo nesse destino.".into()),
+                        .map_err(|_| t::diag_err_save_file().into()),
                 )
             },
             cx,
@@ -394,20 +393,20 @@ impl DiagnosticsPanel {
                     .bg(colors.glass_fill_card())
                     .child(stat_tile(
                         theme,
-                        "Captura → candidato",
+                        t::diag_stat_latency(),
                         median(&metrics.latency_capture_to_candidate_ms),
                         None,
                     ))
                     .child(stat_tile(
                         theme,
-                        "Tempo até revisão",
+                        t::diag_stat_review_time(),
                         median(&metrics.review_time_ms),
                         None,
                     ))
-                    .child(stat_tile(theme, "Descartados", noise, None))
+                    .child(stat_tile(theme, t::diag_stat_dismissed(), noise, None))
                     .child(stat_tile(
                         theme,
-                        "Blocos de contexto",
+                        t::diag_stat_context_blocks(),
                         (context.inject.blocks + context.shadow.blocks).to_string(),
                         None,
                     )),
@@ -415,19 +414,17 @@ impl DiagnosticsPanel {
             .child(
                 text_style(div(), TypeScale::META)
                     .text_color(colors.text_muted())
-                    .child("Tempo até revisão inclui a espera na fila; não mede trabalho ativo do revisor."),
+                    .child(t::diag_review_time_note()),
             )
             .child(
                 text_style(div(), TypeScale::META)
                     .text_color(colors.text_muted())
-                    .child(format!(
-                        "Medianas com p95 de {} e {} · {} candidatos decididos · contexto: {} \
-                         enviados, {} só medidos",
-                        p95(&metrics.latency_capture_to_candidate_ms),
-                        p95(&metrics.review_time_ms),
+                    .child(t::diag_metrics_note(
+                        &p95(&metrics.latency_capture_to_candidate_ms),
+                        &p95(&metrics.review_time_ms),
                         metrics.noise.decided_total,
                         context.inject.blocks,
-                        context.shadow.blocks
+                        context.shadow.blocks,
                     )),
             )
     }
@@ -440,38 +437,11 @@ impl DiagnosticsPanel {
         let (tone, verdict) = match calibration.verdict {
             Verdict::TooFew => (
                 colors.text_muted(),
-                format!(
-                    concat!(
-                        "Ainda não dá para saber: {} de {} decisões, e é preciso ter aceitado ",
-                        "e descartado pelo menos uma."
-                    ),
-                    calibration.decided, MIN_DECIDED
-                ),
+                t::diag_calib_too_few(calibration.decided, MIN_DECIDED),
             ),
-            Verdict::NoSignal => (
-                colors.status_danger(),
-                concat!(
-                    "A confiança não separa o que você aceita do que descarta. ",
-                    "Aprovação automática não deve se apoiar nela."
-                )
-                .to_owned(),
-            ),
-            Verdict::Weak => (
-                colors.status_warning(),
-                concat!(
-                    "A confiança separa um pouco o que você aceita, mas não o bastante ",
-                    "para aprovar sozinha."
-                )
-                .to_owned(),
-            ),
-            Verdict::Predicts => (
-                colors.status_success(),
-                concat!(
-                    "A confiança prevê o que você aceita: ",
-                    "dá para apoiar aprovação automática nela."
-                )
-                .to_owned(),
-            ),
+            Verdict::NoSignal => (colors.status_danger(), t::diag_calib_no_signal().to_owned()),
+            Verdict::Weak => (colors.status_warning(), t::diag_calib_weak().to_owned()),
+            Verdict::Predicts => (colors.status_success(), t::diag_calib_predicts().to_owned()),
         };
         let rows = calibration
             .bins
@@ -501,19 +471,13 @@ impl DiagnosticsPanel {
                             .w(px(150.0))
                             .flex_none()
                             .text_color(colors.text_muted())
-                            .child(format!(
-                                "{:.0}% mantidas · {}",
+                            .child(t::diag_bin_label(
                                 share * 100.0,
-                                plural(bin.total as usize, "decisão", "decisões")
+                                &t::decisions_count(bin.total as usize),
                             )),
                     )
             });
-        card(
-            theme,
-            "A confiança da extração presta?",
-            "Entre os candidatos que você já decidiu: quanto da faixa de confiança foi aceito.",
-        )
-        .child(
+        card(theme, t::diag_calib_title(), t::diag_calib_body()).child(
             card_body()
                 .gap(px(SpacingScale::S3))
                 .child(
@@ -541,16 +505,12 @@ impl DiagnosticsPanel {
                 .children(calibration.confidence_separation.map(|value| {
                     text_style(div(), TypeScale::META)
                         .text_color(colors.text_muted())
-                        .child(format!(
-                            concat!(
-                                "Separação {:.2} (0,50 é acaso; {:.2} ou mais prevê) · ",
-                                "{} aceitas, {} editadas, {} descartadas"
-                            ),
+                        .child(t::diag_separation(
                             value,
                             PREDICTS_AT,
                             calibration.accepted,
                             calibration.edited,
-                            calibration.dismissed
+                            calibration.dismissed,
                         ))
                 })),
         )
@@ -561,32 +521,27 @@ impl DiagnosticsPanel {
         let colors = theme.colors;
         let rows = [
             (
-                "Análises que falharam",
+                t::diag_loss_assessments_failed(),
                 losses.assessments_failed,
                 colors.status_danger(),
             ),
             (
-                "Análises puladas por falta de consentimento",
+                t::diag_loss_assessments_skipped(),
                 losses.assessments_skipped,
                 colors.status_warning(),
             ),
             (
-                "Tarefas que falharam",
+                t::diag_loss_jobs_failed(),
                 losses.jobs_failed,
                 colors.status_danger(),
             ),
             (
-                "Capturas rejeitadas na outbox",
+                t::diag_loss_outbox_rejected(),
                 losses.outbox_rejected,
                 colors.status_danger(),
             ),
         ];
-        card(
-            theme,
-            "Perdas",
-            "Trabalho que não virou candidato. Zero em tudo é o esperado.",
-        )
-        .child(
+        card(theme, t::diag_losses_title(), t::diag_losses_body()).child(
             card_body()
                 .gap(px(0.0))
                 .children(
@@ -667,16 +622,17 @@ impl DiagnosticsPanel {
                             } else {
                                 colors.text_secondary()
                             })
-                            .child(format!(
-                                "{} na fila · {} executando · {} com falha",
-                                summary.queued, summary.running, summary.failed
+                            .child(t::diag_lane_counts(
+                                summary.queued,
+                                summary.running,
+                                summary.failed,
                             )),
                     )
             });
         let mut track = segmented(theme)
             .id("diagnostics-parallel")
             .role(Role::RadioGroup)
-            .aria_label("Análises em paralelo");
+            .aria_label(t::diag_parallel_title());
         for (value, label) in [(1u8, "1"), (2, "2"), (3, "3"), (4, "4")] {
             let selected = self.parallel == Some(value);
             track = track.child(
@@ -695,7 +651,7 @@ impl DiagnosticsPanel {
                             Outcome::Changed(
                                 backend
                                     .set_parallel(value)
-                                    .map(|()| "Salvo. Vale no próximo início do app."),
+                                    .map(|()| t::diag_parallel_saved()),
                             )
                         },
                         cx,
@@ -703,37 +659,30 @@ impl DiagnosticsPanel {
                 })),
             );
         }
-        card(
-            theme,
-            "Filas de análise",
-            "Sessões recentes, documentação e sugestões andam em filas separadas.",
-        )
-        .child(card_body().gap(px(0.0)).children(rows))
-        .child(
-            card_footer(theme)
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.0))
-                        .child(
-                            text_style(div(), TypeScale::LABEL)
-                                .text_color(colors.text_secondary())
-                                .child("Análises em paralelo"),
-                        )
-                        .child(
-                            text_style(div(), TypeScale::META)
-                                .text_color(colors.text_muted())
-                                .child(
-                                    "Chamadas ao provedor de IA ao mesmo tempo. \
-                                     Vale no próximo início do app.",
-                                ),
-                        ),
-                )
-                .child(track),
-        )
+        card(theme, t::diag_lanes_title(), t::diag_lanes_body())
+            .child(card_body().gap(px(0.0)).children(rows))
+            .child(
+                card_footer(theme)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child(
+                                text_style(div(), TypeScale::LABEL)
+                                    .text_color(colors.text_secondary())
+                                    .child(t::diag_parallel_title()),
+                            )
+                            .child(
+                                text_style(div(), TypeScale::META)
+                                    .text_color(colors.text_muted())
+                                    .child(t::diag_parallel_hint()),
+                            ),
+                    )
+                    .child(track),
+            )
     }
 
     fn render_jobs(&self, theme: &Theme, jobs: &[JobDiagnostic], cx: &mut Context<Self>) -> Div {
@@ -741,7 +690,7 @@ impl DiagnosticsPanel {
         let body: AnyElement = if jobs.is_empty() {
             text_style(div(), TypeScale::BODY_SMALL)
                 .text_color(colors.text_secondary())
-                .child("Nenhuma tarefa registrada ainda. Cada captura recebida gera uma análise.")
+                .child(t::diag_jobs_empty())
                 .into_any_element()
         } else {
             div()
@@ -753,8 +702,8 @@ impl DiagnosticsPanel {
                     let (color, state) = job_state(theme, &job.state);
                     let id = job.id.clone();
                     let action = match job.state.as_str() {
-                        "failed" => Some(("Reprocessar", true)),
-                        "queued" => Some(("Cancelar", false)),
+                        "failed" => Some((t::action_reprocess(), true)),
+                        "queued" => Some((t::action_cancel(), false)),
                         _ => None,
                     };
                     div()
@@ -786,14 +735,13 @@ impl DiagnosticsPanel {
                                 .child(
                                     text_style(div(), TypeScale::META)
                                         .text_color(colors.text_muted())
-                                        .child(format!(
-                                            "{} · {} tentativa(s){}",
-                                            date_time(&job.updated_at),
+                                        .child(t::diag_job_meta(
+                                            &date_time(&job.updated_at),
                                             job.attempts,
-                                            job.error_code
-                                                .as_ref()
-                                                .map(|code| format!(" · código {code}"))
-                                                .unwrap_or_default()
+                                            &job.error_code
+                                                .as_deref()
+                                                .map(t::diag_job_code)
+                                                .unwrap_or_default(),
                                         )),
                                 ),
                         )
@@ -813,11 +761,9 @@ impl DiagnosticsPanel {
                                 this.run(
                                     move |backend| {
                                         Outcome::Changed(if reprocess {
-                                            backend
-                                                .reprocess(&id)
-                                                .map(|()| "Tarefa de volta na fila.")
+                                            backend.reprocess(&id).map(|()| t::diag_job_requeued())
                                         } else {
-                                            backend.cancel(&id).map(|()| "Tarefa cancelada.")
+                                            backend.cancel(&id).map(|()| t::diag_job_cancelled())
                                         })
                                     },
                                     cx,
@@ -828,12 +774,7 @@ impl DiagnosticsPanel {
                 }))
                 .into_any_element()
         };
-        card(
-            theme,
-            "Tarefas recentes",
-            "As últimas análises de captura. Falhas podem ser reprocessadas.",
-        )
-        .child(card_body().child(body))
+        card(theme, t::diag_jobs_title(), t::diag_jobs_body()).child(card_body().child(body))
     }
 
     fn render_about(
@@ -846,68 +787,63 @@ impl DiagnosticsPanel {
         let colors = theme.colors;
         let facts = [
             (
-                "Versão",
-                format!(
-                    "{} · banco v{}",
-                    document.schema.app_version, document.schema.migrations_version
+                t::diag_about_version(),
+                t::diag_about_version_value(
+                    &document.schema.app_version,
+                    document.schema.migrations_version,
                 ),
             ),
             (
-                "Dados",
+                t::diag_about_data(),
                 [
-                    plural(counts.projects as usize, "projeto", "projetos"),
-                    plural(counts.captures as usize, "captura", "capturas"),
-                    plural(counts.decisions as usize, "decisão", "decisões"),
-                    plural(counts.revisions as usize, "revisão", "revisões"),
+                    t::projects_count(counts.projects as usize),
+                    t::captures_count(counts.captures as usize),
+                    t::decisions_count(counts.decisions as usize),
+                    t::revisions_count(counts.revisions as usize),
                 ]
                 .join(" · "),
             ),
             (
-                "Extração",
+                t::diag_about_extraction(),
                 match document.ai_profile.provider.as_deref() {
-                    Some(host) => format!("externa via {host} ({})", document.runtime.mode),
-                    None => format!("local ({})", document.runtime.mode),
+                    Some(host) => t::diag_extraction_external(host, &document.runtime.mode),
+                    None => t::diag_extraction_local(&document.runtime.mode),
                 },
             ),
         ];
-        card(
-            theme,
-            "Exportar diagnóstico",
-            "Um JSON com contagens, métricas e códigos de erro. Sem conversas, diffs, decisões \
-             ou credenciais.",
-        )
-        .child(
-            card_body()
-                .gap(px(0.0))
-                .children(
-                    facts
-                        .into_iter()
-                        .enumerate()
-                        .map(|(index, (label, value))| {
-                            super::parts::kv_row(theme, label, value, false, index > 0)
-                        }),
-                ),
-        )
-        .child(
-            card_footer(theme)
-                .child(
-                    text_style(div(), TypeScale::BODY_SMALL)
-                        .flex_1()
-                        .text_color(colors.text_muted())
-                        .child("Anexe a um relato de problema; revise o arquivo antes de enviar."),
-                )
-                .child(
-                    action_button(theme, "diagnostics-export", ButtonKind::Primary, !self.busy)
-                        .aria_label("Exportar diagnóstico")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            if !this.busy {
-                                this.export(cx);
-                            }
-                        }))
-                        .child(icon(IconName::Export, 14.0, colors.accent_on_emphasis()))
-                        .child("Exportar…"),
-                ),
-        )
+        card(theme, t::diag_export_title(), t::diag_export_body())
+            .child(
+                card_body()
+                    .gap(px(0.0))
+                    .children(
+                        facts
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, (label, value))| {
+                                super::parts::kv_row(theme, label, value, false, index > 0)
+                            }),
+                    ),
+            )
+            .child(
+                card_footer(theme)
+                    .child(
+                        text_style(div(), TypeScale::BODY_SMALL)
+                            .flex_1()
+                            .text_color(colors.text_muted())
+                            .child(t::diag_export_footer()),
+                    )
+                    .child(
+                        action_button(theme, "diagnostics-export", ButtonKind::Primary, !self.busy)
+                            .aria_label(t::diag_export_title())
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if !this.busy {
+                                    this.export(cx);
+                                }
+                            }))
+                            .child(icon(IconName::Export, 14.0, colors.accent_on_emphasis()))
+                            .child(t::diag_export_button()),
+                    ),
+            )
     }
 }
 
@@ -936,9 +872,9 @@ impl Render for DiagnosticsPanel {
         };
         let retry = self.error.is_some().then(|| {
             action_button(&theme, "diagnostics-reload", ButtonKind::Ghost, !self.busy)
-                .aria_label("Tentar de novo")
+                .aria_label(t::action_try_again())
                 .on_click(cx.listener(|this, _, _, cx| this.refresh(cx)))
-                .child("Tentar de novo")
+                .child(t::action_try_again())
         });
         div()
             .relative()
@@ -967,11 +903,11 @@ fn accepts_progress(request: u64, current: u64) -> bool {
 impl DiagnosticsPanel {
     fn render_progress(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
         let mut column = div().flex().flex_col().gap(px(SpacingScale::S3)).child(
-            crate::ui::patterns::section_label(theme, "Capturas do projeto selecionado"),
+            crate::ui::patterns::section_label(theme, t::diag_captures_section()),
         );
         if let Some(job) = self.progress_action_error.clone() {
             column = column.child(
-                error_banner(theme, "Não foi possível reprocessar esta captura.")
+                error_banner(theme, t::diag_err_reprocess_capture())
                     .id("diagnostics-capture-action-error")
                     .role(Role::Alert)
                     .child(
@@ -981,11 +917,11 @@ impl DiagnosticsPanel {
                             ButtonKind::Secondary,
                             !self.progress_busy,
                         )
-                        .aria_label("Tentar reprocessar novamente")
+                        .aria_label(t::diag_retry_reprocess_label())
                         .on_click(
                             cx.listener(move |this, _, _, cx| this.retry_capture(job.clone(), cx)),
                         )
-                        .child("Tentar reprocessar"),
+                        .child(t::diag_retry_reprocess()),
                     )
                     .child(
                         action_button(
@@ -994,18 +930,18 @@ impl DiagnosticsPanel {
                             ButtonKind::Ghost,
                             true,
                         )
-                        .aria_label("Dispensar erro de reprocessamento")
+                        .aria_label(t::diag_dismiss_error_label())
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.progress_action_error = None;
                             cx.notify();
                         }))
-                        .child("Dispensar"),
+                        .child(t::diag_dismiss()),
                     ),
             );
         }
         if self.progress_error {
             column = column.child(
-                error_banner(theme, "Não foi possível atualizar o destino das capturas.")
+                error_banner(theme, t::diag_err_captures())
                     .id("diagnostics-captures-error")
                     .role(Role::Alert)
                     .child(
@@ -1015,22 +951,22 @@ impl DiagnosticsPanel {
                             ButtonKind::Ghost,
                             !self.progress_busy,
                         )
-                        .aria_label("Atualizar capturas")
+                        .aria_label(t::diag_refresh_captures_label())
                         .on_click(cx.listener(|this, _, _, cx| this.poll_progress(cx)))
-                        .child("Tentar novamente"),
+                        .child(t::action_try_again()),
                     ),
             );
         }
         if self.project.is_none() {
-            return column.child("Selecione um projeto para consultar suas capturas.");
+            return column.child(t::diag_select_project());
         }
         if self.progress.is_empty() {
             return column.child(if self.progress_busy {
-                "Carregando capturas…"
+                t::diag_loading_captures()
             } else if self.progress_error {
-                "Capturas indisponíveis."
+                t::diag_captures_unavailable()
             } else {
-                "Nenhuma captura recebida neste projeto."
+                t::diag_no_captures()
             });
         }
         for (index, capture) in self.progress.iter().enumerate() {
@@ -1042,17 +978,21 @@ impl DiagnosticsPanel {
                     text_style(div(), TypeScale::BODY)
                         .child(crate::screens::inbox::progress_copy(capture)),
                 )
-                .child(text_style(div(), TypeScale::META).child(format!(
-                        "{} · {}{} · tentativa {}",
-                        date_time(&capture.received_at),
-                        capture.source.as_deref().unwrap_or("Fonte não informada"),
+                .child(
+                    text_style(div(), TypeScale::META).child(t::diag_capture_meta(
+                        &date_time(&capture.received_at),
                         capture
+                            .source
+                            .as_deref()
+                            .unwrap_or(t::diag_source_unknown()),
+                        &capture
                             .model
                             .as_ref()
                             .map(|model| format!(" · {model}"))
                             .unwrap_or_default(),
-                        capture.attempts
-                    )));
+                        capture.attempts,
+                    )),
+                );
             if capture.can_retry {
                 if let Some(job) = capture.job_id.clone() {
                     row = row.child(
@@ -1062,11 +1002,11 @@ impl DiagnosticsPanel {
                             ButtonKind::Secondary,
                             !self.progress_busy,
                         )
-                        .aria_label("Reprocessar captura")
+                        .aria_label(t::diag_reprocess_capture_label())
                         .on_click(
                             cx.listener(move |this, _, _, cx| this.retry_capture(job.clone(), cx)),
                         )
-                        .child("Reprocessar"),
+                        .child(t::action_reprocess()),
                     );
                 }
             }
@@ -1110,34 +1050,31 @@ fn duration(ms: i64) -> String {
 fn job_state(theme: &Theme, state: &str) -> (gpui::Rgba, &'static str) {
     let colors = theme.colors;
     match state {
-        "queued" => (colors.status_info(), "Na fila"),
-        "running" => (colors.accent_hover(), "Executando"),
-        "completed" => (colors.status_success(), "Concluída"),
-        "failed" => (colors.status_danger(), "Falhou"),
-        "cancelled" => (colors.text_muted(), "Cancelada"),
-        _ => (colors.text_muted(), "Desconhecido"),
+        "queued" => (colors.status_info(), t::diag_state_queued()),
+        "running" => (colors.accent_hover(), t::diag_state_running()),
+        "completed" => (colors.status_success(), t::diag_state_completed()),
+        "failed" => (colors.status_danger(), t::diag_state_failed()),
+        "cancelled" => (colors.text_muted(), t::diag_state_cancelled()),
+        _ => (colors.text_muted(), t::diag_state_unknown()),
     }
 }
 
 /// Name and purpose of a lane, in product language.
 fn lane_label(lane: Lane) -> (&'static str, &'static str) {
     match lane {
-        Lane::Now => (
-            "Sessões recentes",
-            "Capturas das sessões de agentes; passam na frente.",
-        ),
-        Lane::Documents => ("Documentação", "Documentos importados dos projetos."),
-        Lane::Suggestions => ("Sugestões", "Relações e regras sugeridas após adotar."),
+        Lane::Now => (t::diag_lane_now(), t::diag_lane_now_hint()),
+        Lane::Documents => (t::diag_lane_documents(), t::diag_lane_documents_hint()),
+        Lane::Suggestions => (t::diag_lane_suggestions(), t::diag_lane_suggestions_hint()),
     }
 }
 
 fn job_kind(kind: &str) -> String {
     match kind {
-        application::jobs::ANALYZE_CAPTURE_KIND => "Análise de captura".into(),
-        application::jobs::ANALYZE_DOCUMENT_KIND => "Análise de documento".into(),
-        application::relation_suggestions::RELATION_JOB_KIND => "Relações sugeridas".into(),
-        application::claim_suggestions::CLAIM_JOB_KIND => "Regras sugeridas".into(),
-        application::search_terms::SEARCH_TERMS_JOB_KIND => "Termos de busca".into(),
+        application::jobs::ANALYZE_CAPTURE_KIND => t::diag_kind_capture().into(),
+        application::jobs::ANALYZE_DOCUMENT_KIND => t::diag_kind_document().into(),
+        application::relation_suggestions::RELATION_JOB_KIND => t::diag_kind_relations().into(),
+        application::claim_suggestions::CLAIM_JOB_KIND => t::diag_kind_rules().into(),
+        application::search_terms::SEARCH_TERMS_JOB_KIND => t::diag_kind_search_terms().into(),
         other => other.replace('_', " "),
     }
 }

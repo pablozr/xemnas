@@ -10,7 +10,9 @@
     sent, so it is safe while the machine is in use.
 
     Routes: overview, overview:flow0, review, decisions, context, map,
-    map:timeline, map:suggestions, map:file, map:entity:<name>.
+    map:timeline, map:suggestions, map:file, map:entity:<name>,
+    settings:<section> (ai, opencode, diagnostics, appearance, language).
+    -Language picks the interface language (default en).
 
 .EXAMPLE
     powershell -File tools\capture-background.ps1 -Route map:timeline -Name timeline
@@ -22,6 +24,7 @@ param(
     [string]$ExePath = "target\debug\xemnas.exe",
     [ValidateSet('quiet', 'charcoal', 'organization', 'moss', 'midnight')][string]$Theme = 'quiet',
     [string]$Wallpaper = '',
+    [ValidateSet('en', 'pt-BR', 'es', 'fr', 'de', 'it', 'ja', 'zh-CN', 'ko', 'ru')][string]$Language = 'en',
     [switch]$Compact,
     [int]$SettleMs = 3500
 )
@@ -47,6 +50,7 @@ public static class XemnasBg {
 $arguments = @('--demo', '--background', '--open', $Route)
 if ($Theme -ne 'quiet') { $arguments += @('--theme', $Theme) }
 if ($Wallpaper -ne '') { $arguments += @('--wallpaper', $Wallpaper) }
+if ($Language -ne 'en') { $arguments += @('--language', $Language) }
 if ($Compact) { $arguments += '--compact' }
 $proc = Start-Process -FilePath $ExePath -ArgumentList $arguments -PassThru
 try {
