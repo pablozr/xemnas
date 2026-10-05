@@ -45,6 +45,9 @@ Visão visual local: [Xemnas, por dentro](operacao/visao-projeto.html).
 Última entrega: [avaliação completa e router IA opcional](operacao/avaliacao-final-e-router-ia.md),
 com resultados controlados e [protocolo de produtividade](operacao/experimento-produtividade-assertividade.md).
 
+Modo automático e autoridade das normas: [ADR-0012](arquitetura/adr/0012-modo-automatico-e-autoridade.md)
+(regras locais só aceitam com confiança calibrada; o resto vai ao juiz de IA).
+
 Memória descritiva automática: [operação e medições](operacao/memoria-descritiva-e-router.md)
 e [ADR-0011](arquitetura/adr/0011-observacoes-descritivas-de-manifests.md), com
 manifests, proveniência, invalidação e roteamento determinístico de baixo custo.

@@ -372,8 +372,18 @@ fn sources(candidate: &StoredCandidate) -> usize {
 }
 
 /// What the rules say about a pending candidate, given the questions already
-/// recorded in its project.
-pub fn triage_candidate(candidate: &StoredCandidate, recorded: &[String]) -> Triage {
+/// recorded in its project and whether the extractor's confidence has been
+/// shown to predict what this person keeps.
+///
+/// Without that proof (`confidence_trusted` false: fewer than 30 decisions,
+/// or a confidence that does not separate kept from dismissed) a high
+/// confidence is only the model's opinion, so the free rules never create a
+/// norm on it: they discard repeats and send the rest to the batched judge.
+pub fn triage_candidate(
+    candidate: &StoredCandidate,
+    recorded: &[String],
+    confidence_trusted: bool,
+) -> Triage {
     let likeness = recorded
         .iter()
         .map(|question| similarity(question, &candidate.question))
@@ -392,16 +402,40 @@ pub fn triage_candidate(candidate: &StoredCandidate, recorded: &[String]) -> Tri
                 .and_then(|files| files.as_array().map(Vec::len))
         })
         .unwrap_or(0);
-    if candidate.confidence >= SURE_CONFIDENCE
+    if confidence_trusted
+        && candidate.confidence >= SURE_CONFIDENCE
         && candidate.significance >= MIN_SIGNIFICANCE
         && sources(candidate) >= 1
         && files <= MAX_FILES
         && likeness < SIMILAR_AT
     {
-        Triage::Accept("alta confiança, com fonte e sem parecido registrado")
+        Triage::Accept("alta confiança calibrada, com fonte e sem parecido registrado")
     } else {
         Triage::Ask
     }
+}
+
+/// Whether the extractor's confidence predicts what this person keeps, from
+/// the candidates already decided (`application::calibration`).
+fn confidence_predicts(decided: &[StoredCandidate]) -> bool {
+    use crate::calibration::{calibrate, Outcome, Sample};
+    let samples: Vec<Sample> = decided
+        .iter()
+        .filter_map(|row| {
+            let outcome = match row.status {
+                CandidateStatus::Accepted => Outcome::Accepted,
+                CandidateStatus::EditedAndAccepted => Outcome::Edited,
+                CandidateStatus::Dismissed => Outcome::Dismissed,
+                _ => return None,
+            };
+            Some(Sample {
+                confidence: row.confidence,
+                significance: row.significance,
+                outcome,
+            })
+        })
+        .collect();
+    calibrate(&samples).verdict.allows_automation()
 }
 
 /// What the rules say about a relation between decisions.
@@ -629,26 +663,24 @@ where
         let mut items = Vec::new();
 
         let pending = self.candidates(project_id, vec![CandidateStatus::Pending], READ_LIMIT)?;
-        let recorded: Vec<String> = self
-            .candidates(
-                project_id,
-                vec![
-                    CandidateStatus::Accepted,
-                    CandidateStatus::EditedAndAccepted,
-                    CandidateStatus::Dismissed,
-                ],
-                READ_LIMIT,
-            )?
-            .into_iter()
-            .map(|row| row.question)
-            .collect();
+        let decided = self.candidates(
+            project_id,
+            vec![
+                CandidateStatus::Accepted,
+                CandidateStatus::EditedAndAccepted,
+                CandidateStatus::Dismissed,
+            ],
+            READ_LIMIT,
+        )?;
+        let confidence_trusted = confidence_predicts(&decided);
+        let recorded: Vec<String> = decided.into_iter().map(|row| row.question).collect();
         for candidate in pending {
             if candidate.significance < MIN_SIGNIFICANCE
                 || done.contains(&(ItemKind::Candidate, candidate.id.clone()))
             {
                 continue;
             }
-            let triage = triage_candidate(&candidate, &recorded);
+            let triage = triage_candidate(&candidate, &recorded, confidence_trusted);
             let kind = if candidate.kind == CandidateKind::Rule.as_str() {
                 "regra"
             } else {
@@ -1034,9 +1066,32 @@ mod tests {
         assert!(matches!(
             triage_candidate(
                 &candidate("Como versionar as decisões revisadas?"),
-                &recorded
+                &recorded,
+                true,
             ),
             Triage::Accept(_)
+        ));
+    }
+
+    #[test]
+    fn without_calibrated_confidence_the_rules_never_accept_a_norm() {
+        let recorded = vec!["Qual fila usar para os jobs?".to_owned()];
+        assert_eq!(
+            triage_candidate(
+                &candidate("Como versionar as decisões revisadas?"),
+                &recorded,
+                false,
+            ),
+            Triage::Ask
+        );
+        let repeat = vec!["Como versionar as decisões revisadas?".to_owned()];
+        assert!(matches!(
+            triage_candidate(
+                &candidate("Como versionar as decisões revisadas?"),
+                &repeat,
+                false,
+            ),
+            Triage::Discard(_)
         ));
     }
 
@@ -1046,7 +1101,8 @@ mod tests {
         assert!(matches!(
             triage_candidate(
                 &candidate("Como versionar as decisões revisadas?"),
-                &recorded
+                &recorded,
+                true,
             ),
             Triage::Discard(_)
         ));
@@ -1058,19 +1114,19 @@ mod tests {
         let base = candidate("Como versionar as decisões revisadas?");
         let mut low = base.clone();
         low.confidence = 0.7;
-        assert_eq!(triage_candidate(&low, &none), Triage::Ask);
+        assert_eq!(triage_candidate(&low, &none, true), Triage::Ask);
         let mut rule = base.clone();
         rule.kind = "rule".into();
-        assert_eq!(triage_candidate(&rule, &none), Triage::Ask);
+        assert_eq!(triage_candidate(&rule, &none, true), Triage::Ask);
         let mut unsourced = base.clone();
         unsourced.evidence_refs = "[]".into();
-        assert_eq!(triage_candidate(&unsourced, &none), Triage::Ask);
+        assert_eq!(triage_candidate(&unsourced, &none, true), Triage::Ask);
         let mut wide = base.clone();
         wide.diff_summary = "{\"files\":[\"a\",\"b\",\"c\",\"d\"]}".into();
-        assert_eq!(triage_candidate(&wide, &none), Triage::Ask);
+        assert_eq!(triage_candidate(&wide, &none, true), Triage::Ask);
         let alike = vec!["Como versionar as decisões revisadas depois?".to_owned()];
         assert_eq!(
-            triage_candidate(&base, &alike),
+            triage_candidate(&base, &alike, true),
             Triage::Ask,
             "resembles one without repeating it"
         );

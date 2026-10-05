@@ -427,7 +427,8 @@ sozinho. Ligado, a IA cuida de todo o ciclo: decisões propostas, ligações sug
 regras e vínculos.
 
 Cada item passa primeiro por uma triagem local e gratuita (repete uma decisão já
-registrada: descarta; alta confiança, com fonte e sem parecido: aceita; vínculo ao
+registrada: descarta; alta confiança, com fonte e sem parecido: aceita **só depois que a
+calibração mostrar que a confiança prevê o que você mantém** (ADR-0012), senão pergunta; vínculo ao
 Mapa por arquivo ou dependência: aceita; vínculo por menção no texto: pergunta, com o
 trecho; o resto pergunta). Só o que sobra vai ao juiz de IA, **em lote** e com limites para não gerar
 chamadas: no mínimo 3 itens (ou o mais antigo esperando 2 h), no máximo 12 por chamada,

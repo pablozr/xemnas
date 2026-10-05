@@ -173,6 +173,24 @@ fn candidate(
     }
 }
 
+/// A decided history in which the extractor's confidence predicts what the
+/// person keeps (confident ones kept, unsure ones dismissed): the only case
+/// in which the free rules may accept on confidence.
+fn calibrated_history() -> Vec<DecisionCandidateRecord> {
+    (0..32)
+        .map(|index| {
+            let kept = index % 2 == 0;
+            candidate(
+                &format!("history-{index}"),
+                if kept { "accepted" } else { "dismissed" },
+                if kept { 0.92 } else { 0.35 },
+                &format!("historico {index} assunto zeta{index}"),
+                "2026-01-01T00:00:00Z",
+            )
+        })
+        .collect()
+}
+
 fn old(id: &str, confidence: f64, question: &str) -> DecisionCandidateRecord {
     candidate(id, "pending", confidence, question, "2026-02-01T00:00:00Z")
 }
@@ -208,6 +226,9 @@ fn the_rules_settle_the_plain_cases_and_one_batched_call_settles_the_rest() {
     );
     let review = review_with(&test.store, consented(), &judge);
     review.set_mode(Mode::Automatic).expect("on");
+    test.store
+        .insert_candidates(&calibrated_history())
+        .expect("history");
     test.store
         .insert_candidates(&[
             candidate(
@@ -383,12 +404,46 @@ fn calls_are_spaced_capped_per_day_and_not_retried_at_once_after_a_failure() {
 }
 
 #[test]
+fn without_a_calibrated_history_a_confident_candidate_goes_to_the_judge() {
+    let test = support::open("review-uncalibrated", &[PROJECT]);
+    let judge = Judge::answering(
+        r#"{"verdicts":[
+          {"id":"I1","verdict":"human","reason":"muda o que os agentes recebem"},
+          {"id":"I2","verdict":"accept","reason":"correta e útil"},
+          {"id":"I3","verdict":"discard","reason":"trivial"}]}"#,
+    );
+    let review = review_with(&test.store, consented(), &judge);
+    review.set_mode(Mode::Automatic).expect("on");
+    test.store
+        .insert_candidates(&[
+            old("plain", 0.97, "como versionar as revisoes passadas"),
+            old("amb-1", 0.6, "qual formato exportar relatorios"),
+            old("amb-2", 0.6, "quando limpar arquivos temporarios"),
+        ])
+        .expect("pending");
+    let report = review.run_at(PROJECT, NOW).expect("pass");
+    assert!(
+        report.asked,
+        "nothing is accepted on an uncalibrated confidence"
+    );
+    assert_eq!(judge.calls.load(Ordering::SeqCst), 1);
+    assert_ne!(
+        status_of(&test.store, "plain"),
+        CandidateStatus::Accepted,
+        "the judge, not the confidence, settles it"
+    );
+}
+
+#[test]
 fn without_an_enabled_provider_only_the_rules_act() {
     let test = support::open("review-offline", &[PROJECT]);
     let judge = Judge::answering("{}");
     let review = review_with(&test.store, offline_default_profile(), &judge);
     review.set_mode(Mode::Automatic).expect("on");
     assert!(!review.status().expect("status").judge);
+    test.store
+        .insert_candidates(&calibrated_history())
+        .expect("history");
     test.store
         .insert_candidates(&[
             old("plain", 0.95, "como versionar as revisoes passadas"),
