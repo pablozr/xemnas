@@ -40,6 +40,7 @@ use crate::ui::patterns::{
 use crate::ui::search_field::SearchField;
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{SpacingScale, TypeScale};
+use crate::ui::tooltip::tooltip;
 use crate::ui::visits;
 
 /// What a person can take back from the last action.
@@ -265,19 +266,20 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
     }
 
     fn group_section(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let mut section = div()
-            .flex()
-            .flex_col()
-            .gap(px(SpacingScale::S3))
-            .child(section_header(theme, "Ocorrências"));
+        // Most candidates appear once: the section only exists when the same
+        // decision showed up in several conversations, so one confirmation
+        // settles all of them.
         if self.group_error {
-            section = section
+            return div()
+                .flex()
+                .flex_col()
+                .gap(px(SpacingScale::S2))
                 .child(error_banner(
                     theme,
-                    "Não foi possível carregar as ocorrências.",
+                    "Não foi possível ver em quais conversas esta decisão apareceu.",
                 ))
                 .child(
-                    action_button(theme, "retry-group", ButtonKind::Secondary, !self.busy)
+                    action_button(theme, "retry-group", ButtonKind::Ghost, !self.busy)
                         .aria_label("Tentar novamente")
                         .child("Tentar novamente")
                         .track_focus(&self.group_focus[0])
@@ -290,85 +292,66 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                                 cx.stop_propagation();
                             }
                         })),
-                );
-        } else if let Some(group) = &self.group {
-            section = section.child(
-                text_style(div(), TypeScale::BODY_SMALL)
-                    .child(format!("{} ocorrências reunidas", group.occurrence_count)),
+                )
+                .into_any_element();
+        }
+        let Some(group) = self
+            .group
+            .as_ref()
+            .filter(|group| group.occurrence_count > 1)
+        else {
+            return div().into_any_element();
+        };
+        let mut chips = div().flex().flex_wrap().gap(px(SpacingScale::S2));
+        for (index, member) in group.members.iter().enumerate() {
+            let id = member.candidate_id.clone();
+            let key_id = id.clone();
+            let number = self.group_offset + index + 1;
+            let label = if member.already_represented {
+                format!("Conversa {number} · já confirmada")
+            } else {
+                format!("Conversa {number}")
+            };
+            chips = chips.child(
+                action_button(theme, ("member", index), ButtonKind::Ghost, !self.busy)
+                    .aria_label(format!("Ler a evidência da {label}"))
+                    .tooltip(tooltip(format!("Captura {}", member.capture_id), None))
+                    .child(label)
+                    .track_focus(&self.member_focus[index])
+                    .when(
+                        self.member_id.as_deref() == Some(&member.candidate_id),
+                        |button| mark_selected(button, theme, true),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| this.load_member(id.clone(), cx)))
+                    .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                            this.load_member(key_id.clone(), cx);
+                            cx.stop_propagation();
+                        }
+                    })),
             );
-            if let Some(metrics) = &self.review_metrics {
-                section = section.child(
-                    text_style(div(), TypeScale::META)
-                        .text_color(theme.colors.text_muted())
-                        .child(format!(
-                            "{} ocorrências pendentes · {} oportunidades potenciais de revisão",
-                            metrics.pending_occurrences, metrics.potential_review_opportunities
-                        )),
-                );
-            }
-            if group.members.is_empty() {
-                section = section.child("Nenhuma ocorrência disponível nesta página.");
-            }
-            for (index, member) in group.members.iter().enumerate() {
-                let id = member.candidate_id.clone();
-                let key_id = id.clone();
-                let label = format!(
-                    "Ler fonte · {}{}",
-                    member.capture_id,
-                    if member.already_represented {
-                        " · já representada"
-                    } else {
-                        ""
-                    }
-                );
-                section = section.child(
-                    action_button(theme, ("member", index), ButtonKind::Secondary, !self.busy)
-                        .aria_label(label.clone())
-                        .child(label)
-                        .track_focus(&self.member_focus[index])
-                        .when(
-                            self.member_id.as_deref() == Some(&member.candidate_id),
-                            |button| mark_selected(button, theme, true),
-                        )
-                        .on_click(
-                            cx.listener(move |this, _, _, cx| this.load_member(id.clone(), cx)),
-                        )
-                        .on_key_down(cx.listener(
-                            move |this, event: &gpui::KeyDownEvent, _, cx| {
-                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                    this.load_member(key_id.clone(), cx);
-                                    cx.stop_propagation();
-                                }
-                            },
-                        )),
-                );
-            }
-            for (index, label, offset, enabled) in [
-                (
-                    1,
-                    "Anteriores",
-                    self.group_offset.saturating_sub(20),
-                    self.group_offset > 0,
+        }
+        for (index, label, offset, enabled) in [
+            (
+                1,
+                "Anteriores",
+                self.group_offset.saturating_sub(20),
+                self.group_offset > 0,
+            ),
+            (
+                2,
+                "Mais conversas",
+                self.group_offset + 20,
+                has_more_members(
+                    self.group_offset,
+                    group.members.len(),
+                    group.occurrence_count,
                 ),
-                (
-                    2,
-                    "Próximas ocorrências",
-                    self.group_offset + 20,
-                    has_more_members(
-                        self.group_offset,
-                        group.members.len(),
-                        group.occurrence_count,
-                    ),
-                ),
-            ] {
-                if enabled {
-                    section = section.child(
-                        action_button(
-                            theme,
-                            ("group-page", index),
-                            ButtonKind::Secondary,
-                            !self.busy,
-                        )
+            ),
+        ] {
+            if enabled {
+                chips = chips.child(
+                    action_button(theme, ("group-page", index), ButtonKind::Ghost, !self.busy)
                         .aria_label(label)
                         .child(label)
                         .track_focus(&self.group_focus[index])
@@ -381,13 +364,26 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                                 }
                             },
                         )),
-                    );
-                }
+                );
             }
-        } else {
-            section = section.child(skeleton_list(theme, "group-loading", 3));
         }
-        section.into_any_element()
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(SpacingScale::S2))
+            .child(
+                section_header(theme, "Também apareceu em").child(count_chip(
+                    theme,
+                    format!("{} conversas", group.occurrence_count),
+                )),
+            )
+            .child(
+                text_style(div(), TypeScale::META)
+                    .text_color(theme.colors.text_muted())
+                    .child("Confirmar ou rejeitar vale para todas; cada uma guarda sua evidência."),
+            )
+            .child(chips)
+            .into_any_element()
     }
 
     /// Installs capture reads and retry without starting integrations.
@@ -2280,22 +2276,37 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                             n => format!("{n} fontes"),
                         },
                     )))
-                    .child(text_style(div(), TypeScale::BODY_SMALL)
-                        .text_color(theme.colors.text_muted())
-                        .child(format!(
-                            "Evidência da ocorrência {}; confirmação aplica à proposta principal {}.",
-                            self.member_id.as_deref().unwrap_or(&detail.summary.id),
-                            detail.summary.id,
-                        )))
+                    .when(
+                        self.member_id
+                            .as_deref()
+                            .is_some_and(|member| member != detail.summary.id),
+                        |section| {
+                            section.child(
+                                text_style(div(), TypeScale::BODY_SMALL)
+                                    .text_color(theme.colors.text_muted())
+                                    .child(
+                                        "Evidência de outra conversa em que a mesma decisão \
+                                         apareceu. Confirmar vale para todas.",
+                                    ),
+                            )
+                        },
+                    )
                     .when(self.member.is_some(), |section| {
-                        section.child(super::review_editor::qualifier_reading(
-                            &theme, &source_detail.qualifiers,
-                        )).child(section_label(&theme, "Origem da ocorrência"))
-                            .child(text_style(div(), TypeScale::META)
-                                .text_color(theme.colors.text_muted())
-                                .child(format!("Recebido em {} · {}",
-                                    short_date(&source_detail.summary.received_at),
-                                    source_detail.summary.project_location)))
+                        section
+                            .child(super::review_editor::qualifier_reading(
+                                &theme,
+                                &source_detail.qualifiers,
+                            ))
+                            .child(section_label(&theme, "Origem desta conversa"))
+                            .child(
+                                text_style(div(), TypeScale::META)
+                                    .text_color(theme.colors.text_muted())
+                                    .child(format!(
+                                        "Recebido em {} · {}",
+                                        short_date(&source_detail.summary.received_at),
+                                        source_detail.summary.project_location
+                                    )),
+                            )
                     })
                     .child(evidence_block),
             )
@@ -2321,7 +2332,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                     .child(
                         section(
                             theme,
-                            "Origem da proposta principal",
+                            "Origem",
                             &format!(
                                 "Recebido em {}\n{}",
                                 short_date(&detail.summary.received_at),

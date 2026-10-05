@@ -407,6 +407,15 @@ modelo; os dados novos entram no JSON sem mudar a Rust além do tipo.
   explicação convincente aumenta a aceitação certa ou errada, então a fonte verificável
   vem primeiro.
 - **Desfazer em vez de confirmar:** Rejeitar e Adiar mostram "Desfazer" no aviso.
+- **Alcance e ressalvas** (os qualificadores do ADR-0010): logo após a escolha, só quando
+  existem. Cada ressalva é o texto em corpo e, abaixo em meta, o tipo e a origem
+  ("citado da evidência" ou "escrito na revisão, sem fonte"). Nada de "Não informados".
+- **Também apareceu em** (revisão por exceção): só quando a mesma decisão veio de mais de
+  uma conversa. Rótulo com a contagem, uma linha dizendo que confirmar ou rejeitar vale
+  para todas e chips Ghost "Conversa 1", "Conversa 2" (o selecionado com
+  `mark_selected`; o id da captura fica no tooltip). Ler outra conversa troca a evidência
+  e mostra uma linha explicando isso. Nunca ids internos nem métricas de oportunidade no
+  texto.
 
 ## Aprovação automática
 

@@ -184,23 +184,34 @@ pub(super) fn qualifier_label(kind: QualifierKind) -> &'static str {
 }
 
 pub(super) fn qualifier_reading(theme: &Theme, items: &[KnowledgeQualifier]) -> gpui::Div {
+    // Nothing informed is the common case: no section instead of "none".
+    if items.is_empty() {
+        return div();
+    }
     div()
         .flex()
         .flex_col()
         .gap(px(SpacingScale::S2))
-        .child(section_label(theme, "Qualificadores"))
-        .when(items.is_empty(), |column| column.child("Não informados."))
+        .child(section_label(theme, "Alcance e ressalvas"))
         .children(items.iter().map(|item| {
-            text_style(div(), TypeScale::BODY).child(format!(
-                "{} · {}\n{}",
-                qualifier_label(item.kind),
-                if item.artifact_id.is_some() {
-                    "Citação da evidência"
-                } else {
-                    "Declaração do revisor · sem fonte verificada"
-                },
-                item.text
-            ))
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(SpacingScale::S1))
+                .child(text_style(div(), TypeScale::BODY).child(item.text.clone()))
+                .child(
+                    text_style(div(), TypeScale::META)
+                        .text_color(theme.colors.text_muted())
+                        .child(format!(
+                            "{} · {}",
+                            qualifier_label(item.kind),
+                            if item.artifact_id.is_some() {
+                                "citado da evidência"
+                            } else {
+                                "escrito na revisão, sem fonte"
+                            }
+                        )),
+                )
         }))
 }
 
@@ -271,7 +282,7 @@ impl QualifierFields {
 
     pub(super) fn render(&self, theme: &Theme) -> gpui::Div {
         div().flex().flex_col().gap(px(SpacingScale::S4))
-            .child(section_label(theme, "Qualificadores"))
+            .child(section_label(theme, "Alcance e ressalvas"))
             .child("Alterar uma citação a torna declaração do revisor, sem fonte verificada. Apague o texto para remover.")
             .children(self.original.iter().zip(&self.fields).map(|(item, field)| {
                 form_field(theme, qualifier_label(item.kind), Some(if item.artifact_id.is_some() {
