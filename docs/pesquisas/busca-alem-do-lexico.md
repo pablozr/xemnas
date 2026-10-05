@@ -52,7 +52,24 @@ palavras demais em comum. Fica fora até um caso medido pedir.
   grava os termos.
 - **4, 5 e 6** precisam de dados reais (dogfood); ficam para depois do corpus.
 
+## O que um mapa real tem hoje
+
+Conferido em 05/10/2026, só leitura, no banco local do único projeto registrado: 6
+componentes, todos descobertos do workspace e nomeados pelo pacote (`@jevguard/core`,
+`docs`, `.jev`...), **nenhum apelido e nenhuma parte**. Com nomes assim, uma tarefa como
+"recalcular o cache das observações" não cita entidade nenhuma, e a técnica 1 quase nunca
+dispararia. Ela só rende quando o mapa tiver nomes como as pessoas escrevem ("observações",
+"API", "outbox"), o que hoje depende do usuário cadastrar apelidos.
+
+Consequência: medir a técnica 1 com um mapa rico no corpus mostraria um ganho que o uso
+real não teria. A técnica 2 alcança qualquer decisão, com ou sem mapa. Uma variante une as
+duas: a mesma expansão na extração pode propor apelidos em PT e EN para os componentes
+citados, que o usuário confirma como qualquer sugestão do mapa.
+
 ## Recomendação
+
+**Revista após conferir o mapa real:** a técnica 2 passa a vir primeiro. A técnica 1 vem
+depois dela e da proposta de apelidos, quando os mapas tiverem nomes para casar.
 
 1. **Sementes pela menção** (técnica 1): a mais barata e a que usa o grafo como centro da
    memória. Ataca o ruído, que é o que segura a precisão.
