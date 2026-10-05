@@ -14,6 +14,167 @@ pub struct Family {
     pub files: &'static [&'static str],
 }
 
+/// Seeded decisions: (alias, project, question, choice). The rationale stored
+/// is "motivo de <alias>" (`support::decision`).
+pub const DECISIONS: &[(&str, &str, &str, &str)] = &[
+    (
+        "override",
+        "p1",
+        "Como aplicar Override na avaliação local?",
+        "Preservar comportamento e contadores locais ao aplicar Override",
+    ),
+    (
+        "cache",
+        "p1",
+        "Como fazer cache das respostas da API?",
+        "Memória",
+    ),
+    (
+        "storage",
+        "p1",
+        "Qual banco usar para persistência local?",
+        "SQLite",
+    ),
+    (
+        "password",
+        "p1",
+        "Como proteger senhas nos logs?",
+        "Nunca registrar senhas",
+    ),
+    (
+        "logging",
+        "p1",
+        "Como registrar logs da aplicação?",
+        "JSON estruturado",
+    ),
+    (
+        "foreign",
+        "p2",
+        "Como configurar sonar submarino?",
+        "Ativar",
+    ),
+    (
+        "superseded",
+        "p1",
+        "Qual banco de persistência?",
+        "Postgres",
+    ),
+    (
+        "outbox",
+        "p1",
+        "Como o hook entrega o turno ao app?",
+        "Gravar um arquivo JSON na pasta outbox quando o app estiver fechado",
+    ),
+    (
+        "transaction",
+        "p1",
+        "Como confirmar candidatos sem perder edições?",
+        "Uma transação com validação de versão",
+    ),
+    (
+        "retry",
+        "p1",
+        "Quando reenviar uma captura que falhou?",
+        "Só falhas transitórias, mantendo a chave de idempotência",
+    ),
+    (
+        "keychain",
+        "p1",
+        "Onde guardar a chave do provedor de IA?",
+        "No cofre de credenciais do sistema operacional",
+    ),
+    (
+        "migrations",
+        "p1",
+        "Como evoluir o esquema do banco?",
+        "Migrações só para frente, numeradas, sem editar as antigas",
+    ),
+    (
+        "redaction",
+        "p1",
+        "Como evitar que segredos cheguem ao provedor?",
+        "Redigir padrões conhecidos de segredo antes de qualquer envio",
+    ),
+    (
+        "budget",
+        "p1",
+        "Quanto contexto entregar ao agente?",
+        "Um bloco de até 300 tokens por tarefa",
+    ),
+    (
+        "virtual-list",
+        "p1",
+        "Como desenhar listas com milhares de itens?",
+        "Lista virtual do GPUI, desenhando só o que está na tela",
+    ),
+    (
+        "timestamps",
+        "p1",
+        "Em que formato guardar datas?",
+        "RFC 3339 em UTC",
+    ),
+    (
+        "release",
+        "p1",
+        "Como distribuir o app no Windows?",
+        "ZIP com scripts de instalação, sem instalador MSI",
+    ),
+    (
+        "mcp",
+        "p1",
+        "Como o agente consulta decisões sob demanda?",
+        "Servidor MCP somente leitura via stdio",
+    ),
+    (
+        "lanes",
+        "p1",
+        "Como evitar que documentos atrasem as capturas?",
+        "Filas separadas por tipo de job, capturas primeiro",
+    ),
+    (
+        "rate-limit",
+        "p1",
+        "O que fazer quando o provedor responde 429?",
+        "Pausar as chamadas pelo Retry-After e devolver o job à fila",
+    ),
+    (
+        "ci",
+        "p1",
+        "O que o CI precisa verificar?",
+        "fmt, clippy com -D warnings e os testes do workspace",
+    ),
+    (
+        "fonts",
+        "p1",
+        "Que fonte usar nos títulos?",
+        "Bricolage Grotesque embutida no app",
+    ),
+    (
+        "accent",
+        "p1",
+        "Qual cor de destaque usar na interface?",
+        "Lavanda só para seleção, foco e ação primária",
+    ),
+    (
+        "cache-invalidation",
+        "p1",
+        "Quando invalidar o cache semântico das observações?",
+        "Quando a fonte muda de hash",
+    ),
+    (
+        "log-retention",
+        "p1",
+        "Por quanto tempo manter os logs?",
+        "Sete dias, sem conteúdo de conversas",
+    ),
+    (
+        "pagination",
+        "p1",
+        "Como paginar respostas da API local?",
+        "Cursor opaco por data de criação e id",
+    ),
+];
+
 pub const STANDING: &[&str] = &["standing"];
 pub const FORBIDDEN: &[&str] = &["foreign", "expired", "superseded"];
 

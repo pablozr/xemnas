@@ -18,7 +18,8 @@ plurais dos dois idiomas, terminações verbais do português, `-ing`/`-ed` do i
 glossário bilíngue de vocabulário geral de software; a busca de texto pede o radical como
 prefixo. Precisão 0,75, cobertura 0,91 (desenvolvimento 1,0), holdout 0,70 / 0,78 / 0.
 As terminações verbais vieram de um caso do holdout. Falta a meta de precisão. Antes do passo 5
-(embeddings), as opções sem modelo estão em [busca além do léxico](busca-alem-do-lexico.md). A medição usa o portão de
+(embeddings), as opções sem modelo estão em [busca além do léxico](busca-alem-do-lexico.md);
+a expansão do documento na adoção, como último recurso, levou a 0,76 / 0,95. A medição usa o portão de
 [qualidade do núcleo](../arquitetura/qualidade-do-nucleo.md).
 
 Complementa [medir a eficácia do contexto](medir-eficacia-do-contexto.md) (se o contexto

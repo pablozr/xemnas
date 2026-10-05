@@ -15,6 +15,7 @@ use application::graph::{KnowledgeGraph, LinkRequest, NewEntity};
 use application::injection::render_compact;
 use application::qualifiers::{KnowledgeQualifier, QualifierKind};
 use application::relations::DecisionRelations;
+use application::search_terms::SearchTermStore;
 use domain::claims::ClaimKind;
 use domain::entities::{EdgeKind, EntityKind, NodeKind};
 
@@ -27,164 +28,7 @@ impl Fixture {
     fn seed(tag: &str) -> Self {
         let test = support::open(tag, &["p1", "p2"]);
         let mut aliases = BTreeMap::new();
-        for (alias, project, question, choice) in [
-            (
-                "override",
-                "p1",
-                "Como aplicar Override na avaliação local?",
-                "Preservar comportamento e contadores locais ao aplicar Override",
-            ),
-            (
-                "cache",
-                "p1",
-                "Como fazer cache das respostas da API?",
-                "Memória",
-            ),
-            (
-                "storage",
-                "p1",
-                "Qual banco usar para persistência local?",
-                "SQLite",
-            ),
-            (
-                "password",
-                "p1",
-                "Como proteger senhas nos logs?",
-                "Nunca registrar senhas",
-            ),
-            (
-                "logging",
-                "p1",
-                "Como registrar logs da aplicação?",
-                "JSON estruturado",
-            ),
-            (
-                "foreign",
-                "p2",
-                "Como configurar sonar submarino?",
-                "Ativar",
-            ),
-            (
-                "superseded",
-                "p1",
-                "Qual banco de persistência?",
-                "Postgres",
-            ),
-            (
-                "outbox",
-                "p1",
-                "Como o hook entrega o turno ao app?",
-                "Gravar um arquivo JSON na pasta outbox quando o app estiver fechado",
-            ),
-            (
-                "transaction",
-                "p1",
-                "Como confirmar candidatos sem perder edições?",
-                "Uma transação com validação de versão",
-            ),
-            (
-                "retry",
-                "p1",
-                "Quando reenviar uma captura que falhou?",
-                "Só falhas transitórias, mantendo a chave de idempotência",
-            ),
-            (
-                "keychain",
-                "p1",
-                "Onde guardar a chave do provedor de IA?",
-                "No cofre de credenciais do sistema operacional",
-            ),
-            (
-                "migrations",
-                "p1",
-                "Como evoluir o esquema do banco?",
-                "Migrações só para frente, numeradas, sem editar as antigas",
-            ),
-            (
-                "redaction",
-                "p1",
-                "Como evitar que segredos cheguem ao provedor?",
-                "Redigir padrões conhecidos de segredo antes de qualquer envio",
-            ),
-            (
-                "budget",
-                "p1",
-                "Quanto contexto entregar ao agente?",
-                "Um bloco de até 300 tokens por tarefa",
-            ),
-            (
-                "virtual-list",
-                "p1",
-                "Como desenhar listas com milhares de itens?",
-                "Lista virtual do GPUI, desenhando só o que está na tela",
-            ),
-            (
-                "timestamps",
-                "p1",
-                "Em que formato guardar datas?",
-                "RFC 3339 em UTC",
-            ),
-            (
-                "release",
-                "p1",
-                "Como distribuir o app no Windows?",
-                "ZIP com scripts de instalação, sem instalador MSI",
-            ),
-            (
-                "mcp",
-                "p1",
-                "Como o agente consulta decisões sob demanda?",
-                "Servidor MCP somente leitura via stdio",
-            ),
-            (
-                "lanes",
-                "p1",
-                "Como evitar que documentos atrasem as capturas?",
-                "Filas separadas por tipo de job, capturas primeiro",
-            ),
-            (
-                "rate-limit",
-                "p1",
-                "O que fazer quando o provedor responde 429?",
-                "Pausar as chamadas pelo Retry-After e devolver o job à fila",
-            ),
-            (
-                "ci",
-                "p1",
-                "O que o CI precisa verificar?",
-                "fmt, clippy com -D warnings e os testes do workspace",
-            ),
-            (
-                "fonts",
-                "p1",
-                "Que fonte usar nos títulos?",
-                "Bricolage Grotesque embutida no app",
-            ),
-            (
-                "accent",
-                "p1",
-                "Qual cor de destaque usar na interface?",
-                "Lavanda só para seleção, foco e ação primária",
-            ),
-            (
-                "cache-invalidation",
-                "p1",
-                "Quando invalidar o cache semântico das observações?",
-                "Quando a fonte muda de hash",
-            ),
-            (
-                "log-retention",
-                "p1",
-                "Por quanto tempo manter os logs?",
-                "Sete dias, sem conteúdo de conversas",
-            ),
-            (
-                "pagination",
-                "p1",
-                "Como paginar respostas da API local?",
-                "Cursor opaco por data de criação e id",
-            ),
-        ] {
+        for (alias, project, question, choice) in corpus::DECISIONS {
             let id = support::decision(&test.store, project, alias, question, choice);
             aliases.insert(alias.to_string(), id);
         }
@@ -299,6 +143,9 @@ impl Fixture {
                     .expect("seed file link");
             }
         }
+        if WITH_SEARCH_TERMS {
+            seed_search_terms(&test.store, &aliases);
+        }
         Self { test, aliases }
     }
 
@@ -309,6 +156,23 @@ impl Fixture {
             .expect("every result has a frozen alias")
             .0
             .clone()
+    }
+}
+
+/// Whether decisions carry the search terms a live model generated for them
+/// (`fixtures/context_corpus_terms.json`, see `application::search_terms`).
+const WITH_SEARCH_TERMS: bool = true;
+
+fn seed_search_terms(store: &storage_sqlite::SqliteStore, aliases: &BTreeMap<String, String>) {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/context_corpus_terms.json"))
+            .expect("terms fixture");
+    let model = fixture["model"].as_str().expect("model");
+    for (alias, terms) in fixture["terms"].as_object().expect("terms") {
+        let terms: Vec<String> = serde_json::from_value(terms.clone()).expect("term list");
+        store
+            .set_search_terms(&aliases[alias], &terms, model)
+            .expect("seed terms");
     }
 }
 
@@ -569,9 +433,13 @@ fn report_context_corpus() {
 /// is a holdout family, so it no longer counts as independent evidence.
 /// PT/EN bridge (plurals, verb endings, a general bilingual glossary):
 /// 0.75 / 0.91 / 1, holdout 0.70 / 0.78 / 0; the verb endings were
-/// prompted by confirm-race, also a holdout family.
-const PRECISION_FLOOR: f64 = 0.74;
-const RECALL_FLOOR: f64 = 0.90;
+/// prompted by confirm-race, also a holdout family. Search terms from a
+/// live model (`fixtures/context_corpus_terms.json`): counted always, 0.66 /
+/// 0.95 / 1, so they are a last resort, used only when no decision speaks
+/// of the task in its own words: 0.76 / 0.95 / 1, holdout 0.73 / 0.89 / 0.
+/// The last-resort rule was chosen after seeing which families regressed.
+const PRECISION_FLOOR: f64 = 0.75;
+const RECALL_FLOOR: f64 = 0.95;
 const CONTAMINATED_CASES_CEILING: usize = 1;
 /// Generous on purpose: this runs on a developer's machine beside other work.
 const BUILD_PACK_P95_CEILING_US: u128 = 20_000;
