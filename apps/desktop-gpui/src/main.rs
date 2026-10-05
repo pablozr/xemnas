@@ -65,11 +65,13 @@ fn main() {
                 protocol_version: local_api::PROTOCOL_VERSION,
             }),
         };
-        // The demo lists sample models and offers no ChatGPT sign-in: it never
-        // touches the network or the OS key vault.
+        // The demo lists sample models, offers no ChatGPT sign-in and reports
+        // a sample Claude Code: it never touches the network, the OS key vault
+        // or a local CLI.
         let providers = ProviderPorts {
             catalog: Some(std::sync::Arc::new(demo::SampleCatalog)),
             account: None,
+            claude_code: Some(std::sync::Arc::new(demo::SampleClaudeCode)),
         };
         let overview = overview_api(ai.clone(), Arc::new(ai_provider::ChatGptSession::default()));
         let services = settings_services(
@@ -107,6 +109,7 @@ fn main() {
                 ai: Box::new(ai_settings(&paths.ai_profile)),
                 catalog: providers.catalog,
                 account: providers.account,
+                claude_code: providers.claude_code,
                 integration: None,
                 diagnostics: None,
             };
@@ -496,6 +499,7 @@ impl ObservationReconciler {
 struct ProviderPorts {
     catalog: Option<std::sync::Arc<dyn application::providers::ModelCatalog>>,
     account: Option<std::sync::Arc<dyn application::providers::PlanAccount>>,
+    claude_code: Option<std::sync::Arc<dyn application::providers::ClaudeCodeProbe>>,
 }
 
 /// Model catalog and ChatGPT sign-in over the process-wide ChatGPT session,
@@ -506,6 +510,7 @@ fn provider_ports(chatgpt: &std::sync::Arc<ai_provider::ChatGptSession>) -> Prov
             chatgpt.clone(),
         ))),
         account: Some(chatgpt.clone()),
+        claude_code: Some(std::sync::Arc::new(ai_provider::LocalClaudeCode)),
     }
 }
 
@@ -528,6 +533,7 @@ where
         ai,
         catalog: providers.catalog,
         account: providers.account,
+        claude_code: providers.claude_code,
         integration: store.map(|store| {
             Box::new(IntegrationService::new(
                 application::integration::Integration::new(store.clone(), environment),

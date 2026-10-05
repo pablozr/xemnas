@@ -70,7 +70,7 @@ A Anthropic não oferece um "Sign in with Claude" para apps de terceiros, e os t
 - Configurações › IA ganha a escolha entre quatro provedores, a lista de modelos e o painel de login.
 - Entrar com a conta ChatGPT guarda a conta e o token sem trocar o tipo do perfil: o usuário escolhe um modelo do plano e salva para trocar, então um login nunca desliga outro provedor já consentido. Sair revoga o token na OpenAI e apaga o do cofre mesmo se a revogação não for confirmada; o consentimento só cai se o perfil usava a conta.
 - Cada execução continua registrando perfil, adapter, modelo e hashes (§12); o tipo novo aparece como adapter.
-- Claude Code: o backend (`ai_provider::claude_code`, `application::providers::ClaudeCodeProbe`) entrou com braços mínimos nas telas para o app compilar. O cartão "Conectar Claude Code" em Configurações › IA (instalado, com login, conta, comando de login e aviso de experimental) fica para a sessão de front.
+- Claude Code: `ai_provider::claude_code` e o port `application::providers::ClaudeCodeProbe`; em Configurações › IA, a opção "Claude Code (experimental)" e o painel de estado (instalado, com login, conta, comando de login e aviso de experimental), descritos em `docs/design/VISUAL-IDENTITY.md`.
 
 ## Alternativas rejeitadas
 

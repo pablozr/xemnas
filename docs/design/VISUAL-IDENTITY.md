@@ -64,7 +64,8 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   regra = `Shield`; documento do projeto = `Book`; arquivo de código e
   evidência = `File`; Contexto = `Layers`; Mapa = `Graph`; Visão = `Compass`;
   sugestão = `Lightbulb`; ligação do mapa = `Link`; visão geral de um destino =
-  `Gauge`; testar uma tarefa = `Flask`; objetivo = `Flag`; escopo = `Target`.
+  `Gauge`; testar uma tarefa = `Flask`; objetivo = `Flag`; escopo = `Target`;
+  ferramenta de linha de comando desta máquina (Claude Code) = `Terminal`.
   Um ícone novo entra nessa lista; nunca reaproveitar um glifo para outro
   conceito.
 - **Títulos de seção têm uma forma só**: `section_header` (rótulo em
@@ -582,8 +583,8 @@ diz o que ela é e o que confirmar faz, e cada sugestão é um cartão
   `mark_selected`), nunca cartões lado a lado. Números em destaque ficam
   planos (`stat_tile`) dentro de um painel único. Requisitos antes do
   consentimento são uma lista de verificação (círculo vazio → check verde).
-- Extrator em lista de rádio: Local, Modelo local ou API, Conta ChatGPT e
-  OpenCode Zen ou Go (ADR-0004); no OpenCode o plano (Zen ou Go) é um par de
+- Extrator em lista de rádio: Local, Modelo local ou API, Conta ChatGPT,
+  OpenCode Zen ou Go e Claude Code (experimental) (ADR-0004); no OpenCode o plano (Zen ou Go) é um par de
   opções com `mark_selected` e a chave tem o atalho **Criar uma chave**. Cada
   provedor mostra só os campos que usa; trocar de provedor não leva endereço
   nem modelo de um para outro.
@@ -597,6 +598,15 @@ diz o que ela é e o que confirmar faz, e cada sugestão é um cartão
   **Usando o plano do ChatGPT**, **Gerenciar uso** (ícone de seta para fora,
   abre o navegador) e Sair da conta. No primeiro login aparece uma vez o aviso
   "Você está usando o seu plano do ChatGPT" com **Entendi**.
+- **Claude Code** é um painel de estado, sem login próprio, porque o login é
+  do Claude Code: verificando é esqueleto; sem o CLI, selo **Não encontrado** e
+  como instalar; sem login, selo **Sem login** e o comando `claude auth login`
+  em monoespaçada com **Copiar comando**; conectado, e-mail, plano, método e
+  versão com o selo **Conectado** e a dica de que é experimental e conta no uso
+  do plano. **Verificar de novo** fica no rodapé, e o painel não tem ação
+  primária: a de ativar é a do consentimento. Escolher o Claude Code preenche
+  `haiku`, o modelo mais barato. Rota de captura: `settings:claude-code` (o
+  demo simula os outros estados com `XEMNAS_DEMO_CLAUDE=logged-out|missing`).
 - Credencial do provedor (chave de API ou chave do OpenCode) é um painel com
   selo de estado ("Guardada no cofre", "Opcional neste endereço", "Nenhuma chave")
   e o campo secreto; o valor guardado nunca volta para a tela.

@@ -765,9 +765,18 @@ impl<
             }
             None => route,
         };
-        // `settings[:section]` opens the settings page.
+        // `settings[:section]` opens the settings page; `settings:claude-code`
+        // opens IA e privacidade with the Claude Code provider selected.
         if let Some(rest) = route.strip_prefix("settings") {
-            let section = match rest.trim_start_matches(':') {
+            let rest = rest.trim_start_matches(':');
+            if rest == "claude-code" {
+                if let Some(screen) = &self.settings {
+                    screen.update(cx, |screen, _| {
+                        screen.show_kind(application::profile::ProfileKind::ClaudeCode)
+                    });
+                }
+            }
+            let section = match rest {
                 "appearance" => SettingsSection::Appearance,
                 "opencode" => SettingsSection::OpenCode,
                 "diagnostics" => SettingsSection::Diagnostics,

@@ -835,6 +835,35 @@ fn seed_map(store: &SqliteStore) -> Result<(), Box<dyn std::error::Error>> {
 
 /// In-memory AI settings for the demo: never touches the profile file or the
 /// OS key vault, and starts from the offline default.
+/// A sample Claude Code for the demo; no CLI is run. Signed in, unless
+/// `XEMNAS_DEMO_CLAUDE` is `logged-out` or `missing` (to capture those states).
+pub(crate) struct SampleClaudeCode;
+
+impl application::providers::ClaudeCodeProbe for SampleClaudeCode {
+    fn status(
+        &self,
+    ) -> Result<application::providers::ClaudeCodeStatus, application::providers::ProviderError>
+    {
+        let state = std::env::var("XEMNAS_DEMO_CLAUDE").unwrap_or_default();
+        if state == "missing" {
+            return Err(application::providers::ProviderError::NotInstalled);
+        }
+        if state == "logged-out" {
+            return Ok(application::providers::ClaudeCodeStatus {
+                version: Some("2.1.289".to_owned()),
+                ..Default::default()
+            });
+        }
+        Ok(application::providers::ClaudeCodeStatus {
+            version: Some("2.1.289".to_owned()),
+            signed_in: true,
+            auth_method: Some("claude.ai".to_owned()),
+            email: Some("voce@exemplo.com".to_owned()),
+            subscription: Some("pro".to_owned()),
+        })
+    }
+}
+
 /// Sample model lists for the demo's model picker; nothing is fetched.
 pub(crate) struct SampleCatalog;
 

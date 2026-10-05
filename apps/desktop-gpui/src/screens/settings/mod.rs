@@ -1,9 +1,10 @@
 //! Application settings: how candidates are extracted and what leaves the machine.
 //!
 //! The page reads and writes only through [`AiBackend`], implemented by the
-//! `AiSettings` use case, plus the provider ports of ADR-0004 (model catalog
-//! and ChatGPT sign-in). Every call touches the profile file, the OS key vault
-//! or the network, so it runs on the background executor. Stored credentials
+//! `AiSettings` use case, plus the provider ports of ADR-0004 (model catalog,
+//! ChatGPT sign-in and the local Claude Code check). Every call touches the
+//! profile file, the OS key vault, the network or a local CLI, so it runs on
+//! the background executor. Stored credentials
 //! are never read back into the view: the page only learns whether they exist.
 
 use std::collections::BTreeMap;
@@ -14,7 +15,9 @@ use application::profile::{
     ConsentPreview, ExtractorChoice, ProfileError, ProfileKind, ProfileStore, SecretStore,
     SignedIn, OPENCODE_GO_ENDPOINT, OPENCODE_ZEN_ENDPOINT,
 };
-use application::providers::{ModelCatalog, ModelInfo, PlanAccount};
+use application::providers::{
+    ClaudeCodeProbe, ClaudeCodeStatus, ModelCatalog, ModelInfo, PlanAccount,
+};
 use gpui::prelude::*;
 use gpui::{
     div, px, AnyElement, App, Context, Div, Entity, EventEmitter, FocusHandle, Render, Role,
@@ -200,6 +203,8 @@ enum Action {
     SignOut,
     ManageUsage,
     DismissPlanNotice,
+    CheckClaudeCode,
+    CopyLoginCommand,
     Grant,
     AskRevoke,
     CancelRevoke,
@@ -230,6 +235,13 @@ enum SignIn {
     },
 }
 
+/// What the local Claude Code reported the last time the page asked.
+enum ClaudeCheck {
+    Idle,
+    Checking,
+    Done(Result<ClaudeCodeStatus, &'static str>),
+}
+
 /// Everything the settings page reads and writes, built by the composition root.
 pub struct SettingsServices {
     /// AI profile, key vault and consent.
@@ -238,6 +250,8 @@ pub struct SettingsServices {
     pub catalog: Option<Arc<dyn ModelCatalog>>,
     /// ChatGPT account sign-in; absent, the ChatGPT option cannot connect.
     pub account: Option<Arc<dyn PlanAccount>>,
+    /// Checks the local Claude Code; absent, the Claude Code option cannot connect.
+    pub claude_code: Option<Arc<dyn ClaudeCodeProbe>>,
     /// Integration status and connection test; absent without a database.
     pub integration: Option<Box<dyn IntegrationBackend>>,
     /// Diagnostics and job actions; absent without a database.
@@ -301,6 +315,10 @@ pub struct SettingsScreen {
     backend: Option<Box<dyn AiBackend>>,
     catalog: Option<Arc<dyn ModelCatalog>>,
     account: Option<Arc<dyn PlanAccount>>,
+    claude_code: Option<Arc<dyn ClaudeCodeProbe>>,
+    claude: ClaudeCheck,
+    /// Provider to show once the profile loads (`settings:claude-code`).
+    requested_kind: Option<ProfileKind>,
     busy: bool,
     load: Load,
     stored: Option<AiProfile>,
@@ -346,6 +364,7 @@ impl SettingsScreen {
             ai: backend,
             catalog,
             account,
+            claude_code,
             integration,
             diagnostics,
         } = services;
@@ -379,6 +398,9 @@ impl SettingsScreen {
             backend: Some(backend),
             catalog,
             account,
+            claude_code,
+            claude: ClaudeCheck::Idle,
+            requested_kind: None,
             busy: false,
             load: Load::Loading,
             stored: None,
@@ -499,6 +521,18 @@ impl SettingsScreen {
         self.credentials = credentials;
         self.stored = Some(profile);
         self.load = Load::Ready;
+        if let Some(kind) = self.requested_kind.take() {
+            self.switch_kind(kind, cx);
+        }
+        if self.kind == ProfileKind::ClaudeCode && matches!(self.claude, ClaudeCheck::Idle) {
+            self.check_claude_code(cx);
+        }
+    }
+
+    /// Shows `kind` in the provider form after the next load, without
+    /// saving it (the route a capture opens).
+    pub fn show_kind(&mut self, kind: ProfileKind) {
+        self.requested_kind = Some(kind);
     }
 
     /// Writes the provider form and makes it the new baseline.
@@ -532,10 +566,18 @@ impl SettingsScreen {
                 ProfileKind::OpenCode => OPENCODE_ZEN_ENDPOINT.to_owned(),
                 _ => String::new(),
             };
-            [endpoint, String::new(), limit]
+            // Claude Code offers three fixed aliases; the cheapest is the default.
+            let model = match kind {
+                ProfileKind::ClaudeCode => "haiku".to_owned(),
+                _ => String::new(),
+            };
+            [endpoint, model, limit]
         };
         self.fill(values, cx);
         self.key_placeholder(cx);
+        if kind == ProfileKind::ClaudeCode && !matches!(self.claude, ClaudeCheck::Checking) {
+            self.check_claude_code(cx);
+        }
     }
 
     fn key_placeholder(&mut self, cx: &mut Context<Self>) {
@@ -579,8 +621,11 @@ impl SettingsScreen {
         profile.kind = self.kind;
         if self.kind != ProfileKind::Fake {
             let endpoint = self.value(0, cx);
-            profile.endpoint =
-                (self.kind != ProfileKind::ChatGptPlan && !endpoint.is_empty()).then_some(endpoint);
+            let fixed = matches!(
+                self.kind,
+                ProfileKind::ChatGptPlan | ProfileKind::ClaudeCode
+            );
+            profile.endpoint = (!fixed && !endpoint.is_empty()).then_some(endpoint);
             profile.model = self.value(1, cx);
             profile.max_input_chars = self
                 .value(2, cx)
@@ -707,6 +752,13 @@ impl SettingsScreen {
             Action::SignOut => self.sign_out(cx),
             Action::ManageUsage => cx.open_url(application::providers::CHATGPT_USAGE_URL),
             Action::DismissPlanNotice => self.plan_notice = false,
+            Action::CheckClaudeCode => self.check_claude_code(cx),
+            Action::CopyLoginCommand => {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                    application::providers::CLAUDE_CODE_LOGIN_COMMAND.to_owned(),
+                ));
+                self.show_notice("Comando copiado.".to_owned(), cx);
+            }
             Action::Save => {
                 if !self.edited(cx) {
                     return;
@@ -982,7 +1034,7 @@ impl SettingsScreen {
             ProfileKind::OpenAiCompatible => ("settings-kind-external", IconName::Cloud),
             ProfileKind::ChatGptPlan => ("settings-kind-chatgpt", IconName::User),
             ProfileKind::OpenCode => ("settings-kind-opencode", IconName::Link),
-            ProfileKind::ClaudeCode => ("settings-kind-claude-code", IconName::Link),
+            ProfileKind::ClaudeCode => ("settings-kind-claude-code", IconName::Terminal),
         };
         let focus = self
             .focus
@@ -1045,6 +1097,12 @@ impl SettingsScreen {
             "Cole a chave do OpenCode e escolha um modelo.",
             cx,
         );
+        let claude_code = self.kind_option(
+            ProfileKind::ClaudeCode,
+            "Claude Code (experimental)",
+            "Usa o Claude Code já conectado nesta máquina, sem chave de API.",
+            cx,
+        );
         let save = self.button(
             "settings-save",
             ButtonKind::Primary,
@@ -1064,6 +1122,7 @@ impl SettingsScreen {
                 match self.kind {
                     ProfileKind::ChatGptPlan => "Escolha um modelo do plano para salvar.",
                     ProfileKind::OpenCode => "Escolha um modelo do OpenCode para salvar.",
+                    ProfileKind::ClaudeCode => "Escolha um modelo do Claude Code para salvar.",
                     _ => "Informe o endereço e o modelo do provedor para salvar.",
                 }
                 .to_owned(),
@@ -1114,7 +1173,8 @@ impl SettingsScreen {
                         .child(local)
                         .child(remote)
                         .child(chatgpt)
-                        .child(opencode),
+                        .child(opencode)
+                        .child(claude_code),
                 )
                 .children(fields),
         )
@@ -1483,8 +1543,11 @@ impl Render for SettingsScreen {
                         ProfileKind::OpenAiCompatible | ProfileKind::OpenCode
                     )
                     .then(|| self.render_key(&theme, cx));
-                    let account = (self.kind == ProfileKind::ChatGptPlan)
-                        .then(|| self.render_account(&theme, cx));
+                    let account = match self.kind {
+                        ProfileKind::ChatGptPlan => Some(self.render_account(&theme, cx)),
+                        ProfileKind::ClaudeCode => Some(self.render_claude_code(&theme, cx)),
+                        _ => None,
+                    };
                     let preview = self.render_preview(&theme, cx);
                     let consent = external.then(|| self.render_consent(&theme, cx));
                     div()

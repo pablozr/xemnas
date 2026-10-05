@@ -141,6 +141,8 @@ pub enum IconName {
     Close,
     /// Fit the content to the view.
     Fit,
+    /// A command-line tool on this machine (Claude Code).
+    Terminal,
 }
 
 impl IconName {
@@ -264,6 +266,9 @@ impl IconName {
             Self::Compass => {
                 glyph!(r#"<circle cx="12" cy="12" r="8.5"/><path d="m15.5 8.5-2 5-5 2 2-5z"/>"#)
             }
+            Self::Terminal => glyph!(
+                r#"<rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="m7.5 9.5 3 2.5-3 2.5M12.5 15h4"/>"#
+            ),
             Self::Graph => glyph!(
                 r#"<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="9" cy="18" r="2.5"/><path d="M8.3 7.2 15.6 7.7M7 8.4 8.4 15.6M16.6 10.1 10.7 16.2"/>"#
             ),

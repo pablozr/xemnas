@@ -1,6 +1,7 @@
 //! The provider-specific parts of "IA e privacidade" (ADR-0004): the provider
 //! form with its model picker, the credential card (API key or OpenCode
-//! password) and the ChatGPT account card with its browser sign-in.
+//! password), the ChatGPT account card with its browser sign-in and the
+//! Claude Code card.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -10,16 +11,18 @@ use application::profile::{
     build_preview, is_loopback_endpoint, AiProfile, ConsentPreview, ProfileKind, SignedIn,
     OPENCODE_GO_ENDPOINT,
 };
-use application::providers::ProviderError;
+use application::providers::{ProviderError, CLAUDE_CODE_LOGIN_COMMAND};
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Context, Div, Role, Toggled};
 
 use super::parts::{card, card_body, card_footer, field_row};
-use super::{as_kind, Action, Models, SettingsScreen, SignIn, FIELD_LABELS, KEY_DESCRIPTION};
+use super::{
+    as_kind, Action, ClaudeCheck, Models, SettingsScreen, SignIn, FIELD_LABELS, KEY_DESCRIPTION,
+};
 use crate::ui::controls::{button_foreground, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{mark_selected, skeleton_list, status_pill};
-use crate::ui::theme::{text_style, Theme};
+use crate::ui::theme::{code_style, text_style, Theme};
 use crate::ui::tokens::{tint, SpacingScale, TypeScale};
 
 /// Local model servers the OpenAI-compatible form can fill in one click.
@@ -49,6 +52,12 @@ const PLAN_NOTICE: &str = "As análises da xemnas contam no uso do seu plano, co
 const OPENCODE_KEY_DESCRIPTION: &str = "A mesma chave serve para o Zen e o Go. Fica no \
                                         Gerenciador de Credenciais do sistema e não é \
                                         exibida aqui.";
+const CLAUDE_INSTALL: &str = "Instale o Claude Code e entre nele num terminal. Fora do PATH, \
+                              aponte XEMNAS_CLAUDE_CODE para o executável.";
+const CLAUDE_LOGIN: &str = "Entre no Claude Code num terminal com o comando abaixo e verifique \
+                            de novo. A senha nunca passa pela xemnas.";
+const CLAUDE_EXPERIMENTAL: &str = "Experimental. Cada análise conta no uso do seu plano, junto \
+                                   com o próprio Claude Code.";
 const WAITING_BROWSER: &str =
     "Conclua o login no navegador. Esta tela atualiza sozinha quando você voltar.";
 
@@ -83,6 +92,7 @@ pub(super) fn destination(profile: &AiProfile, preview: &ConsentPreview) -> Opti
             },
         ),
         ProfileKind::OpenCode => Some(opencode_plan(profile).to_owned()),
+        ProfileKind::ClaudeCode => Some("Anthropic, pelo Claude Code".to_owned()),
         _ => preview.endpoint_host.clone(),
     }
 }
@@ -108,6 +118,10 @@ pub(super) fn destination_note(profile: &AiProfile) -> Option<(IconName, &'stati
         ProfileKind::OpenCode => Some((
             IconName::Link,
             "O OpenCode repassa os trechos ao provedor do modelo escolhido.",
+        )),
+        ProfileKind::ClaudeCode => Some((
+            IconName::Terminal,
+            "O Claude Code desta máquina envia os trechos com o login dele.",
         )),
         _ => None,
     }
@@ -179,8 +193,10 @@ impl SettingsScreen {
                         .is_some_and(|account| account.plan_usage)
             }
             ProfileKind::OpenCode => self.credentials.opencode,
-            // Claude Code keeps its own login; xemnas stores nothing.
-            ProfileKind::ClaudeCode => true,
+            // Claude Code keeps its own login; xemnas only checks it.
+            ProfileKind::ClaudeCode => {
+                matches!(&self.claude, ClaudeCheck::Done(Ok(status)) if status.signed_in)
+            }
         }
     }
 
@@ -435,8 +451,8 @@ impl SettingsScreen {
         let loading = matches!(self.models, Models::Loading);
         let reachable = match kind {
             ProfileKind::ChatGptPlan => self.credentials.chatgpt,
-            // The gateway lists its models without a key.
-            ProfileKind::OpenCode => true,
+            // The gateway lists its models without a key; Claude Code's are fixed.
+            ProfileKind::OpenCode | ProfileKind::ClaudeCode => true,
             _ => !self.value(0, cx).is_empty(),
         };
         let list = self.catalog.is_some().then(|| {
@@ -982,5 +998,196 @@ impl SettingsScreen {
         )
         .child(body)
         .children(footer)
+    }
+
+    /// Asks the local Claude Code for its installation and login, off the
+    /// UI thread; spends no tokens.
+    pub(super) fn check_claude_code(&mut self, cx: &mut Context<Self>) {
+        let Some(probe) = self.claude_code.clone() else {
+            self.claude = ClaudeCheck::Done(Err(
+                "A verificação do Claude Code não está disponível aqui.",
+            ));
+            return;
+        };
+        self.claude = ClaudeCheck::Checking;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let outcome = cx
+                .background_executor()
+                .spawn(async move { probe.status() })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.claude = ClaudeCheck::Done(outcome.map_err(|error| error.message()));
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Claude Code: whether it is installed and signed in, the account it
+    /// uses, and the login command when it is not.
+    pub(super) fn render_claude_code(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Div {
+        let colors = theme.colors;
+        let checking = matches!(self.claude, ClaudeCheck::Idle | ClaudeCheck::Checking);
+        let mut body = card_body();
+        let mut hint = None;
+        match &self.claude {
+            ClaudeCheck::Idle | ClaudeCheck::Checking => {
+                body = body.child(skeleton_list(theme, "settings-claude-skeleton", 2));
+            }
+            ClaudeCheck::Done(Err(message)) => {
+                let missing = *message == ProviderError::NotInstalled.message();
+                body = body
+                    .child(div().flex().child(status_pill(
+                        theme,
+                        colors.status_warning(),
+                        if missing {
+                            "Não encontrado"
+                        } else {
+                            "Indisponível"
+                        },
+                    )))
+                    .child(
+                        text_style(div(), TypeScale::BODY_SMALL)
+                            .text_color(colors.text_secondary())
+                            .child(format!("{message} {CLAUDE_INSTALL}")),
+                    );
+            }
+            ClaudeCheck::Done(Ok(status)) if !status.signed_in => {
+                let status = status.clone();
+                body = body
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(SpacingScale::S2))
+                            .child(status_pill(theme, colors.status_warning(), "Sem login"))
+                            .children(status.version.map(|version| {
+                                text_style(div(), TypeScale::META)
+                                    .text_color(colors.text_muted())
+                                    .child(format!("Claude Code {version}"))
+                            })),
+                    )
+                    .child(
+                        text_style(div(), TypeScale::BODY_SMALL)
+                            .text_color(colors.text_secondary())
+                            .child(CLAUDE_LOGIN),
+                    )
+                    .child(self.render_login_command(theme, cx));
+            }
+            ClaudeCheck::Done(Ok(status)) => {
+                let status = status.clone();
+                let details = [
+                    status
+                        .subscription
+                        .map(|plan| format!("Plano {}", super::capitalize(&plan))),
+                    status.auth_method.map(|method| match method.as_str() {
+                        "claude.ai" => "conta claude.ai".to_owned(),
+                        other => other.to_owned(),
+                    }),
+                    status
+                        .version
+                        .map(|version| format!("Claude Code {version}")),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" · ");
+                body = body.child(
+                    div()
+                        .id("settings-claude-account")
+                        .flex()
+                        .items_center()
+                        .gap(px(SpacingScale::S3))
+                        .role(Role::Status)
+                        .child(icon(IconName::User, 16.0, colors.text_muted()))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.0))
+                                .child(text_style(div(), TypeScale::ROW_TITLE).truncate().child(
+                                    status.email.unwrap_or_else(|| "Conta conectada".to_owned()),
+                                ))
+                                .child(
+                                    text_style(div(), TypeScale::BODY_SMALL)
+                                        .truncate()
+                                        .text_color(colors.text_muted())
+                                        .child(details),
+                                ),
+                        )
+                        .child(status_pill(theme, colors.status_success(), "Conectado")),
+                );
+                hint = Some(CLAUDE_EXPERIMENTAL);
+            }
+        }
+        let check = self.button(
+            "settings-claude-check",
+            ButtonKind::Secondary,
+            !checking && self.claude_code.is_some(),
+            if checking {
+                "Verificando…"
+            } else {
+                "Verificar de novo"
+            },
+            Action::CheckClaudeCode,
+            cx,
+        );
+        card(
+            theme,
+            "Claude Code",
+            "A xemnas usa o Claude Code desta máquina; o login fica com ele, nunca com a xemnas.",
+        )
+        .child(body)
+        .child(
+            card_footer(theme)
+                .child(
+                    text_style(div(), TypeScale::BODY_SMALL)
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .text_color(colors.text_muted())
+                        .children(hint),
+                )
+                .child(check),
+        )
+    }
+
+    /// `claude auth login` in monospace, with a copy action.
+    fn render_login_command(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Div {
+        let label = "Copiar comando";
+        let copy = self
+            .button_frame(
+                "settings-claude-copy",
+                ButtonKind::Ghost,
+                true,
+                label.into(),
+                Action::CopyLoginCommand,
+                cx,
+            )
+            .child(icon(
+                IconName::Copy,
+                14.0,
+                button_foreground(theme, ButtonKind::Ghost, true),
+            ))
+            .child(label);
+        div()
+            .flex()
+            .items_center()
+            .gap(px(SpacingScale::S2))
+            .p(px(SpacingScale::S2))
+            .pl(px(SpacingScale::S3))
+            .rounded(theme.radius.control())
+            .bg(theme.colors.glass_fill_low())
+            .border_1()
+            .border_color(theme.colors.hairline_divider())
+            .child(
+                code_style(div(), TypeScale::BODY_SMALL)
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .child(CLAUDE_CODE_LOGIN_COMMAND),
+            )
+            .child(copy)
     }
 }
