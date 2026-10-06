@@ -277,3 +277,70 @@ fn derived_context_becomes_a_scoped_rule_and_is_flagged_when_its_decision_is_rep
     );
     assert_eq!(offline.run(&newer).expect("offline"), 0);
 }
+
+/// A pending suggestion whose `source_version` is NULL, as 0027 left the rows
+/// that existed before it.
+fn legacy_suggestion(tag: &str, revise: bool) -> (support::TestStore, rusqlite::Connection) {
+    use application::claim_suggestions::{ClaimSuggestionRecord, ClaimSuggestionStore};
+    use application::decisions::{DecisionEdits, Decisions};
+    let test = support::open(tag, &["p1"]);
+    let id = support::decision(&test.store, "p1", "source", "Question", "Choice");
+    test.store
+        .insert_claim_suggestion(&ClaimSuggestionRecord {
+            suggestion_id: "legacy".into(),
+            project_id: "p1".into(),
+            decision_id: id.clone(),
+            kind: ClaimKind::Constraint,
+            statement: "Rule".into(),
+            quote: "Choice".into(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            qualifiers: "[]".into(),
+            inherited_scope: "[]".into(),
+            source_version: Some(1),
+        })
+        .unwrap();
+    if revise {
+        Decisions::new(test.store.clone())
+            .revise(
+                &id,
+                DecisionEdits {
+                    choice: Some("Changed choice".into()),
+                    ..DecisionEdits::default()
+                },
+            )
+            .unwrap();
+    }
+    let db = rusqlite::Connection::open(test.root.join("app.db")).unwrap();
+    db.execute("UPDATE claim_suggestions SET source_version = NULL", [])
+        .unwrap();
+    (test, db)
+}
+
+const BACKFILL: &str = include_str!("../src/migrations/0041_backfill_claim_suggestion_version.sql");
+
+#[test]
+fn backfill_makes_a_legacy_suggestion_of_an_unrevised_decision_confirmable() {
+    let (test, db) = legacy_suggestion("backfill-v1", false);
+    assert!(ClaimSuggestions::new(test.store.clone())
+        .confirm("legacy")
+        .is_err());
+    db.execute_batch(BACKFILL).unwrap();
+    ClaimSuggestions::new(test.store.clone())
+        .confirm("legacy")
+        .expect("confirmable after the backfill");
+}
+
+#[test]
+fn backfill_leaves_a_revised_decision_whose_quote_is_gone_untouched() {
+    let (test, db) = legacy_suggestion("backfill-v2", true);
+    db.execute_batch(BACKFILL).unwrap();
+    let version: Option<i64> = db
+        .query_row("SELECT source_version FROM claim_suggestions", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(version, None);
+    assert!(ClaimSuggestions::new(test.store.clone())
+        .confirm("legacy")
+        .is_err());
+}

@@ -573,3 +573,62 @@ fn a_link_found_by_mention_is_asked_with_its_quote_and_a_file_link_is_accepted()
         .reason
         .starts_with(application::graph::MENTION_REASON));
 }
+
+#[test]
+fn an_unconfirmable_suggestion_is_left_for_the_person_and_not_asked_again() {
+    use application::claim_suggestions::{ClaimSuggestionRecord, ClaimSuggestionStore};
+    use application::decisions::{DecisionEdits, Decisions};
+    use domain::claims::ClaimKind;
+
+    let test = support::open("review-unconfirmable", &[PROJECT]);
+    let id = support::decision(&test.store, PROJECT, "source", "Pergunta", "Escolha");
+    test.store
+        .insert_claim_suggestion(&ClaimSuggestionRecord {
+            suggestion_id: "legacy".into(),
+            project_id: PROJECT.into(),
+            decision_id: id.clone(),
+            kind: ClaimKind::Constraint,
+            statement: "Regra antiga".into(),
+            quote: "Escolha".into(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            qualifiers: "[]".into(),
+            inherited_scope: "[]".into(),
+            source_version: Some(1),
+        })
+        .expect("suggestion");
+    Decisions::new(test.store.clone())
+        .revise(
+            &id,
+            DecisionEdits {
+                choice: Some("Outra escolha".into()),
+                ..DecisionEdits::default()
+            },
+        )
+        .expect("revise");
+    // A suggestion from before the version was recorded, whose quote is gone.
+    rusqlite::Connection::open(test.root.join("app.db"))
+        .expect("raw")
+        .execute("UPDATE claim_suggestions SET source_version = NULL", [])
+        .expect("legacy row");
+
+    let judge = Judge::answering(r#"{"verdicts":[{"id":"I1","verdict":"accept","reason":"ok"}]}"#);
+    let review = review_with(&test.store, consented(), &judge);
+    review.set_mode(Mode::Automatic).expect("on");
+    let first = review
+        .run_at(PROJECT, "2099-01-01T00:00:00Z")
+        .expect("pass");
+    assert!(first.asked);
+    assert_eq!((first.accepted, first.left), (0, 1));
+    let ledger = review.ledger(PROJECT).expect("ledger");
+    let entry = ledger
+        .iter()
+        .find(|entry| entry.kind == ItemKind::Claim)
+        .expect("recorded");
+    assert_eq!(entry.verdict, Verdict::NeedsHuman);
+    let calls = judge.calls.load(Ordering::SeqCst);
+
+    review
+        .run_at(PROJECT, "2099-01-02T00:00:00Z")
+        .expect("second pass");
+    assert_eq!(judge.calls.load(Ordering::SeqCst), calls, "not asked again");
+}

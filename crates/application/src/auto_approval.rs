@@ -825,8 +825,19 @@ where
         }
     }
 
-    /// Applies a verdict and writes it to the ledger. An item that cannot be
-    /// applied (a person got there first) is skipped without a record.
+    /// Whether the item is still waiting (gather lists only unrecorded,
+    /// pending items); a failed read counts as resolved, so nothing is recorded.
+    fn is_pending(&self, project_id: &str, item: &Item) -> bool {
+        self.gather(project_id).is_ok_and(|items| {
+            items
+                .iter()
+                .any(|other| other.kind == item.kind && other.id == item.id)
+        })
+    }
+
+    /// Applies a verdict and writes it to the ledger. An item a person
+    /// resolved meanwhile is skipped without a record; one that is still
+    /// pending but cannot be applied is recorded as left for the person.
     #[allow(clippy::too_many_arguments)]
     fn settle(
         &self,
@@ -843,9 +854,27 @@ where
             Verdict::Accepted | Verdict::Discarded => {
                 match self.apply(item, verdict == Verdict::Accepted) {
                     Ok(result) => result,
-                    // A person got there first, or the item changed: nothing to record.
                     Err(_) => {
-                        return Ok(());
+                        // A person got there first: nothing to record.
+                        if !self.is_pending(project_id, item) {
+                            return Ok(());
+                        }
+                        // Still pending but not applicable: record it for the
+                        // person, or every pass would ask the AI again.
+                        let reason = if verdict == Verdict::Accepted {
+                            "a IA aceitou, mas não foi possível aplicar; revise"
+                        } else {
+                            "a IA descartou, mas não foi possível aplicar; revise"
+                        };
+                        return self.settle(
+                            project_id,
+                            item,
+                            Verdict::NeedsHuman,
+                            by,
+                            reason,
+                            now,
+                            report,
+                        );
                     }
                 }
             }

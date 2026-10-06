@@ -164,6 +164,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 40,
         sql: include_str!("migrations/0040_decision_search_terms.sql"),
     },
+    Migration {
+        version: 41,
+        sql: include_str!("migrations/0041_backfill_claim_suggestion_version.sql"),
+    },
 ];
 
 /// A single embedded schema migration.

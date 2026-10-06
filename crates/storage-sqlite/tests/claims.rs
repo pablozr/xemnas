@@ -427,5 +427,5 @@ fn migration_23_to_24_keeps_legacy_claim_and_suggestion_without_inferred_version
     let count: i64 = db
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(count, 39); // Version 7 intentionally has no registered migration.
+    assert_eq!(count, 40); // Version 7 intentionally has no registered migration.
 }
