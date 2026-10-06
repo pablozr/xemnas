@@ -1,4 +1,4 @@
-//! End to end: `xemnas-mcp hook prompt|stop` against a fake local API.
+//! End to end: `xemnas-mcp hook prompt|stop|session-end` against a fake local API.
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -213,7 +213,7 @@ fn hook_prompt_latency_stays_under_the_budget() {
 }
 
 #[test]
-fn hook_stop_posts_one_envelope_per_turn_with_the_idempotency_key() {
+fn hook_stop_posts_one_envelope_per_exchange_holding_the_newest_back() {
     let data_dir = temporary_directory("stop");
     let transcript = data_dir.join("t.jsonl");
     write_transcript(&transcript);
@@ -226,8 +226,8 @@ fn hook_stop_posts_one_envelope_per_turn_with_the_idempotency_key() {
     assert!(output.status.success() && output.stdout.is_empty());
 
     let requests = seen.lock().expect("lock").clone();
-    assert_eq!(requests.len(), 2);
-    for (request, prompt) in requests.iter().zip(["p1", "p2"]) {
+    assert_eq!(requests.len(), 1, "p2 is held back for a possible fold");
+    for (request, prompt) in requests.iter().zip(["p1"]) {
         assert!(request.starts_with("POST /v1/captures "));
         let lower = request.to_ascii_lowercase();
         assert!(lower.contains("authorization: bearer tok-123"));
@@ -252,6 +252,19 @@ fn hook_stop_posts_one_envelope_per_turn_with_the_idempotency_key() {
 
     // Nothing new: a second Stop sends nothing.
     hook(&data_dir, "stop", &event);
+    assert_eq!(seen.lock().expect("lock").len(), 1);
+
+    // SessionEnd flushes the held turn, silently.
+    let end = json!({ "session_id": "sess-1", "transcript_path": transcript,
+        "cwd": "C:/proj", "hook_event_name": "SessionEnd", "reason": "other" });
+    let output = hook(&data_dir, "session-end", &end);
+    assert!(output.status.success() && output.stdout.is_empty() && output.stderr.is_empty());
+    let requests = seen.lock().expect("lock").clone();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1]
+        .to_ascii_lowercase()
+        .contains("idempotency-key: claude-code:sess-1:p2:"));
+    hook(&data_dir, "session-end", &end);
     assert_eq!(seen.lock().expect("lock").len(), 2);
     assert!(!data_dir.join("outbox").join("pending").exists());
     let _ = std::fs::remove_dir_all(&data_dir);
@@ -267,6 +280,7 @@ fn hook_stop_writes_to_the_outbox_when_the_app_is_closed() {
 
     let output = hook(&data_dir, "stop", &event);
     assert!(output.status.success() && output.stdout.is_empty());
+    hook(&data_dir, "session-end", &event);
 
     let pending = data_dir.join("outbox").join("pending");
     let files: Vec<_> = std::fs::read_dir(&pending)
@@ -303,10 +317,12 @@ fn hook_stop_passes_over_unregistered_projects_without_jamming() {
 
     let output = hook(&data_dir, "stop", &event);
     assert!(output.status.success() && output.stdout.is_empty() && output.stderr.is_empty());
+    assert_eq!(seen.lock().expect("lock").len(), 1, "p1 only; p2 is held");
+    hook(&data_dir, "session-end", &event);
     assert_eq!(
         seen.lock().expect("lock").len(),
-        1,
-        "one POST, then short-circuit"
+        2,
+        "the flush tries p2 once"
     );
     assert!(!data_dir.join("outbox").join("pending").exists());
     let checkpoint = data_dir
@@ -318,7 +334,7 @@ fn hook_stop_passes_over_unregistered_projects_without_jamming() {
             .expect("json");
     assert_eq!(saved["last_prompt_uuid"], json!("p2"));
 
-    hook(&data_dir, "stop", &event);
-    assert_eq!(seen.lock().expect("lock").len(), 1, "nothing new to send");
+    hook(&data_dir, "session-end", &event);
+    assert_eq!(seen.lock().expect("lock").len(), 2, "nothing new to send");
     let _ = std::fs::remove_dir_all(&data_dir);
 }
