@@ -8,7 +8,7 @@ sempre, os termos subiram a cobertura (0,91 → 0,95) e derrubaram a precisão (
 termos genéricos ("secret storage", "credential") puxam distratores. Como último recurso,
 só quando nenhuma decisão fala da tarefa com as próprias palavras: precisão 0,76,
 cobertura 0,95, holdout 0,73 / 0,89. O modelo gerou quase só termos em inglês. Técnica 1
-adiada (mapas reais sem apelidos), 3 pendente. Continua o plano de
+entregue em 06/10/2026 pelas menções com apelidos derivados dos pacotes; 3 pendente. Continua o plano de
 [precisão do contexto](precisao-do-contexto.md), entre o passo 4 (feito) e o passo 5
 (embeddings).
 

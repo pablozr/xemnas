@@ -13,7 +13,7 @@ alterações pertinentes. O `README.md` da raiz é a apresentação do projeto e
 | [arquitetura/](arquitetura/) | Stack, módulos e decisões técnicas | [mapa-do-codigo.md](arquitetura/mapa-do-codigo.md) (arquivos e testes atuais), [stack-e-arquitetura-rust-gpui.md](arquitetura/stack-e-arquitetura-rust-gpui.md), [desempenho-e-escala.md](arquitetura/desempenho-e-escala.md) (performance e baixo custo), [qualidade-do-nucleo.md](arquitetura/qualidade-do-nucleo.md) (portões de assertividade e desempenho do núcleo), [adr/](arquitetura/adr/) (decisões registradas), [historico/](arquitetura/historico/) (propostas superadas) |
 | [roadmap/](roadmap/) | Planos e tickets de execução, por fase | [mvp/BRIEFING.md](roadmap/mvp/BRIEFING.md) e [mvp/issues/](roadmap/mvp/issues/) (MVP), [fase-3/](roadmap/fase-3/), [fase-4/](roadmap/fase-4/), [fase-5/](roadmap/fase-5/) |
 | [operacao/](operacao/) | Como rodar, dados locais, integrações, limitações e uso real | [operacao-e-referencia.md](operacao/operacao-e-referencia.md), [teste-captura-opencode.md](operacao/teste-captura-opencode.md), [dogfood-log.md](operacao/dogfood-log.md) |
-| [pesquisas/](pesquisas/) | Pesquisas e ideias para o futuro, com status | [README.md](pesquisas/README.md) (índice), [memoria-semantica-local-first.md](pesquisas/memoria-semantica-local-first.md) (recuperação local, automação e custos) |
+| [pesquisas/](pesquisas/) | Pesquisas e ideias para o futuro, com status | [README.md](pesquisas/README.md) (índice), [memoria-semantica-local-first.md](pesquisas/busca-semantica-local.md) (recuperação local, automação e custos) |
 | [assets/](assets/) | Imagens usadas pelo README da raiz | — |
 
 Pesquisas recentes: [escalar grafos e blocos](pesquisas/escalabilidade-renderizacao-fontes.md),
@@ -86,6 +86,6 @@ Quando dois documentos divergirem, vale nesta ordem:
 - **Pesquisa, investigação ou ideia futura:** `pesquisas/`, seguindo as regras do
   [índice da pasta](pesquisas/README.md).
   A avaliação de recuperação local segue a
-  [metodologia do benchmark semântico](pesquisas/metodologia-benchmark-semantico.md).
+  [metodologia do benchmark semântico](pesquisas/busca-semantica-local.md).
 - **Como operar, configurar ou diagnosticar:** `operacao/`.
 - **Imagem para o README da raiz:** `assets/readme/`.

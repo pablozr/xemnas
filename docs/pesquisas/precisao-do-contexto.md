@@ -25,7 +25,7 @@ conceitos): 0,83 / 0,95, holdout 0,92 / 0,89. Oração principal (o item precisa
 nela, tanto quanto o melhor resultado): 0,94 / 0,95 / 0 contaminados, holdout 0,96 / 0,89.
 Corpus v4, escrito às cegas e selado: 0,58 / 0,62 / 4 de 21. Os ganhos depois da ponte
 PT/EN eram, na maior parte, ajuste ao v3; o próximo passo se decide pelo v4 e pelo dogfood. Passo 5 em
-[embeddings no contexto](embeddings-no-contexto.md): o modelo estático `potion` como veto
+[embeddings no contexto](busca-semantica-local.md): o modelo estático `potion` como veto
 levou o v4 a 0,67 / 0,60 / 4 e o `multilingual-e5-small` a 0,60 / 0,60 / 4, abaixo do
 aceite; nenhum entra. Corpus de calibração v5, também às cegas: 0,41 / 0,43 / 15 de 24, e
 nenhuma variante com vetor o melhora sem derrubar o v3.
@@ -38,8 +38,8 @@ Ganho provavelmente otimista: falta um corpus v4 com holdout novo. A medição u
 [qualidade do núcleo](../arquitetura/qualidade-do-nucleo.md).
 
 Complementa [medir a eficácia do contexto](medir-eficacia-do-contexto.md) (se o contexto
-ajuda o agente), [memória semântica local first](memoria-semantica-local-first.md) e
-[embeddings e reranking locais](embeddings-e-reranking-local.md) (como rodar modelos no
+ajuda o agente), [memória semântica local first](busca-semantica-local.md) e
+[embeddings e reranking locais](busca-semantica-local.md) (como rodar modelos no
 desktop). Esta pesquisa trata de outra pergunta: **o que entra no bloco**.
 
 ## Por que a precisão importa mais que a cobertura
@@ -97,14 +97,14 @@ casos negativos contaminados. De onde vem o ruído no corpus:
 | 4 | **Radical das palavras PT e EN + glossário do projeto** ("cache"/"caching", "avaliação"/"evaluation") | Snowball em Rust ([rust-stemmers](https://docs.rs/rust-stemmers)); o `porter` do FTS5 é só inglês | consulta em inglês sobre decisão em português | baixo (crate pequena, sem modelo) | radical agressivo junta palavras diferentes; medir |
 | 5 | **Proximidade no grafo**: o que o grafo liga aos arquivos ou partes citadas na tarefa sobe; o que só tem coincidência de texto precisa de mais evidência | "node distance reranker" do [Graphiti/Zep](https://help.getzep.com/graphiti/working-with-data/searching); reforço de 10× a 50× por menção no [repo map do Aider](https://github.com/NousResearch/hermes-agent/issues/535) | ruído lexical; aproveita o grafo como centro da memória | baixo (o grafo e as menções já existem) | depende da qualidade dos vínculos |
 | 6 | **Regras com escopo** (feita em 06/10/2026, ver abaixo): regra permanente só entra quando o escopo bate com os arquivos da tarefa | regras por caminho do [Cursor](https://cursor.com/docs/rules) e do Claude Code ([comparação](https://dev.to/rulestack/how-cursor-claude-code-and-codex-actually-load-your-project-rules-and-why-yours-get-ignored-1l1j)) | orçamento gasto com regras sem relação | baixo | regra realmente global perde espaço; manter as marcadas como globais |
-| 7 | **Busca híbrida com embeddings locais**, fundida por Reciprocal Rank Fusion (k=60) | [Cormack et al., 2009](https://bigdataboutique.com/blog/reciprocal-rank-fusion-how-it-works-and-when-to-use-it); modelos estáticos [Model2Vec](https://huggingface.co/minishlab/potion-multilingual-128M) (milissegundos em CPU) ou `multilingual-e5-small` via [fastembed-rs](https://docs.rs/fastembed) | sinônimos e paráfrases | médio (modelo de 30 a 120 MB, índice de vetores) | download, memória em 8 GB; build nativo já foi bloqueado no Windows ([metodologia](metodologia-benchmark-semantico.md)) |
+| 7 | **Busca híbrida com embeddings locais**, fundida por Reciprocal Rank Fusion (k=60) | [Cormack et al., 2009](https://bigdataboutique.com/blog/reciprocal-rank-fusion-how-it-works-and-when-to-use-it); modelos estáticos [Model2Vec](https://huggingface.co/minishlab/potion-multilingual-128M) (milissegundos em CPU) ou `multilingual-e5-small` via [fastembed-rs](https://docs.rs/fastembed) | sinônimos e paráfrases | médio (modelo de 30 a 120 MB, índice de vetores) | download, memória em 8 GB; build nativo já foi bloqueado no Windows ([metodologia](busca-semantica-local.md)) |
 | 8 | **Reranker local (cross-encoder)** nos 10 a 20 primeiros | `bge-reranker-v2-m3` via fastembed-rs | ordem fina | alto (CPU por consulta) | latência; só se 1 a 7 não bastarem |
 | 9 | **Juiz de IA para ambiguidade** | já existe (router opcional, até 8 consultas por dia) | casos que nada local resolve | custo de API, opcional | latência e consentimento; continua opcional |
 | 10 | **Ordem do bloco**: o mais relevante primeiro | Liu et al., 2023 | uso do que entrou | nulo | nenhum |
 
 As técnicas 1 a 6 cabem no pilar de baixo custo: são código e consulta SQL, sem modelo
 novo. A 7 tem o melhor potencial para sinônimos, mas só vale depois de medir o que as
-anteriores entregam, como já recomendam as pesquisas de [memória semântica](memoria-semantica-local-first.md).
+anteriores entregam, como já recomendam as pesquisas de [memória semântica](busca-semantica-local.md).
 
 ## Como medir
 

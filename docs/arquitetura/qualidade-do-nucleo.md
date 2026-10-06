@@ -60,11 +60,12 @@ e pelos dados reais do usuário, medidos só na máquina dele com
 `storage-sqlite/tests/dogfood_context.rs` (ignorado; nada do que lê é versionado). Os termos são gerados uma vez por um
 modelo real e versionados como fixture (`context_corpus_terms.json`); regenerar exige a
 autorização do usuário, porque chama o provedor. O plano está em [precisão do contexto](../pesquisas/precisao-do-contexto.md).
-Embeddings como veto e resgate (vetores em `context_corpus_vectors_*.json`) levaram o v4 a
+Embeddings como veto e resgate (experimento removido; resultados em
+[busca semântica local](../pesquisas/busca-semantica-local.md)) levaram o v4 a
 0,67 / 0,60 / 4 (`potion-multilingual-128M`) e 0,60 / 0,60 / 4 (`multilingual-e5-small`) e
 não entraram; o corpus de calibração v5, escrito às cegas, mede 0,41 / 0,43 / 15 de 24 e
 nenhuma variante com vetor o melhora sem derrubar o v3
-([embeddings no contexto](../pesquisas/embeddings-no-contexto.md)).
+([embeddings no contexto](../pesquisas/busca-semantica-local.md)).
 
 ## Vínculos propostos pela IA
 
