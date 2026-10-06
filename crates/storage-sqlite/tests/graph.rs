@@ -740,6 +740,103 @@ fn an_empty_map_assembles_itself_from_the_declared_workspace() {
 }
 
 #[test]
+fn package_aliases_reach_existing_components_and_link_decisions_once() {
+    use application::projects::{ProjectRecord, ProjectRepository};
+
+    let test = support::open("graph-package-aliases", &[]);
+    let repo = test.root.join("repo");
+    let packages = [
+        ("core", "@acme/core"),
+        ("opencode-adapter", "@acme/opencode-adapter"),
+        ("plugin", "@acme/app"),
+    ];
+    for (dir, name) in packages {
+        std::fs::create_dir_all(repo.join("packages").join(dir)).expect("dirs");
+        std::fs::write(
+            repo.join("packages").join(dir).join("package.json"),
+            format!("{{\"name\": \"{name}\"}}"),
+        )
+        .expect("package");
+    }
+    std::fs::write(
+        repo.join("package.json"),
+        "{\"workspaces\": [\"packages/*\"]}",
+    )
+    .expect("root");
+    test.store
+        .insert(&ProjectRecord::new(
+            "ws".into(),
+            repo.to_string_lossy().replace('\\', "/"),
+            "2026-01-01T00:00:00Z".into(),
+        ))
+        .expect("project");
+
+    // A map discovered before aliases existed: names and patterns only.
+    let graph = KnowledgeGraph::new(test.store.clone());
+    let mut ids = Vec::new();
+    for (dir, name) in packages {
+        ids.push(
+            graph
+                .create_entity(NewEntity {
+                    project_id: "ws".into(),
+                    kind: Some(EntityKind::Component),
+                    name: name.into(),
+                    patterns: vec![format!("packages/{dir}/**")],
+                    aliases: if dir == "core" {
+                        vec!["engine".into()]
+                    } else {
+                        vec![]
+                    },
+                    ..NewEntity::default()
+                })
+                .expect("component")
+                .entity_id,
+        );
+    }
+    let decision = support::decision_at(
+        &test.store,
+        "ws",
+        &repo
+            .to_string_lossy()
+            .replace(std::path::MAIN_SEPARATOR, "/"),
+        "adr",
+        "Como o core grava o que o opencode adapter captura?",
+        &["docs/adr/0001.md"],
+        "",
+    );
+
+    let first = graph.refresh_suggestions("ws").expect("refresh");
+    assert_eq!(first.new_edges, 2, "core and adapter, by their aliases");
+    let entities = graph.entities("ws").expect("entities");
+    let aliases = |id: &str| {
+        entities
+            .iter()
+            .find(|entity| entity.entity_id == id)
+            .expect("entity")
+            .aliases
+            .clone()
+    };
+    assert_eq!(aliases(&ids[0]), vec!["engine", "core"], "user alias kept");
+    assert_eq!(
+        aliases(&ids[1]),
+        vec!["opencode-adapter", "opencode adapter"]
+    );
+    assert_eq!(aliases(&ids[2]), vec!["app", "plugin"]);
+
+    // Idempotent, and a rejected link is not suggested again.
+    let pending = graph.suggestions("ws").expect("suggestions");
+    let core_edge = pending
+        .iter()
+        .find(|row| row.entity.node.id == ids[0] && row.source.node.id == decision)
+        .expect("core suggested");
+    graph.invalidate(&core_edge.edge_id).expect("reject");
+    let again = graph.refresh_suggestions("ws").expect("refresh again");
+    assert_eq!(again.new_edges, 0);
+    assert_eq!(graph.suggestions("ws").expect("pending").len(), 1);
+    assert_eq!(aliases(&ids[0]), vec!["engine", "core"]);
+}
+
+#[test]
 fn recent_files_come_from_decisions_without_repeats() {
     let test = support::open("graph-recent-files", &["p1"]);
     support::decision_with_diff(

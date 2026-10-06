@@ -329,6 +329,8 @@ where
     pub fn refresh_suggestions(&self, project_id: &str) -> Result<SuggestionReport, GraphError> {
         let project =
             ProjectRepository::get(&self.store, project_id)?.ok_or(GraphError::ProjectNotFound)?;
+        // Aliases first, so mentions below already use them.
+        self.merge_package_aliases(project_id)?;
         let now = now_rfc3339();
         let at = Timestamp::parse(&now).ok_or(GraphError::Storage("relógio inválido".into()))?;
         let entities = self.store.project_entities(project_id)?;
