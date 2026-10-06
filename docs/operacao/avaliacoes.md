@@ -49,7 +49,8 @@ vigente, justificativa inventada) reprova a fidelidade da tarefa.
   vazio sem vínculo; fila vazia não distingue "nada durável" de "não
   processado". Riscos estáticos: adoção confirma antes de gravar relações,
   chave de idempotência sem comparar payload, sugestões de claims sem
-  `redact_secrets`.
+  `redact_secrets` (corrigido depois: o texto passa por `external::protected_text`;
+  os outros dois não foram reconferidos em 06/10).
 - **Limites:** cinco críticos são o mesmo modelo, não pesquisa de usabilidade; o
   teste escrito no clone não rodou (Controle de Aplicativo, erro 4551);
   `review_time_ms` = 225 s é contador do app, não tempo humano; o bridge de
