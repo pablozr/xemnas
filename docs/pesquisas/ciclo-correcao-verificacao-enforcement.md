@@ -65,13 +65,12 @@ num hook. A memória sai do orçamento de tokens e passa a custar zero por sess�
 
 ## Relação com pesquisas existentes
 
-- [medir-eficacia-do-contexto.md](medir-eficacia-do-contexto.md): a guarda dá uma
-  métrica direta que complementa a proposta de medição.
-- [20-ideias-dores-reais-devs.md](20-ideias-dores-reais-devs.md) (17, mapa de
-  verificação): lá a verificação é obrigação → evidência da tarefa; aqui é
-  regra confirmada → diff.
-- [direcao-memoria-contexto-baixo-atrito.md](direcao-memoria-contexto-baixo-atrito.md):
-  a captura por correção é uma fonte de memória de baixo atrito.
+- [backlog-de-ideias.md](backlog-de-ideias.md) (medir se o contexto ajuda): a guarda
+  dá uma métrica direta que complementa a proposta de medição.
+- [mercado-e-ideias.md](mercado-e-ideias.md) (mapa de verificação): lá a verificação é
+  obrigação → evidência da tarefa; aqui é regra confirmada → diff.
+- A captura por correção é uma fonte de memória de baixo atrito (modo automático,
+  ADR-0012).
 
 ## Outras ideias da mesma conversa (não priorizadas)
 

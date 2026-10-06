@@ -18,7 +18,7 @@ plurais dos dois idiomas, terminações verbais do português, `-ing`/`-ed` do i
 glossário bilíngue de vocabulário geral de software; a busca de texto pede o radical como
 prefixo. Precisão 0,75, cobertura 0,91 (desenvolvimento 1,0), holdout 0,70 / 0,78 / 0.
 As terminações verbais vieram de um caso do holdout. Falta a meta de precisão. Antes do passo 5
-(embeddings), as opções sem modelo estão em [busca além do léxico](busca-alem-do-lexico.md);
+(embeddings), as opções sem modelo (menções com apelidos e termos de busca) já foram entregues e o que sobra (PageRank, sinônimos aprendidos, sinais de uso) está no [backlog](backlog-de-ideias.md#contexto-e-busca);
 a expansão do documento na adoção, como último recurso, levou a 0,76 / 0,95. Sinônimos da
 tarefa como um só conceito e cobertura relativa ao melhor resultado (a partir de 4
 conceitos): 0,83 / 0,95, holdout 0,92 / 0,89. Oração principal (o item precisa se apoiar
@@ -37,8 +37,7 @@ famílias novas: 0,95 / 0,96 / 0 de 27 (antes 0,94 / 0,95 / 0); v4 e v5 inaltera
 Ganho provavelmente otimista: falta um corpus v4 com holdout novo. A medição usa o portão de
 [qualidade do núcleo](../arquitetura/qualidade-do-nucleo.md).
 
-Complementa [medir a eficácia do contexto](medir-eficacia-do-contexto.md) (se o contexto
-ajuda o agente), [memória semântica local first](busca-semantica-local.md) e
+Complementa a medição de eficácia do contexto ([backlog](backlog-de-ideias.md#medir-se-o-contexto-ajuda); `agent_queries` já registra cada consulta), [memória semântica local first](busca-semantica-local.md) e
 [embeddings e reranking locais](busca-semantica-local.md) (como rodar modelos no
 desktop). Esta pesquisa trata de outra pergunta: **o que entra no bloco**.
 
@@ -57,7 +56,7 @@ desktop). Esta pesquisa trata de outra pergunta: **o que entra no bloco**.
   alto sinal que maximiza o resultado
   ([resumo do guia](https://agentic-ai.readthedocs.io/en/latest/ContextEngineering/anthropic/)).
 - **E a pesquisa anterior do Xemnas** mostrou que só ajuda o que é específico e fora do
-  padrão; visões gerais não ajudam e custam tokens ([medir a eficácia](medir-eficacia-do-contexto.md)).
+  padrão; visões gerais não ajudam e custam tokens (medição de eficácia no [backlog](backlog-de-ideias.md#medir-se-o-contexto-ajuda)).
 
 Conclusão: para o Xemnas, **abster-se é melhor que entregar um item fraco**.
 
@@ -109,7 +108,7 @@ anteriores entregam, como já recomendam as pesquisas de [memória semântica](b
 ## Como medir
 
 - **Ampliar o corpus antes de calibrar**: de 10 para cerca de 30 famílias, incluindo casos
-  reais do próprio Xemnas e da [avaliação no ripgrep](../operacao/avaliacao-repositorio-real.md),
+  reais do próprio Xemnas e da [avaliação no ripgrep](../operacao/avaliacoes.md#2-repositório-real-ripgrep-0310),
   com consultas em PT, EN e com distrator. Separar desenvolvimento e holdout por família,
   como já faz o corpus atual.
 - **Métricas**: precisão, cobertura e casos contaminados (portão atual) e, para a ordem,

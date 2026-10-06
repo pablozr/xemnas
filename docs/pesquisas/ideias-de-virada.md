@@ -38,9 +38,9 @@ muda**, em qualquer agente e qualquer editor, inclusive de quem não usa o Xemna
 
 ## As quatro ideias
 
-Elas não repetem as propostas anteriores ([oportunidades](oportunidades-produto-memoria-decisional.md),
-[20 ideias](20-ideias-dores-reais-devs.md), [melhorias](melhorias-apos-avaliacao-real.md)):
-reaproveitam os verificadores desenhados em [medir eficácia](medir-eficacia-do-contexto.md#regras-com-verificador-automático)
+Elas não repetem as propostas anteriores ([mercado e ideias](mercado-e-ideias.md),
+[backlog](backlog-de-ideias.md)):
+reaproveitam os verificadores de regra listados no [backlog](backlog-de-ideias.md#regras-e-verificação)
 (ainda não implementados) e mudam *onde* e *para quem* eles agem.
 
 ### 1. Decisões como diagnósticos: o Xemnas vira um language server

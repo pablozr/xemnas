@@ -3,7 +3,7 @@
 O pilar do xemnas é **desempenho e baixo custo**: CPU em repouso, memória,
 chamadas e tokens de IA, dependências. Entre duas soluções equivalentes, vale a
 mais barata. Este documento são as regras que decorrem disso; o que está
-pendente fica em `docs/pesquisas/listas-e-grafos-em-escala.md`.
+pendente fica em `docs/pesquisas/backlog-de-ideias.md` (seção Desempenho e escala).
 
 ## Regras
 
@@ -99,11 +99,31 @@ atrase a análise da sessão que o desenvolvedor acabou de encerrar.
 - Lista virtual: `ListState` na view, `list(state, cx.processor(...))`, linhas
   como chaves baratas e `splice` quando o formato muda (`screens/map.rs`,
   `screens/decisions.rs`); barra e rodapé em `ui/list.rs`.
-- Medição: `layout_benchmark` (layout, ignorado por padrão) e `XEMNAS_GRAPH_RENDER=full|cull|cheap|lod` (pintura); números em `docs/pesquisas/escalabilidade-renderizacao-fontes.md`.
+- Medição: `layout_benchmark` (layout, ignorado por padrão) e `XEMNAS_GRAPH_RENDER=full|cull|cheap|lod` (pintura); números na seção Medições abaixo.
 - Grafo: `fold_crowds` agrupa multidões, `Scene::on_screen` e
   `links_on_screen` cortam o que está fora, `crowded` liga o modo barato.
 - Layout do grafo em segundo plano com geração para descartar resultado velho
   (`GraphCanvas::set_graph`).
+
+## Medições (release, 02/10/2026, uma máquina)
+
+- **Solver do layout.** Barnes–Hut vence o laço exato a partir de ~1.000 nós, de 3x
+  a 6x, sem perder qualidade; em 250 nós o exato é mais rápido. A grade espacial nunca
+  foi a mais rápida e saiu do app. 10.000 nós levam ~2,9 s em fundo: não congelam a
+  interface, mas o resultado demora. O layout para quando surge uma geração mais nova
+  (contador atômico), em vez de terminar um resultado que seria descartado.
+- **Pintura (`Scene::paint`, CPU, mediana por quadro, zoom que ajusta o mapa).**
+  1.000 entidades: 9,4 ms (tudo) para 1,5 ms (modo barato mais panorama); 2.500
+  componentes: 10,4 ms para 2,5 ms. O modo barato vale 1,8x a 3x e o panorama mais
+  1,7x a 2x; o corte por viewport quase não ajuda no zoom de ajuste, onde tudo está
+  na tela.
+- **Montagem por tela (`XEMNAS_PERF=1`).** Escala 1000: Mapa 4,3 ms, Decisões 0,5 ms,
+  Revisão 0,6 ms (medianas). Escala 2500: Mapa 0,5 ms; layout do grafo 566 ms antes
+  do Barnes–Hut, 321 ms depois, fora da thread da interface.
+- **Não medido:** GPU, rolagem e zoom contínuos em uso real, zoom aproximado, 5.000
+  nós ou mais (semear 5.000 decisões passa de 100 s) e hit-test. Uma varredura linear
+  de 2.500 nós por movimento do mouse é pequena diante do que foi poupado. Duas
+  execuções por célula, uma máquina: não é p95.
 
 Telas novas seguem estas regras antes de seguir o padrão visual
 (`docs/design/VISUAL-IDENTITY.md`).

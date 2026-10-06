@@ -431,7 +431,7 @@ impl DiagnosticsPanel {
     }
 
     /// Whether the extractor's confidence predicts what is accepted: the
-    /// gate for any automatic approval (docs/pesquisas/exibicao-e-aprovacao.md).
+    /// gate for any automatic approval (ADR-0012).
     fn render_calibration(theme: &Theme, document: &DiagnosticsDocument) -> Div {
         let calibration = &document.metrics.calibration;
         let colors = theme.colors;

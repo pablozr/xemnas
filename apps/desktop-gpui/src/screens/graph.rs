@@ -2445,7 +2445,7 @@ enum Solver {
 const EXACT_UP_TO: usize = 300;
 
 /// The solver the app lays out with, by size. The release benchmark
-/// (`layout_benchmark`, results in `docs/pesquisas/escalabilidade-renderizacao-fontes.md`)
+/// (`layout_benchmark`, results in `docs/arquitetura/desempenho-e-escala.md`)
 /// had Barnes-Hut 3 to 6 times faster than the grid from 1 000 nodes up,
 /// with the same quality; the grid was never the fastest.
 fn solver_for(count: usize) -> Solver {

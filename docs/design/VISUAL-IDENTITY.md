@@ -737,6 +737,16 @@ em `docs/arquitetura/desempenho-e-escala.md`. No visual, isso vira:
 - Botões respondem em três tempos: repouso, hover (preenchimento e borda sobem;
   o primário ganha halo lavanda) e clique (um passo mais fundo). Desabilitado
   não reage. Linhas de lista e abas usam a mola de `hover_tint`.
+- **Raio concêntrico.** Um elemento dentro de um cartão tem raio igual ao do
+  cartão menos o espaçamento entre eles; chips de 4 px dentro de cartões de 8 px
+  são o caso a revisar.
+- **Teclado não anima.** Ação repetida centenas de vezes por dia (navegar, filtrar,
+  confirmar por atalho) não ganha cascata nem entrada animada: a animação a faz
+  parecer lenta. A cascata vale só para carga. Transições curtas (~150 ms,
+  ease-out) e interrompíveis.
+- **Material fica ao fundo.** Camadas sutis e hairlines no lugar de bordas
+  brilhantes; o acento (lavanda) só em seleção, foco e ação primária. Vidro com blur
+  real exigiria fork do GPUI e foi descartado: o Quiet Glass é luz e borda.
 
 ## Gate de entrega visual
 

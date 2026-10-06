@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Captures the five scenes of the showcase route (docs/pesquisas/plano-design-vitrine.md)
+    Captures the five scenes of the showcase route (docs/design/VISUAL-IDENTITY.md)
     without focus, clicks or keys.
 
 .DESCRIPTION
