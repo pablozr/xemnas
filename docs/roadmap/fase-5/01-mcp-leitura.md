@@ -54,10 +54,14 @@ claude mcp add xemnas -- C:/caminho/para/xemnas-mcp.exe
 
 ## Hooks do Claude Code
 
-O mesmo binário atende dois hooks do Claude Code (injeção e captura), sem processo residente. Todos terminam com código 0 e não imprimem nada em caso de erro (no máximo uma linha sanitizada no stderr, sem texto de prompt ou conteúdo):
+O mesmo binário atende os hooks do Claude Code (injeção e captura), sem processo residente. Todos terminam com código 0 e não imprimem nada em caso de erro (no máximo uma linha sanitizada no stderr, sem texto de prompt ou conteúdo):
 
 - `xemnas-mcp hook prompt` (`UserPromptSubmit`): lê o JSON do evento, chama `POST /v1/context` (timeout de 300 ms; app fechado sai em silêncio) com o prompt e até 8 arquivos recentes (`Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `Read`, lidos só do fim do transcript) e imprime `hookSpecificOutput.additionalContext` quando há contexto.
-- `xemnas-mcp hook stop` (`Stop`): lê o transcript de forma incremental e envia um Capture Envelope por turno fechado a `POST /v1/captures` (`Idempotency-Key`, timeout de 2 s). Com o app fechado ou erro 5xx grava em `outbox/pending`. Até 20 turnos por execução. O ponto de retomada fica em `<dados>/adapter/claude-code/<sessão>.json` (um arquivo por sessão; o id vira `[A-Za-z0-9-]`, o resto `_`, até 128 caracteres): o deslocamento do início do último prompt capturado e seu uuid; o Stop seguinte relê só esse turno e os novos. Se o app responder 403 (diretório que não é projeto registrado), os turnos são passados por cima, sem outbox e sem novas chamadas naquela execução.
+- `xemnas-mcp hook stop` (`Stop`): lê o transcript de forma incremental e envia um Capture Envelope por **troca substantiva** a `POST /v1/captures` (`Idempotency-Key`, timeout de 2 s). Com o app fechado ou erro 5xx grava em `outbox/pending`. Até 20 capturas por execução.
+  - **Dobra de turnos triviais.** Turno trivial: sem `tool_use`, prompt de até 80 caracteres (após trim) e texto do assistente de até 600. Turnos triviais consecutivos são dobrados na captura do turno anterior: prompts e respostas são anexados, em ordem e separados por linha em branco, aos artefatos `user_text` e `assistant_text` (mesmos limites de tamanho; até 10 turnos dobrados por captura). `message_id` e chave de idempotência continuam os do primeiro turno. Assim "vamos de X?" / "pode" fica junto da proposta. Um trivial sem turno anterior (o primeiro da sessão) é capturado sozinho.
+  - **Retenção do mais novo.** O Stop não envia o grupo mais recente, porque o próximo turno pode dobrar nele; ele sai quando existe um turno não trivial depois. Uma captura já enviada nunca é reenviada com mais conteúdo: triviais que chegam depois dela abrem o próprio grupo (e só dobram nele enquanto ele estiver pendente).
+  - **Ponto de retomada** em `<dados>/adapter/claude-code/<sessão>.json` (um arquivo por sessão; o id vira `[A-Za-z0-9-]`, o resto `_`, até 128 caracteres): o deslocamento do início do grupo retido e o uuid do último turno enviado. A execução seguinte relê o grupo retido inteiro e os novos; sem grupo retido (após `session-end`) o deslocamento é o do último turno enviado, pulado pelo uuid. Se o app responder 403 (diretório que não é projeto registrado), as capturas são passadas por cima, sem outbox e sem novas chamadas naquela execução.
+- `xemnas-mcp hook session-end` (`SessionEnd`, entrada `{session_id, transcript_path, cwd, hook_event_name, reason}`): igual ao `stop`, mas envia tudo, inclusive o grupo retido (repete até esvaziar o atraso). Sai sempre com código 0 e sem stdout.
 
 `~/.claude/settings.json` (os hooks rodam junto com os que já existirem; acrescente aos arrays):
 
@@ -69,12 +73,15 @@ O mesmo binário atende dois hooks do Claude Code (injeção e captura), sem pro
     ],
     "Stop": [
       { "hooks": [{ "type": "command", "command": "C:/caminho/para/xemnas-mcp.exe hook stop", "timeout": 15 }] }
+    ],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "C:/caminho/para/xemnas-mcp.exe hook session-end", "timeout": 15 }] }
     ]
   }
 }
 ```
 
-Código em `apps/mcp-server/src/hook/`; testes em `src/hook/*` e `tests/hook.rs` (inclui latência do `hook prompt` e leitura só do fim do transcript no segundo Stop).
+Código em `apps/mcp-server/src/hook/`; testes em `src/hook/*` e `tests/hook.rs` (inclui latência do `hook prompt`, dobra, retenção, `session-end` e leitura só do fim do transcript no segundo Stop).
 
 ## Evidências
 

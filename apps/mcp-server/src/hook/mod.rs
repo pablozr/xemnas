@@ -1,5 +1,6 @@
 //! Claude Code hooks: `xemnas-mcp hook prompt` injects context on every user
-//! prompt and `xemnas-mcp hook stop` captures the finished turns.
+//! prompt, `xemnas-mcp hook stop` captures the finished exchanges and
+//! `xemnas-mcp hook session-end` flushes the one held back.
 //!
 //! A hook must never break or block Claude Code: every path exits 0, prints
 //! nothing on failure and writes at most one sanitized line (ids and counts,
@@ -18,7 +19,7 @@ use serde_json::Value;
 /// Largest hook payload read from stdin.
 const MAX_INPUT_BYTES: u64 = 8 * 1024 * 1024;
 
-/// Runs the hook `subcommand` (`prompt` or `stop`) over the JSON on stdin.
+/// Runs the hook `subcommand` (`prompt`, `stop` or `session-end`) over the JSON on stdin.
 pub fn run(subcommand: &str) {
     // A panic message could carry content; hooks stay silent instead.
     std::panic::set_hook(Box::new(|_| {}));
@@ -47,9 +48,9 @@ fn handle(subcommand: &str) {
             Ok(None) => {}
             Err(reason) => eprintln!("xemnas hook: prompt {reason}"),
         },
-        "stop" => {
-            if let Err(reason) = stop::execute(&event, &paths) {
-                eprintln!("xemnas hook: stop {reason}");
+        "stop" | "session-end" => {
+            if let Err(reason) = stop::execute(&event, &paths, subcommand == "session-end") {
+                eprintln!("xemnas hook: {subcommand} {reason}");
             }
         }
         _ => eprintln!("xemnas hook: unknown subcommand"),

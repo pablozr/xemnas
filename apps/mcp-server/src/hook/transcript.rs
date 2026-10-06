@@ -20,6 +20,12 @@ const FILE_TOOLS: [&str; 5] = ["Edit", "Write", "MultiEdit", "NotebookEdit", "Re
 /// Echoes of slash commands, which are not user prompts.
 const COMMAND_PREFIXES: [&str; 3] = ["<command-name>", "<local-command-", "<command-message>"];
 
+/// Longest prompt (chars, trimmed) of a trivial turn: "ok", "pode seguir", a quick question.
+pub const TRIVIAL_PROMPT_CHARS: usize = 80;
+
+/// Longest assistant text (chars) of a trivial turn; longer answers carry content worth analysing.
+pub const TRIVIAL_ASSISTANT_CHARS: usize = 600;
+
 /// One `tool_use` block of the turn and how it ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolCall {
@@ -55,6 +61,38 @@ pub struct Turn {
     pub tools: Vec<ToolCall>,
     /// File changes, in order.
     pub edits: Vec<FileEdit>,
+}
+
+impl Turn {
+    /// A short exchange without tool use: it adds no decision of its own, only
+    /// the confirmation of the turn before it.
+    pub fn is_trivial(&self) -> bool {
+        let answer: usize = self.assistant_texts.iter().map(|t| t.chars().count()).sum();
+        self.tools.is_empty()
+            && self.user_text.trim().chars().count() <= TRIVIAL_PROMPT_CHARS
+            && answer <= TRIVIAL_ASSISTANT_CHARS
+    }
+
+    /// Appends `other`'s prompt and answer after this turn's, separated by a
+    /// blank line. The identity (uuid, offset) stays this turn's.
+    pub fn fold(&mut self, other: &Turn) {
+        if !other.user_text.trim().is_empty() {
+            if !self.user_text.trim().is_empty() {
+                self.user_text.push_str("\n\n");
+            }
+            self.user_text.push_str(&other.user_text);
+        }
+        if other.assistant_texts.is_empty() {
+            return;
+        }
+        let answer = other.assistant_texts.join("\n");
+        if self.assistant_texts.is_empty() {
+            self.assistant_texts.push(answer);
+        } else {
+            let joined = self.assistant_texts.join("\n");
+            self.assistant_texts = vec![format!("{joined}\n\n{answer}")];
+        }
+    }
 }
 
 /// Result of [`scan`].
@@ -301,6 +339,42 @@ mod tests {
         json!({ "type": "assistant", "message": { "content": [
             { "type": "tool_use", "id": "t", "name": name, "input": { "file_path": file } }
         ] } })
+    }
+
+    fn turn(prompt: &str, answer: &str) -> Turn {
+        Turn {
+            prompt_uuid: prompt.to_string(),
+            user_text: prompt.to_string(),
+            assistant_texts: vec![answer.to_string()],
+            ..Turn::default()
+        }
+    }
+
+    #[test]
+    fn trivial_turns_are_short_and_without_tools() {
+        assert!(turn("  ok  ", "certo").is_trivial());
+        assert!(turn(&"a".repeat(TRIVIAL_PROMPT_CHARS), "").is_trivial());
+        assert!(!turn(&"a".repeat(TRIVIAL_PROMPT_CHARS + 1), "certo").is_trivial());
+        assert!(!turn("ok", &"a".repeat(TRIVIAL_ASSISTANT_CHARS + 1)).is_trivial());
+        let mut with_tool = turn("ok", "certo");
+        with_tool.tools.push(ToolCall {
+            name: "Bash".to_string(),
+            id: "t".to_string(),
+            is_error: false,
+        });
+        assert!(!with_tool.is_trivial());
+    }
+
+    #[test]
+    fn folding_appends_with_a_blank_line_and_keeps_the_identity() {
+        let mut head = turn("proposta", "faço X?");
+        head.start_offset = 7;
+        head.fold(&turn("pode", "feito"));
+
+        assert_eq!(head.prompt_uuid, "proposta");
+        assert_eq!(head.start_offset, 7);
+        assert_eq!(head.user_text, "proposta\n\npode");
+        assert_eq!(head.assistant_texts.join("\n"), "faço X?\n\nfeito");
     }
 
     #[test]
