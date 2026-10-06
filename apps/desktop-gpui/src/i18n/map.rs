@@ -1805,6 +1805,19 @@ formats! {
              {BOLD}“{quote}”{BOLD}.",
         ru: "Решение {BOLD}«{source}»{BOLD} упоминает {BOLD}«{target}»{BOLD} в собственном \
              тексте: {BOLD}«{quote}»{BOLD}." }
+    /// Sentence: the AI proposed that a decision applies to a map item, with
+    /// the passage of the decision and its own reason.
+    link_ai_decision(source: &str, target: &str, quote: &str, why: &str) {
+        en: "The AI proposes that the decision {BOLD}“{source}”{BOLD} applies to              {BOLD}“{target}”{BOLD}, based on this passage: {BOLD}“{quote}”{BOLD}. {why}",
+        pt: "A IA propõe que a decisão {BOLD}“{source}”{BOLD} vale para              {BOLD}“{target}”{BOLD}, com base neste trecho: {BOLD}“{quote}”{BOLD}. {why}",
+        es: "La IA propone que la decisión {BOLD}“{source}”{BOLD} se aplica a              {BOLD}“{target}”{BOLD}, según este fragmento: {BOLD}“{quote}”{BOLD}. {why}",
+        fr: "L’IA propose que la décision {BOLD}“{source}”{BOLD} s’applique à              {BOLD}“{target}”{BOLD}, d’après cet extrait : {BOLD}“{quote}”{BOLD}. {why}",
+        de: "Die KI schlägt vor, dass die Entscheidung {BOLD}„{source}“{BOLD} für              {BOLD}„{target}“{BOLD} gilt, nach dieser Passage: {BOLD}„{quote}“{BOLD}. {why}",
+        it: "L’IA propone che la decisione {BOLD}“{source}”{BOLD} valga per              {BOLD}“{target}”{BOLD}, in base a questo passaggio: {BOLD}“{quote}”{BOLD}. {why}",
+        ja: "AI は、決定 {BOLD}「{source}」{BOLD} が {BOLD}「{target}」{BOLD} に適用されると提案             しています。根拠の一節: {BOLD}「{quote}」{BOLD}。{why}",
+        zh: "AI 建议决策 {BOLD}“{source}”{BOLD} 适用于 {BOLD}“{target}”{BOLD}，依据这段文字：              {BOLD}“{quote}”{BOLD}。{why}",
+        ko: "AI가 {BOLD}“{source}”{BOLD} 결정이 {BOLD}“{target}”{BOLD}에 적용된다고 제안해요.              근거 문장: {BOLD}“{quote}”{BOLD}. {why}",
+        ru: "ИИ предлагает применить решение {BOLD}«{source}»{BOLD} к {BOLD}«{target}»{BOLD}              на основании этого фрагмента: {BOLD}«{quote}»{BOLD}. {why}" }
     /// Sentence: a rule added a dependency that is a map technology.
     link_uses_rule(source: &str, reason: &str, target: &str) {
         en: "The rule {BOLD}“{source}”{BOLD} added the dependency {BOLD}{reason}{BOLD}, which \

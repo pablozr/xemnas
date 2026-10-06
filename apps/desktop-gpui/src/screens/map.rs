@@ -3903,6 +3903,15 @@ fn link_wording(suggestion: &Suggestion) -> (Vec<(String, bool)>, String) {
             t::link_mention_effect(target, uses, rule),
         );
     }
+    if let (Some(quote), Some(why)) = (
+        application::graph::ai_link_quote(reason),
+        application::graph::ai_link_why(reason),
+    ) {
+        return (
+            t::spans(&t::link_ai_decision(&source, &shown, quote, why)),
+            t::link_mention_effect(target, uses, rule),
+        );
+    }
     let (sentence, effect) = match suggestion.kind {
         EdgeKind::Uses if rule => (
             t::link_uses_rule(&source, reason, &shown),

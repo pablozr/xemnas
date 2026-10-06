@@ -1081,6 +1081,7 @@ fn job_kind(kind: &str) -> String {
         application::relation_suggestions::RELATION_JOB_KIND => t::diag_kind_relations().into(),
         application::claim_suggestions::CLAIM_JOB_KIND => t::diag_kind_rules().into(),
         application::search_terms::SEARCH_TERMS_JOB_KIND => t::diag_kind_search_terms().into(),
+        application::link_suggestions::LINK_JOB_KIND => t::diag_kind_links().into(),
         other => other.replace('_', " "),
     }
 }

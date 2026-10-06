@@ -303,11 +303,13 @@ pub enum JobKind {
     ContextRouting,
     /// Search terms for a project's adopted decisions.
     DeriveSearchTerms,
+    /// Map components a decision applies to, proposed by the AI.
+    SuggestLinks,
 }
 
 impl JobKind {
     /// Every product kind.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::AnalyzeCapture,
         Self::AnalyzeDocument,
         Self::SuggestRelations,
@@ -315,6 +317,7 @@ impl JobKind {
         Self::RefreshObservations,
         Self::ContextRouting,
         Self::DeriveSearchTerms,
+        Self::SuggestLinks,
     ];
 
     /// Literal persisted in the `kind` column.
@@ -327,6 +330,7 @@ impl JobKind {
             Self::RefreshObservations => crate::observations::refresh::REFRESH_OBSERVATIONS_KIND,
             Self::ContextRouting => crate::context_routing::CONTEXT_ROUTING_KIND,
             Self::DeriveSearchTerms => "derive_search_terms",
+            Self::SuggestLinks => "suggest_links",
         }
     }
 
@@ -346,7 +350,8 @@ impl JobKind {
             Self::SuggestRelations
             | Self::DeriveClaims
             | Self::ContextRouting
-            | Self::DeriveSearchTerms => Lane::Suggestions,
+            | Self::DeriveSearchTerms
+            | Self::SuggestLinks => Lane::Suggestions,
         }
     }
 }

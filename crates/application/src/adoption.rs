@@ -338,6 +338,30 @@ where
                 let _ = queued;
             }
             crate::search_terms::queue_search_terms(&self.store, &project);
+            // A decision no file or dependency tied to the map (it came from
+            // an ADR, a spec or a conversation) asks the AI which components
+            // it governs. The edges are read after the refresh above, so
+            // weak mention suggestions do not count as ties.
+            let edges = self
+                .store
+                .project_edges(&project)
+                .map_err(AdoptionError::Graph)?;
+            if crate::link_suggestions::needs_links(&edges, &confirmed.decision_id) {
+                let _ = JobRepository::insert(
+                    &self.store,
+                    &JobRecord {
+                        id: uuid::Uuid::now_v7().to_string(),
+                        kind: crate::link_suggestions::LINK_JOB_KIND.to_string(),
+                        payload: confirmed.decision_id.clone(),
+                        state: JobState::Queued,
+                        idempotent: true,
+                        attempts: 0,
+                        last_error: None,
+                        created_at: now.clone(),
+                        updated_at: now.clone(),
+                    },
+                );
+            }
         }
         Ok(AdoptOutcome {
             id: confirmed.decision_id,
