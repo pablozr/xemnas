@@ -4,7 +4,7 @@
 liga o Claude Code (e o OpenCode) com um botão, sem editar JSON. Hoje o pacote
 só traz o `xemnas.exe` e ligar o Claude Code é manual: copiar o `xemnas-mcp.exe`,
 registrar o MCP e acrescentar os hooks ao `~/.claude/settings.json`
-([MCP de leitura](../../fase-5/01-mcp-leitura.md)).
+([MCP de leitura](../../operacao/operacao-e-referencia.md)).
 
 **Blocked by:** nada. Adiado por decisão do usuário (05/10/2026): vem depois do
 dogfood com o Claude Code.
@@ -28,7 +28,7 @@ dogfood com o Claude Code.
 - [ ] **Assinatura e winget**: binários assinados (programas gratuitos para
   open source, como o SignPath, ou assinatura paga barata; conferir condições na
   hora), instalador e manifesto do winget. Trocar o ZIP por instalador revê a
-  ADR-0002 ([18](18-distribuicao-e-upgrade.md)).
+  ADR-0002 (ticket 18 do MVP, entregue).
 - [ ] **Plugin do Claude Code** (opcional, por último): hooks e MCP num plugin de
   marketplace, como vitrine; depende do app instalado.
 

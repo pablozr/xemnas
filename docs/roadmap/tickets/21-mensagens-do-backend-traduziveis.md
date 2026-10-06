@@ -2,7 +2,7 @@
 
 **What to build:** Fazer o backend devolver motivos tipados em vez de frases
 prontas em português, para a interface mostrar tudo no idioma escolhido
-([idiomas.md](../../../design/idiomas.md)).
+([idiomas.md](../../design/idiomas.md)).
 
 **Blocked by:** nada. É trabalho da sessão de backend; o front só troca a
 leitura da mensagem pela tradução do motivo.
@@ -13,7 +13,7 @@ A interface já está em dez idiomas (padrão inglês), mas estas mensagens cheg
 prontas de `application`/`ai-provider` e aparecem em português em qualquer
 idioma:
 
-- [ ] `ai-provider::ProviderError::message()` — falha ao listar modelos e no
+- [ ] `application::providers::ProviderError::message()` — falha ao listar modelos e no
   login da Conta ChatGPT (`screens/settings/providers.rs`).
 - [ ] `application::profile::ProfileError::Invalid(..)` — erro ao salvar o
   perfil de IA (`screens/settings/mod.rs`, `failure()`).
