@@ -84,7 +84,7 @@ O backend monta um **Context Pack** para uma tarefa: decisões vigentes e premis
 
 ## Recovery
 
-- Jobs interrompidos voltam para `queued` na reinicialização quando idempotentes; capturas na outbox são importadas depois (com desktop fechado inclusive) sem duplicar (chaves de idempotência + dedup por constraint). Um item recusado 5 vezes por projeto não cadastrado vai intacto para `stalled/` e só volta para `pending/` por ação explícita (`outbox::retry_stalled`); diagnósticos em `rejected/` são removidos após 30 dias.
+- Jobs interrompidos voltam para `queued` na reinicialização quando idempotentes; capturas na outbox são importadas depois (com desktop fechado inclusive) sem duplicar (chaves de idempotência + dedup por constraint). Um item de projeto não cadastrado (recusa `Forbidden`) é definitivo: vai direto para `rejected/` (`project_not_registered`) no primeiro drain; falha de storage segue tentando. Itens já parados em `stalled/` por versões antigas só voltam para `pending/` por ação explícita (`outbox::retry_stalled`); diagnósticos em `rejected/` são removidos após 30 dias.
 - `cargo test` inclui testes de crash/restart; E2Es: `tests\e2e\jobs-recovery.ps1`, `tests\e2e\capture-outbox.ps1`, `tests\e2e\install-clean.ps1`.
 
 ## Limitações conhecidas

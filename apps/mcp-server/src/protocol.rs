@@ -101,10 +101,14 @@ fn tools() -> Value {
         {
             "name": "get_decision",
             "description": "Abre uma decisão do projeto pela referência D:<ref> dos blocos \
-                <xemnas-context>: motivo completo, premissas, relações e regras derivadas.",
+                <xemnas-context>: motivo completo, premissas, relações e regras derivadas. \
+                Parâmetro reference (alias aceito: ref).",
             "inputSchema": {
                 "type": "object",
-                "properties": { "reference": { "type": "string", "description": "Ex.: D:bbbbcccc" } },
+                "properties": {
+                    "reference": { "type": "string", "description": "Ex.: D:bbbbcccc" },
+                    "ref": { "type": "string", "description": "Alias de reference" }
+                },
                 "required": ["reference"],
                 "additionalProperties": false
             }
@@ -148,7 +152,9 @@ fn call_tool(params: &Value, backend: &dyn Backend) -> Result<Value, (i64, &'sta
     };
     let outcome = match name {
         "get_decision" => {
-            let reference = argument("reference").ok_or((-32602, "informe reference"))?;
+            let reference = argument("reference")
+                .or_else(|| argument("ref"))
+                .ok_or((-32602, "informe reference"))?;
             backend.decision(&reference)
         }
         "search_context" => {
@@ -273,6 +279,18 @@ mod tests {
             ok["result"]["content"][0]["text"],
             json!("pergunta: Qual banco?")
         );
+
+        let alias = call("get_decision", json!({ "ref": "D:bbbbcccc" }));
+        assert_eq!(alias["result"]["isError"], json!(false));
+        assert_eq!(
+            alias["result"]["content"][0]["text"],
+            json!("pergunta: Qual banco?")
+        );
+        let both = call(
+            "get_decision",
+            json!({ "reference": "D:closed00", "ref": "D:bbbbcccc" }),
+        );
+        assert_eq!(both["result"]["isError"], json!(true), "reference wins");
 
         let closed = call("get_decision", json!({ "reference": "D:closed00" }));
         assert_eq!(closed["result"]["isError"], json!(true));

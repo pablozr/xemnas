@@ -43,4 +43,4 @@
 ## Pendências resolvidas depois do fechamento
 
 - Retenção de rejeitados: diagnósticos em `rejected/` são removidos após 30 dias (`DrainPolicy::rejected_retention`) — `8067a34`.
-- Teto de transientes: item recusado como `Forbidden` em 5 drains vai intacto para `stalled/`; `outbox::retry_stalled` o devolve a `pending/`; falha de storage não conta — `8067a34`.
+- (Substituído: `Forbidden` agora é rejeição imediata em `rejected/` com código `project_not_registered`; o teto deixou de existir.) Teto de transientes anterior: item recusado como `Forbidden` em 5 drains ia intacto para `stalled/`; `outbox::retry_stalled` o devolve a `pending/`; falha de storage não conta — `8067a34`.

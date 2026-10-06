@@ -105,7 +105,7 @@ pub use jobs::{
 };
 pub use outbox::{
     drain, drain_with, retry_stalled, DrainPolicy, DrainReport, OutboxError,
-    DEFAULT_MAX_TRANSIENT_ATTEMPTS, DEFAULT_REJECTED_RETENTION,
+    DEFAULT_REJECTED_RETENTION,
 };
 pub use paths::AppPaths;
 pub use profile::{
