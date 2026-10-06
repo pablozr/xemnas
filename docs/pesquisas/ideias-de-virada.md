@@ -3,7 +3,8 @@
 **Data:** 06/10/2026.
 **Pergunta:** quando lembrar entre sessões já vem de graça nos agentes, o que só o Xemnas
 consegue fazer e pode fazer o produto deslanchar?
-**Status:** Aberta. Pesquisa e proposta; nada implementado, demanda não validada.
+**Status:** Aberta. Pesquisa e proposta; nada implementado, demanda não validada. O usuário
+marcou a ideia 1 (language server) para explorar a seguir (06/10/2026).
 
 ## O mercado mudou o terreno
 
