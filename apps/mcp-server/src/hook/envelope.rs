@@ -265,10 +265,11 @@ mod tests {
         assert_eq!(diff.metadata["file"], json!("src/a.rs"));
         assert_eq!(envelope.artifacts[3].metadata["status"], json!("ok"));
         assert_eq!(envelope.artifacts[4].metadata["status"], json!("error"));
-        assert_eq!(
-            envelope.artifacts[4].content,
-            r#"{"status":"error","tool":"Bash"}"#
-        );
+        // Key order depends on whether a workspace dependency turns on
+        // serde_json's `preserve_order`, so compare the parsed value.
+        let summary: serde_json::Value =
+            serde_json::from_str(&envelope.artifacts[4].content).expect("tool summary JSON");
+        assert_eq!(summary, json!({"status": "error", "tool": "Bash"}));
         assert_eq!(envelope.source.adapter, "claude-code");
         assert_eq!(envelope.source.message_id, "p1");
         assert!(envelope.idempotency_key.starts_with("claude-code:s1:p1:"));
