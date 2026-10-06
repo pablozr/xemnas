@@ -393,3 +393,29 @@ fn adoption_queues_the_job_only_for_a_decision_no_file_tied_to_the_map() {
     assert_eq!(by_adr.linked, 0);
     assert_eq!(queued(&test, &by_adr.id), 1, "nothing tied it to the map");
 }
+
+#[test]
+fn a_map_refresh_queues_the_untied_decisions_once() {
+    let test = support::open("links-backfill", &["p1"]);
+    let untied = adr_decision(&test.store, "adr", OUTCOME);
+    let by_file = support::decision_with_diff(
+        &test.store,
+        "p1",
+        "code",
+        "Onde guardar o estado?",
+        &["packages/core/src/state.ts"],
+        "",
+    );
+    let graph = KnowledgeGraph::new(test.store.clone());
+
+    graph.refresh_suggestions("p1").expect("empty map");
+    assert_eq!(queued(&test, &untied), 0, "no component to link to yet");
+
+    component(&test.store, "engine", "packages/core/**");
+    graph.refresh_suggestions("p1").expect("refresh");
+    assert_eq!(queued(&test, &untied), 1, "adopted before the job existed");
+    assert_eq!(queued(&test, &by_file), 0, "a file tied it");
+
+    graph.refresh_suggestions("p1").expect("again");
+    assert_eq!(queued(&test, &untied), 1, "never queued twice");
+}

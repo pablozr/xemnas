@@ -58,6 +58,7 @@ pub trait MapStores:
     + ClaimStore
     + ProjectRepository
     + DecisionStore
+    + application::jobs::JobRepository
     + Clone
     + Send
     + 'static
@@ -72,6 +73,7 @@ impl<T> MapStores for T where
         + ClaimStore
         + ProjectRepository
         + DecisionStore
+        + application::jobs::JobRepository
         + Clone
         + Send
         + 'static

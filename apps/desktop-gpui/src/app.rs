@@ -249,7 +249,8 @@ pub struct Shell<
         + ReviewExceptionStore
         + DecisionStore
         + ContextStores
-        + RelationSuggestionStore,
+        + RelationSuggestionStore
+        + application::jobs::JobRepository,
 > {
     theme: Theme,
     focus: FocusHandle,
@@ -324,7 +325,8 @@ impl<
             + ReviewExceptionStore
             + DecisionStore
             + ContextStores
-            + RelationSuggestionStore,
+            + RelationSuggestionStore
+            + application::jobs::JobRepository,
     > Shell<R>
 {
     /// Mounts both use cases once, retaining their state across navigation.
@@ -2123,7 +2125,8 @@ impl<
             + ReviewExceptionStore
             + DecisionStore
             + ContextStores
-            + RelationSuggestionStore,
+            + RelationSuggestionStore
+            + application::jobs::JobRepository,
     > Render for Shell<R>
 {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

@@ -20,6 +20,7 @@ use super::{DecisionNode, EdgeRecord, EntityRecord, GraphError, GraphStore, Know
 use crate::claims::ClaimStore;
 use crate::clock::now_rfc3339;
 use crate::documents::is_documentation_path;
+use crate::jobs::JobRepository;
 use crate::projects::ProjectRepository;
 use crate::relations::RelationStore;
 
@@ -316,7 +317,7 @@ fn npm_dependency(line: &str, section: Section) -> Option<String> {
 
 impl<S> KnowledgeGraph<S>
 where
-    S: GraphStore + RelationStore + ClaimStore + ProjectRepository,
+    S: GraphStore + RelationStore + ClaimStore + ProjectRepository + JobRepository,
 {
     /// Derives suggestions from the decisions in force: writes the new
     /// `affects`/`uses` suggestions (from touched files, added dependencies
@@ -430,6 +431,18 @@ where
             report.new_edges +=
                 self.suggest_mentions(&mut edges, project_id, decision, &named, &now)?;
         }
+
+        // Decisions no file tied to the map ask the AI which components they
+        // govern (best effort, bounded; see `link_suggestions`).
+        let ids: Vec<&str> = decisions
+            .iter()
+            .map(|decision| decision.decision_id.as_str())
+            .collect();
+        let components = live
+            .iter()
+            .filter(|entity| entity.kind == EntityKind::Component)
+            .count();
+        crate::link_suggestions::queue_untied(&self.store, &ids, &edges, components);
 
         // Rules adopted from Revisão apply to the components their evidence
         // touched: suggested, like any derived edge.

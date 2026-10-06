@@ -347,20 +347,7 @@ where
                 .project_edges(&project)
                 .map_err(AdoptionError::Graph)?;
             if crate::link_suggestions::needs_links(&edges, &confirmed.decision_id) {
-                let _ = JobRepository::insert(
-                    &self.store,
-                    &JobRecord {
-                        id: uuid::Uuid::now_v7().to_string(),
-                        kind: crate::link_suggestions::LINK_JOB_KIND.to_string(),
-                        payload: confirmed.decision_id.clone(),
-                        state: JobState::Queued,
-                        idempotent: true,
-                        attempts: 0,
-                        last_error: None,
-                        created_at: now.clone(),
-                        updated_at: now.clone(),
-                    },
-                );
+                crate::link_suggestions::queue_link_job(&self.store, &confirmed.decision_id);
             }
         }
         Ok(AdoptOutcome {

@@ -807,7 +807,7 @@ fn connection_test_body(evidence_ref: &str) -> Vec<u8> {
                 "confidence": 0.8,
                 "confidence_reason": "Troca explícita.",
                 "evidence_refs": [evidence_ref],
-                "diff_summary": { "files": [], "artifacts": 2 }
+                "diff_summary": { "files": [], "artifacts": 1 }
             }]
         })
         .to_string(),

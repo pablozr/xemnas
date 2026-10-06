@@ -21,6 +21,7 @@ use crate::decisions::{DecisionStatus, DecisionStore, StoredDecision};
 use crate::graph::{
     ai_link_quote, ai_link_reason, mention_quote, EdgeRecord, EntityRecord, GraphStore,
 };
+use crate::jobs::{JobRecord, JobRepository, JobState};
 use crate::overview::StructuredModel;
 use crate::profile::{choose_extractor, AiSettings, ExtractorChoice, ProfileStore, SecretStore};
 
@@ -267,6 +268,79 @@ pub fn needs_links(edges: &[EdgeRecord], decision_id: &str) -> bool {
             let tie = edge.is_live() && mention_quote(&edge.reason).is_none();
             asked || tie
         })
+}
+
+/// Decisions queued per map refresh, at most.
+pub const MAX_QUEUED_PER_REFRESH: usize = 50;
+
+fn insert_link_job<S: JobRepository>(store: &S, decision_id: &str) {
+    let now = now_rfc3339();
+    // A suggestion; nothing waits on it, so a failed insert is not an error.
+    let _ = store.insert(&JobRecord {
+        id: uuid::Uuid::now_v7().to_string(),
+        kind: LINK_JOB_KIND.to_string(),
+        payload: decision_id.to_string(),
+        state: JobState::Queued,
+        idempotent: true,
+        attempts: 0,
+        last_error: None,
+        created_at: now.clone(),
+        updated_at: now,
+    });
+}
+
+/// Decisions that already have a link job in any state: asked, or waiting.
+fn already_asked<S: JobRepository>(store: &S) -> BTreeSet<String> {
+    store
+        .list()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|job| job.kind == LINK_JOB_KIND)
+        .map(|job| job.payload)
+        .collect()
+}
+
+/// Queues the link job of one decision unless it already has one.
+pub fn queue_link_job<S: JobRepository>(store: &S, decision_id: &str) {
+    if !already_asked(store).contains(decision_id) {
+        insert_link_job(store, decision_id);
+    }
+}
+
+/// Queues the link job of every decision in force that no file, dependency
+/// or person tied to the map and that was never asked about, at most
+/// [`MAX_QUEUED_PER_REFRESH`] per call (the rest on later refreshes). It does
+/// nothing while the map has no live component. Called by the map refresh,
+/// so decisions adopted before this job existed catch up. Returns how many
+/// were queued.
+pub fn queue_untied<S: JobRepository>(
+    store: &S,
+    decision_ids: &[&str],
+    edges: &[EdgeRecord],
+    components: usize,
+) -> usize {
+    if components == 0 {
+        return 0;
+    }
+    let untied: Vec<&str> = decision_ids
+        .iter()
+        .copied()
+        .filter(|id| needs_links(edges, id))
+        .collect();
+    if untied.is_empty() {
+        return 0;
+    }
+    let asked = already_asked(store);
+    let mut queued = 0;
+    for id in untied
+        .into_iter()
+        .filter(|id| !asked.contains(*id))
+        .take(MAX_QUEUED_PER_REFRESH)
+    {
+        insert_link_job(store, id);
+        queued += 1;
+    }
+    queued
 }
 
 /// Failures of a link search, for the job log.
