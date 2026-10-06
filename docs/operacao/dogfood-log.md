@@ -1,29 +1,27 @@
 # Registro de dogfood (Gate 5, ticket 20)
 
-Semana de uso real do produto para medir **ruído, perdas, latência e tempo de revisão** e decidir a conclusão do MVP (spec §16 Gate 5, §17 critérios finais). **Este arquivo é preenchido durante a semana; a decisão de conclusão é do usuário.**
+Semana de uso real do produto para medir **ruído, perdas, latência e tempo de revisão** e decidir a conclusão do MVP (spec §16 Gate 5, §17 critérios finais). **A tabela de métricas é preenchida sozinha; falhas críticas e a decisão de conclusão são do usuário.**
 
-## Como coletar
+## Métricas automáticas
 
-1. **Métricas automáticas** — durante o uso, abrir Configurações › Diagnóstico e usar Exportar…; a seção `metrics` traz:
-   - `latency_capture_to_candidate_ms` — p50/p95 de `received_at → created_at` do candidato (ruído de cadência);
-   - `review_time_ms` — p50/p95 de `created_at → confirmed_at` (tempo de revisão humana);
-   - `noise.dismissed_ratio` — fração de candidatos descartados entre os decididos (ruído percebido);
-   - `losses` — `assessments_failed/skipped`, `jobs_failed`, `outbox_rejected` (perdas).
-   Fonte: `Diagnostics::export()` (`application/src/diagnostics.rs`) — sanitizado, seguro para anexar ao registro.
-2. **Diário qualitativo (uma linha por dia)** — data, o que aconteceu, o que incomodou, quase-acidentes, tempo gasto revisando.
-3. **Falhas críticas** — cada falha: o que quebrou, severidade, correção aplicada (ou por que não corrigiu).
+A tabela abaixo é gerada pelo banco local do app, sem digitação. Uma tarefa agendada diária roda `python tools/dogfood-report.py --write`, que lê o banco só para leitura e refaz o bloco inteiro. Para ver sem gravar, rode o comando sem `--write`.
+
+Só entram números agregados, por dia local. Dias sem atividade não aparecem. Ruído é descartados ÷ decididos. Latência é captura até candidato; revisão é candidato até confirmação. As definições são as do Diagnóstico. MCP mostra as consultas do agente (total e respondidas); "—" quer dizer que o banco ainda não registra isso.
+
+<!-- dogfood:auto:start -->
+
+| Dia | Capturas | Candidatos | Confirmados | Descartados | Ruído | Auto | Desfeitos | Latência p50/p95 | Revisão p50/p95 | Injeções | Tokens | Omitidos | MCP | MCP respondidas | Perdas |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 2026-10-06 | 27 | 13 | 13 | 0 | 0% | 28 | 0 | 1.4 min / 1.8 min | 9 s / 56 s | 1 | 292 | 21 | — | — | 8 |
+| **Total (1 dia)** | 27 | 13 | 13 | 0 | 0% | 28 | 0 | 1.4 min / 1.8 min | 9 s / 56 s | 1 | 292 | 21 | — | — | 8 |
+
+Atualizado em 2026-10-06 12:07 (hora local).
+
+<!-- dogfood:auto:end -->
 
 ## Baseline de referência (teste automatizado — não é dogfood)
 
 Registrado em 2026-09-29 como ponto de partida: suíte completa verde (application 102, storage-sqlite 61, local-api 26, ai-provider 13+1, desktop 12, contracts 9+1, telemetry 13, domain 4, arch 11/12), deny 0, audit 0, E2Es (`jobs-recovery`, `capture-outbox`, `install-clean`) PASS. Métricas reais começam em zero quando a UI estiver disponível.
-
-## Diário da semana
-
-| Data | Latência p50/p95 (ms) | Revisão p50/p95 (ms) | Ruído (dismissed_ratio) | Perdas | Observações / atritos | Falha crítica? |
-| --- | --- | --- | --- | --- | --- | --- |
-| _(início: ____-__-__)`*`* | | | | | | |
-
-`*` A semana só começa quando houver UI utilizável (Inbox/Decisions) e ao menos uma sessão OpenCode real capturando.
 
 ## Falhas críticas
 
