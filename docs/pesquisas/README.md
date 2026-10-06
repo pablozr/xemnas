@@ -9,6 +9,7 @@ planos de `docs/roadmap/`.
 | Documento | Assunto | Status |
 | --- | --- | --- |
 | [sonho-consolidacao-da-memoria.md](sonho-consolidacao-da-memoria.md) | "Sonho": rodada periódica que junta duplicatas, resolve contradições, aposenta o envelhecido e descobre ligações e padrões; exportação no formato Agent Memory Repo | Aberta. Desenho e protocolo; nada implementado |
+| [ideias-de-virada.md](ideias-de-virada.md) | Com memória virando recurso nativo dos agentes: decisões como diagnósticos (LSP), repetições que viram regra, barramento entre agentes paralelos e contrato do repositório para agentes de fora | Aberta. Pesquisa e proposta; nada implementado nem medido |
 | [precisao-do-contexto.md](precisao-do-contexto.md) | Precisão do bloco entregue ao agente: evidência, diagnóstico, dez técnicas por custo, medição e plano | Em implementação. v3: 0,94 / 0,95; corpus v4 às cegas: 0,58 / 0,62; próximo passo, embeddings |
 | [busca-alem-do-lexico.md](busca-alem-do-lexico.md) | Depois da ponte PT/EN e antes dos embeddings: sementes pela menção, expansão do documento na extração, PageRank no grafo e o que fica de fora | Em implementação. Termos de busca como último recurso: 0,76 / 0,95 |
 | [embeddings-no-contexto.md](embeddings-no-contexto.md) | Modelo estático local (Model2Vec) como veto e resgate na seleção de contexto, medido no v4 selado | Aberta. `potion` e `e5-small` reprovados no v4 e no v5; segue o dogfood |
