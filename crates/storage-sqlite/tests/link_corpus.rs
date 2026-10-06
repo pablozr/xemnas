@@ -16,8 +16,12 @@ mod corpus;
 
 /// Floors of the first live run: raise them in the commit that improves the
 /// numbers (docs/arquitetura/qualidade-do-nucleo.md).
-const PRECISION_FLOOR: f64 = 0.85;
-const RECALL_FLOOR: f64 = 0.5;
+/// First live run (06/10/2026, gpt-5.6-luna): 0.71 / 0.75, 4 of 8 negatives
+/// linked, all decisions about the project rather than the code (publishing
+/// scope, ownership, naming, glossary). The prompt then said so: 0.93 / 0.88,
+/// 1 of 8. That rule came from these failures, so the gain is optimistic.
+const PRECISION_FLOOR: f64 = 0.93;
+const RECALL_FLOOR: f64 = 0.87;
 
 #[derive(Debug, Default, PartialEq)]
 struct Score {
@@ -137,9 +141,6 @@ fn the_scorer_rewards_the_labels_and_punishes_invented_links() {
 }
 
 #[test]
-#[ignore = "needs fixtures/link_corpus_answers.json, generated once by the live test in \
-            ai-provider/tests/link_suggestions_live.rs (requires the user's go-ahead); \
-            remove this attribute when the fixture is committed"]
 fn link_quality_gate() {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),

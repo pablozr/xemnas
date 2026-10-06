@@ -48,8 +48,11 @@ a description. Link the decision to a component only when the decision governs o
 that component's behavior or code: a rule, contract, policy, format or limit that the \
 component must follow or implements. Never link by shared vocabulary alone: a decision that \
 only mentions a word, a tool or a topic that a component also uses is not about that \
-component. Prefer no link over a weak one; an empty list is a good answer when you are not \
-sure. Give at most 3 links.\n\
+component. Decisions about the project rather than the code are not links even when they \
+name a component: who owns or approves changes, how things are named, published, packaged, \
+hosted or announced, and which words to use. Ask: would the component's code or behavior be \
+different if this decision were different? If not, do not link. Prefer no link over a weak \
+one; an empty list is a good answer when you are not sure. Give at most 3 links.\n\
 For each link give component_id exactly as listed (c1, c2, ...); quote: the words of the \
 decision, copied verbatim from its question, choice, why or scope, that tie it to the \
 component; and reason: one short sentence, in the language of the decision.\n\
