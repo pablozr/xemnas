@@ -479,9 +479,25 @@ where
         }
 
         let mut pack_claims = Vec::new();
+        // A standing rule tied to components applies only when the task
+        // touches one of them (files, mention or a decision of the pack).
+        let decision_ids: Vec<String> = decisions
+            .iter()
+            .map(|item| item.decision_id.clone())
+            .collect();
+        let out_of_scope = KnowledgeGraph::new(self.store.clone())
+            .claims_out_of_scope(
+                &request.project_id,
+                &task,
+                &files,
+                &decision_ids,
+                as_of.as_str(),
+            )
+            .map_err(graph_error)?;
         let standing = valid.values().filter(|claim| {
             !matched_claims.contains(claim.claim_id.as_str())
                 && matches!(claim.kind, ClaimKind::Constraint | ClaimKind::Convention)
+                && !out_of_scope.contains(&claim.claim_id)
         });
         let ordered = ranked_claims
             .iter()

@@ -448,10 +448,15 @@ where
 
         // Rules adopted from Revisão apply to the components their evidence
         // touched: suggested, like any derived edge.
-        let valid_claims: BTreeSet<String> = self
+        let claims = self
             .store
             .project_claims(project_id)
-            .map_err(|error| GraphError::Storage(error.to_string()))?
+            .map_err(|error| GraphError::Storage(error.to_string()))?;
+        // Claims derived from a decision follow its confirmed component ties
+        // (backfill for ties made before the claim or before this rule).
+        let ties = Self::decision_ties(&edges);
+        self.inherit_claim_scope(&mut edges, &claims, &ties, &now)?;
+        let valid_claims: BTreeSet<String> = claims
             .into_iter()
             .filter(|claim| claim.is_valid_at(&at))
             .map(|claim| claim.claim_id)

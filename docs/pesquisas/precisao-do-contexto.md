@@ -11,8 +11,8 @@ O corte relativo ao melhor resultado não mudou nenhum número no desenvolviment
 fora. A busca que o agente pede sob demanda é exploratória e não usa o corte.
 Passo 3: foco do grafo (num componente largo, itens que não falam da tarefa saem quando
 outros falam) levou a precisão a 0,70 (holdout 0,73). O caso que motivou a regra é do
-holdout, que nesse ponto deixa de ser prova independente. Regras com escopo ficam para
-quando o portão medir regras permanentes.
+holdout, que nesse ponto deixa de ser prova independente. Regras com escopo (técnica 6)
+foram feitas em 06/10/2026 (parágrafo abaixo).
 Passo 4: ponte PT/EN sem modelo (`crates/application/src/terms.rs`): remoção de acentos,
 plurais dos dois idiomas, terminações verbais do português, `-ing`/`-ed` do inglês e um
 glossário bilíngue de vocabulário geral de software; a busca de texto pede o radical como
@@ -29,6 +29,11 @@ PT/EN eram, na maior parte, ajuste ao v3; o próximo passo se decide pelo v4 e p
 levou o v4 a 0,67 / 0,60 / 4 e o `multilingual-e5-small` a 0,60 / 0,60 / 4, abaixo do
 aceite; nenhum entra. Corpus de calibração v5, também às cegas: 0,41 / 0,43 / 15 de 24, e
 nenhuma variante com vetor o melhora sem derrubar o v3.
+Técnica 6, regras com escopo (06/10/2026): uma regra permanente ligada a componentes
+(`applies_to`) só entra se a tarefa toca um deles (arquivo no padrão, menção no texto ou
+decisão do pacote ligada a ele); sem vínculo, continua global. Regras derivadas de uma decisão
+herdam os componentes dela ao confirmar o vínculo e na atualização do mapa. v3 com quatro
+famílias novas: 0,95 / 0,96 / 0 de 27 (antes 0,94 / 0,95 / 0); v4 e v5 inalterados; p95 2 ms.
 Ganho provavelmente otimista: falta um corpus v4 com holdout novo. A medição usa o portão de
 [qualidade do núcleo](../arquitetura/qualidade-do-nucleo.md).
 
@@ -91,7 +96,7 @@ casos negativos contaminados. De onde vem o ruído no corpus:
 | 3 | **Peso por campo no bm25**: a pergunta e a escolha valem mais que o motivo | `bm25(fts, w1, w2, w3)` do [FTS5](https://www.sqlite.org/fts5.html) | coincidências no texto longo do motivo | muito baixo | nenhum relevante |
 | 4 | **Radical das palavras PT e EN + glossário do projeto** ("cache"/"caching", "avaliação"/"evaluation") | Snowball em Rust ([rust-stemmers](https://docs.rs/rust-stemmers)); o `porter` do FTS5 é só inglês | consulta em inglês sobre decisão em português | baixo (crate pequena, sem modelo) | radical agressivo junta palavras diferentes; medir |
 | 5 | **Proximidade no grafo**: o que o grafo liga aos arquivos ou partes citadas na tarefa sobe; o que só tem coincidência de texto precisa de mais evidência | "node distance reranker" do [Graphiti/Zep](https://help.getzep.com/graphiti/working-with-data/searching); reforço de 10× a 50× por menção no [repo map do Aider](https://github.com/NousResearch/hermes-agent/issues/535) | ruído lexical; aproveita o grafo como centro da memória | baixo (o grafo e as menções já existem) | depende da qualidade dos vínculos |
-| 6 | **Regras com escopo**: regra permanente só entra quando o escopo bate com os arquivos da tarefa | regras por caminho do [Cursor](https://cursor.com/docs/rules) e do Claude Code ([comparação](https://dev.to/rulestack/how-cursor-claude-code-and-codex-actually-load-your-project-rules-and-why-yours-get-ignored-1l1j)) | orçamento gasto com regras sem relação | baixo | regra realmente global perde espaço; manter as marcadas como globais |
+| 6 | **Regras com escopo** (feita em 06/10/2026, ver abaixo): regra permanente só entra quando o escopo bate com os arquivos da tarefa | regras por caminho do [Cursor](https://cursor.com/docs/rules) e do Claude Code ([comparação](https://dev.to/rulestack/how-cursor-claude-code-and-codex-actually-load-your-project-rules-and-why-yours-get-ignored-1l1j)) | orçamento gasto com regras sem relação | baixo | regra realmente global perde espaço; manter as marcadas como globais |
 | 7 | **Busca híbrida com embeddings locais**, fundida por Reciprocal Rank Fusion (k=60) | [Cormack et al., 2009](https://bigdataboutique.com/blog/reciprocal-rank-fusion-how-it-works-and-when-to-use-it); modelos estáticos [Model2Vec](https://huggingface.co/minishlab/potion-multilingual-128M) (milissegundos em CPU) ou `multilingual-e5-small` via [fastembed-rs](https://docs.rs/fastembed) | sinônimos e paráfrases | médio (modelo de 30 a 120 MB, índice de vetores) | download, memória em 8 GB; build nativo já foi bloqueado no Windows ([metodologia](metodologia-benchmark-semantico.md)) |
 | 8 | **Reranker local (cross-encoder)** nos 10 a 20 primeiros | `bge-reranker-v2-m3` via fastembed-rs | ordem fina | alto (CPU por consulta) | latência; só se 1 a 7 não bastarem |
 | 9 | **Juiz de IA para ambiguidade** | já existe (router opcional, até 8 consultas por dia) | casos que nada local resolve | custo de API, opcional | latência e consentimento; continua opcional |
