@@ -9,7 +9,7 @@ use integration_contracts::capture::{artifact_fingerprint, CaptureEnvelope};
 use crate::clock::now_rfc3339;
 use crate::injection::strip_context_blocks;
 use crate::jobs::{JobRecord, JobState, ANALYZE_CAPTURE_KIND};
-use crate::projects::{canonicalize_location, ProjectRepository};
+use crate::projects::{find_project_by_directory, ProjectRepository};
 use crate::redact::{redact_json, redact_secrets};
 
 /// A persisted capture receipt.
@@ -219,14 +219,12 @@ where
         envelope: &CaptureEnvelope,
         idempotency_key: &str,
     ) -> Result<CaptureWrite, IngestError> {
-        let canonical_path = canonicalize_location(&envelope.project.canonical_path)
-            .map_err(|_| IngestError::Forbidden)?;
-        let project = self
-            .repository
-            .find_by_location(&canonical_path)
+        let project = find_project_by_directory(&self.repository, &envelope.project.canonical_path)
             .map_err(|error| IngestError::Storage(error.to_string()))?
             .ok_or(IngestError::Forbidden)?;
-        let _ = project;
+        // Receipts are keyed by the project's own location, so a worktree's
+        // captures read back with the project they belong to.
+        let canonical_path = project.location;
 
         let mut seen_ids = HashSet::new();
         for artifact in &envelope.artifacts {

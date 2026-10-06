@@ -170,6 +170,9 @@ pub fn canonicalize_location(location: &str) -> Result<String, ProjectError> {
 
 /// Finds the registered project for an agent's working directory, if any.
 ///
+/// A directory that is not registered still resolves to a project when it is
+/// a git worktree of the repository that project lives in.
+///
 /// # Errors
 ///
 /// `Storage` on query failure; an invalid or unregistered directory is `Ok(None)`.
@@ -177,10 +180,29 @@ pub fn find_project_by_directory<R: ProjectRepository + ?Sized>(
     repository: &R,
     directory: &str,
 ) -> Result<Option<ProjectRecord>, ProjectError> {
-    match canonicalize_location(directory) {
-        Ok(location) => repository.find_by_location(&location),
-        Err(_) => Ok(None),
+    find_project_with_identity(repository, crate::repo_identity::shared(), directory)
+}
+
+/// [`find_project_by_directory`] with an explicit repository identity port.
+pub fn find_project_with_identity<R: ProjectRepository + ?Sized>(
+    repository: &R,
+    identity: &dyn crate::repo_identity::RepoIdentity,
+    directory: &str,
+) -> Result<Option<ProjectRecord>, ProjectError> {
+    let Ok(location) = canonicalize_location(directory) else {
+        return Ok(None);
+    };
+    if let Some(record) = repository.find_by_location(&location)? {
+        return Ok(Some(record));
     }
+
+    let Some(common_dir) = identity.common_dir(&location) else {
+        return Ok(None);
+    };
+    Ok(repository
+        .list()?
+        .into_iter()
+        .find(|record| identity.common_dir(&record.location).as_deref() == Some(&common_dir)))
 }
 
 /// Project use cases over a [`ProjectRepository`].

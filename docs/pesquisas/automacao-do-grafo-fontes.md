@@ -185,7 +185,7 @@ O ADR-0005 descreve o comportamento implementado e deverá ser revisado no traba
 de implementação. Nenhuma destas mudanças já está entregue.
 
 O levantamento de mercado, custos e latência desta direção está em
-[memoria-semantica-local-first.md](memoria-semantica-local-first.md), com notas
+[memoria-semantica-local-first.md](busca-semantica-local.md), com notas
 específicas para runtimes, biblioteca de documentos e produtos existentes.
 
 ### Ordem de implementação proposta

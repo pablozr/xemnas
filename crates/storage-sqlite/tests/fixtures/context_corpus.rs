@@ -543,6 +543,61 @@ pub const FAMILIES: &[Family] = &[
         partial: &[],
         files: &[],
     },
+    // Scoped standing rule: the claim `scoped` applies to the `ledger`
+    // component only, so it counts as a topical item (required on its
+    // component, noise anywhere else).
+    Family {
+        name: "scoped-rule-by-files",
+        positive: true,
+        holdout: false,
+        queries: [
+            "Ajustar o módulo aberto",
+            "Adjust the open module",
+            "Ajustar o módulo aberto no editor do terminal",
+        ],
+        required: &["scoped"],
+        partial: &[],
+        files: &["crates/ledger/src/post.rs"],
+    },
+    Family {
+        name: "scoped-rule-by-mention",
+        positive: true,
+        holdout: false,
+        queries: [
+            "Reorganizar o ledger por mês",
+            "Reorganize the ledger by month",
+            "Reorganizar o ledger exibido no terminal",
+        ],
+        required: &["scoped"],
+        partial: &[],
+        files: &[],
+    },
+    Family {
+        name: "scoped-rule-elsewhere",
+        positive: true,
+        holdout: false,
+        queries: [
+            "Mexer neste módulo de entrega",
+            "Change this delivery module",
+            "Mexer neste módulo de entrega no terminal",
+        ],
+        required: &["outbox"],
+        partial: &[],
+        files: &["adapters/outbox/src/pending.rs"],
+    },
+    Family {
+        name: "scoped-rule-unrelated",
+        positive: false,
+        holdout: false,
+        queries: [
+            "Escolher a trilha sonora do jogo",
+            "Pick the game soundtrack",
+            "Escolher a trilha sonora tocada no terminal",
+        ],
+        required: &[],
+        partial: &[],
+        files: &[],
+    },
     Family {
         name: "marketing-translation",
         positive: false,
