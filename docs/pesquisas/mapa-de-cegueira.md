@@ -89,6 +89,8 @@ para gestão. Se um dia houver equipe, o mapa mostra componentes, não autores.
 
 ## Plano
 
+Detalhado no [estudo de implementação](implementacao-procurador-e-mapa.md).
+
 1. Classificador de engajamento sobre as capturas existentes e o portão (só backend).
 2. Agregado por componente e a previsão falsificável no dogfood: se não houver correlação,
    parar.

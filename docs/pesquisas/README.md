@@ -9,6 +9,7 @@ planos de `docs/roadmap/`.
 | Documento | Assunto | Status |
 | --- | --- | --- |
 | [sonho-consolidacao-da-memoria.md](sonho-consolidacao-da-memoria.md) | "Sonho": rodada periódica que junta duplicatas, resolve contradições, aposenta o envelhecido e descobre ligações e padrões; exportação no formato Agent Memory Repo | Aberta. Desenho e protocolo; nada implementado |
+| [implementacao-procurador-e-mapa.md](implementacao-procurador-e-mapa.md) | Onde o Procurador e o mapa de cegueira entram no código: sinais de turno, políticas de autonomia, livro em sombra, engajamento por captura, contratos e ordem de entrega | Aberta. Estudo de implementação; nada implementado |
 | [procurador.md](procurador.md) | Procurador: o Xemnas responde ao agente pela pessoa quando uma decisão confirmada cobre a pergunta; ganchos, casamento, escada de confiança e medição | Aberta. Desenho e protocolo; nada implementado |
 | [mapa-de-cegueira.md](mapa-de-cegueira.md) | Mapa de cegueira: código escrito por agentes sem conversa com a pessoa, por componente, priorizado por risco, com tour de compreensão | Aberta. Desenho e protocolo; nada implementado |
 | [ideias-de-virada.md](ideias-de-virada.md) | Com memória virando recurso nativo dos agentes: decisões como diagnósticos (LSP), repetições que viram regra, barramento entre agentes paralelos e contrato do repositório para agentes de fora | Aberta. Pesquisa e proposta; nada implementado nem medido |

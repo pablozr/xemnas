@@ -95,6 +95,9 @@ abre a pergunta, a decisão usada e a sessão.
 
 ## Plano
 
+O estudo de implementação ([implementação](implementacao-procurador-e-mapa.md)) substitui este
+plano: acrescenta a política de autonomia e a regra de exceção.
+
 1. Medir a dor antes de construir: nos transcripts reais, quantas perguntas por sessão, quanto
    tempo de espera e que fração parece coberta por decisões (com autorização do usuário).
 2. Captura dos pares pergunta → resposta como candidatos (útil mesmo sem o Procurador).
