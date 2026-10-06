@@ -8,6 +8,8 @@ use std::cell::{Cell, RefCell};
 
 use application::adoption::Adoption;
 use application::analysis::ExtractorFactory;
+use application::claims::{Claims, NewClaim};
+use application::context::{ContextPacks, ContextProvider, ContextRequest};
 use application::extract::{
     CandidateExtractor, CandidateProposal, DecisionCandidateRecord, DecisionEvidence, ExtractError,
     ExtractionStore, RelevanceSignal,
@@ -19,7 +21,8 @@ use application::profile::{
     build_preview, grant_consent, offline_default_profile, AiProfile, AiSettings, ProfileError,
     ProfileKind, ProfileStore, SecretStore,
 };
-use domain::entities::{EdgeKind, EntityKind};
+use domain::claims::ClaimKind;
+use domain::entities::{EdgeKind, EntityKind, NodeKind};
 use storage_sqlite::SqliteStore;
 
 struct Profiles(RefCell<AiProfile>);
@@ -332,6 +335,10 @@ fn a_rate_limit_defers_the_job() {
 
 /// A pending candidate of `p1` whose evidence cites `files`.
 fn candidate(store: &SqliteStore, id: &str, files: &[&str]) {
+    candidate_of_kind(store, id, files, "decision");
+}
+
+fn candidate_of_kind(store: &SqliteStore, id: &str, files: &[&str], kind: &str) {
     let files: Vec<String> = files.iter().map(|file| format!("\"{file}\"")).collect();
     store
         .insert_candidates(&[DecisionCandidateRecord {
@@ -351,7 +358,7 @@ fn candidate(store: &SqliteStore, id: &str, files: &[&str]) {
             dedup_hash: format!("dedup-{id}"),
             created_at: "2026-01-02T00:00:00Z".into(),
             updated_at: "2026-01-02T00:00:00Z".into(),
-            kind: "decision".into(),
+            kind: kind.into(),
             significance: 0.8,
             criteria: "[]".into(),
         }])
@@ -418,4 +425,193 @@ fn a_map_refresh_queues_the_untied_decisions_once() {
 
     graph.refresh_suggestions("p1").expect("again");
     assert_eq!(queued(&test, &untied), 1, "never queued twice");
+}
+
+const RULE: &str = "Render historical changesets only from frozen historical inputs";
+
+fn new_claim(kind: ClaimKind, statement: &str, source: Option<&str>) -> NewClaim {
+    NewClaim {
+        source_version: None,
+        qualifiers: Vec::new(),
+        project_id: "p1".into(),
+        kind,
+        statement: statement.into(),
+        valid_from: Some("2020-01-01".into()),
+        valid_until: None,
+        source_decision_id: source.map(str::to_string),
+    }
+}
+
+fn create_claim(
+    store: &SqliteStore,
+    kind: ClaimKind,
+    statement: &str,
+    source: Option<&str>,
+) -> String {
+    Claims::new(store.clone())
+        .create(new_claim(kind, statement, source))
+        .expect("claim")
+        .claim_id
+}
+
+/// A standing rule with no source decision.
+fn loose_rule(store: &SqliteStore, statement: &str) -> String {
+    create_claim(store, ClaimKind::Constraint, statement, None)
+}
+
+fn claim_edges(store: &SqliteStore, claim: &str) -> Vec<application::graph::EdgeRecord> {
+    store
+        .project_edges("p1")
+        .expect("edges")
+        .into_iter()
+        .filter(|edge| edge.source_kind == NodeKind::Claim && edge.source_id == claim)
+        .collect()
+}
+
+fn pack_claims(store: &SqliteStore, task: &str, files: &[&str]) -> Vec<String> {
+    ContextPacks::new(store.clone())
+        .build_pack(ContextRequest {
+            project_id: "p1".into(),
+            task: task.into(),
+            as_of: None,
+            budget_chars: Some(12_000),
+            files: files.iter().map(|file| (*file).into()).collect(),
+        })
+        .expect("pack")
+        .claims
+        .into_iter()
+        .map(|claim| claim.claim_id)
+        .collect()
+}
+
+#[test]
+fn an_adopted_rule_with_no_tie_queues_the_job_and_the_refresh_backfills_once() {
+    let test = support::open("rule-links-queue", &["p1"]);
+    component(&test.store, "engine", "packages/core/**");
+    candidate_of_kind(&test.store, "rule-adr", &["docs/adr/0013.md"], "rule");
+    candidate_of_kind(
+        &test.store,
+        "rule-code",
+        &["packages/core/src/lib.ts"],
+        "rule",
+    );
+    let adoption = Adoption::new(test.store.clone());
+
+    let loose = adoption.adopt("rule-adr", None, &[], &[]).expect("adopt");
+    assert!(loose.rule);
+    assert_eq!(queued(&test, &loose.id), 1, "no component tie");
+    let preview = adoption.preview("rule-code").expect("preview");
+    let tied = adoption
+        .adopt("rule-code", None, &preview.links, &[])
+        .expect("adopt");
+    assert_eq!(queued(&test, &tied.id), 0, "tied by its files");
+
+    // A rule that predates the job is queued by the refresh, once. A goal and
+    // a rule whose source decision has ties are not.
+    let store = &test.store;
+    let old = loose_rule(store, "Recusar avaliação sem histórico fechado");
+    let goal = create_claim(store, ClaimKind::Goal, "Chegar à versão 1", None);
+    let decision = support::decision(store, "p1", "d1", "Como gravar?", "Pela outbox");
+    let derived = create_claim(
+        store,
+        ClaimKind::Convention,
+        "Gravar pela outbox",
+        Some(&decision),
+    );
+    let graph = KnowledgeGraph::new(store.clone());
+    let outbox = component(store, "outbox", "adapters/outbox/**");
+    graph
+        .link(application::graph::LinkRequest {
+            kind: EdgeKind::Affects,
+            source_kind: NodeKind::Decision,
+            source_id: decision,
+            entity_id: outbox,
+        })
+        .expect("tie");
+    graph.refresh_suggestions("p1").expect("refresh");
+    graph.refresh_suggestions("p1").expect("again");
+    assert_eq!(queued(&test, &old), 1, "backfilled once");
+    assert_eq!(queued(&test, &goal), 0, "not a standing rule");
+    assert_eq!(queued(&test, &derived), 0, "inherits from its decision");
+    assert_eq!(queued(&test, &loose.id), 1, "never queued twice");
+}
+
+#[test]
+fn a_rule_without_a_decision_is_scoped_by_the_proposal_once_confirmed() {
+    let test = support::open("rule-links-scope", &["p1"]);
+    let store = &test.store;
+    let adapter = component(store, "opencode-adapter", "packages/opencode-adapter/**");
+    component(store, "testkit", "packages/testkit/**");
+    let rule = loose_rule(store, RULE);
+
+    // Global until the tie is confirmed.
+    let other = &["packages/testkit/src/a.ts"];
+    assert!(pack_claims(store, "ajustar testes", other).contains(&rule));
+
+    let (calls, asked) = (Cell::new(0), RefCell::new(Vec::new()));
+    let fixture = Fixture {
+        calls: &calls,
+        asked: &asked,
+    };
+    // Components are numbered by name: c1 = opencode-adapter, c2 = testkit.
+    let proposal = answer("c1", "only from frozen historical inputs");
+    let finder = fixture.finder(store, consented(), Ok(&proposal));
+    assert_eq!(finder.run(&rule).expect("links"), 1);
+    assert!(asked.borrow()[0].contains("Choice: Render historical changesets"));
+
+    let edges = claim_edges(store, &rule);
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0].kind, EdgeKind::AppliesTo);
+    assert_eq!(edges[0].entity_id, adapter);
+    assert!(edges[0].is_pending());
+    assert_eq!(
+        ai_link_quote(&edges[0].reason),
+        Some("only from frozen historical inputs")
+    );
+    let graph = KnowledgeGraph::new(store.clone());
+    let suggestion = graph
+        .suggestions("p1")
+        .expect("suggestions")
+        .into_iter()
+        .find(|suggestion| suggestion.source.node.id == rule)
+        .expect("the review sees the claim-sourced edge");
+    assert_eq!(suggestion.kind, EdgeKind::AppliesTo);
+
+    // No duplicate: a pending proposal is not asked again.
+    assert_eq!(finder.run(&rule).expect("again"), 0);
+    assert_eq!(calls.get(), 1);
+
+    graph.confirm(&edges[0].edge_id).expect("confirm");
+    let on_adapter = &["packages/opencode-adapter/src/render.ts"];
+    assert!(pack_claims(store, "ajustar o render", on_adapter).contains(&rule));
+    assert!(!pack_claims(store, "ajustar testes", other).contains(&rule));
+}
+
+#[test]
+fn an_invalidated_rule_edge_is_never_proposed_again() {
+    let test = support::open("rule-links-invalidated", &["p1"]);
+    let store = &test.store;
+    component(store, "opencode-adapter", "packages/opencode-adapter/**");
+    let rule = loose_rule(store, RULE);
+    let (calls, asked) = (Cell::new(0), RefCell::new(Vec::new()));
+    let fixture = Fixture {
+        calls: &calls,
+        asked: &asked,
+    };
+    let proposal = answer("c1", "only from frozen historical inputs");
+    let finder = fixture.finder(store, consented(), Ok(&proposal));
+    assert_eq!(finder.run(&rule).expect("links"), 1);
+
+    let edge = claim_edges(store, &rule).remove(0);
+    KnowledgeGraph::new(store.clone())
+        .invalidate(&edge.edge_id)
+        .expect("invalidate");
+    assert_eq!(finder.run(&rule).expect("again"), 0);
+    assert_eq!(claim_edges(store, &rule).len(), 1);
+    assert_eq!(calls.get(), 1, "asked once");
+
+    KnowledgeGraph::new(store.clone())
+        .refresh_suggestions("p1")
+        .expect("refresh");
+    assert_eq!(queued(&test, &rule), 0, "an asked rule is not queued again");
 }

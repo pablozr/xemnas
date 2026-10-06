@@ -315,7 +315,22 @@ where
         }
         // A new decision may depend on, conflict with or replace earlier ones:
         // a background job looks for that without holding the adoption.
-        if !confirmed.rule {
+        if confirmed.rule {
+            // A standing rule no file tied to the map asks the AI which
+            // components it governs, like a decision does.
+            let edges = self
+                .store
+                .project_edges(&project)
+                .map_err(AdoptionError::Graph)?;
+            let claim = ClaimStore::get_claim(&self.store, &confirmed.decision_id)
+                .map_err(|error| AdoptionError::Graph(GraphError::Storage(error.to_string())))?;
+            let at = domain::time::Timestamp::parse(&crate::clock::now_rfc3339());
+            if let (Some(claim), Some(at)) = (claim, at) {
+                if crate::link_suggestions::claim_needs_links(&edges, &claim, &at) {
+                    crate::link_suggestions::queue_link_job(&self.store, &claim.claim_id);
+                }
+            }
+        } else {
             let now = crate::clock::now_rfc3339();
             // Relations with earlier decisions and the context this one
             // states are looked for in the background.

@@ -36,7 +36,9 @@ exportação para Markdown ou JSON e uma revisão consultiva, sob demanda, que a
 entre decisões sem alterar nada.
 
 **Regras com escopo.** Uma regra ligada a componentes só vale quando a tarefa toca um deles.
-Sem ligação, vale para o projeto todo (`crates/application/src/graph/scope.rs`).
+Sem ligação, vale para o projeto todo (`crates/application/src/graph/scope.rs`), mas a IA propõe
+os componentes de uma regra sem ligação (e sem decisão de origem ligada) para a revisão
+confirmar.
 
 **Grafo e mapa.** Componentes e tecnologias do projeto, com os arquivos que cada um cobre e as
 decisões e regras ligadas a eles. Os componentes vêm do workspace declarado e dos arquivos que

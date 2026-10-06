@@ -1,5 +1,10 @@
 //! Links from an adopted decision to the map's components, proposed by the AI.
 //!
+//! A standing rule (a constraint or convention claim) with no component tie
+//! and no source decision with ties is asked the same way, so it is scoped
+//! like a decision instead of staying global: the job payload is then the
+//! claim id and the stored suggestion is a pending `applies_to` edge.
+//!
 //! A decision taken from an ADR, a spec or a conversation touches no file, so
 //! nothing ties it to the component it governs. When the decision gets no
 //! link from files or dependencies, a job asks the model which components of
@@ -11,11 +16,14 @@
 
 use std::collections::BTreeSet;
 
+use domain::claims::ClaimKind;
 use domain::entities::{EdgeKind, EdgeOrigin, EntityKind, NodeKind};
+use domain::time::Timestamp;
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::analysis::ExtractorFactory;
+use crate::claims::{ClaimRecord, ClaimStore};
 use crate::clock::now_rfc3339;
 use crate::decisions::{DecisionStatus, DecisionStore, StoredDecision};
 use crate::graph::{
@@ -100,6 +108,21 @@ pub struct LinkSubject {
 }
 
 impl LinkSubject {
+    /// The text of a standing claim as it will be sent: the statement as the
+    /// choice and the text of its qualifiers (scope, source...) as context.
+    pub fn of_claim(claim: &ClaimRecord) -> Self {
+        let qualifiers = crate::qualifiers::decode(&claim.qualifiers).unwrap_or_default();
+        Self {
+            question: String::new(),
+            choice: crate::external::protected_text(&claim.statement),
+            rationale: String::new(),
+            scope: qualifiers
+                .iter()
+                .map(|item| crate::external::limited_text(&item.text, MAX_TEXT_CHARS))
+                .collect(),
+        }
+    }
+
     /// The text of a stored decision as it will be sent.
     pub fn of(decision: &StoredDecision) -> Self {
         let scope: Vec<String> = serde_json::from_str(&decision.scope).unwrap_or_default();
@@ -146,10 +169,15 @@ pub fn candidate_components(entities: &[EntityRecord]) -> Vec<&EntityRecord> {
 
 /// The user message: the decision, then the components numbered `c1`, `c2`...
 pub fn link_request(subject: &LinkSubject, components: &[&EntityRecord]) -> String {
-    let mut user = format!(
-        "## Decision\nQuestion: {}\nChoice: {}\nWhy: {}\n",
-        subject.question, subject.choice, subject.rationale
-    );
+    let mut user = String::from("## Decision\n");
+    // A claim has only a statement: its empty fields are left out.
+    if !subject.question.is_empty() {
+        user.push_str(&format!("Question: {}\n", subject.question));
+    }
+    user.push_str(&format!("Choice: {}\n", subject.choice));
+    if !subject.rationale.is_empty() {
+        user.push_str(&format!("Why: {}\n", subject.rationale));
+    }
     for item in &subject.scope {
         user.push_str(&format!("Scope: {item}\n"));
     }
@@ -273,6 +301,32 @@ pub fn needs_links(edges: &[EdgeRecord], decision_id: &str) -> bool {
         })
 }
 
+/// Whether a standing rule still needs the AI's help to be scoped: a valid
+/// constraint or convention with no live tie of its own (mention suggestions
+/// are weak and do not count), never asked before, whose source decision, if
+/// any, has no ties or asks of its own to inherit from.
+pub fn claim_needs_links(edges: &[EdgeRecord], claim: &ClaimRecord, at: &Timestamp) -> bool {
+    if !matches!(claim.kind, ClaimKind::Constraint | ClaimKind::Convention)
+        || !claim.is_valid_at(at)
+    {
+        return false;
+    }
+    let own = edges.iter().any(|edge| {
+        edge.kind == EdgeKind::AppliesTo
+            && edge.source_kind == NodeKind::Claim
+            && edge.source_id == claim.claim_id
+            && (ai_link_quote(&edge.reason).is_some()
+                || (edge.is_live() && mention_quote(&edge.reason).is_none()))
+    });
+    if own {
+        return false;
+    }
+    claim
+        .source_decision_id
+        .as_deref()
+        .map_or(true, |decision| needs_links(edges, decision))
+}
+
 /// Decisions queued per map refresh, at most.
 pub const MAX_QUEUED_PER_REFRESH: usize = 50;
 
@@ -346,6 +400,39 @@ pub fn queue_untied<S: JobRepository>(
     queued
 }
 
+/// Queues the link job of every standing claim that [`claim_needs_links`] and
+/// that was never asked about, at most [`MAX_QUEUED_PER_REFRESH`] per call.
+/// Returns how many were queued.
+pub fn queue_untied_claims<S: JobRepository>(
+    store: &S,
+    claims: &[ClaimRecord],
+    edges: &[EdgeRecord],
+    components: usize,
+    at: &Timestamp,
+) -> usize {
+    if components == 0 {
+        return 0;
+    }
+    let untied: Vec<&ClaimRecord> = claims
+        .iter()
+        .filter(|claim| claim_needs_links(edges, claim, at))
+        .collect();
+    if untied.is_empty() {
+        return 0;
+    }
+    let asked = already_asked(store);
+    let mut queued = 0;
+    for claim in untied
+        .into_iter()
+        .filter(|claim| !asked.contains(&claim.claim_id))
+        .take(MAX_QUEUED_PER_REFRESH)
+    {
+        insert_link_job(store, &claim.claim_id);
+        queued += 1;
+    }
+    queued
+}
+
 /// Failures of a link search, for the job log.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinkFindError {
@@ -373,8 +460,17 @@ fn storage(error: impl std::fmt::Display) -> LinkFindError {
     LinkFindError::Storage(error.to_string())
 }
 
-/// The job: the components one adopted decision applies to, proposed by the
-/// model and stored as pending suggestions.
+/// What a link job is about: an adopted decision or a standing rule.
+struct Target {
+    project_id: String,
+    source_kind: NodeKind,
+    source_id: String,
+    edge_kind: EdgeKind,
+    subject: LinkSubject,
+}
+
+/// The job: the components one adopted decision, or one standing rule,
+/// applies to, proposed by the model and stored as pending suggestions.
 #[derive(Debug, Clone)]
 pub struct LinkFinder<S, P, K, F> {
     store: S,
@@ -384,7 +480,7 @@ pub struct LinkFinder<S, P, K, F> {
 
 impl<S, P, K, F> LinkFinder<S, P, K, F>
 where
-    S: DecisionStore + GraphStore,
+    S: DecisionStore + GraphStore + ClaimStore,
     P: ProfileStore,
     K: SecretStore,
     F: ExtractorFactory,
@@ -399,31 +495,65 @@ where
         }
     }
 
-    /// Asks the model about the decision and stores what survives the checks.
-    /// Returns how many suggestions were stored; 0 without an enabled
-    /// provider, without live components or when the decision already has
-    /// ties.
+    /// The decision or the claim of the job, with its project's edges, when
+    /// it still needs links.
+    fn target(&self, id: &str) -> Result<Option<(Target, Vec<EdgeRecord>)>, LinkFindError> {
+        if let Some(decision) = DecisionStore::get(&self.store, id).map_err(storage)? {
+            if decision.status != DecisionStatus::Accepted {
+                return Ok(None);
+            }
+            let edges = self
+                .store
+                .project_edges(&decision.project_id)
+                .map_err(storage)?;
+            if !needs_links(&edges, id) {
+                return Ok(None);
+            }
+            let target = Target {
+                subject: LinkSubject::of(&decision),
+                project_id: decision.project_id,
+                source_kind: NodeKind::Decision,
+                source_id: decision.decision_id,
+                edge_kind: EdgeKind::Affects,
+            };
+            return Ok(Some((target, edges)));
+        }
+        let Some(claim) = ClaimStore::get_claim(&self.store, id).map_err(storage)? else {
+            return Ok(None);
+        };
+        let edges = self
+            .store
+            .project_edges(&claim.project_id)
+            .map_err(storage)?;
+        let standing = Timestamp::parse(&now_rfc3339())
+            .is_some_and(|at| claim_needs_links(&edges, &claim, &at));
+        if !standing {
+            return Ok(None);
+        }
+        let target = Target {
+            subject: LinkSubject::of_claim(&claim),
+            project_id: claim.project_id,
+            source_kind: NodeKind::Claim,
+            source_id: claim.claim_id,
+            edge_kind: EdgeKind::AppliesTo,
+        };
+        Ok(Some((target, edges)))
+    }
+
+    /// Asks the model about the decision or rule and stores what survives the
+    /// checks. Returns how many suggestions were stored; 0 without an enabled
+    /// provider, without live components or when the item already has ties.
     ///
     /// # Errors
     ///
     /// `storage`, or `provider` when the call fails.
-    pub fn run(&self, decision_id: &str) -> Result<usize, LinkFindError> {
-        let Some(decision) = DecisionStore::get(&self.store, decision_id)
-            .map_err(storage)?
-            .filter(|decision| decision.status == DecisionStatus::Accepted)
-        else {
+    pub fn run(&self, id: &str) -> Result<usize, LinkFindError> {
+        let Some((target, mut edges)) = self.target(id)? else {
             return Ok(0);
         };
-        let mut edges = self
-            .store
-            .project_edges(&decision.project_id)
-            .map_err(storage)?;
-        if !needs_links(&edges, decision_id) {
-            return Ok(0);
-        }
         let entities = self
             .store
-            .project_entities(&decision.project_id)
+            .project_entities(&target.project_id)
             .map_err(storage)?;
         let components = candidate_components(&entities);
         if components.is_empty() {
@@ -441,11 +571,10 @@ where
         let Ok(model) = self.factory.authorized(&profile, secret, &self.settings) else {
             return Ok(0);
         };
-        let subject = LinkSubject::of(&decision);
         let answer = model
             .complete(
                 LINK_PROMPT,
-                &link_request(&subject, &components),
+                &link_request(&target.subject, &components),
                 "decision_links",
                 &link_schema(),
             )
@@ -457,23 +586,23 @@ where
             })?;
         let now = now_rfc3339();
         let mut stored = 0;
-        for link in parse_links(&answer, &subject, &components) {
+        for link in parse_links(&answer, &target.subject, &components) {
             // Any row for the same edge blocks it: pending, confirmed or
             // invalidated by a person.
             if edges.iter().any(|edge| {
-                edge.kind == EdgeKind::Affects
-                    && edge.source_kind == NodeKind::Decision
-                    && edge.source_id == decision.decision_id
+                edge.kind == target.edge_kind
+                    && edge.source_kind == target.source_kind
+                    && edge.source_id == target.source_id
                     && edge.entity_id == link.entity_id
             }) {
                 continue;
             }
             let record = EdgeRecord {
                 edge_id: uuid::Uuid::now_v7().to_string(),
-                project_id: decision.project_id.clone(),
-                kind: EdgeKind::Affects,
-                source_kind: NodeKind::Decision,
-                source_id: decision.decision_id.clone(),
+                project_id: target.project_id.clone(),
+                kind: target.edge_kind,
+                source_kind: target.source_kind,
+                source_id: target.source_id.clone(),
                 entity_id: link.entity_id,
                 origin: EdgeOrigin::Derived,
                 reason: ai_link_reason(&link.quote, &link.reason),
