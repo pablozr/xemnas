@@ -10,6 +10,7 @@ use application::{
 use serde_json::{json, Map, Value};
 
 use super::transcript::Turn;
+use super::worktree::Worktrees;
 
 /// Maximum UTF-8 bytes of one artifact content.
 pub const MAX_ARTIFACT_BYTES: usize = 64 * 1024;
@@ -25,6 +26,7 @@ pub const MAX_DIFF_BYTES: usize = 32 * 1024;
 pub fn build_envelope(
     session_id: &str,
     cwd: &str,
+    worktrees: &mut Worktrees,
     turn: &Turn,
     observed_at: String,
 ) -> Option<CaptureEnvelope> {
@@ -54,10 +56,11 @@ pub fn build_envelope(
     );
 
     // One block per edited file, in first-edit order; files outside the
-    // project are dropped, like `reducePatches` does.
+    // project (the cwd or a worktree of its repository) are dropped, like
+    // `reducePatches` does.
     let mut files: Vec<(String, String)> = Vec::new();
     for edit in &turn.edits {
-        let Some(file) = relative_inside(&edit.path, cwd) else {
+        let Some(file) = worktrees.relative(&edit.path) else {
             continue;
         };
         match files.iter_mut().find(|(known, _)| *known == file) {
@@ -229,7 +232,7 @@ mod tests {
     }
 
     fn build(turn: &Turn) -> Option<CaptureEnvelope> {
-        build_envelope("s1", CWD, turn, now_rfc3339())
+        build_envelope("s1", CWD, &mut Worktrees::new(CWD), turn, now_rfc3339())
     }
 
     fn kinds(envelope: &CaptureEnvelope) -> Vec<&'static str> {

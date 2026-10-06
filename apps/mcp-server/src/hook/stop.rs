@@ -29,6 +29,7 @@ use serde_json::Value;
 use super::deliver::{Outcome, Sender};
 use super::envelope::{build_envelope, now_rfc3339};
 use super::transcript::{scan, Turn};
+use super::worktree::Worktrees;
 
 /// Captures (turn groups) delivered per Stop; the rest waits for the next one.
 pub const MAX_TURNS_PER_STOP: usize = 20;
@@ -183,6 +184,7 @@ pub fn capture(
 
     let mut sender = Sender::new(&paths.runtime_dir, &paths.outbox_dir);
     let mut done = 0;
+    let mut worktrees = Worktrees::new(cwd);
     // A 403 means the directory is not a registered project; it will not become
     // one mid-run, so the remaining turns are passed over without a POST.
     let mut unregistered = false;
@@ -190,7 +192,9 @@ pub fn capture(
         let turn = &group.turn;
         if unregistered {
             report.skipped += 1;
-        } else if let Some(envelope) = build_envelope(session_id, cwd, turn, now_rfc3339()) {
+        } else if let Some(envelope) =
+            build_envelope(session_id, cwd, &mut worktrees, turn, now_rfc3339())
+        {
             match sender.send(&envelope) {
                 Outcome::Sent => report.sent += 1,
                 Outcome::Queued => report.queued += 1,
