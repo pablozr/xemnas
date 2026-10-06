@@ -655,20 +655,19 @@ mod tests {
 
     #[test]
     fn transient_failure_returns_the_item_to_pending() {
-        for error in [IngestError::Storage("busy".to_string())] {
-            let root = temporary_directory("transient");
-            let name = filename();
-            write_pending(&root, &name, &valid_envelope_json("key-1", "C:/proj"));
+        let root = temporary_directory("transient");
+        let name = filename();
+        write_pending(&root, &name, &valid_envelope_json("key-1", "C:/proj"));
 
-            let report = drain(&root, &FailingApi(error), RETENTION).expect("drain");
-            assert_eq!(report.accepted, 0);
-            assert_eq!(report.pending_remaining, 1);
-            assert!(root.join("pending").join(&name).exists());
-            assert!(!root.join("sending").join(&name).exists());
-            assert!(!root.join("rejected").join(&name).exists());
+        let error = IngestError::Storage("busy".to_string());
+        let report = drain(&root, &FailingApi(error), RETENTION).expect("drain");
+        assert_eq!(report.accepted, 0);
+        assert_eq!(report.pending_remaining, 1);
+        assert!(root.join("pending").join(&name).exists());
+        assert!(!root.join("sending").join(&name).exists());
+        assert!(!root.join("rejected").join(&name).exists());
 
-            let _ = fs::remove_dir_all(&root);
-        }
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
