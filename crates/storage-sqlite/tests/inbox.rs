@@ -373,6 +373,15 @@ fn exact_description_is_hidden_only_while_snapshot_is_verified_and_clean() {
             requested_at: "2026-01-02T00:00:00Z".into(),
         })
         .expect("dirty");
+    // A second schedule while the descriptive candidate is still marked
+    // dirty: the upsert must not turn the triggers' OR IGNORE into an abort.
+    store
+        .request_refresh(&RefreshRequest {
+            project_id: "project-1".into(),
+            capture_trigger: "reconciler".into(),
+            requested_at: "2026-01-02T00:00:01Z".into(),
+        })
+        .expect("a second refresh while candidates are marked");
     assert_eq!(
         store
             .nature_traces("project-1", 0, 10)
