@@ -697,6 +697,7 @@ fn seed_map(store: &SqliteStore) -> Result<(), Box<dyn std::error::Error>> {
         bytes: 4096,
         fingerprint: document_ref(path),
         indexed_at: "2026-09-29T18:00:00Z".into(),
+        source: None,
     })
     .collect::<Vec<_>>();
     store.replace_documents(PROJECT, &documents)?;

@@ -121,7 +121,8 @@ fn upgrade_33_to_34_preserves_legacy_artifacts_without_reconstructing_identity()
         "DROP TABLE capture_episode_sources;
         DROP TABLE decision_search_terms;
         DROP TABLE agent_queries;
-        DELETE FROM schema_migrations WHERE version IN (38, 39, 40, 41, 42, 43);",
+        ALTER TABLE project_documents DROP COLUMN source;
+        DELETE FROM schema_migrations WHERE version IN (38, 39, 40, 41, 42, 43, 44);",
     )
     .unwrap();
     db.execute(
@@ -167,7 +168,7 @@ fn upgrade_33_to_34_preserves_legacy_artifacts_without_reconstructing_identity()
         db.query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r
             .get::<_, i64>(0))
             .unwrap(),
-        43
+        44
     );
 }
 

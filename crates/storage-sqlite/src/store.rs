@@ -176,6 +176,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 43,
         sql: include_str!("migrations/0043_agent_queries.sql"),
     },
+    Migration {
+        version: 44,
+        sql: include_str!("migrations/0044_document_source.sql"),
+    },
 ];
 
 /// A single embedded schema migration.

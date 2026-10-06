@@ -541,6 +541,67 @@ strings! {
     reread { en: "Read again", pt: "Ler de novo", es: "Leer de nuevo", fr: "Relire",
         de: "Erneut lesen", it: "Rileggi", ja: "再読み込み", zh: "重新读取",
         ko: "다시 읽기", ru: "Прочитать заново" }
+    /// Button that imports one document from another worktree.
+    import_doc { en: "Import document…", pt: "Importar documento…",
+        es: "Importar documento…", fr: "Importer un document…",
+        de: "Dokument importieren…", it: "Importa documento…",
+        ja: "ドキュメントをインポート…", zh: "导入文档…", ko: "문서 가져오기…",
+        ru: "Импортировать документ…" }
+    /// Label of the import button.
+    import_doc_aria { en: "Import one document from this repository, including another worktree",
+        pt: "Importar um documento deste repositório, inclusive de outro worktree",
+        es: "Importar un documento de este repositorio, incluso de otro worktree",
+        fr: "Importer un document de ce dépôt, y compris d’un autre worktree",
+        de: "Ein Dokument aus diesem Repository importieren, auch aus einem anderen Worktree",
+        it: "Importa un documento da questo repository, anche da un altro worktree",
+        ja: "このリポジトリのドキュメントを1件インポート（別のワークツリーも可）",
+        zh: "导入此仓库中的一个文档（包括其他工作树）",
+        ko: "이 저장소의 문서 하나 가져오기 (다른 워크트리 포함)",
+        ru: "Импортировать один документ из этого репозитория, в том числе из другого worktree" }
+    /// Confirm button of the system file picker.
+    import_doc_prompt { en: "Import", pt: "Importar", es: "Importar", fr: "Importer",
+        de: "Importieren", it: "Importa", ja: "インポート", zh: "导入", ko: "가져오기",
+        ru: "Импортировать" }
+    /// Error when the chosen file cannot be read.
+    import_unavailable { en: "Could not read that file.",
+        pt: "Não foi possível ler esse arquivo.", es: "No se pudo leer ese archivo.",
+        fr: "Impossible de lire ce fichier.", de: "Diese Datei konnte nicht gelesen werden.",
+        it: "Impossibile leggere quel file.", ja: "そのファイルを読み込めませんでした。",
+        zh: "无法读取该文件。", ko: "그 파일을 읽지 못했어요.",
+        ru: "Не удалось прочитать этот файл." }
+    /// Error when the chosen file is not in the project's repository.
+    import_outside { en: "That file is not in this project or in a worktree of the same repository.",
+        pt: "Esse arquivo não está neste projeto nem em um worktree do mesmo repositório.",
+        es: "Ese archivo no está en este proyecto ni en un worktree del mismo repositorio.",
+        fr: "Ce fichier n’est ni dans ce projet ni dans un worktree du même dépôt.",
+        de: "Diese Datei liegt weder in diesem Projekt noch in einem Worktree desselben Repositorys.",
+        it: "Quel file non è in questo progetto né in un worktree dello stesso repository.",
+        ja: "そのファイルはこのプロジェクトにも、同じリポジトリのワークツリーにもありません。",
+        zh: "该文件不在此项目中，也不在同一仓库的工作树中。",
+        ko: "그 파일은 이 프로젝트나 같은 저장소의 워크트리에 있지 않아요.",
+        ru: "Этот файл не относится к проекту или к worktree того же репозитория." }
+    /// Error when the chosen file is not documentation.
+    import_not_document { en: "Only documentation files can be imported: Markdown, reST, AsciiDoc, or text inside docs/.",
+        pt: "Só dá para importar documentação: Markdown, reST, AsciiDoc ou texto dentro de docs/.",
+        es: "Solo se puede importar documentación: Markdown, reST, AsciiDoc o texto dentro de docs/.",
+        fr: "Seuls les fichiers de documentation peuvent être importés : Markdown, reST, AsciiDoc ou texte dans docs/.",
+        de: "Nur Dokumentation lässt sich importieren: Markdown, reST, AsciiDoc oder Text in docs/.",
+        it: "Si può importare solo documentazione: Markdown, reST, AsciiDoc o testo dentro docs/.",
+        ja: "インポートできるのはドキュメントのみです：Markdown、reST、AsciiDoc、docs/ 内のテキスト。",
+        zh: "只能导入文档：Markdown、reST、AsciiDoc，或 docs/ 中的文本。",
+        ko: "문서만 가져올 수 있어요: Markdown, reST, AsciiDoc 또는 docs/ 안의 텍스트.",
+        ru: "Можно импортировать только документацию: Markdown, reST, AsciiDoc или текст внутри docs/." }
+    /// Error when the chosen file is binary or too large.
+    import_not_text { en: "That file is not UTF-8 text or is larger than 512 KB.",
+        pt: "Esse arquivo não é texto UTF-8 ou passa de 512 KB.",
+        es: "Ese archivo no es texto UTF-8 o supera 512 KB.",
+        fr: "Ce fichier n’est pas du texte UTF-8 ou dépasse 512 Ko.",
+        de: "Diese Datei ist kein UTF-8-Text oder größer als 512 KB.",
+        it: "Quel file non è testo UTF-8 o supera 512 KB.",
+        ja: "そのファイルは UTF-8 テキストではないか、512 KB を超えています。",
+        zh: "该文件不是 UTF-8 文本，或超过 512 KB。",
+        ko: "그 파일은 UTF-8 텍스트가 아니거나 512KB를 넘어요.",
+        ru: "Этот файл не в кодировке UTF-8 или больше 512 КБ." }
     /// Header of the documents page when nothing was read.
     no_documents_read { en: "No documents read yet.", pt: "Nenhum documento lido ainda.",
         es: "Aún no se ha leído ningún documento.", fr: "Aucun document lu pour l’instant.",
@@ -1061,6 +1122,11 @@ formats! {
         zh: "已读取文档：{total} 个，其中 {changed} 个有变化。",
         ko: "문서를 읽었어요: {total}개, {changed}개 변경됨.",
         ru: "Документация прочитана: {total}, изменений: {changed}." }
+    /// Notice after importing one document.
+    document_imported(path: &str) { en: "Imported {path}.", pt: "{path} importado.",
+        es: "{path} importado.", fr: "{path} importé.", de: "{path} importiert.",
+        it: "{path} importato.", ja: "{path} をインポートしました。", zh: "已导入 {path}。",
+        ko: "{path}을(를) 가져왔어요.", ru: "Импортировано: {path}." }
     /// Error when the typed budget is out of range.
     budget_out_of_range(min: usize, max: usize) {
         en: "Use a number between {min} and {max} tokens.",

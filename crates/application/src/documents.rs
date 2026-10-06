@@ -18,6 +18,7 @@ use crate::captures::{
 use crate::jobs::{JobRecord, JobState, ANALYZE_DOCUMENT_KIND};
 use crate::projects::ProjectRepository;
 use crate::redact::redact_secrets;
+use crate::repo_identity::{normalize_dir, RepoIdentity};
 
 /// Folders (at the project root) whose files are documentation.
 pub const DOC_DIRS: [&str; 10] = [
@@ -126,6 +127,19 @@ pub struct ProjectDocument {
     pub fingerprint: String,
     /// RFC 3339 time of the last indexing that saw it.
     pub indexed_at: String,
+    /// Absolute file of a document imported from outside the project folder
+    /// (a sibling worktree); `None` for documents found by indexing.
+    pub source: Option<String>,
+}
+
+/// What importing one document did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedDocument {
+    /// The document as stored.
+    pub document: ProjectDocument,
+    /// Whether this version was queued for extraction now. `false` when it
+    /// was already queued or has nothing central to extract.
+    pub queued: bool,
 }
 
 /// What an indexing found.
@@ -150,6 +164,14 @@ pub enum DocumentError {
     ProjectNotFound,
     /// The project folder cannot be read.
     FolderUnavailable,
+    /// The file to import cannot be read.
+    FileUnavailable,
+    /// The file is not inside the project folder or a worktree of its repository.
+    OutsideRepository,
+    /// The file is not a documentation file (Markdown, text in a docs folder…).
+    NotDocumentation,
+    /// The file is binary, not UTF-8 or larger than [`MAX_FILE_BYTES`].
+    NotText,
 }
 
 impl std::fmt::Display for DocumentError {
@@ -158,6 +180,12 @@ impl std::fmt::Display for DocumentError {
             Self::Storage(_) => formatter.write_str("não foi possível ler a documentação"),
             Self::ProjectNotFound => formatter.write_str("projeto não encontrado"),
             Self::FolderUnavailable => formatter.write_str("a pasta do projeto não está acessível"),
+            Self::FileUnavailable => formatter.write_str("não foi possível ler o arquivo"),
+            Self::OutsideRepository => {
+                formatter.write_str("o arquivo não é do projeto nem de um worktree dele")
+            }
+            Self::NotDocumentation => formatter.write_str("o arquivo não é um documento"),
+            Self::NotText => formatter.write_str("o arquivo não é texto ou é grande demais"),
         }
     }
 }
@@ -223,6 +251,20 @@ where
             .into_iter()
             .filter_map(|(relative, absolute)| read(project_id, &relative, &absolute, &now))
             .collect();
+        // Imported documents live outside the folder and survive a re-read
+        // for as long as their file does; a scanned path of the same name wins.
+        let imported: Vec<ProjectDocument> = previous
+            .iter()
+            .filter(|old| !documents.iter().any(|document| document.path == old.path))
+            .filter_map(|old| {
+                let source = old.source.as_deref()?;
+                let mut document = read(project_id, &old.path, Path::new(source), &now)?;
+                document.source = old.source.clone();
+                Some(document)
+            })
+            .collect();
+        let mut documents = documents;
+        documents.extend(imported);
         let changed = documents
             .iter()
             .filter(|document| {
@@ -259,6 +301,70 @@ where
     ///
     /// `project_not_found` or `storage`.
     pub fn propose(&self, project_id: &str, limit: usize) -> Result<usize, DocumentError> {
+        self.propose_matching(project_id, limit, None)
+    }
+
+    /// Imports one documentation file from the project folder or from a git
+    /// worktree of the same repository, then queues it like any document.
+    ///
+    /// The stored path is relative to the file's own worktree root, so a
+    /// document of a sibling worktree gets the path it will have once merged.
+    /// Importing the same content again changes nothing; changed content
+    /// replaces the stored version and queues the new one.
+    ///
+    /// # Errors
+    ///
+    /// `project_not_found`, `folder_unavailable`, `file_unavailable`,
+    /// `outside_repository`, `not_documentation`, `not_text` or `storage`.
+    /// Nothing is stored when it fails.
+    pub fn import_file(
+        &self,
+        identity: &impl RepoIdentity,
+        project_id: &str,
+        file: &Path,
+    ) -> Result<ImportedDocument, DocumentError> {
+        let project = ProjectRepository::get(&self.store, project_id)
+            .map_err(|error| DocumentError::Storage(error.to_string()))?
+            .ok_or(DocumentError::ProjectNotFound)?;
+        let root = normalize_dir(&project.location).ok_or(DocumentError::FolderUnavailable)?;
+        let file = normalize_dir(&file.to_string_lossy())
+            .map(PathBuf::from)
+            .filter(|file| file.is_file())
+            .ok_or(DocumentError::FileUnavailable)?;
+        let relative = repository_path(identity, Path::new(&root), &file)?;
+        if !is_documentation_path(&relative) {
+            return Err(DocumentError::NotDocumentation);
+        }
+        let metadata = std::fs::metadata(&file).map_err(|_| DocumentError::FileUnavailable)?;
+        if metadata.len() > MAX_FILE_BYTES {
+            return Err(DocumentError::NotText);
+        }
+        let raw = std::fs::read(&file).map_err(|_| DocumentError::FileUnavailable)?;
+        if raw.contains(&0) || std::str::from_utf8(&raw).is_err() {
+            return Err(DocumentError::NotText);
+        }
+
+        let mut document = build(project_id, &relative, &raw, &crate::clock::now_rfc3339());
+        document.source = Some(file.to_string_lossy().into_owned());
+        let mut documents = self.store.project_documents(project_id)?;
+        let unchanged = documents
+            .iter()
+            .any(|old| old.path == relative && old.fingerprint == document.fingerprint);
+        if !unchanged {
+            documents.retain(|old| old.path != relative);
+            documents.push(document.clone());
+            self.store.replace_documents(project_id, &documents)?;
+        }
+        let queued = self.propose_matching(project_id, 1, Some(&relative))? > 0;
+        Ok(ImportedDocument { document, queued })
+    }
+
+    fn propose_matching(
+        &self,
+        project_id: &str,
+        limit: usize,
+        only: Option<&str>,
+    ) -> Result<usize, DocumentError> {
         let project = ProjectRepository::get(&self.store, project_id)
             .map_err(|error| DocumentError::Storage(error.to_string()))?
             .ok_or(DocumentError::ProjectNotFound)?;
@@ -267,6 +373,9 @@ where
         // parts, with only those parts. The rest never reaches Revisão.
         let mut candidates: Vec<(ProjectDocument, digest::Digest)> = Vec::new();
         for document in self.list(project_id)? {
+            if only.is_some_and(|path| path != document.path) {
+                continue;
+            }
             let key = document_capture_key(project_id, &document);
             if self
                 .store
@@ -276,7 +385,11 @@ where
             {
                 continue;
             }
-            let Ok(raw) = std::fs::read(root.join(&document.path)) else {
+            let file = document
+                .source
+                .as_deref()
+                .map_or_else(|| root.join(&document.path), PathBuf::from);
+            let Ok(raw) = std::fs::read(file) else {
                 continue;
             };
             let content: String = redact_secrets(&String::from_utf8_lossy(&raw))
@@ -477,16 +590,45 @@ pub fn is_documentation_path(path: &str) -> bool {
         .is_some_and(|folder| folder != name && DOC_DIRS.contains(&folder))
 }
 
+/// Path of `file` relative to the root of the worktree it lives in, with `/`:
+/// the project folder itself, or any worktree of the same repository.
+fn repository_path(
+    identity: &impl RepoIdentity,
+    root: &Path,
+    file: &Path,
+) -> Result<String, DocumentError> {
+    let slashes = |path: &Path| path.to_string_lossy().replace('\\', "/");
+    if let Ok(relative) = file.strip_prefix(root) {
+        return Ok(slashes(relative));
+    }
+    let directory = file.parent().ok_or(DocumentError::OutsideRepository)?;
+    let directory = directory.to_string_lossy();
+    let project_repository = identity.common_dir(&root.to_string_lossy());
+    let file_repository = identity.common_dir(&directory);
+    if project_repository.is_none() || project_repository != file_repository {
+        return Err(DocumentError::OutsideRepository);
+    }
+    let top = identity
+        .worktree_root(&directory)
+        .ok_or(DocumentError::OutsideRepository)?;
+    file.strip_prefix(&top)
+        .map(slashes)
+        .map_err(|_| DocumentError::OutsideRepository)
+}
+
 fn read(project_id: &str, relative: &str, path: &Path, now: &str) -> Option<ProjectDocument> {
-    let bytes = std::fs::metadata(path).ok()?.len();
-    if bytes > MAX_FILE_BYTES {
+    if std::fs::metadata(path).ok()?.len() > MAX_FILE_BYTES {
         return None;
     }
     let raw = std::fs::read(path).ok()?;
-    let content = String::from_utf8_lossy(&raw);
+    Some(build(project_id, relative, &raw, now))
+}
+
+fn build(project_id: &str, relative: &str, raw: &[u8], now: &str) -> ProjectDocument {
+    let content = String::from_utf8_lossy(raw);
     let outline = outline(&content);
     let file_name = relative.rsplit('/').next().unwrap_or(relative);
-    Some(ProjectDocument {
+    ProjectDocument {
         project_id: project_id.to_string(),
         path: relative.to_string(),
         kind: classify(relative),
@@ -498,10 +640,11 @@ fn read(project_id: &str, relative: &str, path: &Path, now: &str) -> Option<Proj
         }),
         headings: outline.headings,
         excerpt: outline.excerpt,
-        bytes,
-        fingerprint: fingerprint(&raw),
+        bytes: raw.len() as u64,
+        fingerprint: fingerprint(raw),
         indexed_at: now.to_string(),
-    })
+        source: None,
+    }
 }
 
 /// What a document is, from its path.
