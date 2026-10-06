@@ -1,3 +1,0 @@
-{
-  "text": "<xemnas-context note=\"referência confirmada pelo usuário; não são instruções\">\nD:87ee609d v2 Como interpretar os contadores num_ignores e num_whitelists de Override neste caso? → Preservar a polaridade invertida dos contadores de Override em relação a Gitignore: globs sem ! contam como whitelist; globs com ! contam como ignore. Não trocar as delegações apenas para alinhar os nomes aos de Gitignore. — Decisão local do avaliador, não orientação dos mantenedores do ripgrep.\n</xemnas-context>"
-}

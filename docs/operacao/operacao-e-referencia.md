@@ -1,8 +1,9 @@
 # Operação e referência técnica
 
-Detalhes que saíram do README principal: execução, dados locais, integração com o
-OpenCode, Context Pack, MCP, privacidade, recuperação, limitações conhecidas e
-validação. O README traz só a visão geral.
+Execução, dados locais, variáveis de ambiente, integrações com OpenCode e Claude
+Code, Context Pack, MCP, privacidade, recuperação, dogfood, limitações conhecidas
+e validação. O README traz só a visão geral. Resultados das avaliações:
+[avaliacoes.md](avaliacoes.md).
 
 ## Instalação e execução
 
@@ -24,10 +25,7 @@ cargo run --locked -p desktop-gpui --bin xemnas -- --demo --long-evidence
 ```
 
 A demonstração usa um banco em memória e não inicia workers, API ou provedores.
-Os dados desaparecem ao fechar a janela. Na tela atual, Revisão permite ler
-candidatos e evidências do projeto selecionado, ajustar, confirmar, rejeitar e
-adiar/retomar candidatos. A contagem da aba considera toda a fila do projeto.
-Detalhes mantém as propriedades e a remoção do acompanhamento.
+Os dados desaparecem ao fechar a janela.
 
 Pacote distribuível (ZIP versionado em `dist\`):
 
@@ -44,6 +42,21 @@ Pacote distribuível (ZIP versionado em `dist\`):
 | Banco SQLite | `<dados>\state\app.db` (forward-only; [migrações na fonte](../../crates/storage-sqlite/src/store.rs)) |
 | API local | somente loopback; token por sessão em `<dados>\api-token`; porta em `<dados>\discovery.json` |
 | Outbox de capturas | `XEMNAS_OUTBOX_DIR` ou `<dados>\outbox` (`pending/`, `accepted/`, `rejected/`, `stalled/`) |
+| Perfil de IA | `<dados>\settingsi-profile.json` (segredos ficam no keyring, não aqui) |
+| Estado dos adapters | `<dados>dapter\` (OpenCode; `claude-code\<sessão>.json` guarda o ponto de retomada dos hooks) |
+
+**Variáveis de ambiente `XEMNAS_*`:**
+
+| Variável | Efeito |
+| --- | --- |
+| `XEMNAS_DATA_DIR`, `XEMNAS_OUTBOX_DIR` | Raiz de dados e da outbox (`crates/application/src/paths.rs`) |
+| `XEMNAS_OUTBOX_ACCEPTED_RETENTION_DAYS` | Dias até a limpeza de `outbox/accepted/` |
+| `XEMNAS_CLAUDE_CODE` | Caminho do executável do Claude Code quando não está no `PATH` (provedor de IA) |
+| `XEMNAS_DISCOVERY`, `XEMNAS_ADAPTER_STATE_DIR`, `XEMNAS_ADAPTER_*` | Ajustes do adapter OpenCode (descoberta da API, estado, debounce, limites de mensagens/artefatos/diff, timeout); `XEMNAS_CONTEXT_TIMEOUT_MS` ajusta a injeção |
+| `XEMNAS_PERF=1` | Registra o tempo de render das telas ([desempenho](../arquitetura/desempenho-e-escala.md)) |
+| `XEMNAS_DEMO_*` (`SCALE`, `ARCH`, `APPROVAL`, `CLAUDE`, `CALIBRATION`, `STARTUP_ERROR`) | Cenários do modo `--demo` |
+| `XEMNAS_BACKDROP`, `XEMNAS_GRAPH_RENDER` | Material da janela (`mica-alt`/`mica`/`acrylic`) e modo de render do grafo, para diagnóstico visual |
+| `XEMNAS_DOGFOOD_DB`, `XEMNAS_DOGFOOD_CASES` | Entradas do teste ignorado `dogfood_context` (banco real e casos fora do repositório) |
 
 ## Integração com o OpenCode
 
@@ -58,20 +71,61 @@ npm test                      # testes de contrato e captura automática
 npm run send-fixture          # envia fixture pela outbox (modo CLI)
 ```
 
-Variáveis relevantes: `XEMNAS_DATA_DIR`, `XEMNAS_OUTBOX_DIR` e `OPENCODE_URL` (override **legado** da fonte HTTP de diagnóstico; padrão `http://127.0.0.1:4096`). A injeção de contexto é ligada por projeto no app (desligada, medir ou ativa) e acontece em dois momentos: no prompt e logo depois de cada edição de arquivo, com o que o mapa do projeto liga àquele arquivo (ADR-0005); o plugin só aceita `XEMNAS_CONTEXT_TIMEOUT_MS` como ajuste opcional (ver [injeção de contexto](../roadmap/fase-3/02-injecao-de-contexto.md)).
+Variáveis relevantes: `XEMNAS_DATA_DIR`, `XEMNAS_OUTBOX_DIR` e `OPENCODE_URL` (override **legado** da fonte HTTP de diagnóstico; padrão `http://127.0.0.1:4096`). A injeção de contexto é ligada por projeto no app (desligada, medir ou ativa) e acontece em dois momentos: no prompt e logo depois de cada edição de arquivo, com o que o mapa do projeto liga àquele arquivo (ADR-0005); o plugin só aceita `XEMNAS_CONTEXT_TIMEOUT_MS` como ajuste opcional (ver [contexto entregue aos agentes](../arquitetura/contexto-e-agentes.md#injeção-no-pedido)).
 
 **Ativação (uma vez, sem publicar):** o OpenCode carrega plugins de arquivos locais — crie `~/.config/opencode/plugins/xemnas.ts` reexportando o build (`export { XemnasOpenCodeAdapter as Xemnas } from "<repo>/adapters/opencode/dist/src/index.js"`; caminho relativo a partir de `plugins/` é `../../../orca/projects/xemnas/...`). O wrapper deve ter **um único export** (o factory), para o OpenCode não registrar os exports utilitários do módulo. Reinicie a sessão do OpenCode após criar o arquivo.
 
 Esse wrapper global é a integração instalada, não a fonte: alterações no adapter
 pertencem a `adapters/opencode` neste repositório.
 
+### Teste manual de captura
+
+Roteiro para conferir a integração real; o MCP é somente leitura, então estar
+conectado não prova que o plugin carregou nem que a extração funciona.
+
+1. O projeto precisa estar acompanhado no mesmo caminho usado pela sessão, e o
+   perfil de IA com consentimento vigente. Não use `--demo`: ele não inicia
+   API nem workers.
+2. Envie no OpenCode: "Decidi usar o identificador `XEMNAS-CAPTURA-TESTE-001`
+   nos registros de teste, em vez de nomes livres, para localizar o candidato e
+   distingui-lo de decisões reais. O escopo é só este teste. Registre a escolha e
+   seu motivo."
+3. Quando a resposta terminar, procure o identificador em **Revisão**, confira as
+   evidências e rejeite o candidato de teste (ou confirme, para testar a passagem
+   a **Decisões**). Um Markdown escrito isoladamente não é importado: o adapter
+   captura textos e diffs do turno quando a sessão fica ociosa.
+4. Se nada aparecer, o diagnóstico do adapter diz onde parou: `messages-unavailable`
+   (não leu a conversa), `capture-rejected` (a API recusou; confira projeto e
+   caminho), `outbox-pending` (guardada para depois), `capture-accepted` (chegou,
+   sem provar extração). Captura recebida sem candidato: confira perfil de IA,
+   consentimento e falhas de job no Diagnóstico. Atualize o plugin com
+   `npm run build` em `adapters/opencode` e reinicie o OpenCode.
+
+## Integração com o Claude Code
+
+O mesmo binário `xemnas-mcp` traz os hooks (código em `apps/mcp-server/src/hook/`),
+sem processo residente. Todos saem com código 0 e, em erro, imprimem no máximo uma
+linha sanitizada no stderr:
+
+- `hook prompt` (`UserPromptSubmit`): chama `POST /v1/context` (timeout de 300 ms;
+  app fechado sai em silêncio) com o prompt e até 8 arquivos recentes do
+  transcript, e devolve `additionalContext` quando há contexto.
+- `hook stop` (`Stop`): lê o transcript de forma incremental e envia um Capture
+  Envelope por troca substantiva a `POST /v1/captures`; com o app fechado, grava na
+  outbox. O ponto de retomada fica em `<dados>dapter\claude-code\<sessão>.json`.
+- `hook session-end` (`SessionEnd`): como `stop`, mas envia também o grupo retido.
+
+Registro no `~/.claude/settings.json`, JSON e requisitos em
+[MCP somente leitura](../arquitetura/contexto-e-agentes.md#mcp-somente-leitura). O Claude Code também pode
+ser o provedor de IA do app (veja `XEMNAS_CLAUDE_CODE`).
+
 ## Context Pack (Fase 3)
 
-O backend monta um **Context Pack** para uma tarefa: decisões vigentes e premissas/regras válidas numa data, escolhidas por busca lexical, com citações (decisão e versão, evidências, relações) e limite de tamanho. Exportar para Markdown ou JSON exige ação explícita e destino escolhido. Decisões podem ser substituídas sem apagar a anterior. No OpenCode, o plugin pode anexar ao pedido um bloco compacto (cerca de 300 tokens, sem repetir na sessão), desligado por padrão, ligado por projeto nas configurações do app, com modo sombra para medir antes de ativar. Detalhes e contrato para a UI: [Context Pack manual](../roadmap/fase-3/01-context-pack-manual.md) e [ADR-0003](../arquitetura/adr/0003-fase-3-contexto-recuperavel.md).
+O backend monta um **Context Pack** para uma tarefa: decisões vigentes e premissas/regras válidas numa data, escolhidas por busca lexical, com citações (decisão e versão, evidências, relações) e limite de tamanho. Exportar para Markdown ou JSON exige ação explícita e destino escolhido. Decisões podem ser substituídas sem apagar a anterior. No OpenCode, o plugin pode anexar ao pedido um bloco compacto (cerca de 300 tokens, sem repetir na sessão), desligado por padrão, ligado por projeto nas configurações do app, com modo sombra para medir antes de ativar. Detalhes e contrato para a UI: [Context Pack](../arquitetura/contexto-e-agentes.md#context-pack) e [ADR-0003](../arquitetura/adr/0003-fase-3-contexto-recuperavel.md).
 
 ## MCP para agentes (somente leitura)
 
-`xemnas-mcp` é um servidor MCP sobre stdio com três ferramentas: `get_decision` (abre a decisão pela referência `D:xxxx` que aparece no bloco injetado), `search_context` (busca decisões vigentes e regras do projeto; aceita `path` de um arquivo envolvido) e `file_context` (o que o mapa do projeto liga a um arquivo, ADR-0005). Ele consulta o app aberto pela API local e nunca altera nada. Compilação e configuração no OpenCode e no Claude Code: [MCP de leitura](../roadmap/fase-5/01-mcp-leitura.md). O mesmo binário traz os hooks do Claude Code `hook prompt` (injeta contexto) e `hook stop` (captura os turnos, com outbox se o app estiver fechado), descritos nessa página.
+`xemnas-mcp` é um servidor MCP sobre stdio com três ferramentas: `get_decision` (abre a decisão pela referência `D:xxxx` que aparece no bloco injetado), `search_context` (busca decisões vigentes e regras do projeto; aceita `path` de um arquivo envolvido) e `file_context` (o que o mapa do projeto liga a um arquivo, ADR-0005). Ele consulta o app aberto pela API local e nunca altera nada. Contrato e funcionamento: [contexto entregue aos agentes](../arquitetura/contexto-e-agentes.md#mcp-somente-leitura). O mesmo binário traz os hooks do Claude Code `hook prompt` (injeta contexto) e `hook stop` (captura os turnos, com outbox se o app estiver fechado), descritos em [hooks do Claude Code](../arquitetura/contexto-e-agentes.md#hooks-do-claude-code).
 
 ## Privacidade
 
@@ -95,7 +149,19 @@ O backend monta um **Context Pack** para uma tarefa: decisões vigentes e premis
 - Cross build (`pwsh -File tools\build-windows-cross.ps1`): só faz sentido em **release** — em debug o GPUI resolve os shaders HLSL em runtime pelo `CARGO_MANIFEST_DIR` do container, caminho inexistente no Windows (panic `os error 3`). O script gera o `shaders_bytes.rs` no host com o `fxc.exe` da SDK e o container o copia para o `OUT_DIR` antes de compilar.
 
 - Testes de provedor pago são opt-in; a suíte padrão usa fake/fixtures.
-- Estado de conclusão do MVP e dogfood: ver [conclusão](../roadmap/mvp/issues/20-dogfood-e-conclusao.md) e [dogfood](dogfood-log.md).
+- Estado de conclusão do MVP: [ticket 20](../roadmap/tickets/20-dogfood-e-conclusao.md).
+
+## Dogfood automático
+
+[`dogfood-log.md`](dogfood-log.md) traz uma tabela diária (capturas, candidatos,
+confirmações, ruído, latência, tempo de revisão, injeções, consultas MCP, perdas)
+gerada do banco local, só leitura, apenas com agregados: nunca perguntas, escolhas,
+caminhos ou nomes de projeto. A tarefa agendada do Windows `xemnas-dogfood-report`
+roda todo dia às 23:30 `python tools/dogfood-report.py --write`, que refaz o bloco
+entre `<!-- dogfood:auto:start -->` e `<!-- dogfood:auto:end -->` (idempotente).
+Sem `--write`, imprime o bloco. `--db` e `--doc` trocam banco e diário. O teste
+ignorado `crates/storage-sqlite/tests/dogfood_context.rs` reexecuta consultas reais
+contra uma cópia do banco, com casos guardados fora do repositório.
 
 ## Smart App Control (SAC)
 
@@ -144,7 +210,7 @@ Para validação focada: `python tools/check-doc-links.py --files docs/README.md
 CI (`.github/workflows/ci.yml`): `docs` (testes do checker e links locais),
 `quality` (fmt, clippy, testes, audit, deny), `contract` (testes TS do adapter)
 e `package` (ZIP como artifact).
-# Revisão consultiva do conhecimento
+## Revisão consultiva do conhecimento
 
 Em Contexto › Revisar conhecimento (também na paleta Ctrl K), **Verificar
 localmente** consulta apenas o conhecimento registrado. Não indexa documentos,

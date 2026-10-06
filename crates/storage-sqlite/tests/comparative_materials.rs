@@ -16,8 +16,7 @@ use std::{path::Path, time::Instant};
 use storage_sqlite::SqliteStore;
 
 const ROOT: &str = r"C:\Users\Pablo\AppData\Local\Temp\opencode\xemnas-comparison-20261004";
-const PROTOCOL: &str =
-    include_str!("../../../docs/operacao/experimento-produtividade-assertividade.md");
+const PROTOCOL: &str = include_str!("fixtures/comparative_protocol.md");
 
 fn block(after: &str) -> &'static str {
     let tail = PROTOCOL.split_once(after).unwrap().1;
