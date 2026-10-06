@@ -9,6 +9,8 @@ planos de `docs/roadmap/`.
 | Documento | Assunto | Status |
 | --- | --- | --- |
 | [sonho-consolidacao-da-memoria.md](sonho-consolidacao-da-memoria.md) | "Sonho": rodada periódica que junta duplicatas, resolve contradições, aposenta o envelhecido e descobre ligações e padrões; exportação no formato Agent Memory Repo | Aberta. Desenho e protocolo; nada implementado |
+| [procurador.md](procurador.md) | Procurador: o Xemnas responde ao agente pela pessoa quando uma decisão confirmada cobre a pergunta; ganchos, casamento, escada de confiança e medição | Aberta. Desenho e protocolo; nada implementado |
+| [mapa-de-cegueira.md](mapa-de-cegueira.md) | Mapa de cegueira: código escrito por agentes sem conversa com a pessoa, por componente, priorizado por risco, com tour de compreensão | Aberta. Desenho e protocolo; nada implementado |
 | [ideias-de-virada.md](ideias-de-virada.md) | Com memória virando recurso nativo dos agentes: decisões como diagnósticos (LSP), repetições que viram regra, barramento entre agentes paralelos e contrato do repositório para agentes de fora | Aberta. Pesquisa e proposta; nada implementado nem medido |
 | [precisao-do-contexto.md](precisao-do-contexto.md) | Precisão do bloco entregue ao agente: evidência, diagnóstico, dez técnicas por custo, medição e plano | Em implementação. v3: 0,94 / 0,95; corpus v4 às cegas: 0,58 / 0,62; próximo passo, embeddings |
 | [busca-alem-do-lexico.md](busca-alem-do-lexico.md) | Depois da ponte PT/EN e antes dos embeddings: sementes pela menção, expansão do documento na extração, PageRank no grafo e o que fica de fora | Em implementação. Termos de busca como último recurso: 0,76 / 0,95 |

@@ -151,6 +151,35 @@ que sai, com prévia do arquivo. Formato público vira contrato: precisa de ADR 
 Nenhum desses números foi medido. O protocolo de corpus às cegas e holdout selado da seleção de
 contexto vale para os verificadores (1, 2 e 4); o barramento (3) se mede no uso real.
 
+## Segunda rodada (06/10/2026)
+
+O usuário pediu ideias que ainda não existem neste contexto. Escolhidas para aprofundar:
+[Procurador](procurador.md) e [mapa de cegueira](mapa-de-cegueira.md). As outras ficam
+anotadas:
+
+- **Taxa de arrependimento**: ao adotar uma biblioteca, mostrar quantos projetos parecidos a
+  removeram em um ano, para onde foram e por quê, a partir de um índice local pré-calculado do
+  histórico público de manifestos. A mineração de migrações existe na academia
+  ([He et al.](https://hehao98.github.io/files/2021-migration-empirical.pdf),
+  [CMU](https://www.cs.cmu.edu/~ckaestne/pdf/icse25_abandonment.pdf)), não como produto no
+  momento da escolha.
+- **Radar do mundo**: vigiar só as fontes externas que as premissas de uma decisão citam
+  (versões, avisos, licenças) e perguntar se a decisão ainda vale. Monitores genéricos de
+  dependência existem; nenhum sabe o porquê da escolha.
+- **O agente decidiu por você**: no fim da sessão, as suposições que o agente fez sem perguntar,
+  para confirmar ou rejeitar com um clique. A extração existe como pesquisa
+  ([AssumptionMiner](https://arxiv.org/abs/2607.22898)), sem memória entre sessões.
+- **Café da manhã de decisões**: prever à noite as perguntas que as tarefas do dia vão gerar e
+  respondê-las de manhã num cartão de um minuto.
+- **Xemnas Wrapped**: o ano em decisões, gerado localmente, para autoavaliação e para
+  compartilhar se a pessoa quiser.
+
+Descartadas na pesquisa: a linha ligada à conversa que a produziu já existe
+([Agent Trace](https://cognition.com/blog/agent-trace)); o "revisor sombra" com o gosto da
+pessoa teve ganho pequeno e inconsistente num estudo com 206 sessões
+([arXiv:2608.10319](https://arxiv.org/abs/2608.10319v1)); teste de arquitetura gerado da
+decisão é padrão conhecido (fitness functions) e cabe nos verificadores da ideia 1.
+
 ## O que não fazer
 
 - Competir em "memória entre sessões" ou "memória compartilhada entre agentes": já é recurso de
