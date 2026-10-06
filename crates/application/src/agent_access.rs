@@ -84,6 +84,71 @@ fn storage(error: impl std::fmt::Display) -> AgentAccessError {
 pub trait AgentStore {
     /// Every decision id of a project.
     fn project_decision_ids(&self, project_id: &str) -> Result<Vec<String>, AgentAccessError>;
+
+    /// Logs one agent query (never its text, reference or path).
+    fn record_agent_query(&self, query: &AgentQuery) -> Result<(), AgentAccessError>;
+}
+
+/// Which agent tool was called.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentTool {
+    /// `get_decision`.
+    Decision,
+    /// `search_context`.
+    Search,
+    /// `file_context`.
+    File,
+}
+
+impl AgentTool {
+    /// Stable storage code.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Decision => "decision",
+            Self::Search => "search",
+            Self::File => "file",
+        }
+    }
+}
+
+/// What an agent query returned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentOutcome {
+    /// Text was returned.
+    Answered,
+    /// Nothing relevant to return.
+    Empty,
+    /// The reference matched no decision.
+    NotFound,
+    /// The reference matched several decisions.
+    Ambiguous,
+}
+
+impl AgentOutcome {
+    /// Stable storage code.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Answered => "answered",
+            Self::Empty => "empty",
+            Self::NotFound => "not_found",
+            Self::Ambiguous => "ambiguous",
+        }
+    }
+}
+
+/// One logged agent query, used to measure whether the context is consulted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentQuery {
+    /// Project the query resolved to.
+    pub project_id: String,
+    /// Tool called.
+    pub tool: AgentTool,
+    /// Result class.
+    pub outcome: AgentOutcome,
+    /// Size of the returned text; 0 when nothing was returned.
+    pub chars: usize,
+    /// RFC 3339 UTC time of the query.
+    pub created_at: String,
 }
 
 /// Object-safe entry point for the local API.
@@ -153,16 +218,39 @@ where
     pub fn decision(&self, directory: &str, reference: &str) -> Result<String, AgentAccessError> {
         let project = self.project(directory)?;
         let wanted = normalize_reference(reference)?;
-        let mut matches = self
-            .store
-            .project_decision_ids(&project)?
-            .into_iter()
-            .filter(|id| alphanumeric(id).ends_with(&wanted));
-        let id = matches.next().ok_or(AgentAccessError::NotFound)?;
-        if matches.next().is_some() {
-            return Err(AgentAccessError::Ambiguous);
-        }
-        self.render_decision(&project, &id)
+        let ids = self.store.project_decision_ids(&project)?;
+        let mut matches = ids.iter().filter(|id| alphanumeric(id).ends_with(&wanted));
+        let id = match (matches.next(), matches.next()) {
+            (Some(id), None) => id,
+            (None, _) => {
+                self.record(&project, AgentTool::Decision, AgentOutcome::NotFound, 0)?;
+                return Err(AgentAccessError::NotFound);
+            }
+            (Some(_), Some(_)) => {
+                self.record(&project, AgentTool::Decision, AgentOutcome::Ambiguous, 0)?;
+                return Err(AgentAccessError::Ambiguous);
+            }
+        };
+        let text = self.render_decision(&project, id)?;
+        let chars = text.chars().count();
+        self.record(&project, AgentTool::Decision, AgentOutcome::Answered, chars)?;
+        Ok(text)
+    }
+
+    fn record(
+        &self,
+        project_id: &str,
+        tool: AgentTool,
+        outcome: AgentOutcome,
+        chars: usize,
+    ) -> Result<(), AgentAccessError> {
+        self.store.record_agent_query(&AgentQuery {
+            project_id: project_id.to_string(),
+            tool,
+            outcome,
+            chars,
+            created_at: crate::clock::now_rfc3339(),
+        })
     }
 
     /// A compact block for an explicit query, without session deduplication.
@@ -183,7 +271,7 @@ where
                 "descreva o que procurar".into(),
             ));
         }
-        self.compact(directory, query, budget_tokens, path)
+        self.compact(AgentTool::Search, directory, query, budget_tokens, path)
     }
 
     /// What holds for one file of the project: decisions in force and rules
@@ -203,11 +291,13 @@ where
                 "informe o caminho de um arquivo".into(),
             ));
         }
-        self.compact(directory, String::new(), budget_tokens, Some(path))
+        let task = String::new();
+        self.compact(AgentTool::File, directory, task, budget_tokens, Some(path))
     }
 
     fn compact(
         &self,
+        tool: AgentTool,
         directory: &str,
         task: String,
         budget_tokens: Option<usize>,
@@ -232,13 +322,19 @@ where
             .with_routing(self.routing.clone())
             .exploratory()
             .build_pack(ContextRequest {
-                project_id: project,
+                project_id: project.clone(),
                 task,
                 as_of: None,
                 budget_chars: Some(MAX_BUDGET_CHARS),
                 files,
             })?;
-        Ok(render_compact(&pack, budget, &BTreeSet::new()).map(|block| block.text))
+        let text = render_compact(&pack, budget, &BTreeSet::new()).map(|block| block.text);
+        let (outcome, chars) = match &text {
+            Some(text) => (AgentOutcome::Answered, text.chars().count()),
+            None => (AgentOutcome::Empty, 0),
+        };
+        self.record(&project, tool, outcome, chars)?;
+        Ok(text)
     }
 
     fn project(&self, directory: &str) -> Result<String, AgentAccessError> {

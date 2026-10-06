@@ -172,6 +172,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 42,
         sql: include_str!("migrations/0042_review_dirty_under_upsert.sql"),
     },
+    Migration {
+        version: 43,
+        sql: include_str!("migrations/0043_agent_queries.sql"),
+    },
 ];
 
 /// A single embedded schema migration.

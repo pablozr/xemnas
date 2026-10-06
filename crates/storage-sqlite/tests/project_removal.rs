@@ -3,6 +3,7 @@
 
 mod support;
 
+use application::agent_access::{AgentOutcome, AgentQuery, AgentStore, AgentTool};
 use application::claims::{Claims, NewClaim};
 use application::injection::{
     DeliveredItem, InjectionMode, InjectionRecord, InjectionStore, ItemKind,
@@ -46,6 +47,15 @@ fn populate(test: &support::TestStore, project: &str) {
             }],
         })
         .expect("injection");
+    test.store
+        .record_agent_query(&AgentQuery {
+            project_id: project.to_string(),
+            tool: AgentTool::Search,
+            outcome: AgentOutcome::Empty,
+            chars: 0,
+            created_at: "2026-09-30T00:00:00Z".to_string(),
+        })
+        .expect("agent query");
 }
 
 fn count(connection: &Connection, table: &str) -> i64 {
@@ -107,6 +117,7 @@ fn removal_with_data_deletes_only_that_project_after_the_typed_name() {
         ("claims_fts", 1),
         ("context_injections", 1),
         ("context_injection_items", 1),
+        ("agent_queries", 1),
         ("capture_receipts", 1),
         ("capture_artifacts", 1),
         ("adapter_checkpoints", 1),

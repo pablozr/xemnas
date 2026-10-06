@@ -155,7 +155,7 @@ fn migration_0008_applies_on_fresh_and_upgraded_databases() {
             row.get(0)
         })
         .expect("count");
-    assert_eq!(versions, 41);
+    assert_eq!(versions, 42);
 
     let _ = std::fs::remove_dir_all(&root);
 }

@@ -144,6 +144,7 @@ const PURGE_STATEMENTS: &[&str] = &[
      (SELECT entity_id FROM entities WHERE project_id = ?1)",
     "DELETE FROM entities WHERE project_id = ?1",
     "DELETE FROM context_injections WHERE project_id = ?1",
+    "DELETE FROM agent_queries WHERE project_id = ?1",
     "DELETE FROM claims_fts WHERE claim_id IN \
      (SELECT claim_id FROM context_claims WHERE project_id = ?1)",
     "DELETE FROM context_claims WHERE project_id = ?1",

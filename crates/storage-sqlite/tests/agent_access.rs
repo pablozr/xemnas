@@ -241,3 +241,70 @@ fn file_context_follows_the_project_map() {
         Err("invalid_request")
     );
 }
+
+#[test]
+fn every_query_is_logged_without_its_text() {
+    let test = support::open("agent-queries", &["p1"]);
+    let path = register_directory(&test);
+    let id = support::decision(&test.store, "p1", "a", "Qual banco usar?", "SQLite");
+    let access = AgentAccess::new(test.store.clone());
+    let elsewhere = test.root.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("dir");
+
+    access.decision(&path, &id).expect("decision");
+    assert!(access.decision(&path, "D:zzzzzzzz").is_err());
+    access.search(&path, "banco", None, None).expect("search");
+    access
+        .search(&path, "renderização", None, None)
+        .expect("empty search");
+    access
+        .file_context(&path, "src/segredo.rs", None)
+        .expect("file");
+    // Unknown project and malformed requests leave no trace.
+    assert!(access.decision(&elsewhere.to_string_lossy(), &id).is_err());
+    assert!(access.decision(&path, "D:ab").is_err());
+    assert!(access.search(&path, " ", None, None).is_err());
+
+    let connection = Connection::open(test.root.join("app.db")).expect("raw");
+    let mut statement = connection
+        .prepare(
+            "SELECT project_id, tool, outcome, chars, created_at \
+             FROM agent_queries ORDER BY query_id",
+        )
+        .expect("prepare");
+    let rows: Vec<(String, String, String, i64, String)> = statement
+        .query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        })
+        .expect("query")
+        .collect::<Result<_, _>>()
+        .expect("rows");
+    let summary: Vec<(&str, &str)> = rows
+        .iter()
+        .map(|row| (row.1.as_str(), row.2.as_str()))
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            ("decision", "answered"),
+            ("decision", "not_found"),
+            ("search", "answered"),
+            ("search", "empty"),
+            ("file", "empty"),
+        ]
+    );
+    for row in &rows {
+        assert_eq!(row.0, "p1");
+        assert_eq!(row.3 > 0, row.2 == "answered", "chars only when answered");
+        assert!(row.4.ends_with('Z'), "RFC3339 UTC: {}", row.4);
+        for secret in ["banco", "zzzzzzzz", "segredo", "renderização", id.as_str()] {
+            assert!(!row.0.contains(secret) && !row.4.contains(secret));
+        }
+    }
+}
