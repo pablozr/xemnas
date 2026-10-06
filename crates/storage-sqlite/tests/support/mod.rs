@@ -143,6 +143,20 @@ pub fn decision_with_diff(
     files: &[&str],
     diff: &str,
 ) -> String {
+    let location = format!("C:/synthetic/{project}");
+    decision_at(store, project, &location, key, question, files, diff)
+}
+
+/// [`decision_with_diff`] for a project registered at a real `location`.
+pub fn decision_at(
+    store: &SqliteStore,
+    project: &str,
+    location: &str,
+    key: &str,
+    question: &str,
+    files: &[&str],
+    diff: &str,
+) -> String {
     let capture = format!("capture-{key}");
     let at = "2026-01-02T00:00:00Z".to_string();
     store
@@ -150,7 +164,7 @@ pub fn decision_with_diff(
             receipt: CaptureReceiptRecord {
                 capture_id: capture.clone(),
                 idempotency_key: format!("key-{capture}"),
-                canonical_path: format!("C:/synthetic/{project}"),
+                canonical_path: location.to_string(),
                 received_at: at.clone(),
                 artifact_count: 1,
             },

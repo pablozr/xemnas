@@ -4,13 +4,14 @@
 //! empty map is assembled from it at once; folders inferred from captured
 //! diffs stay proposals (ADR-0005, revision of 2026-10-01).
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use super::{GraphError, GraphStore, KnowledgeGraph, NewEntity};
+use super::{EntityEdit, GraphError, GraphStore, KnowledgeGraph, NewEntity, MAX_ENTITY_LIST};
 use crate::claims::ClaimStore;
 use crate::projects::ProjectRepository;
 use crate::relations::RelationStore;
-use domain::entities::{EntityKind, MAX_DESCRIPTION_CHARS};
+use domain::entities::{entity_key, EntityKind, MAX_DESCRIPTION_CHARS};
 
 /// Members expanded per workspace pattern, at most.
 const MAX_MEMBERS: usize = 200;
@@ -115,6 +116,66 @@ pub fn declared_components(root: &Path) -> Vec<DeclaredComponent> {
         }
     }
     found
+}
+
+/// How people write the package in prose: the last segment of its name
+/// (`@acme/opencode-adapter` → `opencode-adapter`), its spaced form
+/// (`opencode adapter`) and the folder of its pattern (`packages/plugin/**` →
+/// `plugin`), minus what equals the name. The length rules of the mention
+/// matcher apply later; terms that can never match (under 3 characters) are
+/// not worth storing.
+fn alias_candidates(component: &DeclaredComponent) -> Vec<String> {
+    let last = component.name.rsplit('/').next().unwrap_or("");
+    let folder = component
+        .pattern
+        .trim_end_matches("/**")
+        .rsplit('/')
+        .next()
+        .unwrap_or("");
+    let mut found: Vec<String> = Vec::new();
+    for term in [last, folder] {
+        for form in [term.to_string(), term.replace(['-', '_'], " ")] {
+            let usable = !form.starts_with('@') && entity_key(&form).chars().count() >= 3;
+            let known = |other: &str| other.to_lowercase() == form.to_lowercase();
+            if usable && !known(&component.name) && !found.iter().any(|other| known(other)) {
+                found.push(form);
+            }
+        }
+    }
+    found
+}
+
+/// The aliases each declared component gains: its candidates minus any whose
+/// key another declared name, another candidate or `taken` (what other live
+/// entities already answer to) also uses, since an ambiguous term must link
+/// to nothing. Aligned with `declared`.
+fn package_aliases(declared: &[DeclaredComponent], taken: &[BTreeSet<String>]) -> Vec<Vec<String>> {
+    let candidates: Vec<Vec<String>> = declared.iter().map(alias_candidates).collect();
+    let mut uses: BTreeMap<String, usize> = BTreeMap::new();
+    for (component, own) in declared.iter().zip(&candidates) {
+        let keys: BTreeSet<String> = own
+            .iter()
+            .map(|alias| entity_key(alias))
+            .chain([entity_key(&component.name)])
+            .collect();
+        for key in keys {
+            *uses.entry(key).or_default() += 1;
+        }
+    }
+    candidates
+        .into_iter()
+        .zip(taken)
+        .zip(declared)
+        .map(|((own, taken), component)| {
+            let name_key = entity_key(&component.name);
+            own.into_iter()
+                .filter(|alias| {
+                    let key = entity_key(alias);
+                    key == name_key || (uses.get(&key) == Some(&1) && !taken.contains(&key))
+                })
+                .collect()
+        })
+        .collect()
 }
 
 fn folder_name(dir: &str) -> String {
@@ -272,7 +333,9 @@ where
             return Ok(0);
         }
         let mut created = 0;
-        for declared in declared_components(Path::new(&project.location)) {
+        let declared = declared_components(Path::new(&project.location));
+        let aliases = package_aliases(&declared, &vec![BTreeSet::new(); declared.len()]);
+        for (declared, aliases) in declared.into_iter().zip(aliases) {
             let description: String = declared
                 .description
                 .chars()
@@ -284,7 +347,7 @@ where
                 name: declared.name,
                 description,
                 patterns: vec![declared.pattern],
-                aliases: Vec::new(),
+                aliases,
             }) {
                 Ok(_) => created += 1,
                 Err(GraphError::DuplicateName | GraphError::Invalid(_)) => {}
@@ -293,6 +356,77 @@ where
         }
         Ok(created)
     }
+
+    /// Gives the components already on the map the aliases their package
+    /// earns (see [`alias_candidates`]), keeping the ones they have. A
+    /// component is matched to its package by pattern. Idempotent: returns
+    /// how many components gained aliases, 0 once they are all there.
+    ///
+    /// # Errors
+    ///
+    /// `project_not_found` or `storage`.
+    pub fn merge_package_aliases(&self, project_id: &str) -> Result<usize, GraphError> {
+        let project =
+            ProjectRepository::get(&self.store, project_id)?.ok_or(GraphError::ProjectNotFound)?;
+        let live: Vec<_> = self
+            .store
+            .project_entities(project_id)?
+            .into_iter()
+            .filter(|entity| entity.retired_at.is_none())
+            .collect();
+        let declared = declared_components(Path::new(&project.location));
+        let matched: Vec<Option<&_>> = declared
+            .iter()
+            .map(|component| {
+                live.iter().find(|entity| {
+                    entity.kind == EntityKind::Component
+                        && entity.patterns.contains(&component.pattern)
+                })
+            })
+            .collect();
+        let taken: Vec<BTreeSet<String>> = matched
+            .iter()
+            .map(|own| {
+                live.iter()
+                    .filter(|entity| own.is_none_or(|own| own.entity_id != entity.entity_id))
+                    .flat_map(|entity| entity.keys())
+                    .collect()
+            })
+            .collect();
+        let mut updated = 0;
+        for (entity, aliases) in matched.into_iter().zip(package_aliases(&declared, &taken)) {
+            let Some(entity) = entity else {
+                continue;
+            };
+            let mut merged = entity.aliases.clone();
+            for alias in aliases {
+                if !merged_has(&merged, &alias) {
+                    merged.push(alias);
+                }
+            }
+            if merged.len() == entity.aliases.len() || merged.len() > MAX_ENTITY_LIST {
+                continue;
+            }
+            let edit = EntityEdit {
+                name: entity.name.clone(),
+                description: entity.description.clone(),
+                patterns: entity.patterns.clone(),
+                aliases: merged,
+            };
+            match self.update_entity(&entity.entity_id, edit) {
+                Ok(_) => updated += 1,
+                Err(GraphError::DuplicateName | GraphError::Invalid(_) | GraphError::Conflict) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(updated)
+    }
+}
+
+fn merged_has(aliases: &[String], alias: &str) -> bool {
+    aliases
+        .iter()
+        .any(|known| known.to_lowercase() == alias.to_lowercase())
 }
 
 #[cfg(test)]
@@ -376,6 +510,44 @@ mod tests {
             ]
         );
         assert_eq!(found[1].description, "Regras do domínio.");
+        assert!(alias_candidates(&found[1]).is_empty(), "equal to the name");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn declared(name: &str, dir: &str) -> DeclaredComponent {
+        DeclaredComponent {
+            name: name.into(),
+            pattern: format!("{dir}/**"),
+            description: String::new(),
+            source: WorkspaceKind::Npm,
+        }
+    }
+
+    #[test]
+    fn packages_earn_the_aliases_people_write() {
+        let adapter = declared("@jevguard/opencode-adapter", "packages/opencode-adapter");
+        assert_eq!(
+            alias_candidates(&adapter),
+            vec!["opencode-adapter", "opencode adapter"]
+        );
+        let plugin = declared("@pablozrrrr/jevguard", "packages/plugin");
+        assert_eq!(alias_candidates(&plugin), vec!["jevguard", "plugin"]);
+        let crate_ = declared("storage_sqlite", "crates/storage_sqlite");
+        assert_eq!(alias_candidates(&crate_), vec!["storage sqlite"]);
+        assert!(alias_candidates(&declared("ui", "apps/ui")).is_empty());
+    }
+
+    #[test]
+    fn ambiguous_aliases_are_dropped() {
+        let web = declared("@a/shared", "apps/web");
+        let api = declared("@b/shared", "apps/api");
+        let named = declared("web", "apps/other");
+        let none = BTreeSet::new();
+        let taken = BTreeSet::from(["api".to_string()]);
+        let aliases = package_aliases(&[web, api, named], &[none.clone(), taken, none]);
+        // `shared` is two packages' last segment; `web` is another's name;
+        // `api` is already taken by another entity.
+        assert_eq!(aliases[..2], [Vec::<String>::new(), Vec::new()]);
+        assert_eq!(aliases[2], vec!["other"], "its own folder is unambiguous");
     }
 }

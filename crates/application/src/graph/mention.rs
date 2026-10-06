@@ -353,28 +353,109 @@ mod tests {
         (map, texts)
     }
 
-    /// Floors measured on 2026-10-05; raise them when the rule improves.
-    const MENTION_PRECISION_FLOOR: f64 = 0.92;
+    /// Parts of a project discovered from manifests: npm names with the aliases
+    /// discovery derives from them, and decisions written the way people talk.
+    fn package_corpus() -> Corpus {
+        let map = vec![
+            (
+                "pcore",
+                entity("@jevguard/core", &["core"], &["packages/core/**"]),
+            ),
+            (
+                "padapter",
+                entity(
+                    "@jevguard/opencode-adapter",
+                    &["opencode-adapter", "opencode adapter"],
+                    &["packages/opencode-adapter/**"],
+                ),
+            ),
+            (
+                "ptestkit",
+                entity("@jevguard/testkit", &["testkit"], &["packages/testkit/**"]),
+            ),
+            (
+                "pplugin",
+                entity(
+                    "@pablozrrrr/jevguard",
+                    &["jevguard", "plugin"],
+                    &["packages/plugin/**"],
+                ),
+            ),
+        ];
+        let texts = vec![
+            (
+                "O core grava cada decisão antes de responder.",
+                vec!["pcore"],
+            ),
+            (
+                "The opencode adapter forwards each turn to the core.",
+                vec!["padapter", "pcore"],
+            ),
+            (
+                "O plugin carrega o testkit só nos testes.",
+                vec!["pplugin", "ptestkit"],
+            ),
+            (
+                "Hooks do opencode-adapter capturam cada turno.",
+                vec!["padapter"],
+            ),
+            (
+                "Mudanças em packages/core/src e no testkit andam juntas.",
+                vec!["pcore", "ptestkit"],
+            ),
+            (
+                "Every call the plugin makes goes through the opencode adapter.",
+                vec!["pplugin", "padapter"],
+            ),
+            (
+                "O testkit fornece o servidor falso que o core usa nos testes.",
+                vec!["ptestkit", "pcore"],
+            ),
+            ("A `core` valida o schema antes de gravar.", vec!["pcore"]),
+            (
+                "O jevguard bloqueia o comando antes da execução.",
+                vec!["pplugin"],
+            ),
+            (
+                "Usar um adapter genérico para cada editor foi descartado.",
+                vec![],
+            ),
+            ("O kit de testes compartilhado foi descartado.", vec![]),
+            // Same words in other senses: known false positives of the rule.
+            ("The core of the problem is the message ordering.", vec![]),
+            ("Um plugin de navegador não entra no escopo.", vec![]),
+        ];
+        (map, texts)
+    }
+
+    /// Floors measured on 2026-10-05; raise them when the rule improves. The
+    /// precision floor went from 0.92 (12/13) to 0.90 (27/30) when the
+    /// package corpus added two known false positives of plain-word aliases
+    /// ("the core of the problem", "plugin de navegador"): the price of
+    /// recall on how people write.
+    const MENTION_PRECISION_FLOOR: f64 = 0.90;
     const MENTION_RECALL_FLOOR: f64 = 1.0;
 
     #[test]
     fn mention_quality_gate() {
-        let (map, texts) = corpus();
+        // Each corpus is its own project: the same word may name a part in one.
         let (mut tp, mut found, mut expected) = (0usize, 0usize, 0usize);
-        for (text, truth) in &texts {
-            let folded = Folded::new(text);
-            let hits: Vec<&str> = map
-                .iter()
-                .filter(|(_, entity)| {
-                    entity_terms(entity)
-                        .iter()
-                        .any(|term| folded.mention(term).is_some())
-                })
-                .map(|(label, _)| *label)
-                .collect();
-            tp += hits.iter().filter(|hit| truth.contains(hit)).count();
-            found += hits.len();
-            expected += truth.len();
+        for (map, texts) in [corpus(), package_corpus()] {
+            for (text, truth) in &texts {
+                let folded = Folded::new(text);
+                let hits: Vec<&str> = map
+                    .iter()
+                    .filter(|(_, entity)| {
+                        entity_terms(entity)
+                            .iter()
+                            .any(|term| folded.mention(term).is_some())
+                    })
+                    .map(|(label, _)| *label)
+                    .collect();
+                tp += hits.iter().filter(|hit| truth.contains(hit)).count();
+                found += hits.len();
+                expected += truth.len();
+            }
         }
         let precision = tp as f64 / found.max(1) as f64;
         let recall = tp as f64 / expected.max(1) as f64;
