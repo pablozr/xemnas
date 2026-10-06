@@ -54,7 +54,10 @@ A busca é lexical (FTS5) mais o grafo. O Context Pack manual aparece na tela Co
 
 **Projetos e worktrees.** Um worktree do git conta como o projeto registrado
 (`crates/application/src/repo_identity.rs`). Edições em outro worktree do mesmo repositório
-entram com o caminho relativo a ele (`apps/mcp-server/src/hook/worktree.rs`).
+entram com o caminho relativo a ele (`apps/mcp-server/src/hook/worktree.rs`). Documentos de worktrees
+não são varridos: em Contexto, Documentação, "Importar documento…" traz um único arquivo da pasta do
+projeto ou de um worktree do mesmo repositório, com o caminho relativo ao worktree dele, e o enfileira
+para a extração e a revisão normais (`Documents::import_file`). Só documentação em UTF-8 até 512 KB.
 
 **Interface.** App nativo em Rust + GPUI. Telas: Revisão, Decisões, Contexto, Mapa, Visão,
 Projetos e Configurações (IA, OpenCode, Diagnóstico, Aparência, Idioma). Paleta com Ctrl K.

@@ -443,7 +443,7 @@ fn upgrade_28_to_current_preserves_project() {
             r.get(0)
         })
         .unwrap();
-    assert_eq!(version, 43);
+    assert_eq!(version, 44);
     drop(connection);
     std::fs::remove_dir_all(root).unwrap();
 }

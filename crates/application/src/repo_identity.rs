@@ -22,6 +22,11 @@ pub trait RepoIdentity {
     /// Normalized common git dir of `directory`, or `None` when it is not a
     /// git repository or git is unavailable.
     fn common_dir(&self, directory: &str) -> Option<String>;
+
+    /// Normalized root of the worktree that contains `directory`, if any.
+    fn worktree_root(&self, _directory: &str) -> Option<String> {
+        None
+    }
 }
 
 /// Runs `git` without a shell to read the common dir.
@@ -31,6 +36,11 @@ pub struct GitRepoIdentity;
 impl RepoIdentity for GitRepoIdentity {
     fn common_dir(&self, directory: &str) -> Option<String> {
         let output = git_output(directory, &["--git-common-dir"])?;
+        normalize_dir(output.lines().next()?.trim())
+    }
+
+    fn worktree_root(&self, directory: &str) -> Option<String> {
+        let output = git_output(directory, &["--show-toplevel"])?;
         normalize_dir(output.lines().next()?.trim())
     }
 }
@@ -118,6 +128,10 @@ impl<I: RepoIdentity> RepoIdentity for CachedRepoIdentity<I> {
             entries.insert(directory.to_string(), (Instant::now(), value.clone()));
         }
         value
+    }
+
+    fn worktree_root(&self, directory: &str) -> Option<String> {
+        self.inner.worktree_root(directory)
     }
 }
 

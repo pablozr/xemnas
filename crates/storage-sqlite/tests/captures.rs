@@ -157,7 +157,7 @@ fn fresh_database_applies_capture_migration() {
         )
         .expect("count distinct migrations");
     assert_eq!(versions, distinct);
-    assert_eq!(versions, 42);
+    assert_eq!(versions, 43);
 
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -190,10 +190,10 @@ fn upgrade_reapplies_the_missing_migrations() {
         )
         .expect("count distinct migrations");
     assert_eq!(
-        versions, 42,
-        "0004, 0005, 0006 and 0008 to 0043 must be re-applied on upgrade"
+        versions, 43,
+        "0004, 0005, 0006 and 0008 to 0044 must be re-applied on upgrade"
     );
-    assert_eq!(distinct, 42);
+    assert_eq!(distinct, 43);
 
     let _ = std::fs::remove_dir_all(&root);
 }
