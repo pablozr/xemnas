@@ -138,7 +138,7 @@ fn migration_0010_upgrades_a_version_9_database() {
             row.get(0)
         })
         .expect("version");
-    assert_eq!(version, 43);
+    assert_eq!(version, storage_sqlite::SCHEMA_VERSION);
     assert_eq!(
         Decisions::new(reopened)
             .detail(&decision)

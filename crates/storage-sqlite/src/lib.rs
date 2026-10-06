@@ -32,7 +32,9 @@ mod review_exception;
 mod search_terms;
 mod store;
 
-pub use store::{default_data_dir, default_db_path, SqliteStore, StorageError};
+pub use store::{
+    default_data_dir, default_db_path, SqliteStore, StorageError, MIGRATION_COUNT, SCHEMA_VERSION,
+};
 
 /// Returns a stable identifier for this crate, used by wiring smoke tests.
 pub fn crate_name() -> &'static str {

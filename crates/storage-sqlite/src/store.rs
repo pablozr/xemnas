@@ -178,6 +178,13 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     },
 ];
 
+/// Schema version this build migrates to: the last embedded migration.
+pub const SCHEMA_VERSION: i64 = MIGRATIONS[MIGRATIONS.len() - 1].version;
+
+/// How many migrations are recorded after a full upgrade. Lower than
+/// [`SCHEMA_VERSION`] because version 7 was never registered.
+pub const MIGRATION_COUNT: i64 = MIGRATIONS.len() as i64;
+
 /// A single embedded schema migration.
 pub(crate) struct Migration {
     /// Monotonic version recorded in `schema_migrations`.
