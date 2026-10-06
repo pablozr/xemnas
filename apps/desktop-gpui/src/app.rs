@@ -24,7 +24,7 @@ use crate::palette::{self, PaletteItem};
 use crate::screens::assistant::{AssistantGo, AssistantScreen, AssistantToggled, Briefing};
 use crate::screens::context::{ContextScreen, ContextServices, ContextStores, OpenDecision};
 use crate::screens::decisions::DecisionsScreen;
-use crate::screens::inbox::InboxScreen;
+use crate::screens::inbox::{InboxScreen, OpenDiagnostics};
 use crate::screens::map::OpenSuggestions;
 use crate::screens::map::{MapScreen, MapServices};
 use crate::screens::overview::OverviewScreen;
@@ -258,6 +258,7 @@ pub struct Shell<
     _project_subscription: Option<Subscription>,
     _inbox_subscription: Option<Subscription>,
     _inbox_opens: Option<Subscription>,
+    _inbox_diagnostics: Option<Subscription>,
     projects: Option<Entity<ProjectsScreen<R>>>,
     /// Why there is no database, when the app started without one.
     startup_error: Option<StartupError>,
@@ -458,6 +459,11 @@ impl<
                 shell.show_decision(event.0.clone(), cx)
             })
         });
+        let inbox_diagnostics = inbox.as_ref().map(|screen| {
+            cx.subscribe(screen, |shell, _, _: &OpenDiagnostics, cx| {
+                shell.open_settings_at(SettingsSection::Diagnostics, cx)
+            })
+        });
         let decisions = decisions.map(|(decisions, export, relations, graph)| {
             cx.new(|cx| DecisionsScreen::new(cx, decisions, export, relations, graph))
         });
@@ -494,6 +500,7 @@ impl<
             _project_subscription: project_subscription,
             _inbox_subscription: inbox_subscription,
             _inbox_opens: inbox_opens,
+            _inbox_diagnostics: inbox_diagnostics,
             projects: screen,
             inbox,
             decisions,
@@ -591,9 +598,7 @@ impl<
         cx: &mut Context<Self>,
     ) {
         if let Some(inbox) = &self.inbox {
-            inbox.update(cx, |inbox, _| {
-                inbox.set_progress(read.clone(), retry.clone())
-            });
+            inbox.update(cx, |inbox, _| inbox.set_progress(read.clone()));
         }
         if let Some(settings) = &self.settings {
             settings.update(cx, |settings, cx| {

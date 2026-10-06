@@ -177,8 +177,10 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
 - Qualificadores de atribuição, alcance e validação acompanham a leitura e os
   editores; distinguir fonte citada de declaração do revisor. Não ocultar dados
   malformados como ausência. Evidência na edição reutiliza `screens::evidence`.
-- Progresso recente de capturas pertence ao vazio da Revisão e ao Diagnóstico,
-  não interrompe o documento do candidato. Estado/motivo e retry vêm do backend.
+- A Revisão mostra só candidatos possíveis; atividade vive no Diagnóstico. A fila
+  vazia traz no máximo uma linha de resumo (só partes não zero) e a ação "Ver
+  capturas", que abre Configurações → Diagnóstico, onde ficam a lista, o estado de
+  cada captura e o reprocessamento. Estado/motivo e retry vêm do backend.
   Polling somente visível preserva drafts, seleção e evidência; ausência na janela
   paginada não comprova que o candidato foi resolvido. Toast nomeia regra/decisão
   e vínculos realmente concluídos.

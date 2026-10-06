@@ -490,13 +490,26 @@ pub fn empty_panel_mascot(
     title: &str,
     body: &str,
 ) -> Div {
+    empty_panel_mascot_actions(theme, figure, eyebrow, title, body, None)
+}
+
+/// [`empty_panel_mascot`] with an optional block under the text (a status
+/// line and the way to the surface that holds the detail).
+pub fn empty_panel_mascot_actions(
+    theme: &Theme,
+    figure: std::sync::Arc<gpui::Image>,
+    eyebrow: &str,
+    title: &str,
+    body: &str,
+    actions: Option<AnyElement>,
+) -> Div {
     empty_panel_with(
         theme,
         gpui::img(figure).size(px(96.0)).ml(px(-SpacingScale::S3)),
         eyebrow,
         title,
         body,
-        None,
+        actions,
     )
 }
 

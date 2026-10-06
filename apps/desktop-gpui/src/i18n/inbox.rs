@@ -292,17 +292,6 @@ strings! {
         zh: "确认或拒绝对所有对话生效；每个对话保留各自的证据。",
         ko: "확인이나 거부는 모두에 적용되고, 각각 자기 근거를 유지해요.",
         ru: "Подтверждение или отклонение действует для всех; у каждой остаётся своё доказательство." }
-    /// Toast: a capture went back to the analysis queue.
-    notice_requeued { en: "Capture queued again for analysis.",
-        pt: "Captura reenfileirada para análise.",
-        es: "Captura puesta de nuevo en la cola para análisis.",
-        fr: "Capture remise en file d’attente pour analyse.",
-        de: "Erfassung erneut zur Analyse eingereiht.",
-        it: "Acquisizione rimessa in coda per l’analisi.",
-        ja: "キャプチャを分析のために再度キューに入れました。",
-        zh: "捕获已重新排队等待分析。",
-        ko: "캡처를 분석 대기열에 다시 넣었어요.",
-        ru: "Захват снова поставлен в очередь на анализ." }
     /// Toast: a discarded candidate is back in the queue.
     notice_back_to_queue { en: "Candidate back in the queue.",
         pt: "Candidato de volta à fila.", es: "Candidato de vuelta en la cola.",
@@ -525,12 +514,6 @@ strings! {
         zh: "确认后，该决策将关联到已勾选的项目；未勾选的不会再作为建议出现。",
         ko: "확인하면 결정이 선택한 항목에 연결되고, 선택 해제한 항목은 제안으로 다시 나오지 않아요.",
         ru: "После подтверждения решение связывается с отмеченными элементами; снятые не вернутся как предложения." }
-    /// Heading of the capture progress panel.
-    progress_title { en: "Latest project captures", pt: "Últimas capturas do projeto",
-        es: "Últimas capturas del proyecto", fr: "Dernières captures du projet",
-        de: "Neueste Erfassungen des Projekts", it: "Ultime acquisizioni del progetto",
-        ja: "プロジェクトの最近のキャプチャ", zh: "项目最近的捕获",
-        ko: "프로젝트의 최근 캡처", ru: "Последние захваты проекта" }
     /// Capture pill: waiting for analysis.
     capture_state_queued { en: "Waiting", pt: "Aguardando", es: "En espera", fr: "En attente", de: "Wartet", it: "In attesa", ja: "待機中", zh: "等待中", ko: "대기 중", ru: "Ожидает" }
     /// Capture pill: being analysed.
@@ -547,88 +530,17 @@ strings! {
     capture_state_received { en: "Received", pt: "Recebida", es: "Recibida", fr: "Reçue", de: "Empfangen", it: "Ricevuta", ja: "受信済み", zh: "已收到", ko: "수신됨", ru: "Получен" }
     /// Title of a capture without a user prompt.
     capture_untitled { en: "Capture without a prompt", pt: "Captura sem prompt", es: "Captura sin prompt", fr: "Capture sans prompt", de: "Erfassung ohne Prompt", it: "Acquisizione senza prompt", ja: "プロンプトのないキャプチャ", zh: "没有提示词的捕获", ko: "프롬프트 없는 캡처", ru: "Захват без запроса" }
-    /// Error when a capture could not be reprocessed.
-    reprocess_error { en: "Couldn't reprocess this capture.",
-        pt: "Não foi possível reprocessar esta captura.",
-        es: "No se pudo reprocesar esta captura.",
-        fr: "Impossible de retraiter cette capture.",
-        de: "Diese Erfassung ließ sich nicht neu verarbeiten.",
-        it: "Impossibile rielaborare questa acquisizione.",
-        ja: "このキャプチャを再処理できませんでした。",
-        zh: "无法重新处理此捕获。", ko: "이 캡처를 재처리하지 못했어요.",
-        ru: "Не удалось обработать этот захват заново." }
-    /// Screen-reader label of the reprocess retry button.
-    reprocess_retry_aria { en: "Try reprocessing again",
-        pt: "Tentar reprocessar novamente", es: "Reintentar el reprocesado",
-        fr: "Réessayer le retraitement", de: "Erneut neu verarbeiten",
-        it: "Riprova la rielaborazione", ja: "再処理をもう一度試す",
-        zh: "再次尝试重新处理", ko: "재처리 다시 시도",
-        ru: "Повторить обработку заново" }
-    /// Reprocess retry button.
-    reprocess_retry { en: "Try reprocessing", pt: "Tentar reprocessar",
-        es: "Reprocesar de nuevo", fr: "Retraiter à nouveau", de: "Erneut verarbeiten",
-        it: "Rielabora di nuovo", ja: "再処理を試す", zh: "重试处理", ko: "재처리 시도",
-        ru: "Повторить обработку" }
-    /// Screen-reader label of the dismiss button of the reprocess error.
-    reprocess_dismiss_aria { en: "Dismiss reprocessing error",
-        pt: "Dispensar erro de reprocessamento",
-        es: "Descartar el error de reprocesado",
-        fr: "Ignorer l’erreur de retraitement",
-        de: "Fehler beim Neuverarbeiten ausblenden",
-        it: "Ignora l’errore di rielaborazione", ja: "再処理エラーを閉じる",
-        zh: "忽略重新处理错误", ko: "재처리 오류 닫기",
-        ru: "Скрыть ошибку повторной обработки" }
-    /// Error when the captures could not be refreshed.
-    progress_error { en: "Couldn't refresh the captures.",
-        pt: "Não foi possível atualizar as capturas.",
-        es: "No se pudieron actualizar las capturas.",
-        fr: "Impossible d’actualiser les captures.",
-        de: "Die Erfassungen ließen sich nicht aktualisieren.",
-        it: "Impossibile aggiornare le acquisizioni.",
-        ja: "キャプチャを更新できませんでした。", zh: "无法刷新捕获。",
-        ko: "캡처를 새로 고치지 못했어요.", ru: "Не удалось обновить захваты." }
-    /// Screen-reader label of the captures refresh button.
-    progress_refresh_aria { en: "Refresh captures", pt: "Atualizar capturas",
-        es: "Actualizar capturas", fr: "Actualiser les captures",
-        de: "Erfassungen aktualisieren", it: "Aggiorna acquisizioni",
-        ja: "キャプチャを更新", zh: "刷新捕获", ko: "캡처 새로 고침",
-        ru: "Обновить захваты" }
-    /// The captures are loading.
-    progress_loading { en: "Loading captures…", pt: "Carregando capturas…",
-        es: "Cargando capturas…", fr: "Chargement des captures…",
-        de: "Erfassungen werden geladen …", it: "Caricamento acquisizioni…",
-        ja: "キャプチャを読み込み中…", zh: "正在加载捕获…", ko: "캡처 불러오는 중…",
-        ru: "Загрузка захватов…" }
-    /// The captures destination cannot be read.
-    progress_unavailable { en: "The captures destination is unavailable.",
-        pt: "O destino das capturas está indisponível.",
-        es: "El destino de las capturas no está disponible.",
-        fr: "La destination des captures est indisponible.",
-        de: "Das Ziel der Erfassungen ist nicht verfügbar.",
-        it: "La destinazione delle acquisizioni non è disponibile.",
-        ja: "キャプチャの宛先を利用できません。", zh: "捕获的目的地不可用。",
-        ko: "캡처 대상을 사용할 수 없어요.", ru: "Назначение захватов недоступно." }
-    /// No capture has arrived in the project.
-    progress_empty { en: "No capture received in this project. Captured sessions show up here before review.",
-        pt: "Nenhuma captura recebida neste projeto. As sessões capturadas aparecem aqui antes da revisão.",
-        es: "Ninguna captura recibida en este proyecto. Las sesiones capturadas aparecen aquí antes de la revisión.",
-        fr: "Aucune capture reçue dans ce projet. Les sessions capturées apparaissent ici avant la revue.",
-        de: "In diesem Projekt wurde noch keine Erfassung empfangen. Erfasste Sitzungen erscheinen hier vor der Prüfung.",
-        it: "Nessuna acquisizione ricevuta in questo progetto. Le sessioni acquisite compaiono qui prima della revisione.",
-        ja: "このプロジェクトでキャプチャはまだ届いていません。キャプチャしたセッションは、レビューの前にここに表示されます。",
-        zh: "此项目尚未收到捕获。已捕获的会话会在审阅前显示在这里。",
-        ko: "이 프로젝트에서 받은 캡처가 없어요. 캡처한 세션은 검토 전에 여기에 나타나요.",
-        ru: "В этом проекте пока нет захватов. Захваченные сессии появляются здесь до проверки." }
-    /// Screen-reader label of the reprocess button of a capture.
-    reprocess_aria { en: "Reprocess capture", pt: "Reprocessar captura",
-        es: "Reprocesar captura", fr: "Retraiter la capture",
-        de: "Erfassung neu verarbeiten", it: "Rielabora acquisizione",
-        ja: "キャプチャを再処理", zh: "重新处理捕获", ko: "캡처 재처리",
-        ru: "Обработать захват заново" }
-    /// Reprocess button of a capture.
-    reprocess { en: "Reprocess", pt: "Reprocessar", es: "Reprocesar", fr: "Retraiter",
-        de: "Neu verarbeiten", it: "Rielabora", ja: "再処理", zh: "重新处理",
-        ko: "재처리", ru: "Обработать заново" }
+    /// Button of the empty review queue that opens the captures in Diagnostics.
+    captures_open { en: "View captures", pt: "Ver capturas", es: "Ver capturas",
+        fr: "Voir les captures", de: "Erfassungen ansehen", it: "Vedi acquisizioni",
+        ja: "キャプチャを見る", zh: "查看捕获", ko: "캡처 보기", ru: "Показать захваты" }
+    /// Screen-reader label of the button that opens the captures in Diagnostics.
+    captures_open_aria { en: "View captures in Diagnostics",
+        pt: "Ver capturas em Diagnóstico", es: "Ver capturas en Diagnóstico",
+        fr: "Voir les captures dans Diagnostic", de: "Erfassungen in der Diagnose ansehen",
+        it: "Vedi le acquisizioni in Diagnostica", ja: "診断でキャプチャを見る",
+        zh: "在诊断中查看捕获", ko: "진단에서 캡처 보기",
+        ru: "Показать захваты в диагностике" }
     /// Eyebrow of the empty review queue.
     empty_eyebrow { en: "Review queue", pt: "Fila de revisão", es: "Cola de revisión",
         fr: "File d’attente de revue", de: "Prüfwarteschlange", it: "Coda di revisione",
@@ -1026,109 +938,6 @@ strings! {
         es: "Decisión creada.", fr: "Décision créée.", de: "Entscheidung erstellt.",
         it: "Decisione creata.", ja: "決定を作成しました。", zh: "已创建决策。",
         ko: "결정을 만들었어요.", ru: "Решение создано." }
-    /// Capture state: queued.
-    progress_queued { en: "Capture received · waiting for analysis",
-        pt: "Captura recebida · aguardando análise",
-        es: "Captura recibida · esperando análisis",
-        fr: "Capture reçue · en attente d’analyse",
-        de: "Erfassung empfangen · wartet auf Analyse",
-        it: "Acquisizione ricevuta · in attesa di analisi",
-        ja: "キャプチャを受信 · 分析待ち", zh: "已收到捕获 · 等待分析",
-        ko: "캡처 수신됨 · 분석 대기 중", ru: "Захват получен · ожидает анализа" }
-    /// Capture state: running.
-    progress_running { en: "Capture received · analysis in progress",
-        pt: "Captura recebida · análise em andamento",
-        es: "Captura recibida · análisis en curso",
-        fr: "Capture reçue · analyse en cours",
-        de: "Erfassung empfangen · Analyse läuft",
-        it: "Acquisizione ricevuta · analisi in corso",
-        ja: "キャプチャを受信 · 分析中", zh: "已收到捕获 · 正在分析",
-        ko: "캡처 수신됨 · 분석 진행 중", ru: "Захват получен · идёт анализ" }
-    /// Capture state: failed, nothing confirmed.
-    progress_failed_nothing { en: "The analysis failed; no new result was confirmed.",
-        pt: "A análise falhou; nenhum resultado novo foi confirmado.",
-        es: "El análisis falló; no se confirmó ningún resultado nuevo.",
-        fr: "L’analyse a échoué ; aucun nouveau résultat n’a été confirmé.",
-        de: "Die Analyse ist fehlgeschlagen; es wurde kein neues Ergebnis bestätigt.",
-        it: "L’analisi non è riuscita; nessun nuovo risultato è stato confermato.",
-        ja: "分析に失敗しました。新しい結果は確定されていません。",
-        zh: "分析失败；没有确认任何新结果。",
-        ko: "분석에 실패했어요. 새로 확인된 결과는 없어요.",
-        ru: "Анализ не удался; новых подтверждённых результатов нет." }
-    /// Capture state: skipped because authorization blocked it.
-    progress_skipped { en: "Analysis not run: authorization blocked the extraction.",
-        pt: "Análise não executada: autorização bloqueou a extração.",
-        es: "Análisis no ejecutado: la autorización bloqueó la extracción.",
-        fr: "Analyse non exécutée : l’autorisation a bloqué l’extraction.",
-        de: "Analyse nicht ausgeführt: Die Autorisierung hat die Extraktion blockiert.",
-        it: "Analisi non eseguita: l’autorizzazione ha bloccato l’estrazione.",
-        ja: "分析は実行されませんでした。認可により抽出がブロックされました。",
-        zh: "未执行分析：授权阻止了提取。",
-        ko: "분석을 실행하지 않았어요. 권한 때문에 추출이 차단됐어요.",
-        ru: "Анализ не выполнялся: авторизация заблокировала извлечение." }
-    /// Capture state: cancelled.
-    progress_cancelled { en: "Analysis cancelled.", pt: "Análise cancelada.",
-        es: "Análisis cancelado.", fr: "Analyse annulée.", de: "Analyse abgebrochen.",
-        it: "Analisi annullata.", ja: "分析をキャンセルしました。", zh: "分析已取消。",
-        ko: "분석이 취소됐어요.", ru: "Анализ отменён." }
-    /// Capture state: unknown.
-    progress_unknown { en: "Capture received · analysis status not reported",
-        pt: "Captura recebida · estado da análise não informado",
-        es: "Captura recibida · estado del análisis no informado",
-        fr: "Capture reçue · état de l’analyse non communiqué",
-        de: "Erfassung empfangen · Status der Analyse nicht gemeldet",
-        it: "Acquisizione ricevuta · stato dell’analisi non indicato",
-        ja: "キャプチャを受信 · 分析の状態は不明",
-        zh: "已收到捕获 · 分析状态未知", ko: "캡처 수신됨 · 분석 상태 정보 없음",
-        ru: "Захват получен · состояние анализа не указано" }
-    /// Capture analysis done, with candidates.
-    progress_done_candidates { en: "Analysis complete · candidates produced for review",
-        pt: "Análise concluída · candidatos produzidos para revisão",
-        es: "Análisis completado · candidatos producidos para revisión",
-        fr: "Analyse terminée · candidats produits pour la revue",
-        de: "Analyse abgeschlossen · Kandidaten zur Prüfung erzeugt",
-        it: "Analisi completata · candidati prodotti per la revisione",
-        ja: "分析完了 · レビュー用の候補を生成",
-        zh: "分析完成 · 已生成待审阅的候选",
-        ko: "분석 완료 · 검토할 후보 생성됨",
-        ru: "Анализ завершён · кандидаты подготовлены для проверки" }
-    /// Capture analysis done, with implementation details only.
-    progress_done_detail { en: "Analysis complete · only implementation details, no lasting candidate",
-        pt: "Análise concluída · apenas detalhes de implementação, sem candidato duradouro",
-        es: "Análisis completado · solo detalles de implementación, sin candidato duradero",
-        fr: "Analyse terminée · seulement des détails d’implémentation, aucun candidat durable",
-        de: "Analyse abgeschlossen · nur Implementierungsdetails, kein dauerhafter Kandidat",
-        it: "Analisi completata · solo dettagli di implementazione, nessun candidato duraturo",
-        ja: "分析完了 · 実装の詳細のみで、長く残る候補はなし",
-        zh: "分析完成 · 仅有实现细节，没有长期有效的候选",
-        ko: "분석 완료 · 구현 세부 사항만 있고 오래 남을 후보는 없음",
-        ru: "Анализ завершён · только детали реализации, без долговечного кандидата" }
-    /// Capture analysis done, nothing proposed.
-    progress_done_empty { en: "Analysis complete · no proposal produced",
-        pt: "Análise concluída · nenhuma proposta produzida",
-        es: "Análisis completado · ninguna propuesta producida",
-        fr: "Analyse terminée · aucune proposition produite",
-        de: "Analyse abgeschlossen · kein Vorschlag erzeugt",
-        it: "Analisi completata · nessuna proposta prodotta",
-        ja: "分析完了 · 提案は生成されませんでした",
-        zh: "分析完成 · 没有生成任何提案",
-        ko: "분석 완료 · 만들어진 제안 없음",
-        ru: "Анализ завершён · предложений не создано" }
-    /// Capture analysis failed.
-    progress_failed { en: "The analysis failed.", pt: "A análise falhou.",
-        es: "El análisis falló.", fr: "L’analyse a échoué.",
-        de: "Die Analyse ist fehlgeschlagen.", it: "L’analisi non è riuscita.",
-        ja: "分析に失敗しました。", zh: "分析失败。", ko: "분석에 실패했어요.",
-        ru: "Анализ не удался." }
-    /// Capture analysis done, reason unknown.
-    progress_done_unknown { en: "Analysis complete · reason not reported",
-        pt: "Análise concluída · motivo não informado",
-        es: "Análisis completado · motivo no informado",
-        fr: "Analyse terminée · raison non communiquée",
-        de: "Analyse abgeschlossen · Grund nicht gemeldet",
-        it: "Analisi completata · motivo non indicato",
-        ja: "分析完了 · 理由は不明", zh: "分析完成 · 原因未知",
-        ko: "분석 완료 · 이유 정보 없음", ru: "Анализ завершён · причина не указана" }
 }
 
 formats! {
@@ -1261,6 +1070,13 @@ formats! {
         ja: "{loaded} 件読み込み済み · {visible} 件表示",
         zh: "已加载 {loaded} · 可见 {visible}", ko: "{loaded}개 불러옴 · {visible}개 표시",
         ru: "загружено: {loaded} · видно: {visible}" }
+    /// Line under the empty review queue: what the latest captures did.
+    capture_activity(summary: &str) { en: "Latest captures: {summary}",
+        pt: "Últimas capturas: {summary}", es: "Últimas capturas: {summary}",
+        fr: "Dernières captures : {summary}", de: "Letzte Erfassungen: {summary}",
+        it: "Ultime acquisizioni: {summary}", ja: "最近のキャプチャ: {summary}",
+        zh: "最近的捕获：{summary}", ko: "최근 캡처: {summary}",
+        ru: "Последние захваты: {summary}" }
 }
 
 plurals! {

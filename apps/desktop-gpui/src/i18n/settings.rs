@@ -2670,19 +2670,6 @@ strings! {
         ko: "이 프로젝트에서 받은 캡처가 없어요.",
         ru: "В этом проекте захватов пока нет.",
     }
-    /// Diagnostics: the capture source was not reported.
-    diag_source_unknown {
-        en: "Source not given",
-        pt: "Fonte não informada",
-        es: "Fuente no indicada",
-        fr: "Source non indiquée",
-        de: "Quelle nicht angegeben",
-        it: "Fonte non indicata",
-        ja: "ソース不明",
-        zh: "未提供来源",
-        ko: "출처 정보 없음",
-        ru: "Источник не указан",
-    }
     /// Diagnostics: screen reader label of the capture reprocess button.
     diag_reprocess_capture_label {
         en: "Reprocess capture",
@@ -4612,19 +4599,6 @@ formats! {
         zh: "本地（{mode}）",
         ko: "로컬 ({mode})",
         ru: "локальное ({mode})",
-    }
-    /// Diagnostics: date, source, model and attempt of a capture.
-    diag_capture_meta(date: &str, source: &str, model: &str, attempt: i64) {
-        en: "{date} · {source}{model} · attempt {attempt}",
-        pt: "{date} · {source}{model} · tentativa {attempt}",
-        es: "{date} · {source}{model} · intento {attempt}",
-        fr: "{date} · {source}{model} · tentative {attempt}",
-        de: "{date} · {source}{model} · Versuch {attempt}",
-        it: "{date} · {source}{model} · tentativo {attempt}",
-        ja: "{date} · {source}{model} · {attempt}回目の試行",
-        zh: "{date} · {source}{model} · 第 {attempt} 次尝试",
-        ko: "{date} · {source}{model} · {attempt}번째 시도",
-        ru: "{date} · {source}{model} · попытка {attempt}",
     }
     /// Status line: captures are analyzed by a host.
     analysed_by_host(host: &str) {

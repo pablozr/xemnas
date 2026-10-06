@@ -21,10 +21,11 @@ use gpui::{div, px, AnyElement, Context, Div, Render, Role, Window};
 use super::parts::{card, card_body, card_footer, stat_tile};
 use crate::i18n::settings as t;
 use crate::screens::format::date_time;
+use crate::screens::inbox::{capture_facts, capture_pill, capture_summary};
 use crate::ui::controls::{action_button, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
-    error_banner, meter, segment_label, segmented, skeleton_list, status_pill, toast,
+    error_banner, meter, segment_label, segmented, skeleton_list, status_pill, toast, word_wrapped,
     TOAST_DURATION,
 };
 use crate::ui::theme::{text_style, Theme};
@@ -969,29 +970,33 @@ impl DiagnosticsPanel {
                 t::diag_no_captures()
             });
         }
+        column = column.child(
+            text_style(div(), TypeScale::META)
+                .text_color(theme.colors.text_secondary())
+                .child(capture_summary(&self.progress)),
+        );
         for (index, capture) in self.progress.iter().enumerate() {
+            let (pill_color, pill_label) = capture_pill(theme, capture);
+            let title = capture
+                .title
+                .as_deref()
+                .unwrap_or(crate::i18n::inbox::capture_untitled());
             let mut row = div()
                 .flex()
                 .flex_col()
-                .gap(px(SpacingScale::S2))
+                .gap(px(SpacingScale::S1))
                 .child(
-                    text_style(div(), TypeScale::BODY)
-                        .child(crate::screens::inbox::progress_copy(capture)),
+                    div()
+                        .flex()
+                        .items_start()
+                        .gap(px(SpacingScale::S3))
+                        .child(word_wrapped(title, TypeScale::BODY, Some(2)))
+                        .child(status_pill(theme, pill_color, pill_label)),
                 )
                 .child(
-                    text_style(div(), TypeScale::META).child(t::diag_capture_meta(
-                        &date_time(&capture.received_at),
-                        capture
-                            .source
-                            .as_deref()
-                            .unwrap_or(t::diag_source_unknown()),
-                        &capture
-                            .model
-                            .as_ref()
-                            .map(|model| format!(" · {model}"))
-                            .unwrap_or_default(),
-                        capture.attempts,
-                    )),
+                    text_style(div(), TypeScale::META)
+                        .text_color(theme.colors.text_muted())
+                        .child(capture_facts(capture)),
                 );
             if capture.can_retry {
                 if let Some(job) = capture.job_id.clone() {
@@ -1006,6 +1011,7 @@ impl DiagnosticsPanel {
                         .on_click(
                             cx.listener(move |this, _, _, cx| this.retry_capture(job.clone(), cx)),
                         )
+                        .self_start()
                         .child(t::action_reprocess()),
                     );
                 }

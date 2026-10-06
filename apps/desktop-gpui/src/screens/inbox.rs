@@ -153,11 +153,8 @@ pub struct InboxScreen<S: InboxStore + ReviewExceptionStore + Send + 'static> {
     /// The ties the selected candidate's evidence points to, each kept or not.
     links: Option<MapLinks>,
     progress_read: Option<ProgressRead>,
-    progress_retry: Option<ProgressRetry>,
     progress: Vec<CaptureProgress>,
     progress_busy: bool,
-    progress_error: bool,
-    progress_action_error: Option<String>,
     /// The previous visit to the project, read once to build the briefing.
     since_visit: Option<String>,
     /// What changed since that visit, shown as one quiet line.
@@ -190,6 +187,14 @@ const STREAK_LEN: usize = 8;
 const STREAK_GAP: std::time::Duration = std::time::Duration::from_secs(4);
 /// Lines of the ledger shown when it is open.
 const LEDGER_SHOWN: usize = 8;
+
+/// Asks the shell to open Settings on Diagnostics, where the captures list lives.
+pub struct OpenDiagnostics;
+
+impl<S: InboxStore + ReviewExceptionStore + Send + 'static> EventEmitter<OpenDiagnostics>
+    for InboxScreen<S>
+{
+}
 
 impl<S: InboxStore + ReviewExceptionStore + Send + 'static> EventEmitter<OpenDecision>
     for InboxScreen<S>
@@ -384,10 +389,9 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             .into_any_element()
     }
 
-    /// Installs capture reads and retry without starting integrations.
-    pub fn set_progress(&mut self, read: ProgressRead, retry: ProgressRetry) {
+    /// Installs the capture read behind the empty queue's activity line.
+    pub fn set_progress(&mut self, read: ProgressRead) {
         self.progress_read = Some(read);
-        self.progress_retry = Some(retry);
     }
 
     fn poll_progress(&mut self, cx: &mut Context<Self>) {
@@ -411,12 +415,8 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                     this.poll_progress(cx);
                     return;
                 }
-                match result {
-                    Ok(rows) => {
-                        this.progress = rows;
-                        this.progress_error = false;
-                    }
-                    Err(_) => this.progress_error = true,
+                if let Ok(rows) = result {
+                    this.progress = rows;
                 }
                 cx.notify();
             });
@@ -424,35 +424,6 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
         .detach();
     }
 
-    fn retry_progress(&mut self, job: String, cx: &mut Context<Self>) {
-        if self.progress_busy {
-            return;
-        }
-        let Some(retry) = self.progress_retry.clone() else {
-            return;
-        };
-        let retry_job = job.clone();
-        let generation = self.generation;
-        self.progress_busy = true;
-        cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move { retry(&retry_job) })
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                this.progress_busy = false;
-                if generation == this.generation {
-                    record_retry_result(&mut this.progress_action_error, &job, result.is_ok());
-                    if result.is_ok() {
-                        this.notice = Some(t::notice_requeued());
-                    }
-                }
-                this.poll_progress(cx);
-                cx.notify();
-            });
-        })
-        .detach();
-    }
     /// Confirms through the adoption use case, so a decision lands on the
     /// map with the ties the person kept.
     pub fn set_approvals(&mut self, approvals: Arc<dyn ApprovalsApi>, cx: &mut Context<Self>) {
@@ -644,11 +615,8 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             project_id: None,
             generation: 0,
             progress_read: None,
-            progress_retry: None,
             progress: Vec::new(),
             progress_busy: false,
-            progress_error: false,
-            progress_action_error: None,
             search: None,
             total: None,
             editor: None,
@@ -708,8 +676,6 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
         self.project_id = project_id;
         self.generation += 1;
         self.progress.clear();
-        self.progress_error = false;
-        self.progress_action_error = None;
         self.poll_progress(cx);
         self.briefing = None;
         self.briefing_hidden = false;
@@ -1967,117 +1933,33 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
         )
     }
 
-    fn progress_panel(&self, cx: &mut Context<Self>) -> Div {
-        let theme = Theme::current(cx);
-        let mut panel = div()
-            .flex()
-            .flex_col()
-            .gap(px(SpacingScale::S4))
-            .max_w(px(READING_WIDTH))
-            .p(px(SpacingScale::S6))
-            .child(section_label(&theme, t::progress_title()));
-        if let Some(job) = self.progress_action_error.clone() {
-            panel = panel.child(
-                error_banner(&theme, t::reprocess_error())
-                    .id("capture-action-error")
-                    .role(Role::Alert)
-                    .child(
-                        action_button(
-                            &theme,
-                            "capture-action-retry",
-                            ButtonKind::Secondary,
-                            !self.progress_busy,
-                        )
-                        .aria_label(t::reprocess_retry_aria())
-                        .on_click(
-                            cx.listener(move |this, _, _, cx| this.retry_progress(job.clone(), cx)),
-                        )
-                        .child(t::reprocess_retry()),
-                    )
-                    .child(
-                        action_button(&theme, "capture-action-dismiss", ButtonKind::Ghost, true)
-                            .aria_label(t::reprocess_dismiss_aria())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.progress_action_error = None;
-                                cx.notify();
-                            }))
-                            .child(t::dismiss()),
-                    ),
-            );
+    /// Under the empty queue: what the last captures did, only the non-zero
+    /// parts, and the way to the list that lives in Diagnostics. Nothing when
+    /// no capture was read.
+    fn activity_line(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let summary = capture_summary(&self.progress);
+        if summary.is_empty() {
+            return None;
         }
-        if self.progress_error {
-            panel = panel.child(
-                error_banner(&theme, t::progress_error())
-                    .id("capture-progress-error")
-                    .role(Role::Alert)
-                    .child(
-                        action_button(
-                            &theme,
-                            "capture-progress-retry-read",
-                            ButtonKind::Ghost,
-                            !self.progress_busy,
-                        )
-                        .aria_label(t::progress_refresh_aria())
-                        .on_click(cx.listener(|this, _, _, cx| this.poll_progress(cx)))
-                        .child(t::try_again()),
-                    ),
-            );
-        }
-        if self.progress.is_empty() {
-            return panel.child(if self.progress_busy {
-                t::progress_loading()
-            } else if self.progress_error {
-                t::progress_unavailable()
-            } else {
-                t::progress_empty()
-            });
-        }
-        panel = panel.child(
-            text_style(div(), TypeScale::META)
-                .text_color(theme.colors.text_secondary())
-                .child(capture_summary(&self.progress)),
-        );
-        for (index, capture) in self.progress.iter().take(PROGRESS_ROWS).enumerate() {
-            let (pill_color, pill_label) = capture_pill(&theme, capture);
-            let title = capture.title.as_deref().unwrap_or(t::capture_untitled());
-            let mut row = div()
+        Some(
+            div()
                 .flex()
                 .flex_col()
-                .gap(px(SpacingScale::S1))
-                .child(
-                    div()
-                        .flex()
-                        .items_start()
-                        .gap(px(SpacingScale::S3))
-                        .child(word_wrapped(title, TypeScale::BODY, Some(2)))
-                        .child(status_pill(&theme, pill_color, pill_label)),
-                )
+                .items_start()
+                .gap(px(SpacingScale::S2))
                 .child(
                     text_style(div(), TypeScale::META)
                         .text_color(theme.colors.text_muted())
-                        .child(capture_facts(capture)),
-                );
-            if capture.can_retry {
-                if let Some(job) = capture.job_id.clone() {
-                    row = row.child(
-                        action_button(
-                            &theme,
-                            ("capture-reprocess", index),
-                            ButtonKind::Secondary,
-                            !self.progress_busy,
-                        )
-                        .aria_label(t::reprocess_aria())
-                        .on_click(
-                            cx.listener(move |this, _, _, cx| this.retry_progress(job.clone(), cx)),
-                        )
-                        .self_start()
-                        .child(t::reprocess()),
-                    );
-                }
-            }
-            panel = panel.child(row);
-        }
-        panel
+                        .child(t::capture_activity(&summary)),
+                )
+                .child(
+                    action_button(theme, "review-open-captures", ButtonKind::Ghost, true)
+                        .aria_label(t::captures_open_aria())
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(OpenDiagnostics)))
+                        .child(t::captures_open()),
+                )
+                .into_any_element(),
+        )
     }
 
     fn reading_pane(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -2088,15 +1970,13 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             .filter(|detail| matches_query(&detail.summary, &self.query));
         let Some(detail) = visible_detail else {
             if self.loaded && self.rows.is_empty() && !self.busy {
-                if self.progress_read.is_some() {
-                    return self.progress_panel(cx).into_any_element();
-                }
-                return crate::ui::patterns::empty_panel_mascot(
+                return crate::ui::patterns::empty_panel_mascot_actions(
                     &theme,
                     crate::screens::assistant::resting(),
                     t::empty_eyebrow(),
                     t::empty_title(),
                     t::empty_body(),
+                    self.activity_line(&theme, cx),
                 )
                 .into_any_element();
             }
@@ -2603,11 +2483,8 @@ fn selected_change(
     }
 }
 
-/// Rows shown in the captures panel; the reader loads no more than this.
-const PROGRESS_ROWS: usize = 8;
-
 /// Pill colour and label of a capture's state.
-fn capture_pill(theme: &Theme, capture: &CaptureProgress) -> (gpui::Rgba, &'static str) {
+pub(crate) fn capture_pill(theme: &Theme, capture: &CaptureProgress) -> (gpui::Rgba, &'static str) {
     let colors = &theme.colors;
     let failed =
         capture.state == CaptureState::Completed && capture.reason == AssessmentReason::Failed;
@@ -2629,7 +2506,7 @@ fn dot_joined(parts: Vec<String>) -> String {
 }
 
 /// One line over the loaded captures: only the non-zero parts.
-fn capture_summary(captures: &[CaptureProgress]) -> String {
+pub(crate) fn capture_summary(captures: &[CaptureProgress]) -> String {
     let count = |keep: fn(&CaptureProgress) -> bool| captures.iter().filter(|c| keep(c)).count();
     let waiting = count(|c| matches!(c.state, CaptureState::Queued | CaptureState::Running));
     let analysed = count(|c| c.state == CaptureState::Completed);
@@ -2651,7 +2528,7 @@ fn capture_summary(captures: &[CaptureProgress]) -> String {
 }
 
 /// Time, adapter, model and the counts that are not zero.
-fn capture_facts(capture: &CaptureProgress) -> String {
+pub(crate) fn capture_facts(capture: &CaptureProgress) -> String {
     let counts = &capture.candidates;
     let mut parts = vec![relative(&capture.received_at)];
     parts.extend(capture.adapter.clone());
@@ -2670,25 +2547,6 @@ fn capture_facts(capture: &CaptureProgress) -> String {
         parts.push(t::capture_attempt(capture.attempts as usize));
     }
     dot_joined(parts)
-}
-
-pub(super) fn progress_copy(capture: &CaptureProgress) -> &'static str {
-    match capture.state {
-        CaptureState::Queued => t::progress_queued(),
-        CaptureState::Running => t::progress_running(),
-        CaptureState::Failed => t::progress_failed_nothing(),
-        CaptureState::Skipped => t::progress_skipped(),
-        CaptureState::Cancelled => t::progress_cancelled(),
-        CaptureState::Unknown => t::progress_unknown(),
-        CaptureState::Completed => match capture.reason {
-            AssessmentReason::Candidates => t::progress_done_candidates(),
-            AssessmentReason::Detail => t::progress_done_detail(),
-            AssessmentReason::Empty => t::progress_done_empty(),
-            AssessmentReason::Failed => t::progress_failed(),
-            AssessmentReason::Skipped => t::progress_skipped(),
-            AssessmentReason::Unknown => t::progress_done_unknown(),
-        },
-    }
 }
 
 fn confirmation_notice(rule: bool, linked: bool) -> &'static str {
@@ -2976,35 +2834,6 @@ mod tests {
             capture_summary(&[capture.clone(), capture]),
             "2 analysed · 4 proposals"
         );
-    }
-
-    #[test]
-    fn capture_copy_does_not_reuse_old_assessment_while_running() {
-        let mut capture = CaptureProgress {
-            project_id: "p".into(),
-            capture_id: "c".into(),
-            received_at: "2026-10-04".into(),
-            title: None,
-            adapter: None,
-            job_id: Some("j".into()),
-            attempts: 2,
-            state: CaptureState::Running,
-            reason: AssessmentReason::Detail,
-            source: None,
-            model: None,
-            durable: 0,
-            detail: 1,
-            candidates: Default::default(),
-            can_retry: false,
-        };
-        assert_eq!(
-            progress_copy(&capture),
-            "Capture received · analysis in progress"
-        );
-        capture.state = CaptureState::Completed;
-        assert!(progress_copy(&capture).contains("only implementation details"));
-        capture.reason = AssessmentReason::Unknown;
-        assert!(progress_copy(&capture).contains("not reported"));
     }
 
     #[test]
