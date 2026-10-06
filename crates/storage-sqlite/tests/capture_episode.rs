@@ -121,6 +121,7 @@ fn upgrade_33_to_34_preserves_legacy_artifacts_without_reconstructing_identity()
         "DROP TABLE capture_episode_sources;
         DROP TABLE decision_search_terms;
         DROP TABLE agent_queries;
+        ALTER TABLE project_documents DROP COLUMN source;
         DELETE FROM schema_migrations WHERE version >= 38;",
     )
     .unwrap();

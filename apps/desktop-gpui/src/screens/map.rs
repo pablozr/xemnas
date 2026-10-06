@@ -3909,8 +3909,13 @@ fn link_wording(suggestion: &Suggestion) -> (Vec<(String, bool)>, String) {
         application::graph::ai_link_quote(reason),
         application::graph::ai_link_why(reason),
     ) {
+        let sentence = if rule {
+            t::link_ai_rule(&source, &shown, quote, why)
+        } else {
+            t::link_ai_decision(&source, &shown, quote, why)
+        };
         return (
-            t::spans(&t::link_ai_decision(&source, &shown, quote, why)),
+            t::spans(&sentence),
             t::link_mention_effect(target, uses, rule),
         );
     }

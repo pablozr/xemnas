@@ -36,7 +36,9 @@ exportação para Markdown ou JSON e uma revisão consultiva, sob demanda, que a
 entre decisões sem alterar nada.
 
 **Regras com escopo.** Uma regra ligada a componentes só vale quando a tarefa toca um deles.
-Sem ligação, vale para o projeto todo (`crates/application/src/graph/scope.rs`).
+Sem ligação, vale para o projeto todo (`crates/application/src/graph/scope.rs`), mas a IA propõe
+os componentes de uma regra sem ligação (e sem decisão de origem ligada) para a revisão
+confirmar.
 
 **Grafo e mapa.** Componentes e tecnologias do projeto, com os arquivos que cada um cobre e as
 decisões e regras ligadas a eles. Os componentes vêm do workspace declarado e dos arquivos que
@@ -54,7 +56,10 @@ A busca é lexical (FTS5) mais o grafo. O Context Pack manual aparece na tela Co
 
 **Projetos e worktrees.** Um worktree do git conta como o projeto registrado
 (`crates/application/src/repo_identity.rs`). Edições em outro worktree do mesmo repositório
-entram com o caminho relativo a ele (`apps/mcp-server/src/hook/worktree.rs`).
+entram com o caminho relativo a ele (`apps/mcp-server/src/hook/worktree.rs`). Documentos de worktrees
+não são varridos: em Contexto, Documentação, "Importar documento…" traz um único arquivo da pasta do
+projeto ou de um worktree do mesmo repositório, com o caminho relativo ao worktree dele, e o enfileira
+para a extração e a revisão normais (`Documents::import_file`). Só documentação em UTF-8 até 512 KB.
 
 **Interface.** App nativo em Rust + GPUI. Telas: Revisão, Decisões, Contexto, Mapa, Visão,
 Projetos e Configurações (IA, OpenCode, Diagnóstico, Aparência, Idioma). Paleta com Ctrl K.

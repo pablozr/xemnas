@@ -10,7 +10,7 @@ impl DocumentStore for SqliteStore {
         let connection = self.lock();
         let mut statement = connection
             .prepare(
-                "SELECT path, kind, title, headings, excerpt, bytes, fingerprint, indexed_at \
+                "SELECT path, kind, title, headings, excerpt, bytes, fingerprint, indexed_at, source \
                  FROM project_documents WHERE project_id = ?1 ORDER BY path",
             )
             .map_err(storage_error)?;
@@ -33,6 +33,7 @@ impl DocumentStore for SqliteStore {
                     bytes: u64::try_from(bytes).unwrap_or_default(),
                     fingerprint: row.get(6)?,
                     indexed_at: row.get(7)?,
+                    source: row.get(8)?,
                 })
             })
             .map_err(storage_error)?;
@@ -56,8 +57,8 @@ impl DocumentStore for SqliteStore {
             let mut insert = transaction
                 .prepare(
                     "INSERT INTO project_documents (project_id, path, kind, title, headings, \
-                     excerpt, bytes, fingerprint, indexed_at) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                     excerpt, bytes, fingerprint, indexed_at, source) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 )
                 .map_err(storage_error)?;
             for document in documents {
@@ -72,6 +73,7 @@ impl DocumentStore for SqliteStore {
                         i64::try_from(document.bytes).unwrap_or(i64::MAX),
                         document.fingerprint,
                         document.indexed_at,
+                        document.source,
                     ])
                     .map_err(storage_error)?;
             }

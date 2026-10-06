@@ -456,6 +456,9 @@ where
         // (backfill for ties made before the claim or before this rule).
         let ties = Self::decision_ties(&edges);
         self.inherit_claim_scope(&mut edges, &claims, &ties, &now)?;
+        // Standing rules still without a component tie, and whose source
+        // decision gives none, ask the AI which components they govern.
+        crate::link_suggestions::queue_untied_claims(&self.store, &claims, &edges, components, &at);
         let valid_claims: BTreeSet<String> = claims
             .into_iter()
             .filter(|claim| claim.is_valid_at(&at))

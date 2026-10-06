@@ -80,6 +80,14 @@ já perguntada não é perguntada de novo. Sem componentes vivos o job termina s
 IA. Sugestões com citação verificada vão ao juiz da revisão automática (`Triage::Ask`), que
 vê a citação e o motivo.
 
+A mesma pergunta vale para uma regra permanente (claim `constraint` ou `convention`) sem
+ligação a componente e cuja decisão de origem, se houver, também não tem vínculo: o job
+recebe o id da claim, envia o enunciado (mais o texto dos qualificadores) com o mesmo prompt
+e guarda uma sugestão `applies_to` pendente da claim ao componente. É enfileirado na adoção
+da regra e pelo refresh do mapa (até 50 por refresh, uma vez por claim); confirmada a
+sugestão, `claims_out_of_scope` já filtra a regra por tarefa. O prompt não mudou, então a
+fixture de respostas continua valendo.
+
 A fixture é gerada uma vez, por um teste ignorado que chama o provedor e exige a autorização
 do usuário:
 

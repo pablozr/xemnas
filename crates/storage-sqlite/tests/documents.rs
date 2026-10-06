@@ -229,3 +229,139 @@ fn documents_go_to_review_once_per_version_tied_to_the_code_they_cite() {
     documents.index("docs-p").expect("reindex plain");
     assert_eq!(documents.propose("docs-p", 10).expect("noise"), 0);
 }
+
+fn git(directory: &std::path::Path, args: &[&str]) -> bool {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(directory)
+        .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+        .args(args)
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+fn git_repo(path: &std::path::Path) {
+    std::fs::create_dir_all(path).expect("dir");
+    assert!(git(path, &["init", "-q"]));
+    assert!(git(path, &["commit", "-q", "--allow-empty", "-m", "init"]));
+}
+
+const WORKTREE_ADR: &str = "# Perfil de turno\n\n## Decisão\nGuardar o perfil em SQLite, em \
+                            crates/storage-sqlite/src/store.rs.\n";
+
+#[test]
+fn a_document_of_a_sibling_worktree_is_imported_and_proposed() {
+    if !git(std::path::Path::new("."), &["--version"]) {
+        eprintln!("skipped: git is unavailable");
+        return;
+    }
+    let test = support::open("documents-import", &[]);
+    let main = test.root.join("main");
+    git_repo(&main);
+    let sibling = test.root.join("sibling");
+    assert!(git(
+        &main,
+        &["worktree", "add", "-q", &sibling.to_string_lossy()]
+    ));
+    test.store
+        .insert(&ProjectRecord::new(
+            "wt-p".into(),
+            main.to_string_lossy().replace('\\', "/"),
+            "2026-01-01T00:00:00Z".into(),
+        ))
+        .expect("project");
+    let file = sibling.join("docs/adr/0014-turn-profile.md");
+    std::fs::create_dir_all(file.parent().expect("parent")).expect("dirs");
+    std::fs::write(&file, WORKTREE_ADR).expect("adr");
+    let documents = Documents::new(test.store.clone());
+    let identity = application::repo_identity::GitRepoIdentity;
+
+    let first = documents
+        .import_file(&identity, "wt-p", &file)
+        .expect("import");
+    assert_eq!(first.document.path, "docs/adr/0014-turn-profile.md");
+    assert_eq!(first.document.kind, DocumentKind::Adr);
+    assert!(first.queued, "the normal extraction runs");
+
+    let again = documents
+        .import_file(&identity, "wt-p", &file)
+        .expect("same content");
+    assert!(!again.queued, "a version is queued once");
+    assert_eq!(documents.list("wt-p").expect("list").len(), 1);
+
+    // Reading the folder again keeps what was imported.
+    documents.index("wt-p").expect("index");
+    assert_eq!(documents.list("wt-p").expect("kept").len(), 1);
+
+    // Changed content replaces the stored version and queues the new one.
+    std::fs::write(&file, format!("{WORKTREE_ADR}\nAtualizado.\n")).expect("edit");
+    let changed = documents
+        .import_file(&identity, "wt-p", &file)
+        .expect("changed");
+    assert!(changed.queued);
+    let listed = documents.list("wt-p").expect("list");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].fingerprint, changed.document.fingerprint);
+
+    let connection = Connection::open(test.root.join("app.db")).expect("raw");
+    let captures: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM capture_receipts WHERE idempotency_key LIKE ?1",
+            ["document:wt-p:docs/adr/0014-turn-profile.md:%"],
+            |row| row.get(0),
+        )
+        .expect("count");
+    assert_eq!(captures, 2, "one capture per version");
+}
+
+#[test]
+fn imports_outside_the_repository_or_not_documents_are_refused_without_a_trace() {
+    if !git(std::path::Path::new("."), &["--version"]) {
+        eprintln!("skipped: git is unavailable");
+        return;
+    }
+    let test = support::open("documents-import-refused", &[]);
+    let main = test.root.join("main");
+    git_repo(&main);
+    let unrelated = test.root.join("unrelated");
+    git_repo(&unrelated);
+    test.store
+        .insert(&ProjectRecord::new(
+            "wt-p".into(),
+            main.to_string_lossy().replace('\\', "/"),
+            "2026-01-01T00:00:00Z".into(),
+        ))
+        .expect("project");
+    std::fs::create_dir_all(unrelated.join("docs")).expect("dirs");
+    std::fs::write(unrelated.join("docs/notes.md"), WORKTREE_ADR).expect("notes");
+    std::fs::write(main.join("lib.rs"), "fn main() {}\n").expect("code");
+    std::fs::create_dir_all(main.join("docs")).expect("dirs");
+    std::fs::write(main.join("docs/blob.md"), [0x23, 0x20, 0x00, 0xff, 0xfe]).expect("binary");
+    std::fs::write(main.join("docs/huge.md"), vec![b'a'; 600 * 1024]).expect("huge");
+    let documents = Documents::new(test.store.clone());
+    let identity = application::repo_identity::GitRepoIdentity;
+    let import = |path: std::path::PathBuf| documents.import_file(&identity, "wt-p", &path);
+
+    assert_eq!(
+        import(unrelated.join("docs/notes.md")).unwrap_err(),
+        DocumentError::OutsideRepository
+    );
+    assert_eq!(
+        import(main.join("lib.rs")).unwrap_err(),
+        DocumentError::NotDocumentation
+    );
+    assert_eq!(
+        import(main.join("docs/blob.md")).unwrap_err(),
+        DocumentError::NotText
+    );
+    assert_eq!(
+        import(main.join("docs/huge.md")).unwrap_err(),
+        DocumentError::NotText
+    );
+    assert_eq!(
+        import(main.join("docs/missing.md")).unwrap_err(),
+        DocumentError::FileUnavailable
+    );
+    assert!(documents.list("wt-p").expect("list").is_empty());
+}

@@ -24,7 +24,7 @@ use application::decisions::{
     DecisionFilter, DecisionStatus, DecisionStore, DecisionSummary, Decisions,
 };
 use application::documents::{
-    DocumentIndex, DocumentKind, DocumentStore, Documents, ProjectDocument,
+    DocumentIndex, DocumentKind, DocumentStore, Documents, ImportedDocument, ProjectDocument,
 };
 use application::export::{preview_pack, write_pack, ExportFormat};
 use application::graph::GraphStore;
@@ -66,6 +66,7 @@ pub trait ContextStores:
     + ContextSettingsStore
     + GraphStore
     + DocumentStore
+    + application::captures::CaptureRepository
     + InjectionHistory
     + ClaimSuggestionStore
     + application::observations::ObservationStore
@@ -85,6 +86,7 @@ impl<T> ContextStores for T where
         + ContextSettingsStore
         + GraphStore
         + DocumentStore
+        + application::captures::CaptureRepository
         + InjectionHistory
         + ClaimSuggestionStore
         + application::observations::ObservationStore
@@ -265,6 +267,7 @@ enum Outcome {
     Pack(Result<Box<ContextPack>, String>),
     Exported(Result<Option<PathBuf>, String>),
     Documents(Result<(DocumentIndex, Vec<ProjectDocument>), String>),
+    Imported(Result<(ImportedDocument, Vec<ProjectDocument>), String>),
 }
 
 /// The Contexto destination of a selected project.
@@ -521,12 +524,19 @@ impl<S: ContextStores> ContextScreen<S> {
                     cx,
                 );
             }
+            Outcome::Imported(Ok((imported, documents))) => {
+                if let Some(snapshot) = &mut self.snapshot {
+                    snapshot.documents = documents;
+                }
+                self.show_notice(t::document_imported(&imported.document.path), cx);
+            }
             Outcome::Loaded(Err(error))
             | Outcome::SettingsSaved(Err(error))
             | Outcome::Claims(Err(error), _)
             | Outcome::Pack(Err(error))
             | Outcome::Exported(Err(error))
-            | Outcome::Documents(Err(error)) => self.error = Some(error),
+            | Outcome::Documents(Err(error))
+            | Outcome::Imported(Err(error)) => self.error = Some(error),
         }
     }
 
@@ -889,6 +899,53 @@ impl<S: ContextStores> ContextScreen<S> {
         });
     }
 
+    /// Opens the system file picker for one document; cancelling changes nothing.
+    fn pick_document(&mut self, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(t::import_doc_prompt().into()),
+        });
+        cx.spawn(async move |this, cx| match receiver.await {
+            Ok(Ok(Some(paths))) => {
+                if let Some(path) = paths.into_iter().next() {
+                    let _ = this.update(cx, |screen, cx| screen.import_document(path, cx));
+                }
+            }
+            Ok(Ok(None)) => {}
+            error => {
+                tracing::error!(
+                    ?error,
+                    operation = "document_picker",
+                    "could not pick a file"
+                );
+                let _ = this.update(cx, |screen, cx| {
+                    screen.error = Some(t::import_unavailable().into());
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn import_document(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let Some(project) = self.project.clone() else {
+            return;
+        };
+        self.run(cx, move |backend| {
+            Outcome::Imported(
+                backend
+                    .documents
+                    .import_file(application::repo_identity::shared(), &project, &path)
+                    .map_err(document_failure)
+                    .and_then(|imported| {
+                        list_documents(backend, &project).map(|documents| (imported, documents))
+                    }),
+            )
+        });
+    }
+
     /// The project's own documentation, read from its folder.
     fn render_documents(
         &self,
@@ -902,6 +959,20 @@ impl<S: ContextStores> ContextScreen<S> {
             .on_click(cx.listener(|this, _, _, cx| this.reindex(cx)))
             .child(icon(IconName::Rotate, 13.0, colors.text_secondary()))
             .child(t::reread());
+        let import = action_button(
+            theme,
+            "context-docs-import",
+            ButtonKind::Secondary,
+            !self.busy,
+        )
+        .aria_label(t::import_doc_aria())
+        .on_click(cx.listener(|this, _, _, cx| this.pick_document(cx)))
+        .child(icon(
+            IconName::Plus,
+            13.0,
+            button_foreground(theme, ButtonKind::Secondary, !self.busy),
+        ))
+        .child(t::import_doc());
         let header = div()
             .flex()
             .items_center()
@@ -916,6 +987,7 @@ impl<S: ContextStores> ContextScreen<S> {
                         t::documents_read(documents.len())
                     }),
             )
+            .child(import)
             .child(reread);
         if documents.is_empty() {
             return div()
@@ -2486,6 +2558,10 @@ fn document_failure(error: application::documents::DocumentError) -> String {
     match error {
         DocumentError::FolderUnavailable => t::folder_unavailable().into(),
         DocumentError::ProjectNotFound => t::project_not_found().into(),
+        DocumentError::FileUnavailable => t::import_unavailable().into(),
+        DocumentError::OutsideRepository => t::import_outside().into(),
+        DocumentError::NotDocumentation => t::import_not_document().into(),
+        DocumentError::NotText => t::import_not_text().into(),
         DocumentError::Storage(detail) => {
             tracing::error!(error = %detail, operation = "documents_index", "storage failed");
             t::index_documents_failed().into()
