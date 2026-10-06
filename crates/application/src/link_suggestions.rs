@@ -324,7 +324,7 @@ pub fn claim_needs_links(edges: &[EdgeRecord], claim: &ClaimRecord, at: &Timesta
     claim
         .source_decision_id
         .as_deref()
-        .map_or(true, |decision| needs_links(edges, decision))
+        .is_none_or(|decision| needs_links(edges, decision))
 }
 
 /// Decisions queued per map refresh, at most.
