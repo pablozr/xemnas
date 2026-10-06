@@ -101,6 +101,24 @@ impl Fixture {
                     .expect("seed file link");
             }
         }
+        let ledger = graph
+            .create_entity(NewEntity {
+                project_id: "p1".into(),
+                kind: Some(EntityKind::Component),
+                name: "ledger".into(),
+                patterns: vec!["crates/ledger/**".into()],
+                ..NewEntity::default()
+            })
+            .expect("seed ledger component")
+            .entity_id;
+        graph
+            .link(LinkRequest {
+                kind: EdgeKind::AppliesTo,
+                source_kind: NodeKind::Claim,
+                source_id: aliases["scoped"].clone(),
+                entity_id: ledger,
+            })
+            .expect("seed scoped rule");
         if WITH_SEARCH_TERMS {
             seed_search_terms(&test.store, &aliases);
         }
@@ -136,6 +154,13 @@ const CLAIMS: &[(&str, ClaimKind, &str, Option<&str>)] = &[
         ClaimKind::Constraint,
         "Suportar fax legado",
         Some("2021-01-01"),
+    ),
+    // A standing rule tied to the `ledger` component (see `Fixture::seed`).
+    (
+        "scoped",
+        ClaimKind::Constraint,
+        "Registrar cada lançamento contábil com o selo do auditor",
+        None,
     ),
 ];
 
@@ -191,8 +216,8 @@ fn selected(fixture: &Fixture, pack: &ContextPack) -> BTreeSet<String> {
 fn corpus_integrity_budgets_and_isolation() {
     let fixture = Fixture::seed("corpus-integrity");
     let packs = ContextPacks::new(fixture.test.store.clone());
-    assert_eq!(corpus::FAMILIES.len(), 29);
-    assert_eq!(corpus::FAMILIES.iter().filter(|f| f.positive).count(), 21);
+    assert_eq!(corpus::FAMILIES.len(), 33);
+    assert_eq!(corpus::FAMILIES.iter().filter(|f| f.positive).count(), 24);
     assert_eq!(
         corpus::FAMILIES
             .iter()
@@ -207,7 +232,7 @@ fn corpus_integrity_budgets_and_isolation() {
             .count(),
         3
     );
-    assert_eq!(fixture.aliases.len(), 29);
+    assert_eq!(fixture.aliases.len(), 30);
     let mut queries = BTreeSet::new();
     let mut names = BTreeSet::new();
     for family in corpus::FAMILIES {
@@ -471,8 +496,12 @@ fn report_context_corpus() {
 /// concepts always gave recall 0.92 (outbox-delivery, whose subordinate
 /// clause carries the subject). The corpus's distractor variants are
 /// written as subordinate clauses, so this gain is likely optimistic.
-const PRECISION_FLOOR: f64 = 0.93;
-const RECALL_FLOOR: f64 = 0.95;
+///
+/// Scoped rules (06/10/2026): four families on a standing rule tied to one
+/// component took v3 to 0.9474 / 0.9600 / 0 (33 families); a rule outside the
+/// task's components no longer rides along.
+const PRECISION_FLOOR: f64 = 0.94;
+const RECALL_FLOOR: f64 = 0.96;
 const CONTAMINATED_CASES_CEILING: usize = 0;
 /// Generous on purpose: this runs on a developer's machine beside other work.
 const BUILD_PACK_P95_CEILING_US: u128 = 20_000;

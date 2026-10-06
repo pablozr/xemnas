@@ -10,6 +10,7 @@ mod derive;
 mod discover;
 mod mention;
 mod query;
+mod scope;
 
 pub use ai_link::{ai_link_quote, ai_link_reason, ai_link_why, AI_LINK_REASON};
 pub use derive::{added_dependencies, ComponentProposal, SuggestionReport, TechnologyProposal};
@@ -485,6 +486,7 @@ where
             invalidated_at: None,
         };
         self.store.insert_edge(&record)?;
+        self.propagate_to_claims(&record)?;
         Ok(record)
     }
 
@@ -499,10 +501,12 @@ where
         if !self.store.confirm_edge(edge_id, &now)? {
             return Err(GraphError::Conflict);
         }
-        Ok(EdgeRecord {
+        let confirmed = EdgeRecord {
             confirmed_at: Some(now),
             ..edge
-        })
+        };
+        self.propagate_to_claims(&confirmed)?;
+        Ok(confirmed)
     }
 
     /// Rejects a suggestion or removes a confirmed edge; both keep the row
