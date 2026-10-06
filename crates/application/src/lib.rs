@@ -43,6 +43,7 @@ pub mod qualifiers;
 pub mod redact;
 pub mod relation_suggestions;
 pub mod relations;
+pub mod repo_identity;
 pub mod review_exception;
 pub mod search_terms;
 

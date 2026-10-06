@@ -11,6 +11,7 @@ pub mod envelope;
 pub mod prompt;
 pub mod stop;
 pub mod transcript;
+pub mod worktree;
 
 use std::io::Read;
 
