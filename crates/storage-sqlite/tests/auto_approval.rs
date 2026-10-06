@@ -575,6 +575,79 @@ fn a_link_found_by_mention_is_asked_with_its_quote_and_a_file_link_is_accepted()
 }
 
 #[test]
+fn a_link_the_ai_proposed_is_judged_with_its_quote_and_reason() {
+    use application::graph::{ai_link_reason, EdgeRecord, GraphStore, KnowledgeGraph, NewEntity};
+    use domain::entities::{EdgeKind, EdgeOrigin, EntityKind, NodeKind};
+
+    let test = support::open("review-ai-links", &[PROJECT]);
+    let graph = KnowledgeGraph::new(test.store.clone());
+    let core = graph
+        .create_entity(NewEntity {
+            project_id: PROJECT.into(),
+            kind: Some(EntityKind::Component),
+            name: "motor".into(),
+            patterns: vec!["crates/core/**".into()],
+            ..NewEntity::default()
+        })
+        .expect("component")
+        .entity_id;
+    let decision = support::decision_with_diff(
+        &test.store,
+        PROJECT,
+        "adr",
+        "Como o resultado de um turno é expresso?",
+        &["docs/adr/0003-outcome.md"],
+        "",
+    );
+    test.store
+        .insert_edge(&EdgeRecord {
+            edge_id: "ai-edge".into(),
+            project_id: PROJECT.into(),
+            kind: EdgeKind::Affects,
+            source_kind: NodeKind::Decision,
+            source_id: decision,
+            entity_id: core,
+            origin: EdgeOrigin::Derived,
+            reason: ai_link_reason(
+                "resultado de um turno",
+                "A decisão rege o desfecho do motor.",
+            ),
+            created_at: NOW.into(),
+            confirmed_at: None,
+            invalidated_at: None,
+        })
+        .expect("proposed by the AI");
+
+    let judge =
+        Judge::answering(r#"{"verdicts":[{"id":"I1","verdict":"accept","reason":"rege"}]}"#);
+    let review = review_with(&test.store, consented(), &judge);
+    review.set_mode(Mode::Automatic).expect("on");
+    let report = review
+        .run_at(PROJECT, "2099-01-01T00:00:00Z")
+        .expect("pass");
+    assert!(
+        report.asked,
+        "an AI proposal is not plain: the judge is asked"
+    );
+    assert_eq!((report.accepted, report.left), (1, 0));
+    let asked = judge.asked.lock().expect("lock")[0].clone();
+    assert!(
+        asked.contains("Citação proposta pela IA: resultado de um turno")
+            && asked.contains("Motivo da IA: A decisão rege o desfecho do motor."),
+        "{asked}"
+    );
+    assert!(graph.suggestions(PROJECT).expect("pending").is_empty());
+    let edge = test
+        .store
+        .project_edges(PROJECT)
+        .expect("edges")
+        .into_iter()
+        .find(|edge| edge.edge_id == "ai-edge")
+        .expect("edge");
+    assert!(edge.confirmed_at.is_some(), "the verdict confirmed it");
+}
+
+#[test]
 fn an_unconfirmable_suggestion_is_left_for_the_person_and_not_asked_again() {
     use application::claim_suggestions::{ClaimSuggestionRecord, ClaimSuggestionStore};
     use application::decisions::{DecisionEdits, Decisions};

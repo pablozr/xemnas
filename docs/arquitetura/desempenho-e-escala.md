@@ -37,7 +37,7 @@ atrase a análise da sessão que o desenvolvedor acabou de encerrar.
 | --- | --- | --- |
 | `now` | `analyze_capture` (capturas de sessões de agentes) | até 2 |
 | `documents` | `analyze_document` (documentação importada) | até 2 |
-| `suggestions` | `suggest_relations`, `derive_claims` | 1 |
+| `suggestions` | `suggest_relations`, `derive_claims`, `derive_search_terms`, `suggest_links`, `context_routing` | 1 |
 
 - O tipo diz a fila: `JobKind::lane` é um `match` exaustivo, então um tipo
   novo não compila sem fila. Cada worker só reivindica tipos da sua fila.

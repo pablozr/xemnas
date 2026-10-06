@@ -5,13 +5,16 @@
 //! Nothing is ever deleted: entities are retired, edges are invalidated.
 //! Derived edges start as suggestions and only count once confirmed.
 
+mod ai_link;
 mod derive;
 mod discover;
 mod mention;
 mod query;
 
+pub use ai_link::{ai_link_quote, ai_link_reason, ai_link_why, AI_LINK_REASON};
 pub use derive::{added_dependencies, ComponentProposal, SuggestionReport, TechnologyProposal};
 pub use discover::{declared_components, DeclaredComponent, WorkspaceKind};
+pub use domain::entities::EntityKind;
 pub use mention::{mention_quote, mention_reason, MENTION_REASON};
 pub use query::{
     DecisionParts, EntityDetail, FileLens, GraphEdge, GraphNode, MapEntity, Neighborhood, NodeRef,
@@ -21,7 +24,7 @@ pub use query::{
 
 use domain::entities::{
     check_part_of, entity_description, entity_key, entity_name, path_pattern, EdgeKind, EdgeOrigin,
-    EntityError, EntityKind, NodeKind,
+    EntityError, NodeKind,
 };
 use domain::time::Timestamp;
 

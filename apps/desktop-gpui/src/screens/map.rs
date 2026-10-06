@@ -58,6 +58,7 @@ pub trait MapStores:
     + ClaimStore
     + ProjectRepository
     + DecisionStore
+    + application::jobs::JobRepository
     + Clone
     + Send
     + 'static
@@ -72,6 +73,7 @@ impl<T> MapStores for T where
         + ClaimStore
         + ProjectRepository
         + DecisionStore
+        + application::jobs::JobRepository
         + Clone
         + Send
         + 'static
@@ -3900,6 +3902,15 @@ fn link_wording(suggestion: &Suggestion) -> (Vec<(String, bool)>, String) {
         };
         return (
             t::spans(&sentence),
+            t::link_mention_effect(target, uses, rule),
+        );
+    }
+    if let (Some(quote), Some(why)) = (
+        application::graph::ai_link_quote(reason),
+        application::graph::ai_link_why(reason),
+    ) {
+        return (
+            t::spans(&t::link_ai_decision(&source, &shown, quote, why)),
             t::link_mention_effect(target, uses, rule),
         );
     }

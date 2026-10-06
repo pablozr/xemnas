@@ -29,6 +29,7 @@ pub mod integration;
 pub mod jobs;
 pub mod knowledge_review;
 pub mod limiter;
+pub mod link_suggestions;
 pub mod observations;
 pub mod outbox;
 pub mod overview;

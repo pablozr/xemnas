@@ -4110,6 +4110,19 @@ strings! {
         ko: "검색어",
         ru: "Поисковые термины",
     }
+    /// Diagnostics: task kind, links of a decision to the Map.
+    diag_kind_links {
+        en: "Map links",
+        pt: "Vínculos com o Mapa",
+        es: "Vínculos con el Mapa",
+        fr: "Liens avec la Carte",
+        de: "Verknüpfungen zur Karte",
+        it: "Collegamenti alla Mappa",
+        ja: "マップへのリンク",
+        zh: "地图链接",
+        ko: "맵 연결",
+        ru: "Связи с картой",
+    }
     /// Consent checklist: Claude Code signed in.
     step_claude_connected_title {
         en: "Claude Code connected",

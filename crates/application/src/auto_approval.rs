@@ -46,7 +46,9 @@ use crate::claims::ClaimStore;
 use crate::clock::{add_hours, add_seconds, now_rfc3339};
 use crate::decisions::DecisionStore;
 use crate::extract::{CandidateKind, MIN_SIGNIFICANCE};
-use crate::graph::{mention_quote, GraphStore, KnowledgeGraph, Suggestion};
+use crate::graph::{
+    ai_link_quote, ai_link_why, mention_quote, GraphStore, KnowledgeGraph, Suggestion,
+};
 use crate::inbox::{
     CandidateStatus, Cursor, Inbox, InboxQuery, InboxStore, StoredCandidate, MAX_PAGE_LIMIT,
 };
@@ -447,9 +449,10 @@ pub fn triage_relation(kind: RelationKind) -> Triage {
 
 /// What the rules say about a suggested tie to the map: one derived from a
 /// touched file or an added dependency is plain; one found by a mention in
-/// the decision's text may be a passing remark, so the AI judges its quote.
+/// the decision's text may be a passing remark, and one proposed by the AI
+/// from that text is its own guess: the AI judges the quote of both.
 pub fn triage_link(reason: &str) -> Triage {
-    if mention_quote(reason).is_some() {
+    if mention_quote(reason).is_some() || ai_link_quote(reason).is_some() {
         Triage::Ask
     } else {
         Triage::Accept("derivado de arquivo ou dependência que a decisão tocou")
@@ -458,9 +461,17 @@ pub fn triage_link(reason: &str) -> Triage {
 
 /// What the AI is told about a suggested tie.
 fn link_text(suggestion: &Suggestion) -> String {
-    let evidence = match mention_quote(&suggestion.reason) {
-        Some(quote) => format!("Citação: {}", clip(quote, SENT_CHARS)),
-        None => format!("Arquivo ou dependência: {}", clip(&suggestion.reason, 160)),
+    let evidence = if let Some(quote) = mention_quote(&suggestion.reason) {
+        format!("Citação: {}", clip(quote, SENT_CHARS))
+    } else if let Some(quote) = ai_link_quote(&suggestion.reason) {
+        let why = ai_link_why(&suggestion.reason).unwrap_or_default();
+        format!(
+            "Citação proposta pela IA: {} | Motivo da IA: {}",
+            clip(quote, SENT_CHARS),
+            clip(why, 160)
+        )
+    } else {
+        format!("Arquivo ou dependência: {}", clip(&suggestion.reason, 160))
     };
     format!(
         "[vínculo {}] \"{}\" -> {} \"{}\" | {evidence}",
@@ -1166,6 +1177,8 @@ mod tests {
         assert!(matches!(triage_link("rusqlite"), Triage::Accept(_)));
         let mention = crate::graph::mention_reason("o core grava pela outbox");
         assert_eq!(triage_link(&mention), Triage::Ask);
+        let proposed = crate::graph::ai_link_reason("o core grava pela outbox", "Rege o core.");
+        assert_eq!(triage_link(&proposed), Triage::Ask);
     }
 
     #[test]

@@ -267,6 +267,30 @@ fn main() {
             }
         }),
     );
+    // A decision no file tied to the map asks which components it governs.
+    jobs.register(
+        application::link_suggestions::LINK_JOB_KIND,
+        std::sync::Arc::new({
+            let finder = application::link_suggestions::LinkFinder::new(
+                store.clone(),
+                settings.clone(),
+                ai_provider::ProviderFactory::new(chatgpt.clone()).with_limiter(limiter.clone()),
+            );
+            move |record: &application::jobs::JobRecord| match finder.run(&record.payload) {
+                Ok(stored) => {
+                    tracing::info!(stored, operation = "suggest_links", "links proposed");
+                    Ok(())
+                }
+                Err(application::link_suggestions::LinkFindError::Deferred(retry_after)) => {
+                    Err(application::jobs::JobFailure::Deferred { retry_after })
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, operation = "suggest_links", "failed");
+                    Ok(())
+                }
+            }
+        }),
+    );
     jobs.observe_with(|event| match event {
         application::jobs::JobEvent::Finished(outcome) => {
             tracing::info!(

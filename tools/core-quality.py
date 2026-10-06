@@ -28,11 +28,20 @@ GATES = [
     ('context selection, calibration v5', 'storage-sqlite', 'test:context_corpus', 'calibration_v5_quality_gate', False),
     ('context report', 'storage-sqlite', 'test:context_corpus', 'report_context_corpus', True),
     ('mention links', 'application', 'lib', 'graph::mention', False),
+    ('ai link proposals', 'storage-sqlite', 'test:link_corpus', 'link_quality_gate', False),
     ('automatic review', 'storage-sqlite', 'test:auto_approval', '', False),
     ('automatic triage', 'application', 'lib', 'auto_approval', False),
     ('observations latency', 'storage-sqlite', 'test:observations_evaluation', 'scoped_latency_report', True),
     ('observation query latency', 'storage-sqlite', 'test:observations_router_corpus', 'observation_query_latency', True),
 ]
+
+# Gates that need a fixture generated once by a live model (never in CI):
+# skipped, not failed, until the file exists. The gate test is #[ignore]d until
+# then; when the fixture is committed, remove that attribute and the `True`
+# of the gate above so `cargo test` runs it too.
+NEEDS_FIXTURE = {
+    'ai link proposals': 'crates/storage-sqlite/tests/fixtures/link_corpus_answers.json',
+}
 
 KEEP = re.compile(r'(?:^|\.\.\. )((?:gate |summary |mention |latency|refresh_|build_pack |render |observation_query ).*)')
 
@@ -86,6 +95,11 @@ def run_gate(label, package, target, test_filter, ignored):
 def main():
     failed = []
     for gate in GATES:
+        fixture = NEEDS_FIXTURE.get(gate[0])
+        if fixture and not os.path.exists(os.path.join(ROOT, fixture)):
+            print(f'skip {gate[0]}')
+            print(f'     fixture not generated yet: {fixture}')
+            continue
         passed, lines, output = run_gate(*gate)
         print(f"{'ok  ' if passed else 'FAIL'} {gate[0]}")
         for line in lines:
