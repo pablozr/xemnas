@@ -89,6 +89,8 @@ revisão) vem depois, se a exportação tiver uso.
   perde peso na seleção; o que o agente consulta ganha.
 - **Sinal do agente**: quando o agente abre uma decisão pelo MCP, aquilo foi útil; quando
   contraria uma regra entregue, a regra ou a entrega está errada.
+- **Memória ciente de branch**: decisões de worktree valem só na branch até o merge;
+  o Sonho promove ou expira ([ticket 25](../roadmap/tickets/25-memoria-ciente-de-branch.md)).
 - **Ensaio contrafactual**: repetir uma tarefa real com e sem o bloco injetado e comparar o
   resultado, para medir o valor do contexto em vez de só a precisão.
 

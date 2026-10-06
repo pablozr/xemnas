@@ -11,6 +11,7 @@ Em ordem de prioridade:
    - [21](tickets/21-mensagens-do-backend-traduziveis.md) — mensagens do backend traduzíveis.
    - [22](tickets/22-instalacao-e-integracoes-com-um-clique.md) — instalação e integrações com um clique (depois do dogfood).
    - [23](tickets/23-identidade-das-migracoes.md) — identidade das migrações.
+   - [25](tickets/25-memoria-ciente-de-branch.md) — memória ciente de branch (experimento, depois do dogfood).
 3. **Resto da fase 4** — [24](tickets/24-grafo-injecao-por-arquivo-e-conflitos.md): injeção por arquivo, conflitos e padrões de caminho obsoletos.
 
 ## Entregue
