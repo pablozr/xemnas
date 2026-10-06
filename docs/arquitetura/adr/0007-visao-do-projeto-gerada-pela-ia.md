@@ -1,6 +1,6 @@
 # ADR-0007: Visão do projeto gerada pela IA
 
-- **Status:** aceito
+- **Status:** Vigente. (registro original: aceito)
 - **Data:** 2026-09-30
 - **Contexto:** decisões, regras e mapa respondem "o que vale aqui", mas ninguém lê o projeto inteiro por eles. Faltava uma página que resumisse o projeto e mostrasse os principais fluxos, abrindo cada passo de perto. Montar fluxos à mão seria mais um cadastro; derivá-los só do grafo daria listas, não narrativa.
 

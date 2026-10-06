@@ -1,0 +1,34 @@
+# ADR-0014 — Regras com escopo por componente
+
+**Status:** Vigente. Aceito em 06/10/2026.
+
+## Contexto
+
+Uma regra do projeto ("só um humano resolve X") entrava em todo pacote de contexto que casasse
+pelo texto, mesmo quando o trabalho era em outro componente. Isso gasta orçamento de tokens e
+treina o agente a ignorar o bloco. O grafo ([ADR-0005](0005-grafo-de-entidades.md)) já liga
+regras a componentes por arestas `applies_to`.
+
+## Decisão
+
+1. **Regra ligada a componentes só entra no contexto quando a tarefa toca um deles.** A tarefa
+   toca um componente quando um arquivo casa com seus padrões, o texto o menciona ou uma
+   decisão do pacote está ligada a ele. Um componente conta como tocado pelos seus
+   subcomponentes.
+2. **Regra sem ligação continua global.** Ausência de escopo não restringe nada.
+3. **Regra derivada herda o escopo da decisão de origem.** As arestas confirmadas da decisão
+   passam para a regra no mesmo ponto em que a sugestão é confirmada, e o preenchimento de
+   regras antigas é idempotente. Uma aresta existente, mesmo invalidada, impede religar.
+
+## Consequências
+
+- Implementado em `crates/application/src/graph/scope.rs`. Custa um par de consultas extra
+  (arestas e entidades) por pacote.
+- O corpus de contexto ganhou casos de regra com escopo e o piso do portão subiu; o tempo de
+  `build_pack` continua dentro do teto (cerca de 2 a 3 ms medidos, teto de 20 ms).
+- O resultado depende de o mapa estar ligado: regra sem vínculo vale em todo lugar.
+
+## Alternativas rejeitadas
+
+- **Escopo por palavras da regra:** adivinharia o componente; o vínculo confirmado já existe.
+- **Todas as regras sempre:** desperdiça orçamento e dilui o que importa.

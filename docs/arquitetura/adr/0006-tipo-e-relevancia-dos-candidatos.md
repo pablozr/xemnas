@@ -1,6 +1,6 @@
 # ADR-0006: Tipo e relevância dos candidatos
 
-- **Status:** aceito
+- **Status:** Vigente. (registro original: aceito)
 - **Data:** 2026-09-30
 - **Contexto:** no uso real, a extração propunha como "decisão" correções de bug e detalhes de implementação ("`clear` exige identidade do alvo"), e uma resposta com dois ajustes virava dois candidatos. A confiança media se a escolha foi tomada, não se ela importa, então o ruído chegava com 99%. Algumas dessas propostas eram, na verdade, regras de um componente ("só um humano resolve `review_legacy`"), que não cabem como decisão nem devem se perder.
 
@@ -22,3 +22,7 @@
 - **Juiz sem critério escrito:** um modelo avaliando a própria saída sem rubrica tende a aprová-la.
 - **Normalizar a entrada:** o ruído nasce na classificação, não no que o OpenCode entrega.
 - **Apagar o que tem baixa relevância:** perderia o que o usuário pode querer recuperar; fica guardado e escondido.
+
+## Estado hoje
+
+`kind`, `significance` e `criteria` seguem no esquema do extrator (`application::extract`, `CandidateKind`). O juiz de IA do modo automático ([ADR-0012](0012-modo-automatico-e-autoridade.md)) decide a aprovação; ele não substitui a classificação feita na extração.

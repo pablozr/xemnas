@@ -1,6 +1,8 @@
 # Contextual Engineering — especificação executável do MVP
 
-**Status:** aprovado para implementação  
+**Status:** histórico — substituído por [estado-atual](../produto/estado-atual.md)
+
+**Status original:** aprovado para implementação  
 **Produto:** aplicativo desktop local de memória decisional para engenharia de software  
 **Plataforma inicial:** Windows  
 **UI:** Rust + GPUI  

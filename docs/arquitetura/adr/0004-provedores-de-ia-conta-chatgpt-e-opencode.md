@@ -1,6 +1,6 @@
 # ADR-0004: Provedores de IA — modelo local, conta ChatGPT, OpenCode e Claude Code
 
-- **Status:** aceito
+- **Status:** Vigente. Já cobre os cinco tipos de perfil, inclusive `claude_code` (05/10/2026). (registro original: aceito)
 - **Data:** 2026-09-30
 - **Contexto:** o MVP entregou dois extratores: a heurística local (`Fake`) e um provedor compatível com OpenAI por chave (`OpenAiCompatible`). O MVP-SPEC §12 pedia "apenas um provider real de menor esforço" e dizia que o gateway do OpenCode "é orquestrador, não modelo". Na prática, a chave paga afasta o uso real, e modelos locais sem chave não conseguem consentir. A pesquisa `docs/pesquisas/provedores-e-modelos-de-ia.md` levantou três caminhos sem chave paga. O usuário decidiu implementar os três, pular a semana de dogfood antes disso e seguir direto para backend e telas. Este ADR revisa o §12 nesses pontos e mantém todas as outras regras dele.
 

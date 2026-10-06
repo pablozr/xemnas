@@ -1,6 +1,6 @@
 # ADR-0009 — Revisão consultiva de conhecimento sob demanda
 
-Status: aceito para implementação pelo briefing de 2026-10-02.
+**Status:** Vigente. Implementada (`application::knowledge_review`, `KnowledgeReviewApi`, em Contexto).
 
 ## Decisão
 

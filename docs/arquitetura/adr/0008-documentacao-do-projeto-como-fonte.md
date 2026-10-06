@@ -1,6 +1,6 @@
 # ADR-0008: Documentação do projeto como fonte
 
-- **Status:** aceito
+- **Status:** Vigente. (registro original: aceito)
 - **Data:** 2026-09-30
 - **Contexto:** o app só conhecia o que vinha dos diffs capturados. Projetos com `docs/`, `specs/`, ADRs e README pareciam vazios na Visão, embora a intenção do projeto já estivesse escrita.
 

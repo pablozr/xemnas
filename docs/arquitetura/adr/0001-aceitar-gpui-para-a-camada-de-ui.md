@@ -1,6 +1,6 @@
 # ADR 0001 — Aceitar GPUI para a camada de UI
 
-- **Status:** Aceita no Gate 0 (2026-09-28). Revisável sob as condições abaixo.
+- **Status:** Vigente. O `rev` do GPUI em `apps/desktop-gpui/Cargo.toml` é o registrado aqui. Aceita no Gate 0 (2026-09-28); revisável sob as condições abaixo.
 - **Contexto:** MVP-SPEC §15, Gate 0 — "reduzir o maior risco técnico antes de acoplar o produto".
 - **Decisores:** agente executor do plano `docs/roadmap/mvp/`, com evidências do spike.
 

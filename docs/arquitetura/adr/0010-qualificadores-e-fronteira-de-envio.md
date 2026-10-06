@@ -1,7 +1,6 @@
 # ADR-0010 — Qualificadores persistentes e fronteira de envio
 
-Status: implementado no lote de confiança/clareza, com limitações de validação
-registradas em [operação](../../operacao/lote-confianca-clareza.md).
+**Status:** Vigente com ajustes: o último parágrafo, que tratava memória descritiva, revisão por exceção e roteador de contexto como futuros, já não vale. Implementado no lote de confiança/clareza; limitações de validação em [operação](../../operacao/avaliacoes.md).
 
 Ressalvas de autoria, alcance e validação não podem depender de sobreviver ao resumo
 do motivo. Persistimos qualificadores separados nos candidatos, decisões/revisões,
@@ -28,3 +27,7 @@ consome esse caso de uso, sem classificar capturas por contagens globais.
 
 A confirmação normativa vigente continua humana. Memória descritiva automática,
 revisão por exceção e context router são direção futura, não efeitos deste ADR.
+
+## Estado hoje
+
+A memória descritiva é o [ADR-0011](0011-observacoes-descritivas-de-manifests.md); a revisão por exceção está em `application::review_exception`; o roteador de contexto existe como julgamento opcional em segundo plano (`application::context_routing`, com limites de chamadas). A confirmação normativa continua humana, salvo no modo automático que o usuário liga ([ADR-0012](0012-modo-automatico-e-autoridade.md)).

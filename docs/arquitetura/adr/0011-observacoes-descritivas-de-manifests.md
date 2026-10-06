@@ -1,7 +1,6 @@
 # ADR-0011 — Observações descritivas automáticas de manifests
 
-Status: implementado no slice de memória descritiva. Resultados e limites em
-[operação](../../operacao/memoria-descritiva-e-router.md).
+**Status:** Vigente com ajustes: o roteamento por IA citado como etapa futura já existe como opção limitada. Resultados e limites em [operação](../../operacao/avaliacoes.md).
 
 Declarações verificáveis de Cargo.toml/package.json são observações locais, não
 claims normativas, decisões confirmadas ou arestas humanas. Mantêm identidade,
@@ -33,3 +32,7 @@ Quotas atuais: 64 fontes, 256 KiB/fonte, 2 MiB/refresh e 1.024 observações.
 Windows valida o caminho registrado antes de resolver junctions e mantém handles
 de ancestrais durante a leitura. Não há promessa de cobertura adversarial completa
 de corridas, nem parser universal de código/configuração.
+
+## Estado hoje
+
+O roteador opcional vive em `application::context_routing`: shortlist de até 6 candidatos, no máximo 8 chamadas lógicas por projeto por dia, cache com validade e nunca obrigatório em cada consulta. As observações seguem descritivas; não viram normas.

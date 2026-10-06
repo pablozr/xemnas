@@ -1,6 +1,6 @@
 # ADR-0012 — Modo automático e autoridade das normas
 
-Status: aceito em 05/10/2026.
+**Status:** Vigente.
 
 ## Contexto
 
@@ -37,3 +37,7 @@ conviver sem que o sistema aceite normas com base em sinais fracos.
   chamada por 20 minutos. Quem liga o automático escolhe que a IA faça a revisão.
 - A confiabilidade do automático passa a ser medida: a calibração aparece no Diagnóstico
   e a taxa de desfazer no registro indica quando o juiz erra.
+
+## Estado hoje
+
+`application::auto_approval` e `application::calibration` implementam o modo e a calibração; o registro "Feito sozinho" e a calibração aparecem na Revisão e no Diagnóstico.

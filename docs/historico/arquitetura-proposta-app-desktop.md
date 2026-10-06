@@ -1,6 +1,8 @@
 # Arquitetura proposta para o aplicativo desktop
 
-> **Histórico / não vigente para o MVP:** esta proposta recomenda .NET + Avalonia, mas foi substituída pela decisão aprovada em `../../produto/MVP-SPEC.md`: Rust + GPUI. Ela permanece apenas como contexto de alternativas consideradas; não deve orientar implementação.
+**Status:** histórico — substituído por [estado-atual](../produto/estado-atual.md)
+
+> **Histórico / não vigente para o MVP:** esta proposta recomenda .NET + Avalonia, mas foi substituída pela decisão aprovada em `MVP-SPEC.md`: Rust + GPUI. Ela permanece apenas como contexto de alternativas consideradas; não deve orientar implementação.
 
 ## Recomendação
 

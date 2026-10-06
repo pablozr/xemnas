@@ -1,6 +1,6 @@
 # ADR-0005: Grafo de entidades do projeto
 
-- **Status:** aceito
+- **Status:** Vigente. Estendida pelo [ADR-0014](0014-regras-com-escopo-por-componente.md) (escopo de regra). (registro original: aceito)
 - **Data:** 2026-09-30
 - **Contexto:** a busca de contexto é lexical (FTS5, AD-14). Quando o pedido ao agente não cita as palavras certas ("corrige esse bug"), o contexto certo não vem, e não há como perguntar "o que vale para este arquivo?" ou "o que depende do SQLite?". O plano `docs/roadmap/fase-4/00-plano-grafo-de-entidades.md` propunha ligar decisões e claims às coisas concretas do projeto. O usuário decidiu implementar o plano completo agora, antes do uso diário, em vez de esperar os sinais de uso real que o plano pedia.
 - **Decisão:** um grafo tipado, temporal e confirmado por humano, guardado no SQLite do app, sem banco de grafo e sem extração por IA.
@@ -87,3 +87,7 @@ Uma aba **Mapa** no projeto (Ctrl 4 e paleta), no padrão de `docs/design/VISUAL
 - **Banco de grafo ou grafo genérico de nós e arestas:** o volume é pequeno, o SQLite com `WITH RECURSIVE` basta, e a spec pede relações tipadas e auditáveis (ADR-0003).
 - **Grafo de símbolos (chamadas, imports):** ferramentas de código já fazem isso; o xemnas guarda o porquê, no nível de componente e caminho.
 - **Ler a árvore do repositório para propor componentes:** o app não lê o repositório hoje; os arquivos das decisões já mostram onde o trabalho acontece.
+
+## Estado hoje
+
+O modelo, a derivação sem IA, as consultas e a interface descritos acima seguem em vigor (`crates/application/src/graph/`). Duas mudanças: as regras agora respeitam o escopo por componente ([ADR-0014](0014-regras-com-escopo-por-componente.md)), e a seleção de contexto é grafo mais busca lexical, sem embeddings ([ADR-0013](0013-contexto-sem-embeddings.md)). O contexto depois de editar arquivos existe no plugin do OpenCode (`adapters/opencode/src/context.ts`).

@@ -1,85 +1,105 @@
 # Engineering Decision Intelligence
 
-Este contexto descreve a memória decisional de um projeto de software: como informações vindas do trabalho de humanos e agentes se tornam claims verificáveis, decisões confirmadas e contexto recuperável.
+Este contexto descreve a memória decisional de um projeto de software: como informações vindas do trabalho de humanos e agentes se tornam candidatos revisáveis, decisões confirmadas, regras e contexto entregue ao agente. Os termos abaixo existem no código atual (`crates/domain`, `crates/application`).
 
 ## Language
 
 **Project**:
-O espaço de trabalho de software cujo contexto, decisões, evidências e evolução são acompanhados.
+O espaço de trabalho de software cujo contexto, decisões, evidências e evolução são acompanhados. Um worktree do git conta como o Project registrado do mesmo repositório.
 _Avoid_: Workspace, repository
 
 **Adapter**:
-Uma integração substituível que traduz dados de uma ferramenta externa para Source Artifacts do produto, sem conter regras de decisão.
+Uma integração substituível que traduz dados de uma ferramenta externa para Source Artifacts do produto, sem conter regras de decisão. Hoje: o plugin do OpenCode e os hooks do Claude Code.
 _Avoid_: Connector core, provider logic
 
 **Source Artifact**:
-Um registro imutável ou versionado vindo de uma fonte externa, como turno de agente, diff, commit, arquivo, issue ou métrica.
+Um registro imutável ou versionado vindo de uma fonte externa, como turno de agente, diff, commit, arquivo ou documento.
 _Avoid_: Context, truth
 
 **Capture Envelope**:
-Um pacote versionado e idempotente produzido por um Adapter para transportar Source Artifacts e seus metadados de origem até o produto, sem interpretá-los como decisões.
+Um pacote versionado e idempotente produzido por um Adapter para transportar Source Artifacts e seus metadados de origem até o produto, sem interpretá-los como decisões. Sem o app aberto, espera na outbox.
 _Avoid_: Event, Decision Candidate
 
-**Context Claim**:
-Uma afirmação tipada e temporal sobre o Project, sustentada por Evidence e sujeita a confirmação, contradição ou expiração.
-_Avoid_: Memory, factoid
+**Capture Episode**:
+A visão de detalhe de uma captura: coordenadas imutáveis de origem e até cem fatos descritivos dos artefatos. É apresentação, não identidade canônica nem autoridade.
+_Avoid_: Task, session
 
 **Evidence**:
 Uma referência citável a um Source Artifact que apoia ou contradiz um Context Claim, Decision Candidate ou Engineering Decision.
 _Avoid_: Source, proof
 
 **Decision Candidate**:
-Uma possível escolha durável inferida do trabalho real, ainda sem autoridade até confirmação humana.
+Uma possível escolha durável (decision) ou regra (rule) inferida do trabalho real, ainda sem autoridade até confirmação. Traz relevância, critérios e Qualifiers. O tipo `detail` nunca é gravado.
 _Avoid_: Decision, suggestion
 
-**Decision Relation**:
-Uma ligação tipada e criada por humano entre duas Engineering Decisions: uma substitui, depende de ou conflita com a outra. Substituir nunca apaga a decisão anterior.
-_Avoid_: Link, graph edge
-
-**Engineering Decision**:
-Uma escolha humana confirmada, com escopo, rationale, premissas, evidências e condições de reconsideração.
-_Avoid_: ADR, recommendation
-
-**Assessment**:
-Uma análise temporal e reproduzível feita sobre Claims, Evidence e Decisions; não constitui fato nem decisão.
-_Avoid_: Decision, truth, verdict
-
-**Context Snapshot**:
-Uma visão derivada do que era considerado válido para determinado Project, escopo e instante.
-_Avoid_: Project Context file, summary
-
-**Decision Episode**:
-Um agrupamento de Source Artifacts que mostra a formação de uma possível decisão; é uma visão de apresentação, não uma identidade canônica.
-_Avoid_: Task, session
-
 **Decision Inbox**:
-O conjunto assíncrono de Decision Candidates aguardando revisão humana, sem bloquear o trabalho que os originou.
+O conjunto assíncrono de Decision Candidates aguardando revisão (tela Revisão), sem bloquear o trabalho que os originou. Candidatos de baixa relevância ficam guardados e escondidos por padrão.
 _Avoid_: Approval queue, notification feed
 
-**Knowledge Library**:
-Uma coleção global, curada pelo usuário, de materiais de referência reutilizáveis entre Projects, como papers, livros, normas e páginas web. Seu conteúdo informa análises, mas não constitui automaticamente contexto ou verdade de nenhum Project.
-_Avoid_: Project Context, source of truth
+**Engineering Decision**:
+Uma escolha confirmada, com escopo, rationale, premissas, evidências e condições de reconsideração. Revisar cria nova versão e mantém a anterior.
+_Avoid_: ADR, recommendation
 
-**Knowledge Source**:
-Um documento ou recurso identificável dentro da Knowledge Library, preservando autoria, origem, data, versão e localização citável.
-_Avoid_: Evidence, Context Claim
+**Decision Relation**:
+Uma ligação tipada entre duas Engineering Decisions: uma substitui, depende de ou conflita com a outra. A IA só sugere; vale depois de confirmada. Substituir nunca apaga a decisão anterior.
+_Avoid_: Link, graph edge
 
-**Project Knowledge Link**:
-Uma associação explícita entre um Project e uma Knowledge Source ou coleção considerada relevante para ele; indica disponibilidade para consulta, não concordância nem adoção.
-_Avoid_: Imported decision, project fact
+**Context Claim** (claim, regra):
+Uma afirmação tipada e temporal sobre o Project (premissa, restrição, objetivo ou convenção), com validade e origem. Nasce de uma regra confirmada, de uma sugestão derivada de uma decisão ou de ação direta. A interface a chama de regra.
+_Avoid_: Memory, factoid
+
+**Rule Scope** (escopo de regra):
+Os componentes a que uma Context Claim está ligada por arestas `applies_to`. Com ligação, a regra só vale quando a tarefa toca um deles; sem ligação, vale para o Project todo.
+_Avoid_: Tag, global rule
+
+**Qualifier**:
+Uma ressalva explícita (autoria, alcance, validade) guardada junto do item, que não pode se perder no resumo do motivo. Ausência é desconhecimento, nunca autoridade global.
+_Avoid_: Caveat, tag
+
+**Observation**:
+Um fato descritivo e verificável lido de um manifest (pacote ou dependência declarada), mantido localmente. Não é Claim, decisão nem aresta humana, e não entra na fila de revisão.
+_Avoid_: Claim, fact
+
+**Entity**:
+Um componente ou uma tecnologia do Project no grafo, com padrões de caminho e aliases. Aposentar nunca apaga.
+_Avoid_: Module, tag
+
+**Edge**:
+Uma ligação do grafo entre uma decisão, claim ou Entity e uma Entity (`affects`, `uses`, `applies_to`, `part_of`). Nasce humana e confirmada, ou derivada como sugestão; nunca é apagada, só invalidada.
+_Avoid_: Relation, link
+
+**Knowledge Graph** (grafo, mapa):
+As Entities e Edges de um Project com as consultas sobre elas: mapa, vizinhança, lente de arquivo, impacto, linha do tempo e conflitos.
+_Avoid_: Graph database, GraphRAG
+
+**Review Item** (alvo de revisão):
+Algo que espera decisão sobre autoridade: candidato, relação sugerida, claim derivada ou vínculo com o mapa. É a unidade do modo automático e de seu registro.
+_Avoid_: Task, notification
+
+**Automatic Mode** (modo automático):
+Interruptor, por instalação, em que um juiz de IA decide os Review Items em lote, com limites de chamada. Tudo fica no registro "Feito sozinho", com motivo, e descartes podem ser desfeitos. O padrão é manual.
+_Avoid_: Autopilot, auto-confirm
+
+**Assessment**:
+O registro de uma análise de captura: motivo, classificação e tentativa, gravados juntos. Não constitui fato nem decisão.
+_Avoid_: Decision, truth, verdict
 
 **Context Pack**:
-Uma seleção pequena, temporária e citável de Decisions, Claims, Evidence e Knowledge Sources preparada para uma tarefa ou pergunta específica.
+Uma seleção pequena, temporária e citável de Decisions, Claims e Observations preparada para uma tarefa ou data, dentro de um orçamento de tamanho.
 _Avoid_: Full project dump, permanent prompt
 
-**Engineering Assistant**:
-Um papel consultivo que usa Context Packs para analisar alternativas, trade-offs e compatibilidade com o Project, sem possuir autoridade para confirmar Engineering Decisions.
-_Avoid_: Decision maker, autonomous architect
+**Injection**:
+O bloco compacto de contexto, dentro de um orçamento de tokens, anexado ao turno do agente. O modo é por Project: Desligado, Medir (calcula e registra, não envia) ou Injetar.
+_Avoid_: Prompt stuffing
+
+**Agent Query**:
+Uma consulta MCP do agente (`get_decision`, `search_context`, `file_context`), registrada só com ferramenta, resultado e tamanho, para medir o uso do contexto.
+_Avoid_: Log, telemetry event
 
 **AI Execution Profile**:
-Uma escolha configurável de provedor, modelo, capacidades, limites e política de privacidade usada para executar um Assessment ou propor Decision Candidates.
+Uma escolha configurável de provedor, modelo, limites e política de privacidade usada para extrair candidatos e produzir textos. Consentimento e credencial são validados antes de cada chamada.
 _Avoid_: Model, Provider
 
 **AI Provider**:
-Uma integração que executa solicitações de IA diretamente ou por meio de um gateway como OpenCode, sem possuir regras do domínio decisional.
-_Avoid_: Engineering Assistant, Candidate Extractor
+Uma integração que executa solicitações de IA: heurística local, API compatível com OpenAI, conta ChatGPT, OpenCode Zen/Go ou Claude Code local. Não possui regras do domínio decisional.
+_Avoid_: Candidate Extractor
