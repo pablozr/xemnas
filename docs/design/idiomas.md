@@ -33,7 +33,7 @@ A demo aceita `--language <tag>` (`en`, `pt-BR`, `es`, `fr`, `de`, `it`, `ja`,
 - Mensagens que chegam prontas do backend (`application`, `ai-provider`)
   ainda estão em português; traduzi-las é trabalho da sessão de backend
   (devolver um tipo de erro que a tela traduz), registrado em
-  [roadmap/mvp/issues](../roadmap/mvp/issues/21-mensagens-do-backend-traduziveis.md).
+  [ticket 21](../roadmap/tickets/21-mensagens-do-backend-traduziveis.md).
 
 ## Tom
 

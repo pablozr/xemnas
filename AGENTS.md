@@ -12,7 +12,7 @@
 - Toda documentação fica em `docs/`, organizada por assunto; o mapa e a precedência entre documentos estão em `docs/README.md`. Consulte-o antes de criar um arquivo novo e mantenha-o atualizado.
 - Para localizar um fluxo, símbolo ou teste, consulte `docs/arquitetura/mapa-do-codigo.md`.
 - Pesquisas, planos de tela e ideias futuras ficam em `docs/pesquisas/`, com linha de status e entrada no índice da pasta. Ao implementar, leve o que for duradouro para `docs/design/VISUAL-IDENTITY.md`, o design system, `docs/arquitetura/` ou um ADR e apague a pesquisa no mesmo commit, junto com imagens e protótipos que só ela usava; só fica a que uma regra vigente cita como fundamento.
-- Versione `/docs/` junto com as alterações pertinentes. Ao fechar uma pendência registrada em `docs/roadmap/mvp/issues/`, anote no próprio ticket o que foi feito e o commit.
+- Versione `/docs/` junto com as alterações pertinentes. Trabalho planejado vive em `docs/roadmap/tickets/`; ao fechar um ticket, registre o que foi feito e o commit na tabela "Entregue" de `docs/roadmap/README.md` e apague o ticket no mesmo commit. Se o produto mudou, atualize `docs/produto/estado-atual.md` no mesmo commit.
 - Registre limitações de validação quando o ambiente impedir algum check, na mensagem do commit e no resumo ao usuário.
 - Push só para a branch de trabalho da sessão, quando o usuário pedir ou o ambiente exigir; nunca para `master`. Pull request e merge dependem de pedido explícito do usuário. O pedido de commits automáticos não autoriza push por si só.
 

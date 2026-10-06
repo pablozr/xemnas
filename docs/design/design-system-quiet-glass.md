@@ -233,7 +233,7 @@ e exige pelo menos **4.5:1** para `accent.on-emphasis`. A referência canônica
 do produto atual. `glass.fill-strong` permanece para a camada de highlight,
 não para o corpo do controle.
 
-Estado verificado em: `docs/roadmap/mvp/issues/05-primitives-quiet-glass.md`.
+Estado verificado no ticket 05 do MVP (entregue; ver `docs/roadmap/README.md`).
 
 ### Fallback técnico
 

@@ -30,7 +30,7 @@ to the agent as context, so the next task starts from what the project already
 settled instead of deciding it again.
 
 > **Status: early and built in the open.** xemnas works end to end on Windows with
-> OpenCode, but it is a young project and many pieces are still moving. Ideas, issues
+> OpenCode and Claude Code, but it is a young project and many pieces are still moving. Ideas, issues
 > and pull requests are very welcome; see [Contributing](#contributing).
 
 <p align="center">
@@ -124,8 +124,9 @@ Windows blocks a new build? See [Smart App Control](docs/operacao/operacao-e-ref
 | | |
 | --- | --- |
 | **OpenCode** | Plugin in [`adapters/opencode`](adapters/opencode): captures on idle, validates the envelope and sends it to the app or the outbox. No domain rules, never calls a model. [Setup](docs/operacao/operacao-e-referencia.md#integração-com-o-opencode) |
-| **MCP** | `xemnas-mcp` ([`apps/mcp-server`](apps/mcp-server)): read-only `get_decision`, `search_context` and `file_context` (what the project map ties to a file) over stdio. Works with OpenCode and Claude Code. [Setup](docs/roadmap/fase-5/01-mcp-leitura.md) |
-| **Context Pack** | Decisions in force and rules valid at a date, with citations and a size budget. [Details](docs/roadmap/fase-3/01-context-pack-manual.md) |
+| **Claude Code** | Hooks served by `xemnas-mcp`: `hook prompt` injects context into each prompt, `hook stop` and `hook session-end` capture the session (with the outbox when the app is closed). A git worktree of a registered project counts as that project. [How it works](docs/arquitetura/contexto-e-agentes.md#hooks-do-claude-code) |
+| **MCP** | `xemnas-mcp` ([`apps/mcp-server`](apps/mcp-server)): read-only `get_decision`, `search_context` and `file_context` (what the project map ties to a file) over stdio. Works with OpenCode and Claude Code. [Details](docs/arquitetura/contexto-e-agentes.md#mcp-somente-leitura) |
+| **Context Pack** | Decisions in force and rules valid at a date, with citations and a size budget. [Details](docs/arquitetura/contexto-e-agentes.md#context-pack) |
 
 ## Privacy
 
@@ -157,8 +158,9 @@ A modular Rust monolith whose layering is enforced by an architecture test.
 
 Project documents are written in Portuguese.
 
-- [MVP specification](docs/produto/MVP-SPEC.md) and [domain vocabulary](docs/produto/CONTEXT.md)
-- [Stack and architecture](docs/arquitetura/stack-e-arquitetura-rust-gpui.md) · [ADRs](docs/arquitetura/adr/)
+- [Current state of the product](docs/produto/estado-atual.md) and [domain vocabulary](docs/produto/CONTEXT.md)
+- [Roadmap](docs/roadmap/README.md) · [Dogfood metrics](docs/operacao/dogfood-log.md)
+- [Stack and architecture](docs/arquitetura/stack-e-arquitetura-rust-gpui.md) · [Context for agents](docs/arquitetura/contexto-e-agentes.md) · [ADRs](docs/arquitetura/adr/)
 - [Visual identity](docs/design/VISUAL-IDENTITY.md) and [Quiet Glass design system](docs/design/design-system-quiet-glass.md)
 - [Operations, local data and known limitations](docs/operacao/operacao-e-referencia.md)
 - [Research and future ideas](docs/pesquisas/README.md) · [Full documentation map](docs/README.md)
@@ -167,10 +169,10 @@ Project documents are written in Portuguese.
 
 xemnas is early, so there is room to shape it. Good places to start:
 
-- **English interface.** The UI is in Portuguese today; an i18n layer with English as the
-  default would open the app to everyone.
-- **More agents.** Capture is built for OpenCode; adapters for Claude Code, Codex or other
-  agents are welcome (the MCP server already works with Claude Code).
+- **Translations.** The UI ships in ten languages with English as the default; native
+  speakers reviewing the wording are very welcome ([guide](docs/design/idiomas.md)).
+- **More agents.** Capture works with OpenCode and Claude Code; adapters for Codex or other
+  agents are welcome.
 - **macOS and Linux.** The app targets Windows first; GPUI runs elsewhere, the packaging and a
   few platform pieces do not yet.
 - **Better extraction and retrieval.** Measuring what the agent actually receives and whether
