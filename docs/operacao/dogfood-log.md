@@ -12,10 +12,10 @@ Só entram números agregados, por dia local. Dias sem atividade não aparecem. 
 
 | Dia | Capturas | Candidatos | Confirmados | Descartados | Ruído | Auto | Desfeitos | Latência p50/p95 | Revisão p50/p95 | Injeções | Tokens | Omitidos | MCP | MCP respondidas | Perdas |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 2026-10-06 | 27 | 13 | 13 | 0 | 0% | 28 | 0 | 1.4 min / 1.8 min | 9 s / 56 s | 1 | 292 | 21 | — | — | 8 |
-| **Total (1 dia)** | 27 | 13 | 13 | 0 | 0% | 28 | 0 | 1.4 min / 1.8 min | 9 s / 56 s | 1 | 292 | 21 | — | — | 8 |
+| 2026-10-06 | 15 | 15 | 15 | 0 | 0% | 37 | 0 | 1.2 min / 1.9 min | 30 s / 57 s | 0 | 0 | 0 | 3 | 3 | 14 |
+| **Total (1 dia)** | 15 | 15 | 15 | 0 | 0% | 37 | 0 | 1.2 min / 1.9 min | 30 s / 57 s | 0 | 0 | 0 | 3 | 3 | 14 |
 
-Atualizado em 2026-10-06 12:07 (hora local).
+Atualizado em 2026-10-06 23:30 (hora local).
 
 <!-- dogfood:auto:end -->
 
