@@ -52,7 +52,10 @@ entre decisões sem alterar nada.
 **Regras com escopo.** Uma regra (restrição ou convenção) entra no contexto de uma tarefa só se
 a toca: o texto casa com a tarefa, ela está ligada a um componente que a tarefa toca
 (`crates/application/src/graph/scope.rs`) ou foi marcada como **global**. Escopo vazio quer dizer
-"não informado", não "vale para tudo": uma regra sem nenhuma dessas três coisas não entra. As
+"não informado", não "vale para tudo": uma regra sem nenhuma dessas três coisas não entra. Um
+componente com muitas regras ligadas (mais de 3) contribui no máximo com 3, as que mais falam do
+tema da tarefa; tocar o componente só pelo nome ou pelo arquivo, sem tema em comum, não traz
+nenhuma. Uma decisão do pacote ligada a um componente não o toca. As
 globais são no máximo 3 por pacote, as confirmadas mais recentemente primeiro, e as decisões
 ocupam o orçamento antes das regras. Só a marca explícita torna uma regra global: o valor reservado `*`, como texto de um
 qualificador de escopo ou entrada do escopo herdado (sem migração). Uma convenção sem escopo
