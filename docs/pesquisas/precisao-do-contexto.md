@@ -31,7 +31,9 @@ aceite; nenhum entra. Corpus de calibração v5, também às cegas: 0,41 / 0,43 
 nenhuma variante com vetor o melhora sem derrubar o v3.
 Técnica 6, regras com escopo (06/10/2026): uma regra permanente ligada a componentes
 (`applies_to`) só entra se a tarefa toca um deles (arquivo no padrão, menção no texto ou
-decisão do pacote ligada a ele); sem vínculo, continua global. Regras derivadas de uma decisão
+decisão do pacote ligada a ele). Superado em 06/10/2026 (política de injeção de regras): sem
+vínculo a regra deixou de ser global, entra só por texto ou marca explícita, no máximo 3 por
+pacote. Regras derivadas de uma decisão
 herdam os componentes dela ao confirmar o vínculo e na atualização do mapa. v3 com quatro
 famílias novas: 0,95 / 0,96 / 0 de 27 (antes 0,94 / 0,95 / 0); v4 e v5 inalterados; p95 2 ms.
 Ganho provavelmente otimista: falta um corpus v4 com holdout novo. A medição usa o portão de
@@ -69,7 +71,8 @@ Conclusão: para o Xemnas, **abster-se é melhor que entregar um item fraco**.
    com **qualquer palavra** da tarefa ligada por `OR`; até 50 resultados por `bm25`.
 3. Os itens entram em ordem até encher o orçamento. **Não há limiar de relevância**: uma
    decisão que divide só uma palavra com a tarefa entra.
-4. Regras do tipo restrição e convenção entram **sempre** (permanentes), mesmo sem
+4. (Estado de origem; hoje as regras entram só se tocam a tarefa ou são globais, no máximo
+   3.) Regras do tipo restrição e convenção entravam **sempre** (permanentes), mesmo sem
    relação com a tarefa.
 5. Não há radical das palavras (português e inglês), peso por campo (pergunta, escolha,
    motivo) nem abstenção explícita.

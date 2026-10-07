@@ -27,6 +27,15 @@ pub const MAX_BUDGET_CHARS: usize = 50_000;
 /// Longest accepted task description.
 pub const MAX_TASK_CHARS: usize = 2_000;
 
+/// Reserved scope value that marks a rule as project-wide: it is the whole
+/// text of a `Scope` qualifier or one entry of `inherited_scope`. No
+/// migration: both fields already exist.
+pub const GLOBAL_SCOPE: &str = "*";
+
+/// Most project-wide rules that ride along in one pack, newest first, so a
+/// project with many cannot crowd out what the task touches.
+pub const MAX_GLOBAL_RULES: usize = 3;
+
 /// Ranked candidates fetched per source before selection.
 pub const MAX_RANKED: usize = 50;
 
@@ -169,7 +178,8 @@ pub struct PackClaim {
     pub valid_until: Option<String>,
     /// Decision the claim came from, when any.
     pub source_decision_id: Option<String>,
-    /// Whether the claim matched the task (otherwise it is a standing rule).
+    /// Whether the claim matched the task (otherwise it is a rule tied to a
+    /// component the task touches, or an explicitly global one).
     pub matched: bool,
 }
 
@@ -194,7 +204,8 @@ pub struct ContextPack {
     pub used_chars: usize,
     /// Relevant decisions in force at `as_of`, most relevant first.
     pub decisions: Vec<PackDecision>,
-    /// Claims valid at `as_of`: matched first, then standing constraints and conventions.
+    /// Claims valid at `as_of`: matched first, then rules tied to a touched
+    /// component, then at most [`MAX_GLOBAL_RULES`] explicitly global ones.
     pub claims: Vec<PackClaim>,
     /// Relevant items left out by the budget.
     pub omitted: usize,
@@ -479,14 +490,16 @@ where
         }
 
         let mut pack_claims = Vec::new();
-        // A standing rule tied to components applies only when the task
-        // touches one of them (files, mention or a decision of the pack).
+        // A rule that is neither matched nor explicitly global enters only
+        // when the graph ties it to a component the task touches (files,
+        // mention or a decision of the pack). One with no tie has no scope
+        // informed, so it does not ride along.
         let decision_ids: Vec<String> = decisions
             .iter()
             .map(|item| item.decision_id.clone())
             .collect();
-        let out_of_scope = KnowledgeGraph::new(self.store.clone())
-            .claims_out_of_scope(
+        let scopes = KnowledgeGraph::new(self.store.clone())
+            .claims_by_scope(
                 &request.project_id,
                 &task,
                 &files,
@@ -494,17 +507,29 @@ where
                 as_of.as_str(),
             )
             .map_err(graph_error)?;
-        let standing = valid.values().filter(|claim| {
+        let mut tied = Vec::new();
+        let mut global = Vec::new();
+        for claim in valid.values().filter(|claim| {
             !matched_claims.contains(claim.claim_id.as_str())
                 && matches!(claim.kind, ClaimKind::Constraint | ClaimKind::Convention)
-                && !out_of_scope.contains(&claim.claim_id)
-        });
+        }) {
+            let is_tied = scopes.in_scope.contains(&claim.claim_id)
+                || scopes.out_of_scope.contains(&claim.claim_id);
+            if is_global(claim, is_tied) {
+                global.push(*claim);
+            } else if scopes.in_scope.contains(&claim.claim_id) {
+                tied.push(*claim);
+            }
+        }
+        // The most recently confirmed global rules first; the id breaks ties.
+        global.sort_by(|a, b| (&b.created_at, &b.claim_id).cmp(&(&a.created_at, &a.claim_id)));
+        global.truncate(MAX_GLOBAL_RULES);
         let ordered = ranked_claims
             .iter()
             .filter(|id| matched_claims.contains(id.as_str()))
             .filter_map(|id| valid.get(id.as_str()).copied())
             .map(|claim| (claim, true))
-            .chain(standing.map(|claim| (*claim, false)));
+            .chain(tied.into_iter().chain(global).map(|claim| (claim, false)));
         for (claim, matched) in ordered {
             let item = pack_claim(claim, matched)?;
             if selection.take(
@@ -787,6 +812,30 @@ fn decision_cost(decision: &PackDecision) -> usize {
         .expect("pack serialization is infallible")
         .chars()
         .count()
+}
+
+/// Whether a rule applies to the whole project, so it may ride along on a
+/// task that does not touch it. Only the explicit marker is a decision of
+/// the person or the AI; the second case is the rule for data from before
+/// the marker existed: a convention with no scope at all (no component tie,
+/// no inherited scope, no scope qualifier) is read as project-wide, while
+/// a constraint with no scope is not, since a constraint applies to
+/// something and it was never said to what.
+fn is_global(claim: &ClaimRecord, tied: bool) -> bool {
+    let scope: Vec<String> = serde_json::from_str(&claim.inherited_scope).unwrap_or_default();
+    let qualifiers = crate::qualifiers::decode(&claim.qualifiers).unwrap_or_default();
+    let scope_qualifiers = || {
+        qualifiers
+            .iter()
+            .filter(|item| item.kind == crate::qualifiers::QualifierKind::Scope)
+    };
+    let marked = scope.iter().any(|value| value.trim() == GLOBAL_SCOPE)
+        || scope_qualifiers().any(|item| item.text.trim() == GLOBAL_SCOPE);
+    marked
+        || (claim.kind == ClaimKind::Convention
+            && !tied
+            && scope.is_empty()
+            && scope_qualifiers().next().is_none())
 }
 
 fn pack_claim(claim: &ClaimRecord, matched: bool) -> Result<PackClaim, ContextError> {

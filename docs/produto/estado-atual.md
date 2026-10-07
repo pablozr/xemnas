@@ -49,10 +49,16 @@ derivadas, sempre com citação literal, e nada vale antes de você confirmar. H
 exportação para Markdown ou JSON e uma revisão consultiva, sob demanda, que aponta tensões
 entre decisões sem alterar nada.
 
-**Regras com escopo.** Uma regra ligada a componentes só vale quando a tarefa toca um deles.
-Sem ligação, vale para o projeto todo (`crates/application/src/graph/scope.rs`), mas a IA propõe
-os componentes de uma regra sem ligação (e sem decisão de origem ligada) para a revisão
-confirmar.
+**Regras com escopo.** Uma regra (restrição ou convenção) entra no contexto de uma tarefa só se
+a toca: o texto casa com a tarefa, ela está ligada a um componente que a tarefa toca
+(`crates/application/src/graph/scope.rs`) ou foi marcada como **global**. Escopo vazio quer dizer
+"não informado", não "vale para tudo": uma regra sem nenhuma dessas três coisas não entra. As
+globais são no máximo 3 por pacote, as confirmadas mais recentemente primeiro, e as decisões
+ocupam o orçamento antes das regras. A marca global é o valor reservado `*`, como texto de um
+qualificador de escopo ou entrada do escopo herdado (sem migração); para dados anteriores à marca,
+uma convenção sem escopo algum (sem vínculo, escopo herdado ou qualificador de escopo) conta
+como global e uma restrição sem escopo não. A IA propõe os componentes de uma regra sem ligação
+(e sem decisão de origem ligada) para a revisão confirmar.
 
 **Grafo e mapa.** Componentes e tecnologias do projeto, com os arquivos que cada um cobre e as
 decisões e regras ligadas a eles. Os componentes vêm do workspace declarado e dos arquivos que

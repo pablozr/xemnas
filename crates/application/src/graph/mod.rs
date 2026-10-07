@@ -25,6 +25,7 @@ pub use query::{
     NodeSummary, PartCount, ProjectGraph, ProjectMap, Suggestion, TimelineEvent, TimelineKind,
     DEFAULT_NEIGHBORHOOD_LIMIT, MAX_NEIGHBORHOOD_DEPTH,
 };
+pub use scope::ClaimScopes;
 
 use domain::entities::{
     check_part_of, entity_description, entity_key, entity_name, path_pattern, EdgeKind, EdgeOrigin,
