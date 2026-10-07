@@ -45,3 +45,7 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 # Background images: decoded, downscaled, blurred and dimmed once, off the
 # UI thread (`ui::wallpaper`). Same version GPUI already pulls in.
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
+
+[dev-dependencies]
+# Read-only report queries of the ignored end-to-end run (tests/e2e_pipeline.rs).
+rusqlite = { version = "0.40", features = ["bundled"] }

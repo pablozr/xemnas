@@ -72,6 +72,38 @@ pub fn validate_extracted(
     Ok(())
 }
 
+/// Keeps the extracted qualifications that `validate_extracted` would accept
+/// and drops the rest, so one misquoted excerpt costs that qualification and
+/// not the whole decision. An artifact reference that merely contains a real
+/// artifact id (`artifact <id>`) is canonicalized to the id; the text must
+/// still be a literal excerpt of that artifact.
+pub fn retain_supported(
+    items: Vec<KnowledgeQualifier>,
+    evidence: &crate::extract::DecisionEvidence,
+) -> Vec<KnowledgeQualifier> {
+    items
+        .into_iter()
+        .take(MAX_QUALIFIERS)
+        .filter_map(|mut item| {
+            let id = item.artifact_id.as_deref()?.trim();
+            let artifact = evidence
+                .artifacts
+                .iter()
+                .find(|artifact| artifact.artifact_id == id)
+                .or_else(|| {
+                    evidence
+                        .artifacts
+                        .iter()
+                        .find(|artifact| id.contains(&artifact.artifact_id))
+                })?;
+            item.artifact_id = Some(artifact.artifact_id.clone());
+            let kept = validate_qualifiers(std::slice::from_ref(&item)).is_ok()
+                && artifact.content.contains(&item.text);
+            kept.then_some(item)
+        })
+        .collect()
+}
+
 /// Decodes persisted qualifications; malformed data is an error, not an empty list.
 pub fn decode(text: &str) -> Result<Vec<KnowledgeQualifier>, String> {
     let items: Vec<KnowledgeQualifier> =
@@ -120,6 +152,40 @@ pub fn admit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retain_supported_keeps_only_literal_excerpts_within_bounds() {
+        let evidence = crate::extract::DecisionEvidence {
+            capture_id: "c".into(),
+            project_id: "p".into(),
+            adapter: None,
+            session_id: None,
+            observed_at: None,
+            artifacts: vec![crate::extract::EvidenceArtifact {
+                artifact_id: "a1".into(),
+                kind: "document".into(),
+                content: "uses SQLite only".into(),
+                metadata: "{}".into(),
+            }],
+        };
+        let item = |text: &str, id: &str| KnowledgeQualifier {
+            kind: QualifierKind::Scope,
+            text: text.into(),
+            artifact_id: Some(id.into()),
+        };
+        let kept = retain_supported(
+            vec![
+                item("SQLite only", "a1"),
+                item("sqlite only", "a1"),
+                item("", "a1"),
+                item("SQLite only", "a2"),
+            ],
+            &evidence,
+        );
+        assert_eq!(kept, vec![item("SQLite only", "a1")]);
+        // Whatever survives passes the strict check.
+        assert!(validate_extracted(&kept, &evidence).is_ok());
+    }
 
     #[test]
     fn unicode_bounds_and_total_omission() {

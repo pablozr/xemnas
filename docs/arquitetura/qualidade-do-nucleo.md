@@ -96,3 +96,22 @@ cargo test -j4 --locked -p ai-provider --test link_suggestions_live -- --ignored
 ```
 
 A fixture foi gerada em 06/10/2026 e o portão roda sempre; regenerar exige a autorização do usuário, porque chama o provedor.
+
+## Validação da extração
+
+Cada proposta do modelo é validada sozinha (`extract/validation.rs`); a captura só falha
+quando nenhuma proposta passa. Um qualificador exige citação literal: o texto precisa
+estar no artefato que ele cita, e o app não aceita declaração humana sem artefato vinda
+da IA. Esse é o único campo que o modelo cita de memória e erra com frequência (parafraseia,
+junta frases), então `reconcile_with_evidence` o trata como os demais fatos que o app
+conhece melhor: descarta o qualificador que não passa (artefato desconhecido, texto que
+não é trecho literal, vazio ou longo demais) e mantém a decisão com os que passam, em vez
+de perder a proposta inteira. A referência de artefato que apenas contém um id real
+(`artifact <id>`) vira o id. A validação estrita (`qualifiers::validate_extracted`)
+continua valendo para o que é persistido. Testes:
+`extract::tests::a_misquoted_qualifier_is_dropped_and_the_decision_survives` e
+`qualifiers::tests::retain_supported_keeps_only_literal_excerpts_within_bounds`.
+
+Medido na execução ponta a ponta sobre um projeto real
+([operação](../operacao/operacao-e-referencia.md#execução-ponta-a-ponta-sobre-um-projeto-real)):
+antes, 5 de 30 documentos falharam com `qualificador sem citação literal verificável`.
