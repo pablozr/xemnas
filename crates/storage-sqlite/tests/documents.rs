@@ -365,3 +365,58 @@ fn imports_outside_the_repository_or_not_documents_are_refused_without_a_trace()
     );
     assert!(documents.list("wt-p").expect("list").is_empty());
 }
+
+#[test]
+fn documents_are_queued_for_analysis_adrs_and_specs_before_guides() {
+    use application::jobs::{JobRepository, ANALYZE_DOCUMENT_KIND};
+
+    let test = support::open("documents-order", &[]);
+    let repo = test.root.join("repo");
+    for dir in ["docs/adr", "docs/specs", "docs/guias"] {
+        std::fs::create_dir_all(repo.join(dir)).expect("docs");
+    }
+    let body = "Decidimos guardar tudo em SQLite em vez de um servidor. Nunca gravamos \
+                segredos no banco, em crates/storage-sqlite/src/store.rs.\n";
+    // Written in the opposite order of the analysis order.
+    for path in [
+        "docs/guias/operacao.md",
+        "README.md",
+        "docs/specs/armazenamento.md",
+        "docs/adr/0001-sqlite.md",
+    ] {
+        std::fs::write(repo.join(path), format!("# Titulo\n\n## Decisão\n{body}")).expect("doc");
+    }
+    test.store
+        .insert(&ProjectRecord::new(
+            "docs-p".into(),
+            repo.to_string_lossy().replace('\', "/"),
+            "2026-01-01T00:00:00Z".into(),
+        ))
+        .expect("project");
+    let documents = Documents::new(test.store.clone());
+    documents.index("docs-p").expect("index");
+    assert_eq!(documents.propose("docs-p", 10).expect("propose"), 4);
+
+    let kinds = vec![ANALYZE_DOCUMENT_KIND.to_string()];
+    let connection = Connection::open(test.root.join("app.db")).expect("raw");
+    let mut order = Vec::new();
+    while let Some(job) = test.store.claim_next(&kinds).expect("claim") {
+        let file: String = connection
+            .query_row(
+                "SELECT message_id FROM adapter_checkpoints WHERE capture_id = ?1",
+                [&job.payload],
+                |row| row.get(0),
+            )
+            .expect("checkpoint");
+        order.push(file.split('@').next().unwrap_or_default().to_string());
+    }
+    assert_eq!(
+        order,
+        [
+            "docs/adr/0001-sqlite.md",
+            "docs/specs/armazenamento.md",
+            "README.md",
+            "docs/guias/operacao.md"
+        ]
+    );
+}

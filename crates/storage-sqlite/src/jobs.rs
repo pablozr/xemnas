@@ -138,7 +138,16 @@ impl JobRepository for SqliteStore {
         if registered_kinds.is_empty() {
             return Ok(None);
         }
-        let placeholders = vec!["?"; registered_kinds.len()].join(", ");
+        // The slice is in priority order: the kind listed first wins, the
+        // oldest job of a kind goes first.
+        let placeholders = (1..=registered_kinds.len())
+            .map(|position| format!("?{position}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let rank = (1..=registered_kinds.len())
+            .map(|position| format!("WHEN ?{position} THEN {position}"))
+            .collect::<Vec<_>>()
+            .join(" ");
         let sql = format!(
             "UPDATE jobs \
              SET state = 'running', attempts = attempts + 1, run_after = NULL, \
@@ -147,7 +156,7 @@ impl JobRepository for SqliteStore {
                  SELECT id FROM jobs \
                  WHERE state = 'queued' AND kind IN ({placeholders}) \
                    AND (run_after IS NULL OR run_after <= {TOUCH_UPDATED_AT}) \
-                 ORDER BY created_at ASC, id ASC LIMIT 1 \
+                 ORDER BY CASE kind {rank} END ASC, created_at ASC, id ASC LIMIT 1 \
              ) \
              RETURNING {JOB_COLUMNS}"
         );
@@ -155,6 +164,37 @@ impl JobRepository for SqliteStore {
             .query_row(&sql, params_from_iter(registered_kinds.iter()), map_row)
             .optional()
             .map_err(storage_error)
+    }
+
+    fn claim_more(&self, kind: &str, limit: usize) -> Result<Vec<JobRecord>, JobError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let sql = format!(
+            "UPDATE jobs \
+             SET state = 'running', attempts = attempts + 1, run_after = NULL, \
+                 updated_at = {TOUCH_UPDATED_AT} \
+             WHERE id IN ( \
+                 SELECT id FROM jobs \
+                 WHERE state = 'queued' AND kind = ?1 \
+                   AND (run_after IS NULL OR run_after <= {TOUCH_UPDATED_AT}) \
+                 ORDER BY created_at ASC, id ASC LIMIT ?2 \
+             ) \
+             RETURNING {JOB_COLUMNS}"
+        );
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let connection = self.lock();
+        let mut statement = connection.prepare(&sql).map_err(storage_error)?;
+        let mut records = statement
+            .query_map(params![kind, limit], map_row)
+            .map_err(storage_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage_error)?;
+        // RETURNING has no order guarantee.
+        records.sort_by(|left, right| {
+            (&left.created_at, &left.id).cmp(&(&right.created_at, &right.id))
+        });
+        Ok(records)
     }
 
     fn transition(

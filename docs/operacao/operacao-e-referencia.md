@@ -215,7 +215,10 @@ documentos, roda os mesmos handlers da composition root (análise, regras, rela�
 termos, vínculos, observações), gera a Visão, liga a aprovação automática e repete as
 passagens até estabilizar, e monta o pack de algumas tarefas. O perfil de IA é copiado
 (só leitura) de `%LOCALAPPDATA%\xemnas\settings` e o segredo vem do mesmo cofre do app.
-**Chama o provedor de verdade** (dezenas de chamadas): só com autorização do usuário.
+**Chama o provedor de verdade** (dezenas a centenas de chamadas): só com autorização do usuário.
+O relatório conta as chamadas ao provedor (`ProviderLimiter::calls`) por passo
+(`[passo] N job run(s), M provider call(s)`) e no total da execução, para comparar antes e
+depois de uma mudança nos lotes de jobs de IA.
 
 ```powershell
 $env:XEMNAS_E2E_PROJECT = 'C:\caminho\do\projeto'

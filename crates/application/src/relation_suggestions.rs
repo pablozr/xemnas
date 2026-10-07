@@ -200,9 +200,9 @@ impl std::error::Error for RelationFindError {}
 
 /// System prompt of the relation judge.
 pub const RELATION_PROMPT: &str = concat!(
-    "You compare one new engineering decision of a software \
-project with a few earlier decisions of the same project, and say for each whether a real \
-relation exists. depends_on: one decision only makes sense because of the other (it builds \
+    "You compare each new engineering decision of a software \
+project, numbered in the message, with the few earlier decisions of the same project listed \
+under it, and say for each whether a real relation exists. depends_on: one decision only makes sense because of the other (it builds \
 on it, assumes it). conflicts_with: both cannot hold at the same time. supersedes: the new \
 decision answers the same question as the earlier one with a different choice, replacing \
 it. none: anything else. Most pairs are none; sharing a topic, a component or words is not a \
@@ -212,10 +212,12 @@ given that shows it, and explain it in one sentence in reason, in the language o
 decisions. direction is new_to_earlier when the new decision is the source (the new one \
 depends on, conflicts with or supersedes the earlier one) and earlier_to_new otherwise; \
 supersedes is always new_to_earlier.\n\
-Reply with one JSON object only, matching exactly: {\"relations\":[{\"earlier\":string,\
+Reply with one JSON object only, matching exactly: {\"decisions\":[{\"id\":string,\
+\"relations\":[{\"earlier\":string,\
 \"relation\":\"depends_on|conflicts_with|supersedes|none\",\"direction\":\
-\"new_to_earlier|earlier_to_new\",\"quote\":string,\"reason\":string}]}, one entry per \
-earlier decision, using its id exactly as given (D:xxxxxxxx).",
+\"new_to_earlier|earlier_to_new\",\"quote\":string,\"reason\":string}]}]}, one entry per new \
+decision (id being its number) with one relation per earlier decision listed under it, using \
+the earlier decision's id exactly as given (D:xxxxxxxx).",
     crate::plain_rules!()
 );
 
@@ -224,31 +226,81 @@ pub fn relation_schema() -> serde_json::Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["relations"],
+        "required": ["decisions"],
         "properties": {
-            "relations": {
+            "decisions": {
                 "type": "array",
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["earlier", "relation", "direction", "quote", "reason"],
+                    "required": ["id", "relations"],
                     "properties": {
-                        "earlier": { "type": "string" },
-                        "relation": {
-                            "type": "string",
-                            "enum": ["depends_on", "conflicts_with", "supersedes", "none"]
-                        },
-                        "direction": {
-                            "type": "string",
-                            "enum": ["new_to_earlier", "earlier_to_new"]
-                        },
-                        "quote": { "type": "string" },
-                        "reason": { "type": "string" }
+                        "id": { "type": "string" },
+                        "relations": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                    "earlier", "relation", "direction", "quote", "reason"
+                                ],
+                                "properties": {
+                                    "earlier": { "type": "string" },
+                                    "relation": {
+                                        "type": "string",
+                                        "enum": [
+                                            "depends_on", "conflicts_with", "supersedes", "none"
+                                        ]
+                                    },
+                                    "direction": {
+                                        "type": "string",
+                                        "enum": ["new_to_earlier", "earlier_to_new"]
+                                    },
+                                    "quote": { "type": "string" },
+                                    "reason": { "type": "string" }
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
     })
+}
+
+/// A new decision with the earlier ones it is compared with.
+pub struct RelationSubject<'a> {
+    /// The decision that was just adopted.
+    pub new: &'a StoredDecision,
+    /// Earlier decisions worth comparing with it.
+    pub earlier: &'a [StoredDecision],
+}
+
+/// The user message: each new decision numbered from 1, with its earlier
+/// decisions listed under it; secrets redacted.
+pub fn relation_request(subjects: &[RelationSubject<'_>]) -> String {
+    let mut user = String::new();
+    for (position, subject) in subjects.iter().enumerate() {
+        user.push_str(&format!(
+            "## New decision {} D:{}\nQuestion: {}\nChoice: {}\nWhy: {}\n\n### Earlier decisions\n",
+            position + 1,
+            short_ref(&subject.new.decision_id),
+            crate::external::protected_text(&subject.new.question),
+            crate::external::protected_text(&subject.new.choice),
+            crate::external::limited_text(&subject.new.rationale, 600)
+        ));
+        for decision in subject.earlier {
+            user.push_str(&format!(
+                "- D:{} Question: {} Choice: {} Why: {}\n",
+                short_ref(&decision.decision_id),
+                crate::external::protected_text(&decision.question),
+                crate::external::protected_text(&decision.choice),
+                crate::external::limited_text(&decision.rationale, 400)
+            ));
+        }
+        user.push('\n');
+    }
+    user
 }
 
 #[derive(Deserialize)]
@@ -287,23 +339,55 @@ fn decision_text(decision: &StoredDecision) -> String {
     )
 }
 
-/// Validated relations from the judge's answer: known ids, a real kind, a
-/// quote found in the texts of the pair, a direction the kind allows.
+/// A validated relation: from, to, kind, quote, reason.
+pub type DerivedRelation = (String, String, RelationKind, String, String);
+
+/// Validated relations from the judge's answer `{"relations":[...]}` about
+/// one new decision: known ids, a real kind, a quote found in the texts of the
+/// pair, a direction the kind allows.
 pub fn parse_relations(
     answer: &str,
     new: &StoredDecision,
     earlier: &[StoredDecision],
-) -> Vec<(String, String, RelationKind, String, String)> {
+) -> Vec<DerivedRelation> {
     let Ok(raw) = serde_json::from_str::<RawAnswer>(answer.trim()) else {
         return Vec::new();
     };
+    validated(raw.relations, new, earlier)
+}
+
+/// Validated relations per new decision, in order, from a batched answer. A
+/// decision the judge skipped or answered unreadably gets none; each one is
+/// checked against its own earlier decisions only.
+pub fn parse_relations_batch(
+    answer: &str,
+    subjects: &[RelationSubject<'_>],
+) -> Vec<Vec<DerivedRelation>> {
+    let entries = crate::batching::answers::<RawAnswer>(answer, subjects.len())
+        .unwrap_or_else(|| subjects.iter().map(|_| None).collect());
+    subjects
+        .iter()
+        .zip(entries)
+        .map(|(subject, entry)| {
+            entry.map_or_else(Vec::new, |entry| {
+                validated(entry.relations, subject.new, subject.earlier)
+            })
+        })
+        .collect()
+}
+
+fn validated(
+    relations: Vec<RawRelation>,
+    new: &StoredDecision,
+    earlier: &[StoredDecision],
+) -> Vec<DerivedRelation> {
     let by_ref: BTreeMap<String, &StoredDecision> = earlier
         .iter()
         .map(|decision| (format!("d:{}", short_ref(&decision.decision_id)), decision))
         .collect();
     let mut out = Vec::new();
     let mut seen = BTreeSet::new();
-    for relation in raw.relations {
+    for relation in relations {
         let kind = match relation.relation.as_str() {
             "depends_on" => RelationKind::DependsOn,
             "conflicts_with" => RelationKind::ConflictsWith,
@@ -444,49 +528,89 @@ where
     ///
     /// `storage`, or `provider` when the call fails.
     pub fn run(&self, decision_id: &str) -> Result<usize, RelationFindError> {
+        self.run_many(&[decision_id]).pop().unwrap_or(Ok(0))
+    }
+
+    /// Like [`RelationFinder::run`] for several new decisions at once: those
+    /// of a project with candidates share one provider call (up to
+    /// [`crate::batching::BATCH_SIZE`] per call). The answer holds, per
+    /// decision, what it stored; a failed call fails every decision of its
+    /// group, never the others.
+    pub fn run_many(&self, decision_ids: &[&str]) -> Vec<Result<usize, RelationFindError>> {
         let storage = |error: DecisionsError| RelationFindError::Storage(error.to_string());
-        let Some(new) = accepted(&self.store, decision_id).map_err(storage)? else {
-            return Ok(0);
-        };
-        let earlier = self.candidates(&new)?;
-        if earlier.is_empty() {
-            return Ok(0);
+        let mut results: Vec<Result<usize, RelationFindError>> =
+            decision_ids.iter().map(|_| Ok(0)).collect();
+        // (new decision, its candidates) per id that has something to compare.
+        let mut subjects: Vec<Option<(StoredDecision, Vec<StoredDecision>)>> =
+            Vec::with_capacity(decision_ids.len());
+        for (index, id) in decision_ids.iter().enumerate() {
+            let found = accepted(&self.store, id)
+                .map_err(storage)
+                .and_then(|new| match new {
+                    Some(new) => Ok(Some((self.candidates(&new)?, new))),
+                    None => Ok(None),
+                });
+            match found {
+                Ok(Some((earlier, new))) if !earlier.is_empty() => {
+                    subjects.push(Some((new, earlier)));
+                }
+                Ok(_) => subjects.push(None),
+                Err(error) => {
+                    results[index] = Err(error);
+                    subjects.push(None);
+                }
+            }
         }
+        let live: Vec<(usize, &str)> = subjects
+            .iter()
+            .enumerate()
+            .filter_map(|(index, subject)| Some((index, subject.as_ref()?.0.project_id.as_str())))
+            .collect();
+        for group in crate::batching::project_groups(&live) {
+            let group_subjects: Vec<RelationSubject<'_>> = group
+                .iter()
+                .filter_map(|index| subjects[*index].as_ref())
+                .map(|(new, earlier)| RelationSubject { new, earlier })
+                .collect();
+            match self.run_group(&group_subjects) {
+                Ok(stored) => {
+                    for (index, stored) in group.iter().zip(stored) {
+                        results[*index] = Ok(stored);
+                    }
+                }
+                Err(error) => {
+                    for index in &group {
+                        results[*index] = Err(error.clone());
+                    }
+                }
+            }
+        }
+        results
+    }
+
+    /// One provider call for new decisions of one project; what each stored.
+    fn run_group(&self, subjects: &[RelationSubject<'_>]) -> Result<Vec<usize>, RelationFindError> {
+        let storage = |error: DecisionsError| RelationFindError::Storage(error.to_string());
+        let nothing = Ok(vec![0; subjects.len()]);
         let profile = self
             .settings
             .load_or_seed()
             .map_err(|error| RelationFindError::Storage(error.to_string()))?;
         if choose_extractor(Some(&profile)) != ExtractorChoice::ExternalEnabled {
-            return Ok(0);
+            return nothing;
         }
         let secret = match self.settings.secret(&profile.credential_account()) {
             Ok(Some(secret)) => secret,
             Ok(None) if !profile.credential_required() => String::new(),
-            _ => return Ok(0),
+            _ => return nothing,
         };
         let Ok(model) = self.factory.authorized(&profile, secret, &self.settings) else {
-            return Ok(0);
+            return nothing;
         };
-        let mut user = format!(
-            "## New decision D:{}\nQuestion: {}\nChoice: {}\nWhy: {}\n\n## Earlier decisions\n",
-            short_ref(&new.decision_id),
-            crate::external::protected_text(&new.question),
-            crate::external::protected_text(&new.choice),
-            crate::external::limited_text(&new.rationale, 600)
-        );
-        for decision in &earlier {
-            user.push_str(&format!(
-                "- D:{} Question: {} Choice: {} Why: {}\n",
-                short_ref(&decision.decision_id),
-                crate::external::protected_text(&decision.question),
-                crate::external::protected_text(&decision.choice),
-                crate::external::limited_text(&decision.rationale, 400)
-            ));
-        }
         let answer = model
             .complete(
                 RELATION_PROMPT,
-                &user,
+                &relation_request(subjects),
                 "decision_relations",
                 &relation_schema(),
             )
@@ -498,7 +622,7 @@ where
             })?;
         let existing: Vec<DecisionRelation> = self
             .store
-            .project_relations(&new.project_id)
+            .project_relations(&subjects[0].new.project_id)
             .map_err(storage)?
             .iter()
             .filter_map(|row| {
@@ -511,30 +635,37 @@ where
             })
             .collect();
         let now = now_rfc3339();
-        let mut stored = 0;
-        for (from, to, kind, quote, reason) in parse_relations(&answer, &new, &earlier) {
-            let Ok(relation) = DecisionRelation::new(from.clone(), to.clone(), kind) else {
-                continue;
-            };
-            if relation.check_against(&existing).is_err() {
-                continue;
+        let mut stored = Vec::with_capacity(subjects.len());
+        for (subject, derived) in subjects
+            .iter()
+            .zip(parse_relations_batch(&answer, subjects))
+        {
+            let mut count = 0;
+            for (from, to, kind, quote, reason) in derived {
+                let Ok(relation) = DecisionRelation::new(from.clone(), to.clone(), kind) else {
+                    continue;
+                };
+                if relation.check_against(&existing).is_err() {
+                    continue;
+                }
+                let inserted = self
+                    .store
+                    .insert_relation_suggestion(&RelationSuggestionRecord {
+                        suggestion_id: uuid::Uuid::now_v7().to_string(),
+                        project_id: subject.new.project_id.clone(),
+                        from_id: relation.from().to_string(),
+                        to_id: relation.to().to_string(),
+                        kind,
+                        quote,
+                        reason,
+                        created_at: now.clone(),
+                    })
+                    .map_err(storage)?;
+                if inserted {
+                    count += 1;
+                }
             }
-            let inserted = self
-                .store
-                .insert_relation_suggestion(&RelationSuggestionRecord {
-                    suggestion_id: uuid::Uuid::now_v7().to_string(),
-                    project_id: new.project_id.clone(),
-                    from_id: relation.from().to_string(),
-                    to_id: relation.to().to_string(),
-                    kind,
-                    quote,
-                    reason,
-                    created_at: now.clone(),
-                })
-                .map_err(storage)?;
-            if inserted {
-                stored += 1;
-            }
+            stored.push(count);
         }
         Ok(stored)
     }
@@ -616,5 +747,45 @@ mod tests {
         let answer = r#"{"relations":[{"earlier":"D:0000bbbb","relation":"supersedes",
             "direction":"new_to_earlier","quote":"usar redis, para CACHE","reason":"r"}]}"#;
         assert_eq!(parse_relations(answer, &new, &[old]).len(), 1);
+    }
+
+    #[test]
+    fn a_batched_answer_is_checked_per_new_decision() {
+        let first = decision("n1-0000aaaa", "Onde guardar a fila?", "Na base SQLite.", "");
+        let second = decision("n2-0000dddd", "Qual cache?", "Usar Redis para cache.", "");
+        let old = decision("old-0000bbbb", "Qual banco usar?", "SQLite embutido.", "");
+        let cache = decision("c-0000cccc", "Cache?", "Em memória.", "");
+        let (first_earlier, second_earlier) = ([old.clone()], [cache.clone()]);
+        let subjects = [
+            RelationSubject {
+                new: &first,
+                earlier: &first_earlier,
+            },
+            RelationSubject {
+                new: &second,
+                earlier: &second_earlier,
+            },
+        ];
+        let answer = r#"{"decisions":[
+            {"id":"1","relations":[
+              {"earlier":"D:0000bbbb","relation":"depends_on","direction":"new_to_earlier",
+               "quote":"Na base SQLite","reason":"usa o banco"},
+              {"earlier":"D:0000cccc","relation":"depends_on","direction":"new_to_earlier",
+               "quote":"Em memória","reason":"candidato de outra decisão"}]},
+            {"id":"2","relations":[
+              {"earlier":"D:0000cccc","relation":"supersedes","direction":"new_to_earlier",
+               "quote":"Usar Redis para cache","reason":"substitui"}]}
+        ]}"#;
+        let parsed = parse_relations_batch(answer, &subjects);
+        assert_eq!(parsed[0].len(), 1, "an earlier decision listed under another is refused");
+        assert_eq!(parsed[0][0].1, "old-0000bbbb");
+        assert_eq!(parsed[1][0].2, RelationKind::Supersedes);
+        assert!(parse_relations_batch("not json", &subjects)[1].is_empty());
+
+        let request = relation_request(&subjects);
+        assert!(request.contains("## New decision 1 D:0000aaaa
+"));
+        assert!(request.contains("## New decision 2 D:0000dddd
+"));
     }
 }

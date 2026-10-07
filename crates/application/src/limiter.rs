@@ -33,6 +33,7 @@ struct State {
     urgent_waiting: usize,
     paused_until: Option<Instant>,
     closed: bool,
+    calls: u64,
 }
 
 /// Counting semaphore with priority for the `now` lane and a shared pause.
@@ -52,6 +53,7 @@ impl ProviderLimiter {
                     urgent_waiting: 0,
                     paused_until: None,
                     closed: false,
+                    calls: 0,
                 }),
                 Condvar::new(),
             )),
@@ -86,6 +88,7 @@ impl ProviderLimiter {
             let yields = !urgent && state.urgent_waiting > 0;
             if state.active < state.limit && !yields {
                 state.active += 1;
+                state.calls += 1;
                 break Ok(Permit {
                     limiter: self.clone(),
                 });
@@ -123,6 +126,12 @@ impl ProviderLimiter {
     /// Calls running right now.
     pub fn active(&self) -> usize {
         self.state().active
+    }
+
+    /// Provider calls started since the limiter was made: every permit is one
+    /// call, so a run can report how many calls a pipeline cost.
+    pub fn calls(&self) -> u64 {
+        self.state().calls
     }
 }
 
@@ -171,6 +180,18 @@ mod tests {
         }
         assert_eq!(peak.load(Ordering::SeqCst), 2);
         assert_eq!(limiter.active(), 0);
+    }
+
+    #[test]
+    fn every_permit_is_counted_as_a_provider_call() {
+        let limiter = ProviderLimiter::new(1);
+        assert_eq!(limiter.calls(), 0);
+        for _ in 0..3 {
+            drop(limiter.acquire().expect("permit"));
+        }
+        limiter.pause_for(Duration::from_secs(30));
+        assert!(limiter.acquire().is_err());
+        assert_eq!(limiter.calls(), 3, "a refused call is not a call");
     }
 
     #[test]

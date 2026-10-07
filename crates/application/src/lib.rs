@@ -6,6 +6,7 @@ pub mod agent_access;
 pub mod analysis;
 pub mod architecture;
 pub mod auto_approval;
+pub mod batching;
 pub mod briefing;
 pub mod calibration;
 pub mod capture_episode;

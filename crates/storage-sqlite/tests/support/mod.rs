@@ -237,3 +237,15 @@ pub fn rationale(text: &str) -> DecisionEdits {
         ..DecisionEdits::default()
     }
 }
+
+/// The answer a test scripts for one decision (`{"links":[...]}`, `{"claims":[...]}`
+/// or `{"relations":[...]}`) in the batched shape the jobs read: entry number 1.
+pub fn batched_answer(answer: &str) -> String {
+    let mut entry = match serde_json::from_str::<serde_json::Value>(answer) {
+        Ok(serde_json::Value::Object(entry)) => entry,
+        // Unreadable on purpose: it stays unreadable.
+        _ => return answer.to_string(),
+    };
+    entry.insert("id".into(), "1".into());
+    serde_json::json!({ "decisions": [entry] }).to_string()
+}

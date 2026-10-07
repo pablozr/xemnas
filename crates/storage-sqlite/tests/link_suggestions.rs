@@ -96,7 +96,7 @@ impl StructuredModel for Proposer<'_> {
         self.calls.set(self.calls.get() + 1);
         self.asked.borrow_mut().push(user.to_owned());
         self.answer
-            .map(str::to_owned)
+            .map(support::batched_answer)
             .map_err(|()| ExtractError::RateLimited { retry_after: None })
     }
 }
