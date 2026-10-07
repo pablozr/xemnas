@@ -339,6 +339,20 @@ impl JobKind {
         Self::ALL.into_iter().find(|kind| kind.as_str() == value)
     }
 
+    /// Claim order inside a lane, lowest first: what the agent's hot path
+    /// needs (the context judgement, then the map components a decision
+    /// governs) goes before the relations, rules and search terms, which only
+    /// refine what is already there. Equal priorities run oldest first.
+    pub const fn priority(&self) -> u8 {
+        match self {
+            Self::AnalyzeCapture | Self::AnalyzeDocument | Self::ContextRouting => 0,
+            Self::SuggestLinks | Self::RefreshObservations => 1,
+            Self::SuggestRelations => 2,
+            Self::DeriveClaims => 3,
+            Self::DeriveSearchTerms => 4,
+        }
+    }
+
     /// The lane whose workers run this kind.
     pub fn lane(&self) -> Lane {
         match self {
@@ -399,6 +413,25 @@ pub enum JobEvent {
 /// Callback a handler returns work through.
 type JobHandler = Arc<dyn Fn(&JobRecord) -> Result<(), JobFailure> + Send + Sync + 'static>;
 
+/// Callback that runs several jobs of one kind with a single provider call.
+/// It answers one result per record, in order; a missing result fails that
+/// job.
+type BatchHandler =
+    Arc<dyn Fn(&[JobRecord]) -> Vec<Result<(), JobFailure>> + Send + Sync + 'static>;
+
+/// A kind whose queued jobs are coalesced: up to `max` run together.
+#[derive(Clone)]
+struct Batch {
+    max: usize,
+    handler: BatchHandler,
+}
+
+/// Priority of a persisted kind inside its lane; kinds outside [`JobKind`]
+/// (tests) keep the highest.
+fn priority_of(kind: &str) -> u8 {
+    JobKind::parse(kind).map_or(0, |kind| kind.priority())
+}
+
 /// Callback invoked by the worker for every event, so the composition root can
 /// log without this crate depending on `tracing`.
 type Observer = Arc<dyn Fn(JobEvent) + Send + Sync + 'static>;
@@ -430,8 +463,18 @@ pub trait JobRepository {
         Ok(counts)
     }
 
-    /// Atomically claims the oldest queued job whose kind is in `registered_kinds`.
+    /// Atomically claims the next queued job whose kind is in
+    /// `registered_kinds`: the kind that comes first in the slice (the slice
+    /// is in priority order), then the oldest job of that kind.
     fn claim_next(&self, registered_kinds: &[String]) -> Result<Option<JobRecord>, JobError>;
+
+    /// Atomically claims up to `limit` more queued jobs of `kind`, oldest
+    /// first, so a batch handler can answer them with one provider call. The
+    /// default claims none, which makes every batch a batch of one.
+    fn claim_more(&self, kind: &str, limit: usize) -> Result<Vec<JobRecord>, JobError> {
+        let _ = (kind, limit);
+        Ok(Vec::new())
+    }
 
     /// Compare-and-set transition: changes state only when the row is in `from`.
     fn transition(
@@ -474,6 +517,7 @@ pub trait JobSettingsStore {
 pub struct Jobs<R> {
     repository: R,
     handlers: HashMap<String, JobHandler>,
+    batches: HashMap<String, Batch>,
     kinds: Vec<String>,
     lanes: HashMap<Lane, Vec<String>>,
     observer: Observer,
@@ -493,6 +537,7 @@ impl<R> Jobs<R> {
         Self {
             repository,
             handlers: HashMap::new(),
+            batches: HashMap::new(),
             kinds: Vec::new(),
             lanes: HashMap::new(),
             observer: Arc::new(|_event: JobEvent| {}),
@@ -507,14 +552,37 @@ impl<R> Jobs<R> {
     /// Registers the handler for a job kind, in the lane [`lane_of`] gives it.
     pub fn register(&mut self, kind: impl Into<String>, handler: JobHandler) {
         let kind = kind.into();
-        if !self.handlers.contains_key(&kind) {
-            self.kinds.push(kind.clone());
-            self.lanes
-                .entry(lane_of(&kind))
-                .or_default()
-                .push(kind.clone());
-        }
+        self.add_kind(&kind);
+        self.batches.remove(&kind);
         self.handlers.insert(kind, handler);
+    }
+
+    /// Registers a handler that runs up to `max` queued jobs of `kind` with
+    /// one call: the claimed job plus the oldest others of the same kind.
+    pub fn register_batch(&mut self, kind: impl Into<String>, max: usize, handler: BatchHandler) {
+        let kind = kind.into();
+        self.add_kind(&kind);
+        self.handlers.remove(&kind);
+        self.batches.insert(
+            kind,
+            Batch {
+                max: max.max(1),
+                handler,
+            },
+        );
+    }
+
+    /// Adds the kind to the claim lists, which stay in priority order (the
+    /// sort is stable, so equal priorities keep their registration order).
+    fn add_kind(&mut self, kind: &str) {
+        if self.kinds.iter().any(|known| known == kind) {
+            return;
+        }
+        self.kinds.push(kind.to_string());
+        self.kinds.sort_by_key(|kind| priority_of(kind));
+        let lane = self.lanes.entry(lane_of(kind)).or_default();
+        lane.push(kind.to_string());
+        lane.sort_by_key(|kind| priority_of(kind));
     }
 
     /// Registered kinds served by `lane`.
@@ -623,13 +691,26 @@ impl<R: JobRepository> Jobs<R> {
         self.repository.recover_interrupted()
     }
 
-    /// Claims and runs the next eligible job of any lane.
+    /// Claims and runs the next eligible job of any lane, the one of the
+    /// highest priority kind first. When it ran in a batch this is the outcome
+    /// of the claimed job only; [`Jobs::run_next_group`] has them all.
     pub fn run_next(&self) -> Result<Option<JobOutcome>, JobError> {
-        self.run_next_of(&self.kinds)
+        Ok(self.run_next_of(&self.kinds)?.into_iter().next())
     }
 
     /// Claims and runs the next eligible job of one lane.
     pub fn run_next_in(&self, lane: Lane) -> Result<Option<JobOutcome>, JobError> {
+        Ok(self.run_next_of(self.kinds_in(lane))?.into_iter().next())
+    }
+
+    /// Like [`Jobs::run_next`], with the outcome of every job of the batch
+    /// (empty when nothing was eligible).
+    pub fn run_next_group(&self) -> Result<Vec<JobOutcome>, JobError> {
+        self.run_next_of(&self.kinds)
+    }
+
+    /// Like [`Jobs::run_next_in`], with the outcome of every job of the batch.
+    pub fn run_next_group_in(&self, lane: Lane) -> Result<Vec<JobOutcome>, JobError> {
         self.run_next_of(self.kinds_in(lane))
     }
 
@@ -648,10 +729,13 @@ impl<R: JobRepository> Jobs<R> {
         Ok(summaries)
     }
 
-    fn run_next_of(&self, kinds: &[String]) -> Result<Option<JobOutcome>, JobError> {
+    fn run_next_of(&self, kinds: &[String]) -> Result<Vec<JobOutcome>, JobError> {
         let Some(record) = self.repository.claim_next(kinds)? else {
-            return Ok(None);
+            return Ok(Vec::new());
         };
+        if let Some(batch) = self.batches.get(&record.kind) {
+            return self.run_batch(record, batch);
+        }
         let Some(handler) = self.handlers.get(&record.kind) else {
             let state = if self.repository.transition(
                 &record.id,
@@ -668,23 +752,60 @@ impl<R: JobRepository> Jobs<R> {
                     to: JobState::Queued,
                 });
             };
-            return Ok(Some(JobOutcome {
+            return Ok(vec![JobOutcome {
                 job_id: record.id,
                 kind: record.kind,
                 state,
                 attempts: record.attempts,
-            }));
+            }]);
         };
 
-        let previous = replace_job_panic_sanitized(true);
-        let previous_lane = CURRENT_LANE.with(|lane| lane.replace(Some(lane_of(&record.kind))));
-        let result = catch_unwind(AssertUnwindSafe(|| handler(&record)));
-        CURRENT_LANE.with(|lane| lane.set(previous_lane));
-        replace_job_panic_sanitized(previous);
+        let result = guarded(&record.kind, || handler(&record));
+        Ok(vec![self.settle(record, result)?])
+    }
 
+    /// Runs a batch: the claimed job plus the oldest queued ones of its kind
+    /// share one handler call, and each job then reaches its own state.
+    fn run_batch(&self, first: JobRecord, batch: &Batch) -> Result<Vec<JobOutcome>, JobError> {
+        let mut records = vec![first];
+        records.extend(
+            self.repository
+                .claim_more(&records[0].kind, batch.max.saturating_sub(1))?,
+        );
+        let results = guarded(&records[0].kind, || (batch.handler)(&records));
+
+        // Every claimed job is settled even if one settlement fails, so none
+        // stays `running` until the next restart.
+        let mut outcomes = Vec::with_capacity(records.len());
+        let mut failure = None;
+        for (index, record) in records.into_iter().enumerate() {
+            let result = results.as_ref().map(|results| {
+                results
+                    .get(index)
+                    .copied()
+                    .unwrap_or(Err(JobFailure::Failed))
+            });
+            match self.settle(record, result) {
+                Ok(outcome) => outcomes.push(outcome),
+                Err(error) => failure = failure.or(Some(error)),
+            }
+        }
+        match failure {
+            Some(error) => Err(error),
+            None => Ok(outcomes),
+        }
+    }
+
+    /// Moves a job the handler ran to the state its result calls for; `None`
+    /// is a handler that panicked.
+    fn settle(
+        &self,
+        record: JobRecord,
+        result: Option<Result<(), JobFailure>>,
+    ) -> Result<JobOutcome, JobError> {
         let state = match result {
-            Ok(Ok(())) => self.finish(&record, JobState::Completed, None)?,
-            Ok(Err(JobFailure::Deferred { retry_after }))
+            Some(Ok(())) => self.finish(&record, JobState::Completed, None)?,
+            Some(Err(JobFailure::Deferred { retry_after }))
                 if record.attempts < MAX_DEFERRED_ATTEMPTS =>
             {
                 let delay = deferral_delay(record.attempts, retry_after);
@@ -700,19 +821,18 @@ impl<R: JobRepository> Jobs<R> {
                     });
                 }
             }
-            Ok(Err(JobFailure::Deferred { .. })) => {
+            Some(Err(JobFailure::Deferred { .. })) => {
                 self.finish(&record, JobState::Failed, Some(DEFERRED_TOO_OFTEN))?
             }
-            Ok(Err(failure)) => self.finish(&record, JobState::Failed, Some(failure.as_str()))?,
-            Err(_panic) => self.finish(&record, JobState::Failed, Some(PANIC_MESSAGE))?,
+            Some(Err(failure)) => self.finish(&record, JobState::Failed, Some(failure.as_str()))?,
+            None => self.finish(&record, JobState::Failed, Some(PANIC_MESSAGE))?,
         };
-
-        Ok(Some(JobOutcome {
+        Ok(JobOutcome {
             job_id: record.id,
             kind: record.kind,
             state,
             attempts: record.attempts,
-        }))
+        })
     }
 
     /// Moves a running job to its terminal state. A compare-and-set miss is a
@@ -795,6 +915,17 @@ where
     }
 }
 
+/// Runs a handler on this thread in the lane of `kind`, with panic messages
+/// sanitized; `None` when it panicked.
+fn guarded<T>(kind: &str, handler: impl FnOnce() -> T) -> Option<T> {
+    let previous = replace_job_panic_sanitized(true);
+    let previous_lane = CURRENT_LANE.with(|lane| lane.replace(Some(lane_of(kind))));
+    let result = catch_unwind(AssertUnwindSafe(handler));
+    CURRENT_LANE.with(|lane| lane.set(previous_lane));
+    replace_job_panic_sanitized(previous);
+    result.ok()
+}
+
 /// Poll interval for the worker when no wakeup arrives.
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
@@ -817,12 +948,14 @@ where
         if stop.load(Ordering::SeqCst) {
             return;
         }
-        match jobs.run_next_in(lane) {
-            Ok(Some(outcome)) => {
-                (jobs.observer)(JobEvent::Finished(outcome));
+        match jobs.run_next_group_in(lane) {
+            Ok(outcomes) if !outcomes.is_empty() => {
+                for outcome in outcomes {
+                    (jobs.observer)(JobEvent::Finished(outcome));
+                }
                 continue;
             }
-            Ok(None) => {}
+            Ok(_) => {}
             Err(error) => {
                 let message = error.to_string();
                 record_failure(&failure, message.clone());

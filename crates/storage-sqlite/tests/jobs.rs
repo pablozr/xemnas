@@ -549,3 +549,129 @@ fn parallel_analyses_defaults_to_two_and_persists_within_range() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn suggestion_jobs_run_links_first_then_relations_rules_and_terms() {
+    let (store, root) = store_in("priority");
+    let order = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let mut jobs = Jobs::new(store.clone());
+    // Registered and queued in the opposite order of their priority.
+    let kinds = [
+        "derive_search_terms",
+        "derive_claims",
+        "suggest_relations",
+        "suggest_links",
+    ];
+    for kind in kinds {
+        let order = order.clone();
+        jobs.register(
+            kind,
+            Arc::new(move |record: &JobRecord| {
+                order.lock().expect("order").push(record.kind.clone());
+                Ok(())
+            }),
+        );
+    }
+    for (index, kind) in kinds.iter().enumerate() {
+        store
+            .insert(&record(
+                &format!("job-{index}"),
+                kind,
+                JobState::Queued,
+                true,
+                &format!("2026-01-01T00:00:0{index}Z"),
+            ))
+            .expect("insert");
+    }
+
+    while jobs
+        .run_next_in(application::jobs::Lane::Suggestions)
+        .expect("run")
+        .is_some()
+    {}
+
+    assert_eq!(
+        *order.lock().expect("order"),
+        [
+            "suggest_links",
+            "suggest_relations",
+            "derive_claims",
+            "derive_search_terms"
+        ],
+        "the agent's hot path first, the refinements after"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_batch_takes_the_oldest_queued_jobs_of_its_kind_and_settles_each() {
+    let (store, root) = store_in("batch-claim");
+    let seen = Arc::new(std::sync::Mutex::new(Vec::<Vec<String>>::new()));
+    let mut jobs = Jobs::new(store.clone());
+    {
+        let seen = seen.clone();
+        jobs.register_batch(
+            "suggest_links",
+            3,
+            Arc::new(move |records: &[JobRecord]| {
+                seen.lock()
+                    .expect("seen")
+                    .push(records.iter().map(|job| job.id.clone()).collect());
+                // The second job of the batch fails, the third is deferred.
+                records
+                    .iter()
+                    .enumerate()
+                    .map(|(index, _)| match index {
+                        1 => Err(JobFailure::Failed),
+                        2 => Err(JobFailure::Deferred { retry_after: None }),
+                        _ => Ok(()),
+                    })
+                    .collect()
+            }),
+        );
+    }
+    for index in 0..5 {
+        store
+            .insert(&record(
+                &format!("job-{index}"),
+                "suggest_links",
+                JobState::Queued,
+                true,
+                &format!("2026-01-01T00:00:0{index}Z"),
+            ))
+            .expect("insert");
+    }
+    // Another kind in the queue is never pulled into the batch.
+    store
+        .insert(&record(
+            "other",
+            "derive_claims",
+            JobState::Queued,
+            true,
+            "2026-01-01T00:00:00Z",
+        ))
+        .expect("insert");
+
+    let group = jobs.run_next_group().expect("run");
+
+    assert_eq!(
+        *seen.lock().expect("seen"),
+        [["job-0", "job-1", "job-2"]],
+        "one handler call with the three oldest"
+    );
+    let states: Vec<JobState> = group.iter().map(|outcome| outcome.state).collect();
+    assert_eq!(
+        states,
+        [JobState::Completed, JobState::Failed, JobState::Queued]
+    );
+    assert_eq!(
+        store.get("job-3").expect("get").expect("row").state,
+        JobState::Queued,
+        "beyond the batch size stays queued"
+    );
+    assert_eq!(
+        store.get("other").expect("get").expect("row").state,
+        JobState::Queued
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
