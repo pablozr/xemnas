@@ -176,6 +176,28 @@ pub const DECISIONS: &[(&str, &str, &str, &str)] = &[
 ];
 
 pub const STANDING: &[&str] = &["standing"];
+
+/// Constraints with no scope, no component tie and no global mark, sharing
+/// no vocabulary with any task in particular. A pack must never carry them:
+/// they are scored as noise wherever they appear (the 105-rule JevGuard case
+/// that crowded decisions out).
+pub const UNRELATED_RULES: &[&str] = &[
+    "Funções públicas exigem comentário de documentação",
+    "Evitar números mágicos nas constantes",
+    "Commits pequenos e atômicos",
+    "Revisão por pares antes de integrar",
+    "Linhas com no máximo cem colunas",
+    "Proibido código comentado na base",
+    "Cobertura mínima de oitenta por cento",
+    "Dependências novas exigem justificativa",
+    "Evitar herança profunda de tipos",
+    "Preferir retornos antecipados",
+    "Alertas do compilador tratados como falha",
+    "Branches curtas e integradas diariamente",
+    "Tipos públicos exigem exemplo de uso",
+    "Funções com até quarenta linhas",
+    "Nomes abreviados são proibidos",
+];
 pub const FORBIDDEN: &[&str] = &["foreign", "expired", "superseded"];
 
 pub const FAMILIES: &[Family] = &[
@@ -593,6 +615,47 @@ pub const FAMILIES: &[Family] = &[
             "Escolher a trilha sonora do jogo",
             "Pick the game soundtrack",
             "Escolher a trilha sonora tocada no terminal",
+        ],
+        required: &[],
+        partial: &[],
+        files: &[],
+    },
+    // Many unrelated rules (`UNRELATED_RULES`, seeded for every family): the
+    // decisions of the task must still arrive and no rule may ride along.
+    Family {
+        name: "unrelated-rules-storage",
+        positive: true,
+        holdout: false,
+        queries: [
+            "Decidir o banco da persistência local do projeto",
+            "Which database should local persistence use",
+            "Revisar o banco usado na persistência local",
+        ],
+        required: &["storage"],
+        partial: &[],
+        files: &[],
+    },
+    Family {
+        name: "unrelated-rules-cache",
+        positive: true,
+        holdout: false,
+        queries: [
+            "Implementar cache das respostas da API",
+            "Add caching to the API",
+            "Implementar cache da API consultada pelo cliente de desktop",
+        ],
+        required: &["cache", "rate"],
+        partial: &[],
+        files: &[],
+    },
+    Family {
+        name: "unrelated-rules-nothing",
+        positive: false,
+        holdout: false,
+        queries: [
+            "Desenhar o ícone do aplicativo de jardinagem",
+            "Draw the icon for the gardening app",
+            "Desenhar o ícone do app de jardinagem no tablet",
         ],
         required: &[],
         partial: &[],

@@ -4,8 +4,11 @@
 mod support;
 
 use application::claims::{Claims, NewClaim};
-use application::context::{ContextPacks, ContextProvider, ContextRequest};
+use application::context::{
+    ContextPacks, ContextProvider, ContextRequest, GLOBAL_SCOPE, MAX_GLOBAL_RULES, MIN_BUDGET_CHARS,
+};
 use application::decisions::Decisions;
+use application::qualifiers::{KnowledgeQualifier, QualifierKind};
 use application::relations::DecisionRelations;
 use domain::claims::ClaimKind;
 use domain::relations::RelationKind;
@@ -159,6 +162,132 @@ fn claims_are_matched_first_then_standing_rules() {
         "conventions stand even without a match"
     );
     assert!(pack.decisions.is_empty());
+}
+
+fn global_rule(test: &support::TestStore, kind: ClaimKind, statement: &str) -> String {
+    Claims::new(test.store.clone())
+        .create(NewClaim {
+            source_version: None,
+            qualifiers: vec![KnowledgeQualifier {
+                kind: QualifierKind::Scope,
+                text: GLOBAL_SCOPE.to_string(),
+                artifact_id: None,
+            }],
+            project_id: "p1".to_string(),
+            kind,
+            statement: statement.to_string(),
+            valid_from: Some("2020-01-01".to_string()),
+            valid_until: None,
+            source_decision_id: None,
+        })
+        .expect("create global rule")
+        .claim_id
+}
+
+#[test]
+fn a_rule_enters_only_when_it_touches_the_task_or_is_global() {
+    let test = support::open("pack-rule-policy", &["p1"]);
+    let matched = claim(
+        &test,
+        ClaimKind::Constraint,
+        "Pedidos da API passam por limite de taxa",
+        None,
+    );
+    // No scope informed: a constraint is not read as project-wide.
+    claim(
+        &test,
+        ClaimKind::Constraint,
+        "Nunca usar unwrap em código de produção",
+        None,
+    );
+    // From before the marker: a convention with no scope at all is global.
+    let legacy = claim(
+        &test,
+        ClaimKind::Convention,
+        "Mensagens de erro em português",
+        None,
+    );
+    // A scope in words, with no marker, keeps a convention out.
+    Claims::new(test.store.clone())
+        .create(NewClaim {
+            source_version: None,
+            qualifiers: vec![KnowledgeQualifier {
+                kind: QualifierKind::Scope,
+                text: "somente o módulo de relatórios".to_string(),
+                artifact_id: None,
+            }],
+            project_id: "p1".to_string(),
+            kind: ClaimKind::Convention,
+            statement: "Datas em formato longo".to_string(),
+            valid_from: Some("2020-01-01".to_string()),
+            valid_until: None,
+            source_decision_id: None,
+        })
+        .expect("scoped convention");
+    let marked = global_rule(&test, ClaimKind::Constraint, "Todo texto passa por i18n");
+
+    let pack = ContextPacks::new(test.store.clone())
+        .build_pack(request("limite de pedidos da API"))
+        .expect("pack");
+
+    let mut got = ids(&pack.claims, |c| &c.claim_id);
+    got.sort();
+    let mut want = vec![matched, legacy, marked];
+    want.sort();
+    assert_eq!(got, want);
+}
+
+#[test]
+fn global_rules_are_capped_newest_first() {
+    let test = support::open("pack-global-cap", &["p1"]);
+    let created: Vec<String> = (1..=5)
+        .map(|n| global_rule(&test, ClaimKind::Constraint, &format!("Regra global {n}")))
+        .collect();
+
+    let pack = ContextPacks::new(test.store.clone())
+        .build_pack(request("tarefa sem relação alguma"))
+        .expect("pack");
+
+    assert_eq!(MAX_GLOBAL_RULES, 3);
+    assert_eq!(
+        ids(&pack.claims, |c| &c.claim_id),
+        vec![created[4].clone(), created[3].clone(), created[2].clone()]
+    );
+    assert!(pack.claims.iter().all(|claim| !claim.matched));
+}
+
+#[test]
+fn decisions_take_the_budget_before_rules() {
+    let test = support::open("pack-decisions-first", &["p1"]);
+    for n in 1..=3 {
+        global_rule(
+            &test,
+            ClaimKind::Constraint,
+            &format!("Regra global {n}: {}", "texto longo ".repeat(12)),
+        );
+    }
+    let decision = support::decision(
+        &test.store,
+        "p1",
+        "cache",
+        "Como fazer cache da API?",
+        "Cache em memória",
+    );
+
+    let pack = ContextPacks::new(test.store.clone())
+        .build_pack(ContextRequest {
+            budget_chars: Some(MIN_BUDGET_CHARS),
+            ..request("adicionar cache nas respostas da API")
+        })
+        .expect("pack");
+
+    assert_eq!(ids(&pack.decisions, |d| &d.decision_id), vec![decision]);
+    assert!(
+        pack.claims.len() < 3,
+        "the budget cuts rules, not decisions"
+    );
+    assert!(pack.omitted >= 1);
+    assert!(pack.used_chars <= pack.budget_chars);
 }
 
 #[test]

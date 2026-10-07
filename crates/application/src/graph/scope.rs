@@ -1,5 +1,6 @@
 //! Scope of standing rules: a claim tied to components applies only when the
-//! task touches one of them; a claim with no component tie stays global.
+//! task touches one of them; a claim with no component tie has no scope
+//! informed (it enters a pack only when matched or explicitly global).
 //! Derived claims follow the component ties of their source decision.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -16,6 +17,15 @@ use crate::clock::now_rfc3339;
 use crate::projects::ProjectRepository;
 use crate::relations::RelationStore;
 
+/// Claims tied to live components, by whether the task touches one of them.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ClaimScopes {
+    /// Tied to a component the task touches.
+    pub in_scope: BTreeSet<String>,
+    /// Tied to components, none of which the task touches.
+    pub out_of_scope: BTreeSet<String>,
+}
+
 /// Reason of an edge a claim inherited from its source decision.
 const INHERITED_REASON: &str = "herdado da decisão de origem";
 
@@ -23,25 +33,26 @@ impl<S> KnowledgeGraph<S>
 where
     S: GraphStore + RelationStore + ClaimStore + ProjectRepository,
 {
-    /// Claims tied to components (live `applies_to` edges) none of which the
-    /// task touches. The task touches a component when a file matches its
-    /// patterns, the text mentions it, or a decision of the pack is tied to
-    /// it; a component also counts as touched through its sub-components.
-    /// Claims with no component tie are never listed: they stay global.
+    /// Splits the claims tied to components (live `applies_to` edges) by
+    /// whether the task touches one of them. The task touches a component
+    /// when a file matches its patterns, the text mentions it, or a decision
+    /// of the pack is tied to it; a component also counts as touched through
+    /// its sub-components. Claims with no component tie are in neither set:
+    /// their scope is not informed.
     ///
     /// One pass over the project's entities and edges, whatever the claims.
     ///
     /// # Errors
     ///
     /// `invalid_request` for a bad date, `storage`.
-    pub fn claims_out_of_scope(
+    pub fn claims_by_scope(
         &self,
         project_id: &str,
         task: &str,
         files: &[String],
         decision_ids: &[String],
         as_of: &str,
-    ) -> Result<BTreeSet<String>, GraphError> {
+    ) -> Result<ClaimScopes, GraphError> {
         let at = super::resolve_as_of(Some(as_of))?;
         let edges = self.store.project_edges(project_id)?;
         let mut targets: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
@@ -54,7 +65,7 @@ where
             }
         }
         if targets.is_empty() {
-            return Ok(BTreeSet::new());
+            return Ok(ClaimScopes::default());
         }
 
         let entities = self.store.project_entities(project_id)?;
@@ -117,17 +128,23 @@ where
             }
         }
 
-        Ok(targets
-            .into_iter()
-            .filter(|(_, ties)| {
-                let live: Vec<&&str> = ties
-                    .iter()
-                    .filter(|id| components.contains_key(**id))
-                    .collect();
-                !live.is_empty() && !live.iter().any(|id| touched.contains(**id))
-            })
-            .map(|(claim, _)| claim.to_string())
-            .collect())
+        let mut scopes = ClaimScopes::default();
+        for (claim, ties) in targets {
+            let live: Vec<&&str> = ties
+                .iter()
+                .filter(|id| components.contains_key(**id))
+                .collect();
+            if live.is_empty() {
+                continue;
+            }
+            let set = if live.iter().any(|id| touched.contains(**id)) {
+                &mut scopes.in_scope
+            } else {
+                &mut scopes.out_of_scope
+            };
+            set.insert(claim.to_string());
+        }
+        Ok(scopes)
     }
 
     /// Confirmed ties of decisions to components, as `(decision, component)`.

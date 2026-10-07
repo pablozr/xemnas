@@ -13,7 +13,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
 use application::claims::{Claims, NewClaim};
-use application::context::{ContextPack, ContextPacks, ContextProvider, ContextRequest};
+use application::context::{
+    ContextPack, ContextPacks, ContextProvider, ContextRequest, GLOBAL_SCOPE,
+};
 use application::decisions::{DecisionEdits, Decisions};
 use application::graph::{KnowledgeGraph, LinkRequest, NewEntity};
 use application::injection::render_compact;
@@ -62,21 +64,46 @@ impl Fixture {
         DecisionRelations::new(test.store.clone())
             .supersede(&aliases["storage"], &aliases["superseded"])
             .expect("supersede synthetic decision");
-        for (alias, kind, statement, until) in CLAIMS {
+        // The two standing-rule shapes: the convention is marked project-wide,
+        // the unrelated constraints carry no scope and no tie, so they are
+        // noise wherever they appear.
+        let unrelated = corpus::UNRELATED_RULES
+            .iter()
+            .enumerate()
+            .map(|(n, statement)| {
+                (
+                    format!("unrelated-{n:02}"),
+                    ClaimKind::Constraint,
+                    *statement,
+                )
+            });
+        let claims = CLAIMS
+            .iter()
+            .map(|(alias, kind, statement, until)| (alias.to_string(), *kind, *statement, *until))
+            .chain(unrelated.map(|(alias, kind, statement)| (alias, kind, statement, None)));
+        for (alias, kind, statement, until) in claims {
             let id = Claims::new(test.store.clone())
                 .create(NewClaim {
                     source_version: None,
-                    qualifiers: Vec::new(),
+                    qualifiers: if alias == "standing" {
+                        vec![KnowledgeQualifier {
+                            kind: QualifierKind::Scope,
+                            text: GLOBAL_SCOPE.into(),
+                            artifact_id: None,
+                        }]
+                    } else {
+                        Vec::new()
+                    },
                     project_id: "p1".into(),
-                    kind: *kind,
-                    statement: (*statement).into(),
+                    kind,
+                    statement: statement.into(),
                     valid_from: Some("2020-01-01".into()),
                     valid_until: until.map(str::to_string),
                     source_decision_id: None,
                 })
                 .expect("seed synthetic claim")
                 .claim_id;
-            aliases.insert(alias.to_string(), id);
+            aliases.insert(alias, id);
         }
         let graph = KnowledgeGraph::new(test.store.clone());
         for (name, pattern, linked) in LINKS {
@@ -216,8 +243,8 @@ fn selected(fixture: &Fixture, pack: &ContextPack) -> BTreeSet<String> {
 fn corpus_integrity_budgets_and_isolation() {
     let fixture = Fixture::seed("corpus-integrity");
     let packs = ContextPacks::new(fixture.test.store.clone());
-    assert_eq!(corpus::FAMILIES.len(), 33);
-    assert_eq!(corpus::FAMILIES.iter().filter(|f| f.positive).count(), 24);
+    assert_eq!(corpus::FAMILIES.len(), 36);
+    assert_eq!(corpus::FAMILIES.iter().filter(|f| f.positive).count(), 26);
     assert_eq!(
         corpus::FAMILIES
             .iter()
@@ -232,7 +259,7 @@ fn corpus_integrity_budgets_and_isolation() {
             .count(),
         3
     );
-    assert_eq!(fixture.aliases.len(), 30);
+    assert_eq!(fixture.aliases.len(), 30 + corpus::UNRELATED_RULES.len());
     let mut queries = BTreeSet::new();
     let mut names = BTreeSet::new();
     for family in corpus::FAMILIES {
@@ -259,6 +286,12 @@ fn corpus_integrity_budgets_and_isolation() {
             for alias in corpus::FORBIDDEN {
                 assert!(!items.contains(*alias), "{}: {alias}", family.name);
             }
+            // Rules with no scope, no tie and no mark never ride along.
+            assert!(
+                !items.iter().any(|alias| alias.starts_with("unrelated-")),
+                "{}: an unrelated rule entered: {items:?}",
+                family.name
+            );
             if let Some(block) = render_compact(&pack, 300, &BTreeSet::new()) {
                 assert!(block.tokens <= 300);
                 assert_eq!(block.tokens, block.text.chars().count().div_ceil(4));
@@ -500,6 +533,12 @@ fn report_context_corpus() {
 /// Scoped rules (06/10/2026): four families on a standing rule tied to one
 /// component took v3 to 0.9474 / 0.9600 / 0 (33 families); a rule outside the
 /// task's components no longer rides along.
+///
+/// Rule injection policy (06/10/2026): a rule enters only when matched, tied
+/// to a touched component or explicitly global (at most 3). 15 constraints with
+/// no scope and no tie were seeded: the old policy gave 0.05 / 0.96 / 30 of 30,
+/// the new one 0.9419 / 0.9643 / 0 (36 families), v4 0.5821 / 0.6190 / 4 and v5
+/// 0.4133 / 0.4306 / 15, so the floors held.
 const PRECISION_FLOOR: f64 = 0.94;
 const RECALL_FLOOR: f64 = 0.96;
 const CONTAMINATED_CASES_CEILING: usize = 0;
