@@ -579,6 +579,7 @@ pub(crate) fn reconcile_with_evidence(
     };
     proposal.diff_summary = relevance::diff_summary(&cited);
     proposal.evidence_refs = references;
+    proposal.qualifiers = crate::qualifiers::retain_supported(proposal.qualifiers, evidence);
     proposal
 }
 
@@ -704,6 +705,54 @@ mod tests {
         assert_eq!(cited.evidence_refs, ["talk"]);
         super::validate_proposal(&cited, &capture, &[RelevanceSignal::DependencyAdded])
             .expect("a partial citation is valid");
+    }
+
+    #[test]
+    fn a_misquoted_qualifier_is_dropped_and_the_decision_survives() {
+        use crate::qualifiers::{KnowledgeQualifier, QualifierKind};
+        let capture = evidence(vec![artifact(
+            "doc",
+            "document",
+            "# ADR
+Status: accepted
+Applies to the Claude Code adapter only.",
+        )]);
+        let qualifier = |text: &str, artifact_id: &str| KnowledgeQualifier {
+            kind: QualifierKind::Scope,
+            text: text.to_string(),
+            artifact_id: Some(artifact_id.to_string()),
+        };
+        let mut cited = proposal(&["doc"]);
+        cited.signals = vec![RelevanceSignal::PublicContract];
+        cited.qualifiers = vec![
+            qualifier("Applies to the Claude Code adapter only.", "doc"),
+            // The model paraphrased: not a literal excerpt.
+            qualifier("Applies to the adapter of Claude Code.", "doc"),
+            // The artifact is named inside a longer reference.
+            qualifier("Status: accepted", "artifact doc"),
+            // Unknown artifact, and no artifact at all.
+            qualifier("Status: accepted", "other"),
+            KnowledgeQualifier {
+                kind: QualifierKind::Validation,
+                text: "Status: accepted".to_string(),
+                artifact_id: None,
+            },
+        ];
+        let cited = reconcile_with_evidence(cited, &capture, true);
+        let kept: Vec<_> = cited
+            .qualifiers
+            .iter()
+            .map(|item| (item.text.as_str(), item.artifact_id.as_deref()))
+            .collect();
+        assert_eq!(
+            kept,
+            [
+                ("Applies to the Claude Code adapter only.", Some("doc")),
+                ("Status: accepted", Some("doc")),
+            ]
+        );
+        super::validate_proposal(&cited, &capture, &[RelevanceSignal::PublicContract])
+            .expect("the decision is still valid");
     }
 
     fn artifact(id: &str, kind: &str, content: &str) -> EvidenceArtifact {

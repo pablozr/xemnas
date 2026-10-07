@@ -207,6 +207,30 @@ e query e decodifica URLs. Exige destino existente e versionado, inclusive para
 diretórios. Não valida âncoras, HTTP, HTML, labels aninhados ou destinos multilinha.
 Para validação focada: `python tools/check-doc-links.py --files docs/README.md`.
 
+## Execução ponta a ponta sobre um projeto real
+
+`apps/desktop-gpui/tests/e2e_pipeline.rs` (`#[ignore]`) roda o pipeline de verdade
+numa pasta de dados nova, nunca a do usuário: registra o projeto, indexa e propõe
+documentos, roda os mesmos handlers da composition root (análise, regras, relações,
+termos, vínculos, observações), gera a Visão, liga a aprovação automática e repete as
+passagens até estabilizar, e monta o pack de algumas tarefas. O perfil de IA é copiado
+(só leitura) de `%LOCALAPPDATA%\xemnas\settings` e o segredo vem do mesmo cofre do app.
+**Chama o provedor de verdade** (dezenas de chamadas): só com autorização do usuário.
+
+```powershell
+$env:XEMNAS_E2E_PROJECT = 'C:\caminho\do\projeto'
+$env:XEMNAS_E2E_IMPORT  = 'C:\caminho\do\projeto\docs\adr\0001-x.md'   # opcional
+$env:XEMNAS_E2E_TASKS   = 'primeira tarefa;segunda tarefa'            # opcional
+$env:XEMNAS_E2E_OUT     = 'C:\temp\xemnas-e2e'                         # opcional
+cargo test -j4 -p desktop-gpui --test e2e_pipeline -- --ignored --nocapture
+```
+
+Saída: resumo no stdout e `report.txt` na pasta de dados, com contagens e tempos por
+passo, as falhas com o texto completo (o job só guarda uma mensagem fixa), candidatos,
+o que a revisão automática fez, regras com escopo, vínculos e os packs. Com o Smart
+App Control bloqueando o executável, use `cargo rustc ... --test e2e_pipeline --profile
+test -- -C codegen-units=<ímpar>` e rode o `.exe` gerado.
+
 CI (`.github/workflows/ci.yml`): `docs` (testes do checker e links locais),
 `quality` (fmt, clippy, testes, audit, deny), `contract` (testes TS do adapter)
 e `package` (ZIP como artifact).
