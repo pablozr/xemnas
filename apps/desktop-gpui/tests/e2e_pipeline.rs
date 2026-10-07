@@ -631,7 +631,7 @@ fn registering_through_the_runner_composition_prepares_the_map() {
     )
     .expect("root manifest");
 
-    let store = SqliteStore::open(&root.join("app.db")).expect("open the store");
+    let store = SqliteStore::open(root.join("app.db")).expect("open the store");
     let project = application::graph::prepared_projects(store.clone())
         .register(&project_dir)
         .expect("register");
