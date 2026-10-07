@@ -17,6 +17,8 @@
 //! * a relation that depends on another decision (its quote was already
 //!   checked verbatim) is accepted;
 //! * a candidate that repeats a recorded question is discarded;
+//! * a rule or context suggestion that repeats a rule in force, or another one of the
+//!   batch, is discarded (the judge sees the rules it only resembles);
 //! * a decision with high confidence, a source, few files and nothing like it
 //!   recorded is accepted.
 //!
@@ -81,6 +83,8 @@ const NEIGHBORS: usize = 3;
 /// Word overlap from which a decision in force is worth naming beside a
 /// candidate.
 const NEIGHBOR_AT: f64 = 0.2;
+/// Rules in force named beside a rule item that only resembles them.
+const RULE_NEIGHBORS: usize = 3;
 /// Characters of a rationale or quote sent to the AI.
 const SENT_CHARS: usize = 280;
 
@@ -400,6 +404,8 @@ pub enum Triage {
     Accept(&'static str),
     /// Discard, for this reason.
     Discard(&'static str),
+    /// Discard because it repeats a rule; the reason names it.
+    Repeat(String),
     /// The rules cannot tell: ask the AI.
     Ask,
 }
@@ -420,6 +426,31 @@ pub fn similarity(a: &str, b: &str) -> f64 {
         return 0.0;
     }
     a.intersection(&b).count() as f64 / union as f64
+}
+
+/// The concepts of a rule statement: each word folded to one key shared by
+/// its inflections and its PT/EN glossary synonyms (`application::terms`), so a
+/// paraphrase in the other language or with synonyms meets the original.
+fn concepts(text: &str) -> BTreeSet<String> {
+    words(text)
+        .iter()
+        .filter_map(|word| crate::terms::variants(word).into_iter().next())
+        .collect()
+}
+
+/// Overlap of two concept sets, 0 to 1.
+fn concept_overlap(a: &BTreeSet<String>, b: &BTreeSet<String>) -> f64 {
+    let union = a.union(b).count();
+    if union == 0 {
+        return 0.0;
+    }
+    a.intersection(b).count() as f64 / union as f64
+}
+
+/// How much two rule statements say the same thing, 0 to 1, by the concepts
+/// they share; compared with [`DUPLICATE_AT`] and [`SIMILAR_AT`].
+pub fn rule_similarity(a: &str, b: &str) -> f64 {
+    concept_overlap(&concepts(a), &concepts(b))
 }
 
 /// Sources an evidence list holds.
@@ -554,6 +585,11 @@ struct Item {
     /// The question of a candidate decision, to look for decisions in force
     /// that resemble it.
     near: Option<String>,
+    /// The concepts of a rule or a context suggestion, to compare with the
+    /// rules in force.
+    rule: Option<BTreeSet<String>>,
+    /// Rules in force that only resemble it, for the judge.
+    similar_rules: Vec<String>,
 }
 
 /// System prompt of the judge.
@@ -567,7 +603,10 @@ doubt answer human: a wrong accept becomes context given to agents. A rule or re
 conflicts with or replaces another decision is accept only when its quote clearly supports it. \
 A link from a decision to a part of the project map found by a mention is accept only when \
 its quote shows the decision really affects or uses that part, not a passing remark.\n\
-Give in reason one short sentence in the language of the item. The ids (I1, D2) are only for \
+An item may list rules in force that resemble it after the items: discard it when it \
+only restates one of them, and keep it (accept or human) when it adds a real constraint, \
+a different condition or another scope.\n\
+Give in reason one short sentence in the language of the item. The ids (I1, D2, R3) are only for \
 the conflicts_with field: never write an id in the reason, name the other item by its title \
 instead, because the reader never sees the ids. When an item contradicts another item of the \
 list or one of the decisions in force listed after the items, put that id in conflicts_with \
@@ -681,7 +720,7 @@ pub fn name_items(reason: &str, names: &[(String, String)]) -> String {
     let mut at = 0;
     while at < chars.len() {
         let c = chars[at];
-        if matches!(c, 'I' | 'D') && (at == 0 || !chars[at - 1].is_alphanumeric()) {
+        if matches!(c, 'I' | 'D' | 'R') && (at == 0 || !chars[at - 1].is_alphanumeric()) {
             let digits = chars[at + 1..]
                 .iter()
                 .take_while(|digit| digit.is_ascii_digit())
@@ -844,6 +883,15 @@ where
                 ai_link: false,
                 near: (candidate.kind == CandidateKind::Decision.as_str())
                     .then(|| candidate.question.clone()),
+                rule: (candidate.kind == CandidateKind::Rule.as_str()).then(|| {
+                    // Accepting a rule stores its choice as the statement.
+                    concepts(if candidate.choice.trim().is_empty() {
+                        &candidate.question
+                    } else {
+                        &candidate.choice
+                    })
+                }),
+                similar_rules: Vec::new(),
             });
         }
 
@@ -877,6 +925,8 @@ where
                 triage: triage_relation(record.kind),
                 ai_link: false,
                 near: None,
+                rule: None,
+                similar_rules: Vec::new(),
             });
         }
 
@@ -904,6 +954,8 @@ where
                 triage: Triage::Ask,
                 ai_link: false,
                 near: None,
+                rule: Some(concepts(&record.statement)),
+                similar_rules: Vec::new(),
             });
         }
 
@@ -924,9 +976,74 @@ where
                 triage: triage_link(&suggestion.reason),
                 ai_link: ai_link_quote(&suggestion.reason).is_some(),
                 near: None,
+                rule: None,
+                similar_rules: Vec::new(),
             });
         }
+        self.compare_rules(project_id, &mut items);
         Ok(items)
+    }
+
+    /// Compares the rule items with the rules in force (one read, ranked in
+    /// memory) and with each other: a near-duplicate is settled by the rules,
+    /// one that is only similar carries its closest neighbors to the judge.
+    fn compare_rules(&self, project_id: &str, items: &mut [Item]) {
+        if items.iter().all(|item| item.rule.is_none()) {
+            return;
+        }
+        let now = now_rfc3339();
+        let live: Vec<(String, BTreeSet<String>)> =
+            ClaimStore::project_claims(&self.store, project_id)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|claim| {
+                    claim
+                        .valid_until
+                        .as_deref()
+                        .is_none_or(|end| end > now.as_str())
+                })
+                .map(|claim| {
+                    let concepts = concepts(&claim.statement);
+                    (claim.statement, concepts)
+                })
+                .collect();
+        let mut kept: Vec<(String, BTreeSet<String>)> = Vec::new();
+        for item in items.iter_mut() {
+            let Some(own) = item.rule.take() else {
+                continue;
+            };
+            let mut scored: Vec<(f64, &str)> = live
+                .iter()
+                .map(|(statement, other)| (concept_overlap(&own, other), statement.as_str()))
+                .collect();
+            scored.sort_by(|a, b| b.0.total_cmp(&a.0));
+            let best = scored.first().copied().unwrap_or((0.0, ""));
+            if best.0 >= DUPLICATE_AT {
+                item.triage =
+                    Triage::Repeat(format!("repete a regra em vigor: {}", clip(best.1, 120)));
+                continue;
+            }
+            if let Some((_, earlier)) = kept
+                .iter()
+                .map(|(title, other)| (concept_overlap(&own, other), title))
+                .find(|(likeness, _)| *likeness >= DUPLICATE_AT)
+            {
+                item.triage = Triage::Repeat(format!(
+                    "repete outra regra pendente: {}",
+                    clip(earlier, 120)
+                ));
+                continue;
+            }
+            if best.0 >= SIMILAR_AT {
+                item.similar_rules = scored
+                    .iter()
+                    .filter(|(likeness, _)| *likeness >= NEIGHBOR_AT)
+                    .take(RULE_NEIGHBORS)
+                    .map(|(_, statement)| (*statement).to_owned())
+                    .collect();
+            }
+            kept.push((item.title.clone(), own));
+        }
     }
 
     /// Accepts or discards one item through the use case a person's press
@@ -1093,6 +1210,7 @@ where
             let (verdict, reason) = match &item.triage {
                 Triage::Accept(reason) => (Verdict::Accepted, *reason),
                 Triage::Discard(reason) => (Verdict::Discarded, *reason),
+                Triage::Repeat(reason) => (Verdict::Discarded, reason.as_str()),
                 Triage::Ask => continue,
             };
             self.settle(
@@ -1132,6 +1250,7 @@ where
             Vec::new()
         };
         let mut shown: Vec<&StoredDecision> = Vec::new();
+        let mut shown_rules: Vec<&str> = Vec::new();
         let mut user = String::from("## Items\n");
         for (id, item) in ids.iter().zip(&batch) {
             user.push_str(&format!("- {id} {}", item.text));
@@ -1156,7 +1275,33 @@ where
                     .collect();
                 user.push_str(&format!(" | Parecidas em vigor: {}", named.join(", ")));
             }
+            if !item.similar_rules.is_empty() {
+                let named: Vec<String> = item
+                    .similar_rules
+                    .iter()
+                    .map(|rule| {
+                        let at = shown_rules
+                            .iter()
+                            .position(|seen| *seen == rule.as_str())
+                            .unwrap_or_else(|| {
+                                shown_rules.push(rule);
+                                shown_rules.len() - 1
+                            });
+                        format!("R{}", at + 1)
+                    })
+                    .collect();
+                user.push_str(&format!(
+                    " | Regras parecidas em vigor: {}",
+                    named.join(", ")
+                ));
+            }
             user.push('\n');
+        }
+        if !shown_rules.is_empty() {
+            user.push_str("## Regras em vigor\n");
+            for (at, rule) in shown_rules.iter().enumerate() {
+                user.push_str(&format!("- R{} {}\n", at + 1, clip(rule, 200)));
+            }
         }
         if !shown.is_empty() {
             user.push_str("## Decisões em vigor\n");
@@ -1192,6 +1337,12 @@ where
                 .iter()
                 .enumerate()
                 .map(|(at, decision)| (format!("D{}", at + 1), decision.question.clone())),
+        );
+        names.extend(
+            shown_rules
+                .iter()
+                .enumerate()
+                .map(|(at, rule)| (format!("R{}", at + 1), (*rule).to_owned())),
         );
         let mut judged = parse_verdicts(&answer, &ids);
         let mut conflicts: Vec<Option<Conflict>> = judged
@@ -1569,6 +1720,8 @@ mod tests {
             triage: Triage::Ask,
             ai_link: false,
             near: None,
+            rule: None,
+            similar_rules: Vec::new(),
         };
         let (a, b, link) = (
             item(ItemKind::Candidate, "ca"),

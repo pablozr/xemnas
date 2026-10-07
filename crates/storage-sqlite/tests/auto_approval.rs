@@ -1176,3 +1176,207 @@ mod resolution {
         assert_eq!(superseded[0].candidate_id, "bands");
     }
 }
+
+fn live_rule(test: &support::TestStore, statement: &str) {
+    use application::claims::{Claims, NewClaim};
+    use domain::claims::ClaimKind;
+
+    Claims::new(test.store.clone())
+        .create(NewClaim {
+            project_id: PROJECT.into(),
+            kind: ClaimKind::Constraint,
+            statement: statement.into(),
+            valid_from: None,
+            valid_until: None,
+            source_decision_id: None,
+            source_version: None,
+            qualifiers: Vec::new(),
+        })
+        .expect("claim");
+}
+
+fn pending_rule(id: &str, choice: &str, created_at: &str) -> DecisionCandidateRecord {
+    DecisionCandidateRecord {
+        kind: "rule".into(),
+        choice: choice.into(),
+        ..candidate(id, "pending", 0.6, &format!("regra {id}"), created_at)
+    }
+}
+
+#[test]
+fn a_rule_that_repeats_one_in_force_or_one_of_the_batch_is_discarded_by_the_rules() {
+    let test = support::open("review-rule-repeat", &[PROJECT]);
+    live_rule(&test, "Cache entries must expire after ten minutes");
+    test.store
+        .insert_candidates(&[
+            pending_rule(
+                "again",
+                "Expire cache entries after ten minutes",
+                "2026-02-01T00:00:01Z",
+            ),
+            pending_rule(
+                "twin-a",
+                "Never retry a request that is not idempotent",
+                "2026-02-01T00:00:02Z",
+            ),
+            pending_rule(
+                "twin-b",
+                "Never retry a request that is not idempotent.",
+                "2026-02-01T00:00:03Z",
+            ),
+        ])
+        .expect("pending");
+    let judge = Judge::answering(r#"{"verdicts":[{"id":"I1","verdict":"human","reason":"ok"}]}"#);
+    let review = review_with(&test.store, consented(), &judge);
+    review.set_mode(Mode::Automatic).expect("on");
+    review.run_at(PROJECT, NOW).expect("pass");
+
+    let ledger = review.ledger(PROJECT).expect("ledger");
+    let by_rules: Vec<_> = ledger
+        .iter()
+        .filter(|entry| entry.by == By::Rules && entry.verdict == Verdict::Discarded)
+        .collect();
+    assert_eq!(by_rules.len(), 2, "{ledger:?}");
+    assert!(by_rules.iter().any(|entry| entry.item_id == "again"
+        && entry
+            .reason
+            .starts_with("repete a regra em vigor: Cache entries must")));
+    assert_eq!(
+        ledger
+            .iter()
+            .filter(|entry| entry.item_id.starts_with("twin"))
+            .filter(|entry| entry.by == By::Rules)
+            .count(),
+        1
+    );
+    // The survivor of the pair is the only item the judge sees.
+    assert_eq!(judge.asked.lock().expect("lock").len(), 1);
+    assert_eq!(status_of(&test.store, "again"), CandidateStatus::Dismissed);
+}
+
+#[test]
+fn a_rule_that_only_resembles_one_in_force_goes_to_the_judge_with_it() {
+    let test = support::open("review-rule-near", &[PROJECT]);
+    live_rule(&test, "Cache entries expire after ten minutes");
+    test.store
+        .insert_candidates(&[pending_rule(
+            "hours",
+            "Cache entries expire after ten hours",
+            "2026-02-01T00:00:01Z",
+        )])
+        .expect("pending");
+    let judge =
+        Judge::answering(r#"{"verdicts":[{"id":"I1","verdict":"human","reason":"muda o prazo"}]}"#);
+    let review = review_with(&test.store, consented(), &judge);
+    review.set_mode(Mode::Automatic).expect("on");
+    review.run_at(PROJECT, NOW).expect("pass");
+
+    let asked = judge.asked.lock().expect("lock")[0].clone();
+    assert!(
+        asked.contains("Regras parecidas em vigor: R1")
+            && asked.contains("## Regras em vigor\n- R1 Cache entries expire after ten minutes"),
+        "{asked}"
+    );
+    assert_eq!(status_of(&test.store, "hours"), CandidateStatus::Pending);
+}
+
+/// Pairs of rule statements labeled by a person: `true` when the second only
+/// restates the first (PT, EN, reordered, synonyms), `false` when it is similar
+/// but adds or reverses a constraint and must survive.
+const RULE_PAIRS: &[(&str, &str, bool)] = &[
+    (
+        "Cache entries must expire after ten minutes",
+        "Expire cache entries after ten minutes",
+        true,
+    ),
+    (
+        "O estado UNAVAILABLE é um estado operacional, não uma falha",
+        "UNAVAILABLE é um estado operacional e não uma falha",
+        true,
+    ),
+    (
+        "Never log secrets or tokens in plain text",
+        "Secrets and tokens must never be logged in plain text",
+        true,
+    ),
+    (
+        "Toda chamada externa deve ter timeout",
+        "Every external call must have a timeout",
+        true,
+    ),
+    (
+        "Observe-only mode never changes the user's files",
+        "Observe-only mode must never modify user files",
+        true,
+    ),
+    (
+        "Falhas de rede devem ser repetidas até três vezes",
+        "Repetir falhas de rede até três vezes",
+        true,
+    ),
+    (
+        "A warning never produces FAIL",
+        "An error always produces FAIL",
+        false,
+    ),
+    (
+        "Cache entries expire after ten minutes",
+        "Cache entries expire after ten hours",
+        false,
+    ),
+    (
+        "Retry network failures up to three times",
+        "Never retry network failures",
+        false,
+    ),
+    (
+        "Secrets must never be logged",
+        "Secrets must be stored in the keychain",
+        false,
+    ),
+    (
+        "Tests must run offline",
+        "Tests must run in under one minute",
+        false,
+    ),
+    (
+        "Migrations are never edited after release",
+        "Migrations always run in a transaction",
+        false,
+    ),
+];
+
+#[test]
+fn the_local_duplicate_rule_never_discards_a_different_rule_and_finds_the_plain_paraphrases() {
+    use application::auto_approval::{rule_similarity, DUPLICATE_AT};
+
+    let (mut true_positive, mut false_positive, mut paraphrases) = (0, 0, 0);
+    for (a, b, same) in RULE_PAIRS {
+        let likeness = rule_similarity(a, b);
+        assert!((likeness - rule_similarity(b, a)).abs() < 1e-9, "{a} / {b}");
+        if *same {
+            paraphrases += 1;
+        }
+        if likeness >= DUPLICATE_AT {
+            if *same {
+                true_positive += 1;
+            } else {
+                false_positive += 1;
+            }
+        }
+        eprintln!("{likeness:.2} {same:5} {a} / {b}");
+    }
+    let flagged = true_positive + false_positive;
+    let precision = if flagged == 0 {
+        1.0
+    } else {
+        f64::from(true_positive) / f64::from(flagged)
+    };
+    let recall = f64::from(true_positive) / f64::from(paraphrases);
+    eprintln!("rule duplicate: precision {precision:.2}, recall {recall:.2}");
+    assert!(precision >= 0.9, "precision {precision:.2}");
+    assert!(recall >= RECALL_FLOOR, "recall {recall:.2}");
+}
+
+/// Recall measured on [`RULE_PAIRS`]; raise it when the rule improves.
+const RECALL_FLOOR: f64 = 0.3;
