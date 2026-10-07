@@ -30,6 +30,7 @@ GATES = [
     ('mention links', 'application', 'lib', 'graph::mention', False),
     ('ai link proposals', 'storage-sqlite', 'test:link_corpus', 'link_quality_gate', False),
     ('automatic review', 'storage-sqlite', 'test:auto_approval', '', False),
+    ('pipeline robustness', 'storage-sqlite', 'test:pipeline_robustness', '', False),
     ('automatic triage', 'application', 'lib', 'auto_approval', False),
     ('observations latency', 'storage-sqlite', 'test:observations_evaluation', 'scoped_latency_report', True),
     ('observation query latency', 'storage-sqlite', 'test:observations_router_corpus', 'observation_query_latency', True),

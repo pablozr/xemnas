@@ -86,6 +86,9 @@ pub struct CaptureProgress {
     pub detail: usize,
     /// Persisted candidate lifecycle counts.
     pub candidates: CandidateCounts,
+    /// Why the analysis failed: the sanitized message stored with the
+    /// assessment, for a failed attempt only.
+    pub failure_detail: Option<String>,
     /// Whether backend job rules allow retry.
     pub can_retry: bool,
 }

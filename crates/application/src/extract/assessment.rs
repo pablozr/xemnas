@@ -74,6 +74,26 @@ pub struct AssessmentRecord {
     pub inserted: i64,
     /// Short stable failure code, when the outcome is `failed` or `skipped`.
     pub error_code: Option<String>,
+    /// Sanitized, bounded text of the error that failed the run; see
+    /// [`failure_detail`].
+    pub error_detail: Option<String>,
+}
+
+/// Longest failure detail kept, in characters.
+pub const FAILURE_DETAIL_MAX_CHARS: usize = 200;
+
+/// The error's own message, safe to store and show: secrets redacted, one
+/// line, at most [`FAILURE_DETAIL_MAX_CHARS`] characters. Errors carry fixed
+/// messages, never the prompt or the document; the redaction is a second
+/// guard in case a provider message ever echoes text.
+pub fn failure_detail(error: &ExtractError) -> String {
+    let message = crate::redact::redact_secrets(&error.to_string());
+    let line = message.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.chars().count() <= FAILURE_DETAIL_MAX_CHARS {
+        return line;
+    }
+    let cut: String = line.chars().take(FAILURE_DETAIL_MAX_CHARS - 1).collect();
+    format!("{}…", cut.trim_end())
 }
 
 /// Persistence port for assessment provenance rows.
@@ -218,6 +238,7 @@ where
         0,
         0,
         Some(ERROR_CODE_CONSENT),
+        None,
     )
 }
 
@@ -291,6 +312,7 @@ where
         0,
         0,
         Some(error.code()),
+        None,
     )?;
     Ok(JobFailure::Failed)
 }
@@ -312,6 +334,7 @@ pub(super) fn record_assessment<S: AssessmentStore>(
     candidates: i64,
     inserted: i64,
     error_code: Option<&str>,
+    error_detail: Option<String>,
 ) -> Result<(), ExtractError> {
     let row = AssessmentRecord {
         attempt: context.attempt,
@@ -343,6 +366,7 @@ pub(super) fn record_assessment<S: AssessmentStore>(
         candidates,
         inserted,
         error_code: error_code.map(str::to_string),
+        error_detail,
     };
     store.record_assessment(&row)
 }

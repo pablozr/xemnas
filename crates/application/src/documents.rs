@@ -68,6 +68,10 @@ pub use digest::{digest as digest_document, Digest, Verdict, DIGEST_CHARS};
 pub const DOCUMENT_ARTIFACT: &str = "document";
 /// Adapter recorded on document captures.
 pub const DOCUMENT_ADAPTER: &str = "xemnas-documents";
+/// Runs a failed document analysis gets again on its own (an indexing run
+/// that meets it); importing the file again retries it regardless, and so does
+/// "Reprocessar" in Diagnostics.
+pub const MAX_AUTOMATIC_ATTEMPTS: u32 = 3;
 /// Documents queued for review per run, ADRs and specs first.
 pub const PROPOSE_PER_RUN: usize = 12;
 /// Characters of a document sent to extraction.
@@ -203,12 +207,31 @@ pub trait DocumentStore {
         project_id: &str,
         documents: &[ProjectDocument],
     ) -> Result<(), DocumentError>;
+
+    /// Requeues the analysis job of the document version queued under
+    /// `idempotency_key` when it failed, and only then (fewer than
+    /// `max_attempts` runs so far, when given). Whether it was requeued.
+    fn requeue_failed_analysis(
+        &self,
+        idempotency_key: &str,
+        max_attempts: Option<u32>,
+    ) -> Result<bool, DocumentError>;
 }
 
 /// The documentation use case.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Documents<S> {
     store: S,
+    map: Option<crate::graph::MapPreparer>,
+}
+
+impl<S: std::fmt::Debug> std::fmt::Debug for Documents<S> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Documents")
+            .field("store", &self.store)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<S> Documents<S>
@@ -217,7 +240,22 @@ where
 {
     /// Wraps the store.
     pub fn new(store: S) -> Self {
-        Self { store }
+        Self { store, map: None }
+    }
+
+    /// Prepares the project's map (declared components and suggestions)
+    /// whenever documents are indexed or queued, so the analysis they start
+    /// already finds the components.
+    #[must_use]
+    pub fn with_map_preparer(mut self, preparer: crate::graph::MapPreparer) -> Self {
+        self.map = Some(preparer);
+        self
+    }
+
+    fn prepare_map(&self, project_id: &str) {
+        if let Some(prepare) = &self.map {
+            prepare(project_id);
+        }
     }
 
     /// The indexed documents, by kind then path.
@@ -278,6 +316,7 @@ where
             .filter(|old| !documents.iter().any(|document| document.path == old.path))
             .count();
         self.store.replace_documents(project_id, &documents)?;
+        self.prepare_map(project_id);
         Ok(DocumentIndex {
             total: documents.len(),
             changed,
@@ -295,7 +334,9 @@ where
     /// conversations: each version of a document becomes one capture with a
     /// `document` artifact and an analysis job, so its decisions and rules
     /// reach Revisão and, once confirmed, the map's suggestions. A version
-    /// already queued is never queued again. Returns how many were queued.
+    /// already queued is not queued again, unless its analysis failed: then it
+    /// is requeued, up to [`MAX_AUTOMATIC_ATTEMPTS`] runs in all. Returns how
+    /// many were queued.
     ///
     /// # Errors
     ///
@@ -310,7 +351,8 @@ where
     /// The stored path is relative to the file's own worktree root, so a
     /// document of a sibling worktree gets the path it will have once merged.
     /// Importing the same content again changes nothing; changed content
-    /// replaces the stored version and queues the new one.
+    /// replaces the stored version and queues the new one. A version whose
+    /// analysis failed is requeued, so a fix takes effect without editing it.
     ///
     /// # Errors
     ///
@@ -368,10 +410,12 @@ where
         let project = ProjectRepository::get(&self.store, project_id)
             .map_err(|error| DocumentError::Storage(error.to_string()))?
             .ok_or(DocumentError::ProjectNotFound)?;
+        self.prepare_map(project_id);
         let root = PathBuf::from(&project.location);
         // What would be queued: new or changed documents that have central
         // parts, with only those parts. The rest never reaches Revisão.
         let mut candidates: Vec<(ProjectDocument, digest::Digest)> = Vec::new();
+        let mut requeued = 0;
         for document in self.list(project_id)? {
             if only.is_some_and(|path| path != document.path) {
                 continue;
@@ -383,6 +427,12 @@ where
                 .map_err(capture_error)?
                 .is_some()
             {
+                // Queued before. Only a failed analysis runs again: always
+                // when the person asked for this very file, else a few times.
+                let cap = only.is_none().then_some(MAX_AUTOMATIC_ATTEMPTS);
+                if requeued < limit && self.store.requeue_failed_analysis(&key, cap)? {
+                    requeued += 1;
+                }
                 continue;
             }
             let file = document
@@ -413,7 +463,7 @@ where
                 &right.0.path,
             ))
         });
-        let mut queued = 0;
+        let mut queued = requeued;
         for (document, digest) in candidates {
             if queued >= limit {
                 break;

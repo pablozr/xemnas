@@ -834,7 +834,8 @@ fn run_shell_mode(
             store.as_ref().ok().map(|store| approvals(store.clone()));
         let (projects, inbox, decisions, context, map, overview) = match store {
             Ok(store) => (
-                Ok(application::projects::Projects::new(store.clone())),
+                Ok(application::projects::Projects::new(store.clone())
+                    .with_map_preparer(application::graph::map_preparer(store.clone()))),
                 Some(application::inbox::Inbox::new(store.clone())),
                 Some((
                     application::decisions::Decisions::new(store.clone()),
@@ -849,7 +850,8 @@ fn run_shell_mode(
                     settings: application::context_settings::ContextSettings::new(store.clone()),
                     packs: application::context::ContextPacks::new(store.clone())
                         .with_routing(routing.clone()),
-                    documents: application::documents::Documents::new(store.clone()),
+                    documents: application::documents::Documents::new(store.clone())
+                        .with_map_preparer(application::graph::map_preparer(store.clone())),
                     deliveries: application::injection::Deliveries::new(store.clone()),
                     derived: application::claim_suggestions::ClaimSuggestions::new(store.clone()),
                 }),

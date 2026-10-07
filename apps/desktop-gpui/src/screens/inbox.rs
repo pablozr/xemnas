@@ -2830,6 +2830,7 @@ mod tests {
             durable: 0,
             detail: 0,
             candidates: Default::default(),
+            failure_detail: None,
             can_retry: false,
         };
         assert_eq!(capture_facts(&capture), "not a date · claude-code");

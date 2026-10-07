@@ -11,9 +11,10 @@ use integration_contracts::capture::artifact_fingerprint;
 use crate::clock::now_rfc3339;
 
 pub use assessment::{
-    fail_provider_setup, input_hash, policy_snapshot, record_skipped_assessment, AssessmentOutcome,
-    AssessmentRecord, AssessmentStore, ProviderSetupError, RunContext, ERROR_CODE_CONSENT,
-    ERROR_CODE_KEYSTORE, ERROR_CODE_PROFILE, ERROR_CODE_PROVIDER_CONFIG, ERROR_CODE_SECRET,
+    fail_provider_setup, failure_detail, input_hash, policy_snapshot, record_skipped_assessment,
+    AssessmentOutcome, AssessmentRecord, AssessmentStore, ProviderSetupError, RunContext,
+    ERROR_CODE_CONSENT, ERROR_CODE_KEYSTORE, ERROR_CODE_PROFILE, ERROR_CODE_PROVIDER_CONFIG,
+    ERROR_CODE_SECRET, FAILURE_DETAIL_MAX_CHARS,
 };
 pub use connection_test::{
     connection_test_evidence, run_connection_test, ConnectionTestReport, CONNECTION_TEST_CAPTURE_ID,
@@ -377,6 +378,7 @@ where
             0,
             0,
             None,
+            None,
         )?;
         return Ok(ExtractionReport::default());
     }
@@ -400,6 +402,7 @@ where
                 0,
                 0,
                 Some(error.code()),
+                Some(failure_detail(&error)),
             )?;
             return Err(error);
         }
@@ -449,6 +452,7 @@ where
                 0,
                 0,
                 Some(error.code()),
+                Some(failure_detail(&error)),
             )?;
             return Err(error);
         }
@@ -511,6 +515,7 @@ where
         AssessmentOutcome::Ok,
         report.candidates as i64,
         report.inserted as i64,
+        None,
         None,
     )?;
     Ok(report)

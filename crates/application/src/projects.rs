@@ -208,12 +208,25 @@ pub fn find_project_with_identity<R: ProjectRepository + ?Sized>(
 /// Project use cases over a [`ProjectRepository`].
 pub struct Projects<R> {
     repository: R,
+    after_register: Option<crate::graph::MapPreparer>,
 }
 
 impl<R: ProjectRepository> Projects<R> {
     /// Wraps a repository with the Project use cases.
     pub fn new(repository: R) -> Self {
-        Self { repository }
+        Self {
+            repository,
+            after_register: None,
+        }
+    }
+
+    /// Runs `preparer` for each project right after it is registered, so its
+    /// map exists before the first analysis. Registration is already off the
+    /// UI thread in the app.
+    #[must_use]
+    pub fn with_map_preparer(mut self, preparer: crate::graph::MapPreparer) -> Self {
+        self.after_register = Some(preparer);
+        self
     }
 
     /// Registers a directory to track.
@@ -230,6 +243,9 @@ impl<R: ProjectRepository> Projects<R> {
             registered_at.clone(),
         );
         self.repository.insert(&record)?;
+        if let Some(prepare) = &self.after_register {
+            prepare(id.as_str());
+        }
 
         Ok(Project::new(id, location, registered_at))
     }

@@ -4652,6 +4652,19 @@ formats! {
         ko: "{plan}에서 {model}로",
         ru: "через {plan} с моделью {model}",
     }
+    /// Diagnostics: why a capture analysis failed; the reason is shown as stored.
+    diag_failure_reason(detail: &str) {
+        en: "Reason: {detail}",
+        pt: "Motivo: {detail}",
+        es: "Motivo: {detail}",
+        fr: "Raison : {detail}",
+        de: "Grund: {detail}",
+        it: "Motivo: {detail}",
+        ja: "理由: {detail}",
+        zh: "原因：{detail}",
+        ko: "사유: {detail}",
+        ru: "Причина: {detail}",
+    }
     /// Provider form: the model list failed; the model can still be typed.
     models_failed(message: &str) {
         en: "{message} You can still type the model.",

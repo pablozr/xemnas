@@ -80,6 +80,25 @@ impl DocumentStore for SqliteStore {
         }
         transaction.commit().map_err(storage_error)
     }
+
+    fn requeue_failed_analysis(
+        &self,
+        idempotency_key: &str,
+        max_attempts: Option<u32>,
+    ) -> Result<bool, DocumentError> {
+        let changed = self
+            .lock()
+            .execute(
+                "UPDATE jobs SET state = 'queued', last_error = NULL, \
+                 updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') \
+                 WHERE kind = 'analyze_document' AND state = 'failed' \
+                 AND payload = (SELECT capture_id FROM capture_receipts WHERE idempotency_key = ?1) \
+                 AND (?2 IS NULL OR attempts < ?2)",
+                params![idempotency_key, max_attempts],
+            )
+            .map_err(storage_error)?;
+        Ok(changed > 0)
+    }
 }
 
 fn storage_error(error: rusqlite::Error) -> DocumentError {

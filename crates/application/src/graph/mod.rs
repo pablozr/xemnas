@@ -13,7 +13,10 @@ mod query;
 mod scope;
 
 pub use ai_link::{ai_link_quote, ai_link_reason, ai_link_why, AI_LINK_REASON};
-pub use derive::{added_dependencies, ComponentProposal, SuggestionReport, TechnologyProposal};
+pub use derive::{
+    added_dependencies, map_preparer, ComponentProposal, MapPreparer, SuggestionReport,
+    TechnologyProposal,
+};
 pub use discover::{declared_components, DeclaredComponent, WorkspaceKind};
 pub use domain::entities::EntityKind;
 pub use mention::{mention_quote, mention_reason, MENTION_REASON};

@@ -93,6 +93,24 @@ const CARGO_KEYS: &[&str] = &[
     "default",
 ];
 
+/// Prepares a project's map in the background: what registering a project
+/// and indexing its documents run so extraction, link suggestions and scoped
+/// rules find the components from the first analysis.
+pub type MapPreparer = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
+
+/// A [`MapPreparer`] over `store`. Best effort: a failure is left for the Map
+/// screen, which runs the same work when it loads.
+pub fn map_preparer<S>(store: S) -> MapPreparer
+where
+    S: GraphStore + RelationStore + ClaimStore + ProjectRepository + JobRepository,
+    S: Send + Sync + 'static,
+{
+    let graph = KnowledgeGraph::new(store);
+    std::sync::Arc::new(move |project_id: &str| {
+        let _ = graph.prepare(project_id);
+    })
+}
+
 /// Dependency names added by manifest hunks (`Cargo.toml`, `package.json`),
 /// in order of appearance, without duplicates.
 ///
@@ -319,6 +337,20 @@ impl<S> KnowledgeGraph<S>
 where
     S: GraphStore + RelationStore + ClaimStore + ProjectRepository + JobRepository,
 {
+    /// Gives a project its map: assembles the declared components when the
+    /// map is empty and derives the suggestions, the same work the Map screen
+    /// does on load. Idempotent: with components in place only the
+    /// suggestions are refreshed, and those never repeat.
+    ///
+    /// # Errors
+    ///
+    /// `project_not_found` or `storage`.
+    pub fn prepare(&self, project_id: &str) -> Result<(), GraphError> {
+        self.assemble(project_id)?;
+        self.refresh_suggestions(project_id)?;
+        Ok(())
+    }
+
     /// Derives suggestions from the decisions in force: writes the new
     /// `affects`/`uses` suggestions (from touched files, added dependencies
     /// and mentions in the text) and lists components and technologies worth

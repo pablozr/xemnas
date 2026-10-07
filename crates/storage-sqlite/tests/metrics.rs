@@ -209,6 +209,7 @@ fn metrics_are_aggregated_from_seeded_timestamps() {
                 candidates: 0,
                 inserted: 0,
                 error_code: None,
+                error_detail: None,
             })
             .expect("record assessment");
     }

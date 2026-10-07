@@ -998,6 +998,14 @@ impl DiagnosticsPanel {
                         .text_color(theme.colors.text_muted())
                         .child(capture_facts(capture)),
                 );
+            // The reason the analysis gave, as stored: only the label is
+            // translated.
+            if let Some(detail) = capture.failure_detail.as_deref() {
+                row = row.child(
+                    word_wrapped(&t::diag_failure_reason(detail), TypeScale::META, Some(3))
+                        .text_color(theme.colors.text_muted()),
+                );
+            }
             if capture.can_retry {
                 if let Some(job) = capture.job_id.clone() {
                     row = row.child(

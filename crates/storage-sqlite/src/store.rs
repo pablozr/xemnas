@@ -184,6 +184,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 45,
         sql: include_str!("migrations/0045_auto_review_conflicts.sql"),
     },
+    Migration {
+        version: 46,
+        sql: include_str!("migrations/0046_assessment_error_detail.sql"),
+    },
 ];
 
 /// Schema version this build migrates to: the last embedded migration.

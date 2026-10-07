@@ -108,6 +108,7 @@ fn verify_historical_22(concurrent: bool) {
         candidates: 1,
         inserted: 1,
         error_code: None,
+        error_detail: None,
         attempt: Some(3),
         reason: "candidates".into(),
         durable_count: 1,

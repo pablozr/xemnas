@@ -123,6 +123,7 @@ fn assessment(capture_id: &str) -> AssessmentRecord {
         candidates: 2,
         inserted: 1,
         error_code: None,
+        error_detail: None,
     }
 }
 

@@ -20,7 +20,13 @@ fechado, a captura espera numa outbox de arquivos e entra quando o app abre.
 relevância, evidências e, quando há, ressalvas de alcance. O extrator padrão é offline. Fatos
 de manifests (`Cargo.toml`, `package.json`) viram observações descritivas locais, que nunca
 entram na fila de revisão. Documentação do projeto (README, ADRs, `docs/`) é indexada e pode
-gerar candidatos.
+gerar candidatos. O mapa do projeto existe desde a primeira análise: ao registrar o projeto
+e ao indexar ou importar documentos, os componentes declarados nos manifests são criados e as
+sugestões derivadas (o que a tela Mapa já fazia ao abrir). Uma análise de documento que falhou
+volta para a fila na próxima importação do arquivo, ou quando o app propõe documentos de novo
+(até 3 execuções no total por versão), e "Reprocessar" vale sempre. O motivo de uma falha
+(só a mensagem do erro, limpa e com até 200 caracteres) fica guardado e aparece em
+Configurações → Diagnóstico, na lista de capturas.
 
 **Revisão.** Duas formas, por instalação.
 - *Manual* (padrão): nada vira decisão sem você. Você confirma, ajusta, adia ou rejeita, com

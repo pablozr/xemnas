@@ -23,6 +23,41 @@ const DEMO_FILES: [&str; 5] = [
     "crates/storage-sqlite/src/decisions.rs",
 ];
 
+/// The assessment a failed sample analysis leaves, with its stored reason.
+fn demo_failed_assessment(
+    store: &SqliteStore,
+    capture: &str,
+    at: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use application::extract::{AssessmentOutcome, AssessmentRecord, AssessmentStore};
+
+    store.record_assessment(&AssessmentRecord {
+        attempt: Some(1),
+        reason: "failed".into(),
+        durable_count: 0,
+        detail_count: 0,
+        id: format!("assessment-{capture}"),
+        capture_id: capture.into(),
+        job_id: Some(format!("job-{capture}")),
+        profile_id: "demo".into(),
+        adapter: "fake".into(),
+        model: None,
+        policy: "{}".into(),
+        consent_preview_hash: None,
+        input_hash: "demo".into(),
+        started_at: at.into(),
+        finished_at: at.into(),
+        outcome: AssessmentOutcome::Failed,
+        candidates: 0,
+        inserted: 0,
+        error_code: Some("validation".into()),
+        error_detail: Some(
+            "proposta inválida: qualificador sem citação literal verificável".into(),
+        ),
+    })?;
+    Ok(())
+}
+
 pub(crate) fn store() -> Result<SqliteStore, Box<dyn std::error::Error>> {
     let store = SqliteStore::open(":memory:")?;
     let long_evidence = std::env::args().any(|arg| arg == "--long-evidence");
@@ -94,6 +129,9 @@ pub(crate) fn store() -> Result<SqliteStore, Box<dyn std::error::Error>> {
                 fingerprint: format!("{:064x}", index * 2 + position + 1),
             })
             .collect();
+            // One failed analysis of the sample project, so Diagnostics shows
+            // the reason that was kept.
+            let failed = project == "demo-xemnas" && index == 3;
             store.insert_capture(&CaptureWrite {
                 receipt: CaptureReceiptRecord {
                     capture_id: capture.clone(),
@@ -107,10 +145,14 @@ pub(crate) fn store() -> Result<SqliteStore, Box<dyn std::error::Error>> {
                     id: format!("job-{capture}"),
                     kind: ANALYZE_CAPTURE_KIND.into(),
                     payload: capture.clone(),
-                    state: JobState::Completed,
+                    state: if failed {
+                        JobState::Failed
+                    } else {
+                        JobState::Completed
+                    },
                     idempotent: true,
                     attempts: 1,
-                    last_error: None,
+                    last_error: failed.then(|| "o job falhou durante a execução".into()),
                     created_at: timestamp.clone(),
                     updated_at: timestamp.clone(),
                 },
@@ -124,6 +166,9 @@ pub(crate) fn store() -> Result<SqliteStore, Box<dyn std::error::Error>> {
                     updated_at: timestamp.clone(),
                 },
             })?;
+            if failed {
+                demo_failed_assessment(&store, &capture, &timestamp)?;
+            }
             let mut candidate = DecisionCandidateRecord {
                 id: format!("candidate-{capture}"),
                 project_id: project.into(),

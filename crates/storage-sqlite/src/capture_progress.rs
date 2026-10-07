@@ -52,7 +52,7 @@ impl CaptureProgressStore for SqliteStore {
                 None
             } else {
                 tx.query_row(
-                    "SELECT reason,adapter,model,durable_count,detail_count FROM assessments
+                    "SELECT reason,adapter,model,durable_count,detail_count,error_detail FROM assessments
                     WHERE capture_id=?1 AND job_id IS ?2 AND attempt=?3
                     ORDER BY finished_at DESC,id DESC LIMIT 1",
                     params![capture_id, job_id, attempts],
@@ -63,6 +63,7 @@ impl CaptureProgressStore for SqliteStore {
                             r.get::<_, Option<String>>(2)?,
                             r.get::<_, i64>(3)?,
                             r.get::<_, i64>(4)?,
+                            r.get::<_, Option<String>>(5)?,
                         ))
                     },
                 )
@@ -119,8 +120,8 @@ impl CaptureProgressStore for SqliteStore {
                     _ => {}
                 }
             }
-            let (reason, source, model, durable, detail) = assessment
-                .map(|(reason, source, model, durable, detail)| {
+            let (reason, source, model, durable, detail, failure_detail) = assessment
+                .map(|(reason, source, model, durable, detail, failure_detail)| {
                     (
                         match reason.as_str() {
                             "candidates" => AssessmentReason::Candidates,
@@ -134,9 +135,10 @@ impl CaptureProgressStore for SqliteStore {
                         model,
                         durable as usize,
                         detail as usize,
+                        failure_detail,
                     )
                 })
-                .unwrap_or((AssessmentReason::Unknown, None, None, 0, 0));
+                .unwrap_or((AssessmentReason::Unknown, None, None, 0, 0, None));
             result.push(CaptureProgress {
                 project_id: project.into(),
                 capture_id,
@@ -156,6 +158,7 @@ impl CaptureProgressStore for SqliteStore {
                 durable,
                 detail,
                 candidates: counts,
+                failure_detail,
                 can_retry: state == CaptureState::Failed
                     && idempotent
                     && reason != AssessmentReason::Detail,
