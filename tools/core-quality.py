@@ -27,6 +27,7 @@ GATES = [
     ('context selection, sealed v4', 'storage-sqlite', 'test:context_corpus', 'sealed_v4_quality_gate', False),
     ('context selection, calibration v5', 'storage-sqlite', 'test:context_corpus', 'calibration_v5_quality_gate', False),
     ('context report', 'storage-sqlite', 'test:context_corpus', 'report_context_corpus', True),
+    ('context selection at scale', 'storage-sqlite', 'test:context_scale', 'rule_ranking_scales_to_a_large_project', True),
     ('mention links', 'application', 'lib', 'graph::mention', False),
     ('ai link proposals', 'storage-sqlite', 'test:link_corpus', 'link_quality_gate', False),
     ('automatic review', 'storage-sqlite', 'test:auto_approval', '', False),

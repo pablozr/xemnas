@@ -12,9 +12,13 @@ regras a componentes por arestas `applies_to`.
 ## Decisão
 
 1. **Regra ligada a componentes só entra no contexto quando a tarefa toca um deles.** A tarefa
-   toca um componente quando um arquivo casa com seus padrões, o texto o menciona ou uma
-   decisão do pacote está ligada a ele. Um componente conta como tocado pelos seus
-   subcomponentes.
+   toca um componente quando um arquivo casa com seus padrões ou o texto o menciona. Um
+   componente conta como tocado pelos seus subcomponentes. *Emenda (07/10/2026):* uma decisão
+   do pacote ligada ao componente deixou de tocá-lo, porque uma decisão arrastava todas as
+   regras do componente; e de um componente com mais de `MAX_TIED_RULES` (3) regras ligadas
+   entram no máximo 3, as que cobrem conceitos suficientes da tarefa, mais cobertas primeiro
+   (depois a oração principal, a mais recente e o id). O nome do componente, que o tocou, não
+   conta como tema.
 2. **Regra sem ligação continua global.** Ausência de escopo não restringe nada.
 3. **Regra derivada herda o escopo da decisão de origem.** As arestas confirmadas da decisão
    passam para a regra no mesmo ponto em que a sugestão é confirmada, e o preenchimento de

@@ -29,8 +29,11 @@ arquivo). Como ligar no agente: [operação](../operacao/operacao-e-referencia.m
   **Claim válida:** `valid_from` inclusivo, `valid_until` exclusivo.
 - **Seleção:** termos úteis da tarefa no FTS5 (BM25), sementes por menção e o mapa
   do projeto quando há arquivos (ADR-0005), com regras escopadas aos componentes
-  em que valem (`application::graph::scope`). Restrições e convenções válidas entram
-  mesmo sem casar. Decisões sem relação com a tarefa ficam de fora. Medido no corpus
+  em que valem (`application::graph::scope`, numa só carga do grafo por pacote:
+  `KnowledgeGraph::pack_graph`). De um componente tocado entram no máximo
+  `MAX_TIED_RULES` (3) regras ligadas, ranqueadas pelos conceitos da tarefa; regra
+  sem casar nem vínculo só entra marcada como global (`*`, no máximo 3). Decisões sem
+  relação com a tarefa ficam de fora. Medido no corpus
   rotulado; embeddings foram medidos e reprovados
   ([busca semântica local](../pesquisas/busca-semantica-local.md)).
 - **Orçamento:** 500 a 50.000 caracteres (padrão 8.000), com contagem do que ficou
@@ -121,7 +124,8 @@ imprimem nada em caso de erro (no máximo uma linha sanitizada no stderr).
 
 - Pack e relações: `storage-sqlite/tests/{relations,claims,context_pack}.rs`,
   `application/tests/pack_export.rs`; qualidade da seleção no corpus rotulado
-  (`storage-sqlite/tests/context_corpus.rs`, [portões do núcleo](qualidade-do-nucleo.md)).
+  (`storage-sqlite/tests/context_corpus.rs`, em escala `context_scale.rs`,
+  [portões do núcleo](qualidade-do-nucleo.md)), escopo em `scoped_rules.rs`.
 - Injeção: `application::injection`, `storage-sqlite/tests/{injections,injection_flow}.rs`,
   `local-api/tests/ingest.rs`, `adapters/opencode/tests/context.test.ts`.
 - MCP e hooks: `apps/mcp-server` (protocolo, binário por stdio, `tests/hook.rs`),

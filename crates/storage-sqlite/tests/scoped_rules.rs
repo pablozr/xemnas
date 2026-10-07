@@ -236,7 +236,7 @@ fn a_standing_rule_follows_its_components_and_a_global_one_stays() {
 }
 
 #[test]
-fn a_decision_of_the_pack_tied_to_the_component_brings_the_rule() {
+fn a_decision_of_the_pack_tied_to_the_component_does_not_bring_its_rules() {
     let test = support::open("scope-decision", &["p1"]);
     let store = &test.store;
     let decision = support::decision(
@@ -266,8 +266,16 @@ fn a_decision_of_the_pack_tied_to_the_component_brings_the_rule() {
         &ledger,
     );
 
-    // No files and no mention of the component, but the pack carries a
-    // decision tied to it (the words come from the decision itself).
+    // No files and no mention of the component: the pack carries a decision
+    // tied to it, but that does not touch the component, or one decision
+    // would drag in every rule of its component.
     let pack = pack_claims(store, "Como fechar o balancete mensal", &[]);
+    assert!(!pack.contains(&scoped), "{pack:?}");
+    // Touching the component by a file brings the rule.
+    let pack = pack_claims(
+        store,
+        "Como fechar o balancete mensal",
+        &["crates/contabil/src/lib.rs"],
+    );
     assert!(pack.contains(&scoped), "{pack:?}");
 }

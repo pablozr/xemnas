@@ -35,9 +35,10 @@ where
 {
     /// Splits the claims tied to components (live `applies_to` edges) by
     /// whether the task touches one of them. The task touches a component
-    /// when a file matches its patterns, the text mentions it, or a decision
-    /// of the pack is tied to it; a component also counts as touched through
-    /// its sub-components. Claims with no component tie are in neither set:
+    /// when a file matches its patterns or the text mentions it (never
+    /// through a decision of the pack: one decision would drag in every rule
+    /// of its component); a component also counts as touched through its
+    /// sub-components. Claims with no component tie are in neither set:
     /// their scope is not informed.
     ///
     /// One pass over the project's entities and edges, whatever the claims.
@@ -50,101 +51,12 @@ where
         project_id: &str,
         task: &str,
         files: &[String],
-        decision_ids: &[String],
         as_of: &str,
     ) -> Result<ClaimScopes, GraphError> {
         let at = super::resolve_as_of(Some(as_of))?;
         let edges = self.store.project_edges(project_id)?;
-        let mut targets: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
-        for edge in edges.iter().filter(|edge| edge.holds_at(&at)) {
-            if edge.source_kind == NodeKind::Claim && edge.kind == EdgeKind::AppliesTo {
-                targets
-                    .entry(edge.source_id.as_str())
-                    .or_default()
-                    .insert(edge.entity_id.as_str());
-            }
-        }
-        if targets.is_empty() {
-            return Ok(ClaimScopes::default());
-        }
-
         let entities = self.store.project_entities(project_id)?;
-        let components: BTreeMap<&str, &super::EntityRecord> = entities
-            .iter()
-            .filter(|entity| entity.kind == EntityKind::Component && entity.alive_at(&at))
-            .map(|entity| (entity.entity_id.as_str(), entity))
-            .collect();
-        // Only components some claim is tied to can decide anything.
-        let tied: BTreeSet<&str> = targets
-            .values()
-            .flatten()
-            .copied()
-            .filter(|id| components.contains_key(id))
-            .collect();
-        let files: Vec<String> = files
-            .iter()
-            .map(|file| normalize_path(file))
-            .filter(|file| !file.is_empty())
-            .collect();
-        let text = Folded::new(task);
-        let mut touched: BTreeSet<&str> = BTreeSet::new();
-        for id in tied {
-            let entity = components[id];
-            let by_file = files.iter().any(|file| {
-                entity
-                    .patterns
-                    .iter()
-                    .any(|pattern| pattern_matches(pattern, file))
-            });
-            if by_file
-                || entity_terms(entity)
-                    .iter()
-                    .any(|term| text.mention(term).is_some())
-            {
-                touched.insert(id);
-            }
-        }
-        for edge in edges.iter().filter(|edge| edge.holds_at(&at)) {
-            if edge.source_kind == NodeKind::Decision
-                && decision_ids.contains(&edge.source_id)
-                && components.contains_key(edge.entity_id.as_str())
-            {
-                touched.insert(edge.entity_id.as_str());
-            }
-        }
-        // A touched sub-component touches the components that contain it.
-        let parent: BTreeMap<&str, &str> = edges
-            .iter()
-            .filter(|edge| edge.holds_at(&at) && edge.kind == EdgeKind::PartOf)
-            .filter(|edge| components.contains_key(edge.entity_id.as_str()))
-            .map(|edge| (edge.source_id.as_str(), edge.entity_id.as_str()))
-            .collect();
-        let mut climbing: Vec<&str> = touched.iter().copied().collect();
-        while let Some(current) = climbing.pop() {
-            if let Some(next) = parent.get(current) {
-                if touched.insert(next) {
-                    climbing.push(next);
-                }
-            }
-        }
-
-        let mut scopes = ClaimScopes::default();
-        for (claim, ties) in targets {
-            let live: Vec<&&str> = ties
-                .iter()
-                .filter(|id| components.contains_key(**id))
-                .collect();
-            if live.is_empty() {
-                continue;
-            }
-            let set = if live.iter().any(|id| touched.contains(**id)) {
-                &mut scopes.in_scope
-            } else {
-                &mut scopes.out_of_scope
-            };
-            set.insert(claim.to_string());
-        }
-        Ok(scopes)
+        Ok(scopes_in(&at, &edges, entities.iter(), task, files))
     }
 
     /// Confirmed ties of decisions to components, as `(decision, component)`.
@@ -231,4 +143,95 @@ where
         self.inherit_claim_scope(&mut edges, &claims, &ties, &now_rfc3339())?;
         Ok(())
     }
+}
+
+/// The task's scope over claims already loaded: see
+/// [`KnowledgeGraph::claims_by_scope`].
+pub(super) fn scopes_in<'a>(
+    at: &Timestamp,
+    edges: &[EdgeRecord],
+    entities: impl Iterator<Item = &'a super::EntityRecord>,
+    task: &str,
+    files: &[String],
+) -> ClaimScopes {
+    let mut targets: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for edge in edges.iter().filter(|edge| edge.holds_at(at)) {
+        if edge.source_kind == NodeKind::Claim && edge.kind == EdgeKind::AppliesTo {
+            targets
+                .entry(edge.source_id.as_str())
+                .or_default()
+                .insert(edge.entity_id.as_str());
+        }
+    }
+    if targets.is_empty() {
+        return ClaimScopes::default();
+    }
+
+    let components: BTreeMap<&str, &super::EntityRecord> = entities
+        .filter(|entity| entity.kind == EntityKind::Component && entity.alive_at(at))
+        .map(|entity| (entity.entity_id.as_str(), entity))
+        .collect();
+    // Only components some claim is tied to can decide anything.
+    let tied: BTreeSet<&str> = targets
+        .values()
+        .flatten()
+        .copied()
+        .filter(|id| components.contains_key(id))
+        .collect();
+    let files: Vec<String> = files
+        .iter()
+        .map(|file| normalize_path(file))
+        .filter(|file| !file.is_empty())
+        .collect();
+    let text = Folded::new(task);
+    let mut touched: BTreeSet<&str> = BTreeSet::new();
+    for id in tied {
+        let entity = components[id];
+        let by_file = files.iter().any(|file| {
+            entity
+                .patterns
+                .iter()
+                .any(|pattern| pattern_matches(pattern, file))
+        });
+        if by_file
+            || entity_terms(entity)
+                .iter()
+                .any(|term| text.mention(term).is_some())
+        {
+            touched.insert(id);
+        }
+    }
+    // A touched sub-component touches the components that contain it.
+    let parent: BTreeMap<&str, &str> = edges
+        .iter()
+        .filter(|edge| edge.holds_at(at) && edge.kind == EdgeKind::PartOf)
+        .filter(|edge| components.contains_key(edge.entity_id.as_str()))
+        .map(|edge| (edge.source_id.as_str(), edge.entity_id.as_str()))
+        .collect();
+    let mut climbing: Vec<&str> = touched.iter().copied().collect();
+    while let Some(current) = climbing.pop() {
+        if let Some(next) = parent.get(current) {
+            if touched.insert(next) {
+                climbing.push(next);
+            }
+        }
+    }
+
+    let mut scopes = ClaimScopes::default();
+    for (claim, ties) in targets {
+        let live: Vec<&&str> = ties
+            .iter()
+            .filter(|id| components.contains_key(**id))
+            .collect();
+        if live.is_empty() {
+            continue;
+        }
+        let set = if live.iter().any(|id| touched.contains(**id)) {
+            &mut scopes.in_scope
+        } else {
+            &mut scopes.out_of_scope
+        };
+        set.insert(claim.to_string());
+    }
+    scopes
 }
