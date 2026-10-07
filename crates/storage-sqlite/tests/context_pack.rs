@@ -137,11 +137,10 @@ fn claims_are_matched_first_then_standing_rules() {
         "A API recebe no máximo 10 pedidos por segundo",
         None,
     );
-    let rule = claim(
+    let rule = global_rule(
         &test,
         ClaimKind::Convention,
         "Mensagens de erro em português",
-        None,
     );
     claim(&test, ClaimKind::Goal, "Lançar em dezembro", None);
     claim(
@@ -200,8 +199,9 @@ fn a_rule_enters_only_when_it_touches_the_task_or_is_global() {
         "Nunca usar unwrap em código de produção",
         None,
     );
-    // From before the marker: a convention with no scope at all is global.
-    let legacy = claim(
+    // A convention with no scope is not project-wide either: only the marker
+    // makes a rule global.
+    claim(
         &test,
         ClaimKind::Convention,
         "Mensagens de erro em português",
@@ -232,9 +232,26 @@ fn a_rule_enters_only_when_it_touches_the_task_or_is_global() {
 
     let mut got = ids(&pack.claims, |c| &c.claim_id);
     got.sort();
-    let mut want = vec![matched, legacy, marked];
+    let mut want = vec![matched, marked];
     want.sort();
     assert_eq!(got, want);
+}
+
+#[test]
+fn an_unscoped_convention_stays_out_of_an_unrelated_task() {
+    let test = support::open("pack-unscoped-convention", &["p1"]);
+    claim(
+        &test,
+        ClaimKind::Convention,
+        "A evidência de mudanças deve usar episódios como unidade",
+        None,
+    );
+
+    let pack = ContextPacks::new(test.store.clone())
+        .build_pack(request("corrigir o botão de login"))
+        .expect("pack");
+
+    assert!(pack.claims.is_empty());
 }
 
 #[test]

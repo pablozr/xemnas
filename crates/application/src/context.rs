@@ -513,9 +513,7 @@ where
             !matched_claims.contains(claim.claim_id.as_str())
                 && matches!(claim.kind, ClaimKind::Constraint | ClaimKind::Convention)
         }) {
-            let is_tied = scopes.in_scope.contains(&claim.claim_id)
-                || scopes.out_of_scope.contains(&claim.claim_id);
-            if is_global(claim, is_tied) {
+            if is_global(claim) {
                 global.push(*claim);
             } else if scopes.in_scope.contains(&claim.claim_id) {
                 tied.push(*claim);
@@ -815,27 +813,18 @@ fn decision_cost(decision: &PackDecision) -> usize {
 }
 
 /// Whether a rule applies to the whole project, so it may ride along on a
-/// task that does not touch it. Only the explicit marker is a decision of
-/// the person or the AI; the second case is the rule for data from before
-/// the marker existed: a convention with no scope at all (no component tie,
-/// no inherited scope, no scope qualifier) is read as project-wide, while
-/// a constraint with no scope is not, since a constraint applies to
-/// something and it was never said to what.
-fn is_global(claim: &ClaimRecord, tied: bool) -> bool {
+/// task that does not touch it. Only the explicit marker counts (a `"*"`
+/// `Scope` qualifier or `inherited_scope` entry): the extractor labels many
+/// component-specific rules as conventions, so a convention with no scope is
+/// treated like a constraint with no scope and enters only when matched or
+/// tied by the graph to a touched component.
+fn is_global(claim: &ClaimRecord) -> bool {
     let scope: Vec<String> = serde_json::from_str(&claim.inherited_scope).unwrap_or_default();
     let qualifiers = crate::qualifiers::decode(&claim.qualifiers).unwrap_or_default();
-    let scope_qualifiers = || {
-        qualifiers
-            .iter()
-            .filter(|item| item.kind == crate::qualifiers::QualifierKind::Scope)
-    };
-    let marked = scope.iter().any(|value| value.trim() == GLOBAL_SCOPE)
-        || scope_qualifiers().any(|item| item.text.trim() == GLOBAL_SCOPE);
-    marked
-        || (claim.kind == ClaimKind::Convention
-            && !tied
-            && scope.is_empty()
-            && scope_qualifiers().next().is_none())
+    scope.iter().any(|value| value.trim() == GLOBAL_SCOPE)
+        || qualifiers.iter().any(|item| {
+            item.kind == crate::qualifiers::QualifierKind::Scope && item.text.trim() == GLOBAL_SCOPE
+        })
 }
 
 fn pack_claim(claim: &ClaimRecord, matched: bool) -> Result<PackClaim, ContextError> {

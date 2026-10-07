@@ -187,12 +187,23 @@ fn a_standing_rule_follows_its_components_and_a_global_one_stays() {
         "Registrar cada lançamento com o selo do auditor",
         None,
     );
-    let global = claim(
-        store,
-        ClaimKind::Convention,
-        "Mensagens de erro em português",
-        None,
-    );
+    let global = Claims::new(store.clone())
+        .create(NewClaim {
+            source_version: None,
+            qualifiers: vec![application::qualifiers::KnowledgeQualifier {
+                kind: application::qualifiers::QualifierKind::Scope,
+                text: application::context::GLOBAL_SCOPE.into(),
+                artifact_id: None,
+            }],
+            project_id: "p1".into(),
+            kind: ClaimKind::Convention,
+            statement: "Mensagens de erro em português".into(),
+            valid_from: Some("2020-01-01".into()),
+            valid_until: None,
+            source_decision_id: None,
+        })
+        .expect("global claim")
+        .claim_id;
     let ledger = component(store, "ledger", "crates/ledger/**");
     link(
         store,

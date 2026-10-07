@@ -444,14 +444,14 @@ fn run_the_pipeline_over_a_real_project() {
     let local = observation_jobs(&store);
 
     // Register.
-    let project = application::projects::Projects::new(store.clone())
+    let project = application::graph::prepared_projects(store.clone())
         .register(&project_dir)
         .expect("register the project");
     let project_id = project.id().as_str().to_string();
     report.line(format!("project {project_id} at {project_dir}"));
 
     // Index and propose documents.
-    let documents = application::documents::Documents::new(store.clone());
+    let documents = application::graph::prepared_documents(store.clone());
     let started = Instant::now();
     let index = documents.index(&project_id).expect("index");
     let queued = documents.propose(&project_id, 40).expect("propose");
@@ -607,4 +607,42 @@ fn run_the_pipeline_over_a_real_project() {
         }
     }
     report.line(format!("report: {}", out.join("report.txt").display()));
+}
+
+/// The runner composes registration like the app: the map is prepared, so an
+/// npm workspace's packages exist as components right after `register`.
+#[test]
+fn registering_through_the_runner_composition_prepares_the_map() {
+    let root = std::env::temp_dir().join(format!("xemnas-e2e-compose-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let project_dir = root.join("project");
+    for (dir, name) in [("core", "@demo/core"), ("plugin", "@demo/plugin")] {
+        let package = project_dir.join("packages").join(dir);
+        std::fs::create_dir_all(&package).expect("package dir");
+        std::fs::write(
+            package.join("package.json"),
+            format!("{{\"name\":\"{name}\"}}"),
+        )
+        .expect("package manifest");
+    }
+    std::fs::write(
+        project_dir.join("package.json"),
+        "{\"name\":\"demo\",\"workspaces\":[\"packages/*\"]}",
+    )
+    .expect("root manifest");
+
+    let store = SqliteStore::open(&root.join("app.db")).expect("open the store");
+    let project = application::graph::prepared_projects(store.clone())
+        .register(&project_dir)
+        .expect("register");
+    let names: Vec<String> = application::graph::KnowledgeGraph::new(store)
+        .entities(project.id().as_str())
+        .expect("entities")
+        .into_iter()
+        .map(|entity| entity.name)
+        .collect();
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert!(names.contains(&"@demo/core".to_string()), "{names:?}");
+    assert!(names.contains(&"@demo/plugin".to_string()), "{names:?}");
 }
