@@ -705,3 +705,474 @@ fn an_unconfirmable_suggestion_is_left_for_the_person_and_not_asked_again() {
         .expect("second pass");
     assert_eq!(judge.calls.load(Ordering::SeqCst), calls, "not asked again");
 }
+
+fn two_conflicting(test: &support::TestStore) {
+    test.store
+        .insert_candidates(&[
+            candidate(
+                "fixed",
+                "pending",
+                0.6,
+                "limiares fixos para o juiz",
+                "2026-02-01T00:00:01Z",
+            ),
+            candidate(
+                "bands",
+                "pending",
+                0.6,
+                "faixas de probabilidade para o juiz",
+                "2026-02-01T00:00:02Z",
+            ),
+        ])
+        .expect("pending");
+}
+
+#[test]
+fn the_judge_names_the_other_side_and_no_id_reaches_the_reason() {
+    use application::auto_approval::{Conflict, ConflictKind};
+
+    let test = support::open("review-conflict", &[PROJECT]);
+    two_conflicting(&test);
+    let judge = Judge::answering(
+        r#"{"verdicts":[
+          {"id":"I1","verdict":"human","reason":"Contradiz I2 sobre limiares","conflicts_with":"I2"},
+          {"id":"I2","verdict":"human","reason":"Vale só se I9 sumir","conflicts_with":null}]}"#,
+    );
+    let review = review_with(&test.store, consented(), &judge);
+    review.set_mode(Mode::Automatic).expect("on");
+    let report = review
+        .run_at(PROJECT, "2026-03-01T10:00:00Z")
+        .expect("pass");
+    assert_eq!((report.accepted, report.discarded, report.left), (0, 0, 2));
+    assert_eq!(judge.calls.load(Ordering::SeqCst), 1, "still one call");
+
+    let ledger = review.ledger(PROJECT).expect("ledger");
+    let entry = |id: &str| ledger.iter().find(|entry| entry.item_id == id).expect(id);
+    let fixed = entry("fixed");
+    assert_eq!(
+        fixed.conflicts_with,
+        Some(Conflict {
+            kind: ConflictKind::Candidate,
+            id: "bands".into()
+        })
+    );
+    assert_eq!(
+        entry("bands").conflicts_with,
+        Some(Conflict {
+            kind: ConflictKind::Candidate,
+            id: "fixed".into()
+        }),
+        "the other side shows the same pair"
+    );
+    assert!(
+        fixed
+            .reason
+            .contains("\"faixas de probabilidade para o juiz\""),
+        "{}",
+        fixed.reason
+    );
+    assert_eq!(entry("bands").reason, "Vale só se outro item sumir");
+}
+
+#[test]
+fn a_decision_in_force_that_resembles_the_candidate_is_named_to_the_judge() {
+    use application::auto_approval::{Conflict, ConflictKind};
+
+    let test = support::open("review-in-force", &[PROJECT]);
+    let in_force = support::decision(
+        &test.store,
+        PROJECT,
+        "bands",
+        "faixas de probabilidade para o juiz",
+        "usar três faixas",
+    );
+    test.store
+        .insert_candidates(&[candidate(
+            "fixed",
+            "pending",
+            0.6,
+            "limiares fixos para o juiz",
+            "2026-02-01T00:00:01Z",
+        )])
+        .expect("pending");
+    let judge = Judge::answering(
+        r#"{"verdicts":[{"id":"I1","verdict":"human","reason":"Contradiz D1","conflicts_with":"D1"}]}"#,
+    );
+    let review = review_with(&test.store, consented(), &judge);
+    review.set_mode(Mode::Automatic).expect("on");
+    review
+        .run_at(PROJECT, "2026-03-01T10:00:00Z")
+        .expect("pass");
+
+    let asked = judge.asked.lock().expect("lock")[0].clone();
+    assert!(
+        asked.contains("Parecidas em vigor: D1")
+            && asked.contains("## Decisões em vigor")
+            && asked.contains("D1 \"faixas de probabilidade para o juiz\" -> usar três faixas"),
+        "{asked}"
+    );
+    let ledger = review.ledger(PROJECT).expect("ledger");
+    let entry = ledger
+        .iter()
+        .find(|entry| entry.item_id == "fixed")
+        .expect("entry");
+    assert_eq!(
+        entry.conflicts_with,
+        Some(Conflict {
+            kind: ConflictKind::Decision,
+            id: in_force
+        })
+    );
+    assert!(
+        entry.reason.contains("faixas de probabilidade"),
+        "{}",
+        entry.reason
+    );
+}
+
+#[test]
+fn a_doubted_ai_link_is_discarded_and_a_doubted_mention_still_waits() {
+    use application::graph::{ai_link_reason, EdgeRecord, GraphStore, KnowledgeGraph, NewEntity};
+    use domain::entities::{EdgeKind, EdgeOrigin, EntityKind, NodeKind};
+
+    let test = support::open("review-doubted-links", &[PROJECT]);
+    let graph = KnowledgeGraph::new(test.store.clone());
+    let core = graph
+        .create_entity(NewEntity {
+            project_id: PROJECT.into(),
+            kind: Some(EntityKind::Component),
+            name: "core".into(),
+            patterns: vec!["crates/core/**".into()],
+            ..NewEntity::default()
+        })
+        .expect("component")
+        .entity_id;
+    support::decision_with_diff(
+        &test.store,
+        PROJECT,
+        "mention",
+        "Como o core grava os eventos sem perder nenhum?",
+        &["docs/adr/0003-outbox.md"],
+        "",
+    );
+    graph.refresh_suggestions(PROJECT).expect("refresh");
+    let decision = support::decision_with_diff(
+        &test.store,
+        PROJECT,
+        "ai",
+        "Como o resultado de um turno é expresso?",
+        &["docs/adr/0004-outcome.md"],
+        "",
+    );
+    test.store
+        .insert_edge(&EdgeRecord {
+            edge_id: "ai-edge".into(),
+            project_id: PROJECT.into(),
+            kind: EdgeKind::Affects,
+            source_kind: NodeKind::Decision,
+            source_id: decision,
+            entity_id: core,
+            origin: EdgeOrigin::Derived,
+            reason: ai_link_reason("Como o resultado de um turno é expresso?", "Rege o motor."),
+            created_at: NOW.into(),
+            confirmed_at: None,
+            invalidated_at: None,
+        })
+        .expect("proposed by the AI");
+
+    let judge = Judge::answering(
+        r#"{"verdicts":[
+          {"id":"I1","verdict":"human","reason":"A citação é só a pergunta da decisão"},
+          {"id":"I2","verdict":"human","reason":"A citação é só a pergunta da decisão"}]}"#,
+    );
+    let review = review_with(&test.store, consented(), &judge);
+    review.set_mode(Mode::Automatic).expect("on");
+    let report = review
+        .run_at(PROJECT, "2099-01-01T00:00:00Z")
+        .expect("pass");
+    assert_eq!((report.accepted, report.discarded, report.left), (0, 1, 1));
+
+    let ledger = review.ledger(PROJECT).expect("ledger");
+    let ai = ledger
+        .iter()
+        .find(|entry| entry.item_id == "ai-edge")
+        .expect("ai link entry");
+    assert_eq!((ai.verdict, ai.by), (Verdict::Discarded, By::Ai));
+    assert_eq!(ai.reason, "A citação é só a pergunta da decisão");
+    let mention = ledger
+        .iter()
+        .find(|entry| entry.kind == ItemKind::Link && entry.item_id != "ai-edge")
+        .expect("mention entry");
+    assert_eq!(mention.verdict, Verdict::NeedsHuman);
+    let pending = graph.suggestions(PROJECT).expect("suggestions");
+    assert_eq!(pending.len(), 1, "only the mention waits for the person");
+    assert!(pending[0]
+        .reason
+        .starts_with(application::graph::MENTION_REASON));
+    let edge = test
+        .store
+        .project_edges(PROJECT)
+        .expect("edges")
+        .into_iter()
+        .find(|edge| edge.edge_id == "ai-edge")
+        .expect("edge");
+    assert!(edge.invalidated_at.is_some(), "the discard dropped it");
+}
+
+mod resolution {
+    use super::*;
+    use application::auto_approval::{ApprovalStore, Conflict, ConflictKind, Entry};
+    use application::conflicts::{Resolution, SideKind};
+    use application::decisions::{
+        DecisionQuery, DecisionStatus, DecisionStore, Decisions, StoredDecision,
+    };
+    use application::relations::DecisionRelations;
+    use domain::relations::RelationKind;
+
+    fn leave(store: &SqliteStore, id: &str, other: &Conflict) -> Entry {
+        let entry = Entry {
+            kind: ItemKind::Candidate,
+            item_id: id.into(),
+            project_id: PROJECT.into(),
+            verdict: Verdict::NeedsHuman,
+            by: By::Ai,
+            reason: "Contradiz a outra".into(),
+            title: id.into(),
+            result_id: None,
+            created_at: NOW.into(),
+            undone_at: None,
+            conflicts_with: Some(other.clone()),
+        };
+        store.record_review(&entry).expect("ledger");
+        entry
+    }
+
+    fn against(kind: ConflictKind, id: &str) -> Conflict {
+        Conflict {
+            kind,
+            id: id.into(),
+        }
+    }
+
+    fn decisions(store: &SqliteStore, status: DecisionStatus) -> Vec<StoredDecision> {
+        DecisionStore::list(
+            store,
+            &DecisionQuery {
+                project_id: Some(PROJECT.into()),
+                statuses: vec![status],
+                limit: 50,
+                before: None,
+            },
+        )
+        .expect("decisions")
+    }
+
+    fn from_candidate(store: &SqliteStore, candidate: &str) -> StoredDecision {
+        decisions(store, DecisionStatus::Accepted)
+            .into_iter()
+            .find(|decision| decision.candidate_id == candidate)
+            .expect("the candidate became a decision")
+    }
+
+    struct Fixture {
+        test: support::TestStore,
+        review: Review,
+        in_force: String,
+    }
+
+    /// A decision in force and a pending candidate that contradicts it.
+    fn fixture(tag: &str) -> Fixture {
+        let test = support::open(tag, &[PROJECT]);
+        let in_force = support::decision(
+            &test.store,
+            PROJECT,
+            "old",
+            "faixas de probabilidade para o juiz",
+            "usar três faixas",
+        );
+        test.store
+            .insert_candidates(&[candidate(
+                "new",
+                "pending",
+                0.6,
+                "limiares fixos para o juiz",
+                "2026-02-01T00:00:01Z",
+            )])
+            .expect("pending");
+        let review = review_with(&test.store, consented(), &Judge::answering("{}"));
+        Fixture {
+            test,
+            review,
+            in_force,
+        }
+    }
+
+    #[test]
+    fn the_view_shows_both_sides_and_the_judges_sentence() {
+        let fx = fixture("conflict-view");
+        let entry = leave(
+            &fx.test.store,
+            "new",
+            &against(ConflictKind::Decision, &fx.in_force),
+        );
+        let view = fx.review.conflict(&entry).expect("view").expect("stands");
+        assert_eq!(view.reason, "Contradiz a outra");
+        assert!(view.can_replace);
+        assert_eq!(
+            (
+                view.this.in_force,
+                view.this.kind,
+                view.this.question.as_str()
+            ),
+            (false, SideKind::Decision, "limiares fixos para o juiz")
+        );
+        assert_eq!(
+            (view.other.in_force, view.other.choice.as_str()),
+            (true, "usar três faixas")
+        );
+        assert!(!view.other.created_at.is_empty());
+    }
+
+    #[test]
+    fn keeping_this_one_supersedes_the_decision_in_force() {
+        let fx = fixture("conflict-keep-this");
+        let other = against(ConflictKind::Decision, &fx.in_force);
+        fx.review
+            .resolve("new", &other, &Resolution::KeepThis)
+            .expect("resolve");
+        assert_eq!(status_of(&fx.test.store, "new"), CandidateStatus::Accepted);
+        let new = from_candidate(&fx.test.store, "new");
+        assert_eq!(
+            decisions(&fx.test.store, DecisionStatus::Superseded)[0].decision_id,
+            fx.in_force
+        );
+        let relations = DecisionRelations::new(fx.test.store.clone())
+            .of(&new.decision_id)
+            .expect("relations");
+        assert!(relations
+            .iter()
+            .any(|relation| relation.kind == RelationKind::Supersedes
+                && relation.other_id == fx.in_force));
+        // Resolved: the conflict no longer stands.
+        let entry = leave(&fx.test.store, "new", &other);
+        assert_eq!(fx.review.conflict(&entry).expect("view"), None);
+        assert_eq!(
+            fx.review.resolve("new", &other, &Resolution::KeepThis),
+            Err(ReviewError::Stale)
+        );
+    }
+
+    #[test]
+    fn keeping_the_other_one_rejects_this_and_leaves_the_decision_alone() {
+        let fx = fixture("conflict-keep-other");
+        let other = against(ConflictKind::Decision, &fx.in_force);
+        fx.review
+            .resolve("new", &other, &Resolution::KeepOther)
+            .expect("resolve");
+        assert_eq!(status_of(&fx.test.store, "new"), CandidateStatus::Dismissed);
+        assert_eq!(decisions(&fx.test.store, DecisionStatus::Accepted).len(), 1);
+        assert!(decisions(&fx.test.store, DecisionStatus::Superseded).is_empty());
+    }
+
+    #[test]
+    fn keeping_both_scopes_each_and_supersedes_nothing() {
+        let fx = fixture("conflict-keep-both");
+        let other = against(ConflictKind::Decision, &fx.in_force);
+        let both = |this: &str, other: &str| Resolution::KeepBoth {
+            this_scope: this.into(),
+            other_scope: other.into(),
+        };
+        assert!(
+            fx.review
+                .resolve("new", &other, &both("  ", "só no módulo A"))
+                .is_err(),
+            "a scope is required for each"
+        );
+        assert_eq!(status_of(&fx.test.store, "new"), CandidateStatus::Pending);
+
+        fx.review
+            .resolve(
+                "new",
+                &other,
+                &both("somente   na API pública", "somente no núcleo"),
+            )
+            .expect("resolve");
+        assert_eq!(
+            status_of(&fx.test.store, "new"),
+            CandidateStatus::EditedAndAccepted
+        );
+        assert!(decisions(&fx.test.store, DecisionStatus::Superseded).is_empty());
+        let decisions_api = Decisions::new(fx.test.store.clone());
+        let new = decisions_api
+            .detail(&from_candidate(&fx.test.store, "new").decision_id)
+            .expect("new decision");
+        assert!(new
+            .qualifiers
+            .iter()
+            .any(|qualifier| qualifier.text == "somente na API pública"));
+        let old = decisions_api.detail(&fx.in_force).expect("old decision");
+        assert_eq!(old.scope, vec!["somente no núcleo".to_owned()]);
+    }
+
+    #[test]
+    fn two_candidates_resolve_by_adopting_one_and_rejecting_the_other() {
+        let keep = |tag: &str, resolution: Resolution| {
+            let test = support::open(tag, &[PROJECT]);
+            two_conflicting(&test);
+            let review = review_with(&test.store, consented(), &Judge::answering("{}"));
+            let other = against(ConflictKind::Candidate, "bands");
+            let entry = leave(&test.store, "fixed", &other);
+            let view = review.conflict(&entry).expect("view").expect("stands");
+            assert_eq!(view.other.question, "faixas de probabilidade para o juiz");
+            assert!(!view.other.in_force);
+            review
+                .resolve("fixed", &other, &resolution)
+                .expect("resolve");
+            test
+        };
+        let test = keep("conflict-cands-this", Resolution::KeepThis);
+        assert_eq!(status_of(&test.store, "fixed"), CandidateStatus::Accepted);
+        assert_eq!(status_of(&test.store, "bands"), CandidateStatus::Dismissed);
+
+        let test = keep("conflict-cands-other", Resolution::KeepOther);
+        assert_eq!(status_of(&test.store, "fixed"), CandidateStatus::Dismissed);
+        assert_eq!(status_of(&test.store, "bands"), CandidateStatus::Accepted);
+
+        let test = keep(
+            "conflict-cands-both",
+            Resolution::KeepBoth {
+                this_scope: "limiares onde há dado de sobra".into(),
+                other_scope: "faixas onde há pouco dado".into(),
+            },
+        );
+        assert_eq!(
+            status_of(&test.store, "fixed"),
+            CandidateStatus::EditedAndAccepted
+        );
+        assert_eq!(
+            status_of(&test.store, "bands"),
+            CandidateStatus::EditedAndAccepted
+        );
+    }
+
+    #[test]
+    fn a_candidate_the_ai_adopted_meanwhile_is_a_decision_in_force() {
+        let test = support::open("conflict-adopted", &[PROJECT]);
+        two_conflicting(&test);
+        let review = review_with(&test.store, consented(), &Judge::answering("{}"));
+        Adoption::new(test.store.clone())
+            .adopt("bands", None, &[], &[])
+            .expect("adopted");
+        let other = against(ConflictKind::Candidate, "bands");
+        let entry = leave(&test.store, "fixed", &other);
+        let view = review.conflict(&entry).expect("view").expect("stands");
+        assert!(view.other.in_force, "it stands now");
+
+        review
+            .resolve("fixed", &other, &Resolution::KeepThis)
+            .expect("resolve");
+        let superseded = decisions(&test.store, DecisionStatus::Superseded);
+        assert_eq!(superseded.len(), 1);
+        assert_eq!(superseded[0].candidate_id, "bands");
+    }
+}

@@ -25,6 +25,8 @@ use gpui::{
     ScrollHandle, Stateful, Subscription, Window,
 };
 
+mod conflict;
+
 use super::context::OpenDecision;
 use super::evidence;
 use super::format::{relative, short_date};
@@ -178,6 +180,10 @@ pub struct InboxScreen<S: InboxStore + ReviewExceptionStore + Send + 'static> {
     ledger: Vec<Entry>,
     /// Whether the list of what was accepted on its own is open.
     ledger_open: bool,
+    /// The conflict the review left for the selected candidate.
+    conflict: Option<conflict::Panel>,
+    /// Whether that conflict is being read.
+    conflict_loading: bool,
     /// When the last confirmations happened, to notice a reflex.
     streak: Vec<std::time::Instant>,
 }
@@ -641,6 +647,8 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             reviewing: false,
             ledger: Vec::new(),
             ledger_open: false,
+            conflict: None,
+            conflict_loading: false,
             streak: Vec::new(),
         }
     }
@@ -838,6 +846,8 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
         }
         self.selected = Some(id.clone());
         self.detail = None;
+        self.conflict = None;
+        self.conflict_loading = false;
         self.clear_group();
         self.links = None;
         self.reason_open = false;
@@ -994,6 +1004,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                         this.detail = Some(*detail);
                         this.load_links(id, cx);
                         this.load_group(0, cx);
+                        this.load_conflict(cx);
                     }
                     Outcome::Group(result, offset) => match result {
                         Ok((group, metrics)) => {
@@ -1092,7 +1103,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
     /// Keyboard shortcut for a review action, in footer order:
     /// 0 reject, 1 snooze/resume, 2 adjust, 3 confirm.
     pub fn run_shortcut(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if self.editor.is_some() || self.detail.is_none() {
+        if self.editor.is_some() || self.detail.is_none() || self.conflict_open() {
             return;
         }
         let action = [
@@ -2091,27 +2102,32 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                         )),
                 )
             })
-            .children(self.left_for_you(&detail.summary.id).map(|entry| {
-                div()
-                    .flex()
-                    .items_start()
-                    .gap(px(SpacingScale::S2))
-                    .child(
+            .children(self.conflict_section(&theme, cx))
+            .children(
+                self.left_for_you(&detail.summary.id)
+                    .filter(|_| !self.conflict_open() && !self.conflict_loading)
+                    .map(|entry| {
                         div()
-                            .mt(px(6.0))
-                            .size(px(6.0))
-                            .flex_none()
-                            .rounded_full()
-                            .bg(theme.colors.status_info()),
-                    )
-                    .child(
-                        text_style(div(), TypeScale::BODY_SMALL)
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .text_color(theme.colors.text_secondary())
-                            .child(t::left_for_you_reason(&entry.reason)),
-                    )
-            }))
+                            .flex()
+                            .items_start()
+                            .gap(px(SpacingScale::S2))
+                            .child(
+                                div()
+                                    .mt(px(6.0))
+                                    .size(px(6.0))
+                                    .flex_none()
+                                    .rounded_full()
+                                    .bg(theme.colors.status_info()),
+                            )
+                            .child(
+                                text_style(div(), TypeScale::BODY_SMALL)
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .text_color(theme.colors.text_secondary())
+                                    .child(t::left_for_you_reason(&entry.reason)),
+                            )
+                    }),
+            )
             .child(reading_title(&detail.summary.question).text_color(theme.colors.text_primary()))
             .child(
                 div()
@@ -2407,7 +2423,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> Render for InboxScre
                                     self.reading_pane(cx)
                                 },
                             ))
-                            .when(self.editor.is_none(), |pane| {
+                            .when(self.editor.is_none() && !self.conflict_open(), |pane| {
                                 pane.child(self.review_actions(cx))
                             }),
                     ),

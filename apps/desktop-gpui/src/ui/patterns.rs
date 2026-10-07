@@ -160,6 +160,77 @@ pub fn suggestion_card(
         )
 }
 
+/// Two things set against each other (the sides of a conflict): side by side
+/// when the pane is wide, stacked when it is narrow, each at least
+/// [`COMPARE_MIN_WIDTH`] wide.
+pub fn compare_pair(first: impl IntoElement, second: impl IntoElement) -> Div {
+    div()
+        .w_full()
+        .flex()
+        .flex_wrap()
+        .items_stretch()
+        .gap(px(SpacingScale::S3))
+        .child(first)
+        .child(second)
+}
+
+/// Narrowest a [`compare_card`] gets before the pair stacks.
+pub const COMPARE_MIN_WIDTH: f32 = 260.0;
+
+/// One side of a [`compare_pair`]: which side it is, what kind and state it
+/// has as tags, its question and choice, and quiet facts (origin, date,
+/// scope). The `selected` side takes the lavender edge: it is the one open
+/// in the queue.
+pub fn compare_card(
+    theme: &Theme,
+    role: &str,
+    tags: Vec<String>,
+    question: &str,
+    choice: &str,
+    facts: Vec<String>,
+    selected: bool,
+) -> Div {
+    let colors = theme.colors;
+    div()
+        .flex_1()
+        .min_w(px(COMPARE_MIN_WIDTH))
+        .flex()
+        .flex_col()
+        .gap(px(SpacingScale::S2))
+        .p(px(SpacingScale::S4))
+        .rounded(RadiusScale.surface())
+        .border_1()
+        .border_color(if selected {
+            colors.accent_default()
+        } else {
+            colors.glass_border_card()
+        })
+        .bg(colors.glass_fill_card())
+        .child(section_label(theme, role))
+        .child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap(px(SpacingScale::S2))
+                .children(tags.into_iter().map(|label| tag(theme, label))),
+        )
+        .child(
+            text_style(div(), TypeScale::BODY)
+                .text_color(colors.text_primary())
+                .child(question.to_owned()),
+        )
+        .child(
+            text_style(div(), TypeScale::BODY_SMALL)
+                .text_color(colors.text_secondary())
+                .child(choice.to_owned()),
+        )
+        .children(facts.into_iter().map(|fact| {
+            text_style(div(), TypeScale::META)
+                .text_color(colors.text_muted())
+                .child(fact)
+        }))
+}
+
 /// A section of suggestions: its label, a sentence saying what the section
 /// is and what confirming does there, then the cards.
 pub fn suggestion_section(theme: &Theme, label: &str, intro: &str, cards: Div) -> Div {

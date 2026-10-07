@@ -2,7 +2,9 @@
 
 use std::collections::BTreeSet;
 
-use application::auto_approval::{ApprovalStore, By, Entry, ItemKind, Mode, ReviewError, Verdict};
+use application::auto_approval::{
+    ApprovalStore, By, Conflict, ConflictKind, Entry, ItemKind, Mode, ReviewError, Verdict,
+};
 use rusqlite::{params, OptionalExtension};
 
 use crate::store::SqliteStore;
@@ -65,8 +67,8 @@ impl ApprovalStore for SqliteStore {
             .execute(
                 "INSERT OR REPLACE INTO auto_reviews \
                  (item_kind, item_id, project_id, verdict, decided_by, reason, title, \
-                  result_id, created_at, undone_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                  result_id, created_at, undone_at, conflicts_kind, conflicts_id) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![
                     entry.kind.as_str(),
                     entry.item_id,
@@ -78,6 +80,8 @@ impl ApprovalStore for SqliteStore {
                     entry.result_id,
                     entry.created_at,
                     entry.undone_at,
+                    entry.conflicts_with.as_ref().map(|side| side.kind.as_str()),
+                    entry.conflicts_with.as_ref().map(|side| side.id.as_str()),
                 ],
             )
             .map_err(storage_error)?;
@@ -89,7 +93,7 @@ impl ApprovalStore for SqliteStore {
         let mut statement = connection
             .prepare(
                 "SELECT item_kind, item_id, project_id, verdict, decided_by, reason, title, \
-                        result_id, created_at, undone_at \
+                        result_id, created_at, undone_at, conflicts_kind, conflicts_id \
                  FROM auto_reviews WHERE project_id = ?1 \
                  ORDER BY created_at DESC, item_id LIMIT ?2",
             )
@@ -99,6 +103,13 @@ impl ApprovalStore for SqliteStore {
                 let kind: String = row.get(0)?;
                 let verdict: String = row.get(3)?;
                 let by: String = row.get(4)?;
+                let conflicts_kind: Option<String> = row.get(10)?;
+                let conflicts_id: Option<String> = row.get(11)?;
+                let conflicts_with = conflicts_kind
+                    .as_deref()
+                    .and_then(ConflictKind::parse)
+                    .zip(conflicts_id)
+                    .map(|(kind, id)| Conflict { kind, id });
                 Ok(Entry {
                     kind: ItemKind::parse(&kind).unwrap_or(ItemKind::Candidate),
                     item_id: row.get(1)?,
@@ -110,6 +121,7 @@ impl ApprovalStore for SqliteStore {
                     result_id: row.get(7)?,
                     created_at: row.get(8)?,
                     undone_at: row.get(9)?,
+                    conflicts_with,
                 })
             })
             .map_err(storage_error)?

@@ -445,6 +445,24 @@ decisão quando foi aceita e oferece **Desfazer** quando foi descartada (volta �
 Uma sequência de oito confirmações com poucos segundos entre elas mostra "Ritmo alto:
 abra a evidência de um dos próximos antes de confirmar", uma vez, sem bloquear.
 
+### Conflito
+
+Quando o juiz nomeia o item que um candidato contradiz, o detalhe abre com o painel
+**Conflito** no lugar da frase do motivo: a frase do juiz, os dois lados e as três ações
+(`screens/inbox/conflict.rs`). Os lados usam `ui::patterns::compare_pair` (lado a lado e
+empilhados quando o painel estreita, cada cartão com pelo menos 260 px) e
+`compare_card`: rótulo do lado ("Esta", "A outra"), duas etiquetas (tipo e estado: "Em
+vigor" ou "Aguardando revisão"), pergunta, escolha e fatos discretos (origem, data, escopo
+já registrado). O lado aberto na fila leva a borda lavanda; o outro, a borda de cartão.
+
+As ações são três botões secundários, cada um com a linha do que faz ao lado ("Esta passa a
+valer e substitui a decisão em vigor, que fica no histórico."); não há ação primária, porque
+as três são alternativas iguais, e o rodapé de Rejeitar/Adiar/Ajustar/Confirmar dá lugar ao
+painel enquanto ele está aberto (os atalhos R, S, A e C ficam desligados). *As duas valem*
+abre um passo com um campo de uma linha para o escopo de cada lado e o único botão primário
+(*Manter as duas*), ligado só com os dois campos preenchidos. Carregando: esqueleto;
+falha (o conflito mudou): `error_banner` com "Tentar de novo"; confirmação: `toast`.
+
 ## Contexto — quatro entradas
 
 O índice do Contexto tem quatro entradas (Visão geral, Fontes, Entregas, Ajustes), sem

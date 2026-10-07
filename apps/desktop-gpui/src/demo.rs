@@ -1089,6 +1089,7 @@ fn seed_approval(
                 result_id: result.map(str::to_owned),
                 created_at: "2026-09-29T14:00:00Z".to_owned(),
                 undone_at: None,
+                conflicts_with: None,
             }
         };
     let rows = [

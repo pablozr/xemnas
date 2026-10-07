@@ -28,6 +28,14 @@ gerar candidatos.
 - *Automático*: regras locais descartam repetições e um juiz de IA decide o resto em lote.
   Tudo aparece em "Feito sozinho", com o motivo, e o que o juiz não soube decidir volta para
   você. Ver [ADR-0012](../arquitetura/adr/0012-modo-automatico-e-autoridade.md).
+  Quando o juiz acha que um candidato contradiz outro item (outro candidato do mesmo lote ou
+  uma decisão em vigor parecida), a Revisão mostra o **conflito**: os dois lados lado a lado
+  (tipo, pergunta e escolha, origem, data e estado), a frase do motivo com o título do outro
+  item (nunca "I5") e três ações, cada uma com a linha do que faz: *Ficar com esta* (se a outra
+  está em vigor, esta a substitui; se é candidata, é rejeitada), *Ficar com a outra* (o inverso)
+  e *As duas valem* (as duas ficam, cada uma com um escopo de uma linha). Uma regra não
+  substitui uma decisão em vigor. Vínculo que a própria IA propôs e o juiz duvidou é
+  descartado, com o motivo no "Feito sozinho", em vez de ir para você.
 
 **Decisões e relações.** Revisar uma decisão cria nova versão e mantém a anterior. Você marca
 o que substitui, depende de ou conflita com o quê. A IA pode sugerir relações e regras

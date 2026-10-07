@@ -180,6 +180,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 44,
         sql: include_str!("migrations/0044_document_source.sql"),
     },
+    Migration {
+        version: 45,
+        sql: include_str!("migrations/0045_auto_review_conflicts.sql"),
+    },
 ];
 
 /// Schema version this build migrates to: the last embedded migration.

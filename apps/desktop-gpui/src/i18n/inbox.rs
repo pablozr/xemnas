@@ -1197,3 +1197,207 @@ pub fn briefing_deliveries(deliveries: usize, sessions: usize) -> String {
         briefing_sessions_count(sessions)
     )
 }
+
+// Conflicts the automatic review left for the person: two sides, three
+// actions, each with the effect it has.
+strings! {
+    /// Region label of the conflict panel.
+    conflict_title { en: "Conflict", pt: "Conflito", es: "Conflicto", fr: "Conflit",
+        de: "Konflikt", it: "Conflitto", ja: "競合", zh: "冲突", ko: "충돌",
+        ru: "Конфликт" }
+    /// Accessible name of the conflict panel.
+    conflict_aria { en: "Conflict between two items", pt: "Conflito entre dois itens",
+        es: "Conflicto entre dos elementos", fr: "Conflit entre deux éléments",
+        de: "Konflikt zwischen zwei Einträgen", it: "Conflitto tra due elementi",
+        ja: "2 つの項目の競合", zh: "两项之间的冲突", ko: "두 항목 간의 충돌",
+        ru: "Конфликт между двумя элементами" }
+    /// Label of the side that is selected in the queue.
+    conflict_side_this { en: "This one", pt: "Esta", es: "Esta", fr: "Celle-ci",
+        de: "Diese", it: "Questa", ja: "こちら", zh: "这一条", ko: "이 항목",
+        ru: "Эта" }
+    /// Label of the side it contradicts.
+    conflict_side_other { en: "The other", pt: "A outra", es: "La otra", fr: "L’autre",
+        de: "Die andere", it: "L’altra", ja: "もう一方", zh: "另一条", ko: "다른 항목",
+        ru: "Другая" }
+    /// State of a side that still waits for review.
+    conflict_state_candidate { en: "Waiting for review", pt: "Aguardando revisão",
+        es: "Esperando revisión", fr: "En attente de revue", de: "Wartet auf Prüfung",
+        it: "In attesa di revisione", ja: "レビュー待ち", zh: "等待审核",
+        ko: "검토 대기 중", ru: "Ждёт проверки" }
+    /// State of a side that is a decision in force.
+    conflict_state_in_force { en: "In force", pt: "Em vigor", es: "En vigor",
+        fr: "En vigueur", de: "Gültig", it: "In vigore", ja: "有効", zh: "生效中",
+        ko: "적용 중", ru: "Действует" }
+    /// Origin of a side that came from a captured session, not from a file.
+    conflict_origin_capture { en: "From a captured session",
+        pt: "De uma sessão capturada", es: "De una sesión capturada",
+        fr: "D’une session capturée", de: "Aus einer erfassten Sitzung",
+        it: "Da una sessione catturata", ja: "キャプチャしたセッション由来",
+        zh: "来自已捕获的会话", ko: "캡처한 세션에서", ru: "Из захваченного сеанса" }
+    /// Action: keep the selected side.
+    conflict_keep_this { en: "Keep this one", pt: "Ficar com esta", es: "Quedarme con esta",
+        fr: "Garder celle-ci", de: "Diese behalten", it: "Tenere questa",
+        ja: "こちらを残す", zh: "保留这一条", ko: "이 항목 유지", ru: "Оставить эту" }
+    /// Action: keep the other side.
+    conflict_keep_other { en: "Keep the other", pt: "Ficar com a outra",
+        es: "Quedarme con la otra", fr: "Garder l’autre", de: "Die andere behalten",
+        it: "Tenere l’altra", ja: "もう一方を残す", zh: "保留另一条", ko: "다른 항목 유지",
+        ru: "Оставить другую" }
+    /// Action: keep both, each with a scope.
+    conflict_keep_both { en: "Both apply", pt: "As duas valem", es: "Valen las dos",
+        fr: "Les deux valent", de: "Beide gelten", it: "Valgono entrambe",
+        ja: "両方有効", zh: "两条都有效", ko: "둘 다 유효", ru: "Действуют обе" }
+    /// Effect of keeping this one when the other is a decision in force.
+    conflict_effect_replaces { en: "This one replaces the decision in force, which stays in the history.",
+        pt: "Esta passa a valer e substitui a decisão em vigor, que fica no histórico.",
+        es: "Esta pasa a valer y sustituye la decisión en vigor, que queda en el historial.",
+        fr: "Celle-ci remplace la décision en vigueur, qui reste dans l’historique.",
+        de: "Diese ersetzt die gültige Entscheidung, die im Verlauf bleibt.",
+        it: "Questa sostituisce la decisione in vigore, che resta nella cronologia.",
+        ja: "こちらが有効な決定に置き換わり、元の決定は履歴に残ります。",
+        zh: "这一条取代生效中的决策，旧决策保留在历史中。",
+        ko: "이 항목이 적용 중인 결정을 대체하고, 기존 결정은 기록에 남아요.",
+        ru: "Эта заменяет действующее решение, оно остаётся в истории." }
+    /// Effect of keeping this one when the other is a candidate.
+    conflict_effect_rejects_other { en: "This one is accepted and the other is rejected.",
+        pt: "Esta é aceita e a outra é rejeitada.",
+        es: "Esta se acepta y la otra se rechaza.",
+        fr: "Celle-ci est acceptée et l’autre est rejetée.",
+        de: "Diese wird angenommen, die andere abgelehnt.",
+        it: "Questa viene accettata e l’altra rifiutata.",
+        ja: "こちらを承認し、もう一方は却下します。",
+        zh: "接受这一条，拒绝另一条。",
+        ko: "이 항목은 수락하고 다른 항목은 거절해요.",
+        ru: "Эта принимается, другая отклоняется." }
+    /// Why keeping this one is not offered: a rule cannot replace a decision.
+    conflict_effect_cannot_replace { en: "A rule cannot replace a decision in force: pick another option.",
+        pt: "Uma regra não substitui uma decisão em vigor: escolha outra opção.",
+        es: "Una regla no sustituye una decisión en vigor: elige otra opción.",
+        fr: "Une règle ne remplace pas une décision en vigueur : choisissez une autre option.",
+        de: "Eine Regel ersetzt keine gültige Entscheidung: wähle eine andere Option.",
+        it: "Una regola non sostituisce una decisione in vigore: scegli un’altra opzione.",
+        ja: "ルールは有効な決定を置き換えられません。別の選択肢を選んでください。",
+        zh: "规则不能取代生效中的决策，请选择其他选项。",
+        ko: "규칙은 적용 중인 결정을 대체할 수 없어요. 다른 선택지를 고르세요.",
+        ru: "Правило не заменяет действующее решение: выберите другой вариант." }
+    /// Effect of keeping the other when it is in force.
+    conflict_effect_other_stays { en: "The one in force stays and this one is rejected.",
+        pt: "A que está em vigor continua e esta é rejeitada.",
+        es: "La que está en vigor sigue y esta se rechaza.",
+        fr: "Celle en vigueur reste et celle-ci est rejetée.",
+        de: "Die gültige bleibt, diese wird abgelehnt.",
+        it: "Quella in vigore resta e questa viene rifiutata.",
+        ja: "有効なものはそのまま残り、こちらは却下します。",
+        zh: "生效中的保持不变，拒绝这一条。",
+        ko: "적용 중인 항목은 그대로 두고 이 항목은 거절해요.",
+        ru: "Действующее остаётся, эта отклоняется." }
+    /// Effect of keeping the other when it is a candidate.
+    conflict_effect_other_accepted { en: "The other is accepted and this one is rejected.",
+        pt: "A outra é aceita e esta é rejeitada.",
+        es: "La otra se acepta y esta se rechaza.",
+        fr: "L’autre est acceptée et celle-ci est rejetée.",
+        de: "Die andere wird angenommen, diese abgelehnt.",
+        it: "L’altra viene accettata e questa rifiutata.",
+        ja: "もう一方を承認し、こちらは却下します。",
+        zh: "接受另一条，拒绝这一条。",
+        ko: "다른 항목은 수락하고 이 항목은 거절해요.",
+        ru: "Другая принимается, эта отклоняется." }
+    /// Effect of keeping both.
+    conflict_effect_both { en: "Both stay, each with the scope you write.",
+        pt: "As duas ficam, cada uma com o escopo que você escrever.",
+        es: "Las dos se quedan, cada una con el alcance que escribas.",
+        fr: "Les deux restent, chacune avec la portée que vous écrivez.",
+        de: "Beide bleiben, jede mit dem Geltungsbereich, den du schreibst.",
+        it: "Restano entrambe, ciascuna con l’ambito che scrivi.",
+        ja: "両方を残し、それぞれに書いた適用範囲を付けます。",
+        zh: "两条都保留，各自带上你写的适用范围。",
+        ko: "둘 다 남기고, 각각 적은 적용 범위를 붙여요.",
+        ru: "Остаются обе, каждая с областью применения, которую вы напишете." }
+    /// Title of the step that asks for the two scopes.
+    conflict_scope_title { en: "Where does each one apply?", pt: "Onde cada uma vale?",
+        es: "¿Dónde vale cada una?", fr: "Où chacune s’applique-t-elle ?",
+        de: "Wo gilt jede?", it: "Dove vale ciascuna?",
+        ja: "それぞれどこに適用されますか。", zh: "各自适用于哪里？",
+        ko: "각각 어디에 적용되나요?", ru: "Где действует каждая?" }
+    /// Field: scope of the selected side.
+    conflict_scope_this { en: "Scope of this one", pt: "Escopo desta",
+        es: "Alcance de esta", fr: "Portée de celle-ci", de: "Geltungsbereich dieser",
+        it: "Ambito di questa", ja: "こちらの適用範囲", zh: "这一条的适用范围",
+        ko: "이 항목의 적용 범위", ru: "Область применения этой" }
+    /// Field: scope of the other side.
+    conflict_scope_other { en: "Scope of the other", pt: "Escopo da outra",
+        es: "Alcance de la otra", fr: "Portée de l’autre", de: "Geltungsbereich der anderen",
+        it: "Ambito dell’altra", ja: "もう一方の適用範囲", zh: "另一条的适用范围",
+        ko: "다른 항목의 적용 범위", ru: "Область применения другой" }
+    /// Hint and placeholder of a scope field.
+    conflict_scope_hint { en: "One line, for example: only in the public API.",
+        pt: "Uma linha, por exemplo: só na API pública.",
+        es: "Una línea, por ejemplo: solo en la API pública.",
+        fr: "Une ligne, par exemple : seulement dans l’API publique.",
+        de: "Eine Zeile, zum Beispiel: nur in der öffentlichen API.",
+        it: "Una riga, per esempio: solo nell’API pubblica.",
+        ja: "1 行で入力します。例: 公開 API のみ。",
+        zh: "一行即可，例如：仅限公共 API。",
+        ko: "한 줄로 적어요. 예: 공개 API에서만.",
+        ru: "Одна строка, например: только в публичном API." }
+    /// Confirms both with their scopes.
+    conflict_scope_confirm { en: "Keep both", pt: "Manter as duas", es: "Mantener las dos",
+        fr: "Garder les deux", de: "Beide behalten", it: "Mantieni entrambe",
+        ja: "両方を残す", zh: "保留两条", ko: "둘 다 유지", ru: "Оставить обе" }
+    /// Goes back from the scope step.
+    conflict_scope_back { en: "Back", pt: "Voltar", es: "Volver", fr: "Retour",
+        de: "Zurück", it: "Indietro", ja: "戻る", zh: "返回", ko: "뒤로", ru: "Назад" }
+    /// Notice after keeping this one.
+    notice_conflict_this { en: "Kept this one.", pt: "Ficou com esta.",
+        es: "Te quedaste con esta.", fr: "Celle-ci est gardée.", de: "Diese bleibt.",
+        it: "Hai tenuto questa.", ja: "こちらを残しました。", zh: "已保留这一条。",
+        ko: "이 항목을 유지했어요.", ru: "Эта оставлена." }
+    /// Notice after keeping the other.
+    notice_conflict_other { en: "Kept the other.", pt: "Ficou com a outra.",
+        es: "Te quedaste con la otra.", fr: "L’autre est gardée.", de: "Die andere bleibt.",
+        it: "Hai tenuto l’altra.", ja: "もう一方を残しました。", zh: "已保留另一条。",
+        ko: "다른 항목을 유지했어요.", ru: "Другая оставлена." }
+    /// Notice after keeping both.
+    notice_conflict_both { en: "Both kept, each with its scope.",
+        pt: "As duas ficaram, cada uma com o escopo.",
+        es: "Las dos se quedaron, cada una con su alcance.",
+        fr: "Les deux sont gardées, chacune avec sa portée.",
+        de: "Beide bleiben, jede mit ihrem Geltungsbereich.",
+        it: "Restano entrambe, ciascuna con il suo ambito.",
+        ja: "両方を適用範囲付きで残しました。", zh: "两条都已保留，各带适用范围。",
+        ko: "둘 다 적용 범위와 함께 유지했어요.", ru: "Обе оставлены, каждая со своей областью." }
+    /// Error: the choice could not be applied, usually because a side changed.
+    conflict_failed { en: "Could not apply the choice: the conflict changed. Refresh the queue.",
+        pt: "Não foi possível aplicar a escolha: o conflito mudou. Atualize a fila.",
+        es: "No se pudo aplicar la elección: el conflicto cambió. Actualiza la cola.",
+        fr: "Impossible d’appliquer le choix : le conflit a changé. Actualisez la file.",
+        de: "Die Auswahl konnte nicht angewendet werden: Der Konflikt hat sich geändert. Aktualisiere die Warteschlange.",
+        it: "Impossibile applicare la scelta: il conflitto è cambiato. Aggiorna la coda.",
+        ja: "選択を適用できませんでした。競合が変わっています。キューを更新してください。",
+        zh: "无法应用所选操作：冲突已变化。请刷新队列。",
+        ko: "선택을 적용하지 못했어요. 충돌이 바뀌었어요. 대기열을 새로고침하세요.",
+        ru: "Не удалось применить выбор: конфликт изменился. Обновите очередь." }
+}
+
+formats! {
+    /// Origin of a side that came from a file.
+    conflict_origin_file(path: &str) { en: "From {path}", pt: "De {path}", es: "De {path}",
+        fr: "De {path}", de: "Aus {path}", it: "Da {path}", ja: "{path} から",
+        zh: "来自 {path}", ko: "{path}에서", ru: "Из {path}" }
+    /// When a side that still waits was proposed.
+    conflict_date_candidate(date: &str) { en: "Proposed on {date}",
+        pt: "Proposta em {date}", es: "Propuesta el {date}", fr: "Proposée le {date}",
+        de: "Vorgeschlagen am {date}", it: "Proposta il {date}", ja: "{date} に提案",
+        zh: "提出于 {date}", ko: "{date}에 제안됨", ru: "Предложено {date}" }
+    /// Since when a side has been in force.
+    conflict_date_in_force(date: &str) { en: "In force since {date}",
+        pt: "Em vigor desde {date}", es: "En vigor desde el {date}",
+        fr: "En vigueur depuis le {date}", de: "Gültig seit {date}",
+        it: "In vigore dal {date}", ja: "{date} から有効", zh: "自 {date} 起生效",
+        ko: "{date}부터 적용 중", ru: "Действует с {date}" }
+    /// The scope already recorded on a side.
+    conflict_scope_line(scope: &str) { en: "Scope: {scope}", pt: "Escopo: {scope}",
+        es: "Alcance: {scope}", fr: "Portée : {scope}", de: "Geltungsbereich: {scope}",
+        it: "Ambito: {scope}", ja: "適用範囲: {scope}", zh: "适用范围：{scope}",
+        ko: "적용 범위: {scope}", ru: "Область применения: {scope}" }
+}

@@ -14,6 +14,7 @@ pub mod captures;
 pub mod claim_suggestions;
 pub mod claims;
 mod clock;
+pub mod conflicts;
 pub mod context;
 pub mod context_settings;
 pub mod decisions;

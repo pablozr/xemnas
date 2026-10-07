@@ -44,7 +44,8 @@ use crate::analysis::ExtractorFactory;
 use crate::claim_suggestions::{ClaimSuggestionStore, ClaimSuggestions};
 use crate::claims::ClaimStore;
 use crate::clock::{add_hours, add_seconds, now_rfc3339};
-use crate::decisions::DecisionStore;
+use crate::conflicts::{ConflictView, Conflicts, Resolution};
+use crate::decisions::{DecisionQuery, DecisionStatus, DecisionStore, StoredDecision};
 use crate::extract::{CandidateKind, MIN_SIGNIFICANCE};
 use crate::graph::{
     ai_link_quote, ai_link_why, mention_quote, GraphStore, KnowledgeGraph, Suggestion,
@@ -75,6 +76,11 @@ pub const SIMILAR_AT: f64 = 0.6;
 pub const MAX_FILES: usize = 3;
 /// Candidates read at most per pass.
 const READ_LIMIT: usize = 300;
+/// Decisions in force named beside a candidate decision for the judge.
+const NEIGHBORS: usize = 3;
+/// Word overlap from which a decision in force is worth naming beside a
+/// candidate.
+const NEIGHBOR_AT: f64 = 0.2;
 /// Characters of a rationale or quote sent to the AI.
 const SENT_CHARS: usize = 280;
 
@@ -207,6 +213,44 @@ impl By {
     }
 }
 
+/// What the other side of a conflict is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConflictKind {
+    /// Another candidate waiting for review.
+    Candidate,
+    /// A decision in force.
+    Decision,
+}
+
+impl ConflictKind {
+    /// The literal persisted in the ledger.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Candidate => "candidate",
+            Self::Decision => "decision",
+        }
+    }
+
+    /// Parses a persisted literal.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "candidate" => Some(Self::Candidate),
+            "decision" => Some(Self::Decision),
+            _ => None,
+        }
+    }
+}
+
+/// The other side of a conflict the judge named.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Conflict {
+    /// What kind of item it is.
+    pub kind: ConflictKind,
+    /// Its id (candidate id or decision id).
+    pub id: String,
+}
+
 /// One line of the ledger.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
@@ -230,6 +274,8 @@ pub struct Entry {
     pub created_at: String,
     /// RFC 3339 moment a person put it back, when they did.
     pub undone_at: Option<String>,
+    /// The item this one contradicts, when the judge named it.
+    pub conflicts_with: Option<Conflict>,
 }
 
 /// What one pass did.
@@ -272,6 +318,8 @@ pub enum ReviewError {
     Apply(String),
     /// The item cannot be put back.
     NotUndoable,
+    /// The conflict no longer stands: a side was resolved or dropped.
+    Stale,
 }
 
 impl std::fmt::Display for ReviewError {
@@ -281,6 +329,7 @@ impl std::fmt::Display for ReviewError {
             Self::Provider(message) => write!(formatter, "provedor: {message}"),
             Self::Apply(message) => write!(formatter, "não foi possível aplicar: {message}"),
             Self::NotUndoable => write!(formatter, "este item não pode ser desfeito aqui"),
+            Self::Stale => write!(formatter, "o conflito mudou; atualize a fila"),
         }
     }
 }
@@ -332,6 +381,16 @@ pub trait ApprovalsApi: Send + Sync {
     fn ledger(&self, project_id: &str) -> Result<Vec<Entry>, ReviewError>;
     /// Puts a discarded candidate back in the queue.
     fn undo(&self, kind: ItemKind, item_id: &str) -> Result<(), ReviewError>;
+    /// The two sides of the conflict a ledger entry names, when it still
+    /// stands.
+    fn conflict(&self, entry: &Entry) -> Result<Option<ConflictView>, ReviewError>;
+    /// Applies the person's pick for a candidate against what it contradicts.
+    fn resolve(
+        &self,
+        candidate_id: &str,
+        conflict: &Conflict,
+        resolution: &Resolution,
+    ) -> Result<(), ReviewError>;
 }
 
 /// What the local rules say about an item.
@@ -490,6 +549,11 @@ struct Item {
     text: String,
     waiting_since: String,
     triage: Triage,
+    /// A tie the AI itself proposed from the decision's text.
+    ai_link: bool,
+    /// The question of a candidate decision, to look for decisions in force
+    /// that resemble it.
+    near: Option<String>,
 }
 
 /// System prompt of the judge.
@@ -503,9 +567,14 @@ doubt answer human: a wrong accept becomes context given to agents. A rule or re
 conflicts with or replaces another decision is accept only when its quote clearly supports it. \
 A link from a decision to a part of the project map found by a mention is accept only when \
 its quote shows the decision really affects or uses that part, not a passing remark.\n\
-Give in reason one short sentence in the language of the item. Reply with one JSON object \
+Give in reason one short sentence in the language of the item. The ids (I1, D2) are only for \
+the conflicts_with field: never write an id in the reason, name the other item by its title \
+instead, because the reader never sees the ids. When an item contradicts another item of the \
+list or one of the decisions in force listed after the items, put that id in conflicts_with \
+(only one, the most direct); otherwise leave it null. Reply with one JSON object \
 only, matching exactly: {\"verdicts\":[{\"id\":string,\"verdict\":\"accept|discard|human\",\
-\"reason\":string}]}, one entry per item, using its id exactly as given.",
+\"reason\":string,\"conflicts_with\":string|null}]}, one entry per item, using its id exactly \
+as given.",
     crate::plain_rules!()
 );
 
@@ -521,11 +590,12 @@ pub fn review_schema() -> serde_json::Value {
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["id", "verdict", "reason"],
+                    "required": ["id", "verdict", "reason", "conflicts_with"],
                     "properties": {
                         "id": { "type": "string" },
                         "verdict": { "type": "string", "enum": ["accept", "discard", "human"] },
-                        "reason": { "type": "string" }
+                        "reason": { "type": "string" },
+                        "conflicts_with": { "type": ["string", "null"] }
                     }
                 }
             }
@@ -545,11 +615,28 @@ struct RawVerdict {
     verdict: String,
     #[serde(default)]
     reason: String,
+    #[serde(default)]
+    conflicts_with: Option<String>,
+}
+
+/// What the judge said about one item of the batch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Judged {
+    /// The item's id in the prompt (`I1`).
+    pub id: String,
+    /// The verdict.
+    pub verdict: Verdict,
+    /// The reason, as written (it may still cite ids).
+    pub reason: String,
+    /// The id of the item or decision in force it contradicts, as written.
+    pub conflicts_with: Option<String>,
+    /// Whether the answer mentioned the item at all.
+    pub answered: bool,
 }
 
 /// The verdicts of an answer, by the ids given in the prompt; anything the
 /// answer left out or garbled is for the person.
-pub fn parse_verdicts(text: &str, ids: &[String]) -> Vec<(String, Verdict, String)> {
+pub fn parse_verdicts(text: &str, ids: &[String]) -> Vec<Judged> {
     let start = text.find('{').unwrap_or(0);
     let end = text.rfind('}').map_or(text.len(), |end| end + 1);
     let raw: RawVerdicts = serde_json::from_str(text.get(start..end).unwrap_or(text))
@@ -557,22 +644,67 @@ pub fn parse_verdicts(text: &str, ids: &[String]) -> Vec<(String, Verdict, Strin
     ids.iter()
         .map(
             |id| match raw.verdicts.iter().find(|verdict| verdict.id == *id) {
-                Some(verdict) => {
-                    let reason: String = verdict.reason.trim().chars().take(240).collect();
-                    match verdict.verdict.as_str() {
-                        "accept" => (id.clone(), Verdict::Accepted, reason),
-                        "discard" => (id.clone(), Verdict::Discarded, reason),
-                        _ => (id.clone(), Verdict::NeedsHuman, reason),
-                    }
-                }
-                None => (
-                    id.clone(),
-                    Verdict::NeedsHuman,
-                    "a IA não respondeu sobre este item".to_owned(),
-                ),
+                Some(verdict) => Judged {
+                    id: id.clone(),
+                    verdict: match verdict.verdict.as_str() {
+                        "accept" => Verdict::Accepted,
+                        "discard" => Verdict::Discarded,
+                        _ => Verdict::NeedsHuman,
+                    },
+                    reason: verdict.reason.trim().chars().take(240).collect(),
+                    conflicts_with: verdict
+                        .conflicts_with
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|other| !other.is_empty())
+                        .map(str::to_owned),
+                    answered: true,
+                },
+                None => Judged {
+                    id: id.clone(),
+                    verdict: Verdict::NeedsHuman,
+                    reason: "a IA não respondeu sobre este item".to_owned(),
+                    conflicts_with: None,
+                    answered: false,
+                },
             },
         )
         .collect()
+}
+
+/// Replaces the ids of the prompt left in a reason (`I5`, `D2`) by the title
+/// of the item they stand for: the reader never saw the ids. An id that
+/// stands for nothing becomes "outro item".
+pub fn name_items(reason: &str, names: &[(String, String)]) -> String {
+    let chars: Vec<char> = reason.chars().collect();
+    let mut out = String::new();
+    let mut at = 0;
+    while at < chars.len() {
+        let c = chars[at];
+        if matches!(c, 'I' | 'D') && (at == 0 || !chars[at - 1].is_alphanumeric()) {
+            let digits = chars[at + 1..]
+                .iter()
+                .take_while(|digit| digit.is_ascii_digit())
+                .count();
+            let end = at + 1 + digits;
+            if digits > 0 && chars.get(end).is_none_or(|next| !next.is_alphanumeric()) {
+                let token: String = chars[at..end].iter().collect();
+                match names.iter().find(|(id, _)| *id == token) {
+                    Some((_, title)) => {
+                        out.push('"');
+                        out.push_str(&clip(title, 80));
+                        out.push('"');
+                    }
+                    None => out.push_str("outro item"),
+                }
+                at = end;
+                continue;
+            }
+        }
+        out.push(c);
+        at += 1;
+    }
+    out
 }
 
 fn clip(text: &str, max: usize) -> String {
@@ -709,6 +841,9 @@ where
                 ),
                 waiting_since: candidate.created_at.clone(),
                 triage,
+                ai_link: false,
+                near: (candidate.kind == CandidateKind::Decision.as_str())
+                    .then(|| candidate.question.clone()),
             });
         }
 
@@ -740,6 +875,8 @@ where
                 ),
                 waiting_since: record.created_at.clone(),
                 triage: triage_relation(record.kind),
+                ai_link: false,
+                near: None,
             });
         }
 
@@ -765,6 +902,8 @@ where
                 ),
                 waiting_since: record.created_at.clone(),
                 triage: Triage::Ask,
+                ai_link: false,
+                near: None,
             });
         }
 
@@ -783,6 +922,8 @@ where
                 text: link_text(&suggestion),
                 waiting_since: suggestion.created_at.clone(),
                 triage: triage_link(&suggestion.reason),
+                ai_link: ai_link_quote(&suggestion.reason).is_some(),
+                near: None,
             });
         }
         Ok(items)
@@ -857,6 +998,7 @@ where
         verdict: Verdict,
         by: By,
         reason: &str,
+        conflicts_with: Option<Conflict>,
         now: &str,
         report: &mut RunReport,
     ) -> Result<(), ReviewError> {
@@ -883,6 +1025,7 @@ where
                             Verdict::NeedsHuman,
                             by,
                             reason,
+                            conflicts_with,
                             now,
                             report,
                         );
@@ -901,6 +1044,7 @@ where
             result_id,
             created_at: now.to_owned(),
             undone_at: None,
+            conflicts_with: conflicts_with.filter(|_| verdict == Verdict::NeedsHuman),
         })?;
         match verdict {
             Verdict::Accepted => report.accepted += 1,
@@ -957,6 +1101,7 @@ where
                 verdict,
                 By::Rules,
                 reason,
+                None,
                 now,
                 &mut report,
             )?;
@@ -977,9 +1122,52 @@ where
         oldest_first.sort_by(|a, b| a.waiting_since.cmp(&b.waiting_since));
         let batch: Vec<&Item> = oldest_first.into_iter().take(BATCH).collect();
         let ids: Vec<String> = (1..=batch.len()).map(|at| format!("I{at}")).collect();
+
+        // The decisions in force that resemble a candidate decision are named
+        // beside it, so the judge can tell a contradiction with what already
+        // stands. Ranked in memory over one read: no query per item.
+        let in_force = if batch.iter().any(|item| item.near.is_some()) {
+            self.in_force(project_id)
+        } else {
+            Vec::new()
+        };
+        let mut shown: Vec<&StoredDecision> = Vec::new();
         let mut user = String::from("## Items\n");
         for (id, item) in ids.iter().zip(&batch) {
-            user.push_str(&format!("- {id} {}\n", item.text));
+            user.push_str(&format!("- {id} {}", item.text));
+            let near = item
+                .near
+                .as_deref()
+                .map(|question| nearest(question, &in_force))
+                .unwrap_or_default();
+            if !near.is_empty() {
+                let named: Vec<String> = near
+                    .into_iter()
+                    .map(|decision| {
+                        let at = shown
+                            .iter()
+                            .position(|seen| seen.decision_id == decision.decision_id)
+                            .unwrap_or_else(|| {
+                                shown.push(decision);
+                                shown.len() - 1
+                            });
+                        format!("D{}", at + 1)
+                    })
+                    .collect();
+                user.push_str(&format!(" | Parecidas em vigor: {}", named.join(", ")));
+            }
+            user.push('\n');
+        }
+        if !shown.is_empty() {
+            user.push_str("## Decisões em vigor\n");
+            for (at, decision) in shown.iter().enumerate() {
+                user.push_str(&format!(
+                    "- D{} \"{}\" -> {}\n",
+                    at + 1,
+                    clip(&decision.question, 160),
+                    clip(&decision.choice, 160)
+                ));
+            }
         }
         report.asked = true;
         let answer =
@@ -993,15 +1181,137 @@ where
                     return Err(ReviewError::Provider(error.to_string()));
                 }
             };
-        for ((_, verdict, reason), item) in parse_verdicts(&answer, &ids).into_iter().zip(&batch) {
+
+        let mut names: Vec<(String, String)> = ids
+            .iter()
+            .cloned()
+            .zip(batch.iter().map(|item| item.title.clone()))
+            .collect();
+        names.extend(
+            shown
+                .iter()
+                .enumerate()
+                .map(|(at, decision)| (format!("D{}", at + 1), decision.question.clone())),
+        );
+        let mut judged = parse_verdicts(&answer, &ids);
+        let mut conflicts: Vec<Option<Conflict>> = judged
+            .iter()
+            .enumerate()
+            .map(|(at, verdict)| {
+                let other = verdict.conflicts_with.as_deref()?;
+                if batch[at].kind != ItemKind::Candidate {
+                    return None;
+                }
+                conflict_named(other, at, &batch, &shown)
+            })
+            .collect();
+        // A contradiction runs both ways: the other candidate, when it is
+        // left for the person too, shows the same pair. One that was
+        // discarded no longer contradicts anything.
+        for at in 0..conflicts.len() {
+            let Some(Conflict {
+                kind: ConflictKind::Candidate,
+                id,
+            }) = conflicts[at].clone()
+            else {
+                continue;
+            };
+            let Some(other) = batch.iter().position(|item| item.id == id) else {
+                continue;
+            };
+            match judged[other].verdict {
+                Verdict::Discarded => conflicts[at] = None,
+                Verdict::NeedsHuman if conflicts[other].is_none() => {
+                    conflicts[other] = Some(Conflict {
+                        kind: ConflictKind::Candidate,
+                        id: batch[at].id.clone(),
+                    });
+                }
+                _ => {}
+            }
+        }
+        for ((verdict, conflict), item) in judged.iter_mut().zip(conflicts).zip(&batch) {
+            // Two AIs disagreeing on a weak tie is not worth a person's time:
+            // a tie the AI proposed that the judge doubts is dropped, with
+            // the judge's reason on the ledger.
+            if item.ai_link && verdict.answered && verdict.verdict == Verdict::NeedsHuman {
+                verdict.verdict = Verdict::Discarded;
+            }
+            let reason = name_items(&verdict.reason, &names);
             let reason = if reason.is_empty() {
                 "decidido pela IA".to_owned()
             } else {
                 reason
             };
-            self.settle(project_id, item, verdict, By::Ai, &reason, now, &mut report)?;
+            self.settle(
+                project_id,
+                item,
+                verdict.verdict,
+                By::Ai,
+                &reason,
+                conflict,
+                now,
+                &mut report,
+            )?;
         }
         Ok(report)
+    }
+
+    /// The decisions in force of a project, newest first, up to the same
+    /// bound as the candidates read; a failed read means none.
+    fn in_force(&self, project_id: &str) -> Vec<StoredDecision> {
+        DecisionStore::list(
+            &self.store,
+            &DecisionQuery {
+                project_id: Some(project_id.to_owned()),
+                statuses: vec![DecisionStatus::Accepted],
+                limit: READ_LIMIT.min(MAX_PAGE_LIMIT),
+                before: None,
+            },
+        )
+        .unwrap_or_default()
+    }
+}
+
+/// Decisions in force that resemble a question, the closest first, at most
+/// [`NEIGHBORS`].
+fn nearest<'a>(question: &str, in_force: &'a [StoredDecision]) -> Vec<&'a StoredDecision> {
+    let mut scored: Vec<(f64, &StoredDecision)> = in_force
+        .iter()
+        .map(|decision| (similarity(question, &decision.question), decision))
+        .filter(|(likeness, _)| *likeness >= NEIGHBOR_AT)
+        .collect();
+    scored.sort_by(|a, b| b.0.total_cmp(&a.0));
+    scored
+        .into_iter()
+        .take(NEIGHBORS)
+        .map(|(_, decision)| decision)
+        .collect()
+}
+
+/// The real item an id of the prompt names, if it is a candidate of the
+/// batch other than the item itself, or a decision shown in force.
+fn conflict_named(
+    raw: &str,
+    own: usize,
+    batch: &[&Item],
+    shown: &[&StoredDecision],
+) -> Option<Conflict> {
+    let (letter, number) = raw.split_at_checked(1)?;
+    let at = number.parse::<usize>().ok()?.checked_sub(1)?;
+    match letter {
+        "I" if at != own => {
+            let other = batch.get(at)?;
+            (other.kind == ItemKind::Candidate).then(|| Conflict {
+                kind: ConflictKind::Candidate,
+                id: other.id.clone(),
+            })
+        }
+        "D" => Some(Conflict {
+            kind: ConflictKind::Decision,
+            id: shown.get(at)?.decision_id.clone(),
+        }),
+        _ => None,
     }
 }
 
@@ -1051,6 +1361,23 @@ where
             .reopen(item_id)
             .map_err(|_| ReviewError::NotUndoable)?;
         self.store.mark_undone(kind, item_id, &now_rfc3339())
+    }
+
+    fn conflict(&self, entry: &Entry) -> Result<Option<ConflictView>, ReviewError> {
+        Conflicts::new(self.store.clone(), self.adoption.clone()).view(entry)
+    }
+
+    fn resolve(
+        &self,
+        candidate_id: &str,
+        conflict: &Conflict,
+        resolution: &Resolution,
+    ) -> Result<(), ReviewError> {
+        Conflicts::new(self.store.clone(), self.adoption.clone()).resolve(
+            candidate_id,
+            conflict,
+            resolution,
+        )
     }
 }
 
@@ -1191,12 +1518,74 @@ mod tests {
           {"id":"I9","verdict":"accept","reason":"não existe"}]}
         ```"#;
         let parsed = parse_verdicts(answer, &ids);
-        assert_eq!(parsed[0].1, Verdict::Accepted);
-        assert_eq!(parsed[1].1, Verdict::Discarded);
-        assert_eq!(parsed[2].1, Verdict::NeedsHuman, "unanswered");
+        assert_eq!(parsed[0].verdict, Verdict::Accepted);
+        assert_eq!(parsed[1].verdict, Verdict::Discarded);
+        assert_eq!(parsed[2].verdict, Verdict::NeedsHuman, "unanswered");
+        assert!(!parsed[2].answered);
         assert!(parse_verdicts("not json", &ids)
             .iter()
-            .all(|(_, verdict, _)| *verdict == Verdict::NeedsHuman));
+            .all(|judged| judged.verdict == Verdict::NeedsHuman && !judged.answered));
+    }
+
+    #[test]
+    fn conflicts_with_is_parsed_and_an_empty_one_is_none() {
+        let ids = vec!["I1".to_owned(), "I2".to_owned(), "I3".to_owned()];
+        let answer = r#"{"verdicts":[
+          {"id":"I1","verdict":"human","reason":"contradiz","conflicts_with":" I2 "},
+          {"id":"I2","verdict":"human","reason":"contradiz","conflicts_with":null},
+          {"id":"I3","verdict":"human","reason":"ok","conflicts_with":""}]}"#;
+        let parsed = parse_verdicts(answer, &ids);
+        assert_eq!(parsed[0].conflicts_with.as_deref(), Some("I2"));
+        assert_eq!(parsed[1].conflicts_with, None);
+        assert_eq!(parsed[2].conflicts_with, None);
+    }
+
+    #[test]
+    fn ids_left_in_a_reason_become_the_title_of_the_item() {
+        let names = vec![
+            ("I5".to_owned(), "Limiares fixos para o juiz".to_owned()),
+            ("D2".to_owned(), "Faixas de probabilidade".to_owned()),
+        ];
+        assert_eq!(
+            name_items("Contradiz I5 sobre limiares e D2.", &names),
+            "Contradiz \"Limiares fixos para o juiz\" sobre limiares e \"Faixas de probabilidade\"."
+        );
+        assert_eq!(
+            name_items("Ver I9, não VI5 nem I5x.", &names),
+            "Ver outro item, não VI5 nem I5x."
+        );
+        let long = vec![("I1".to_owned(), "palavra ".repeat(30))];
+        assert!(name_items("I1", &long).chars().count() <= 84);
+    }
+
+    #[test]
+    fn the_conflict_an_id_names_is_a_candidate_of_the_batch_or_a_decision_in_force() {
+        let item = |kind, id: &str| Item {
+            kind,
+            id: id.to_owned(),
+            title: id.to_owned(),
+            text: String::new(),
+            waiting_since: String::new(),
+            triage: Triage::Ask,
+            ai_link: false,
+            near: None,
+        };
+        let (a, b, link) = (
+            item(ItemKind::Candidate, "ca"),
+            item(ItemKind::Candidate, "cb"),
+            item(ItemKind::Link, "ek"),
+        );
+        let batch = vec![&a, &b, &link];
+        let named = conflict_named("I2", 0, &batch, &[]).expect("candidate");
+        assert_eq!(
+            (named.kind, named.id.as_str()),
+            (ConflictKind::Candidate, "cb")
+        );
+        assert_eq!(conflict_named("I1", 0, &batch, &[]), None, "itself");
+        assert_eq!(conflict_named("I3", 0, &batch, &[]), None, "a link");
+        assert_eq!(conflict_named("I7", 0, &batch, &[]), None, "out of range");
+        assert_eq!(conflict_named("D1", 0, &batch, &[]), None, "nothing shown");
+        assert_eq!(conflict_named("x", 0, &batch, &[]), None);
     }
 
     #[test]
