@@ -10,6 +10,7 @@ Pesquisas de referência, investigações técnicas e ideias para o futuro. Nada
 | --- | --- | --- |
 | [backlog-de-ideias.md](backlog-de-ideias.md) | O que ainda está aberto e concreto, por tema, com a origem de cada linha | Aberta |
 | [mercado-e-ideias.md](mercado-e-ideias.md) | Concorrentes e onde colidem, ideias com evidência mais forte, estudos de dores e o que foi descartado | Aberta |
+| [ai-memory-do-akita.md](ai-memory-do-akita.md) | O ai-memory do Akita: comparação, cinco ideias sem IA nova para trazer e por que não integrar agora | Aberta. Estudo de referência; nada implementado |
 | [sonho-consolidacao-da-memoria.md](sonho-consolidacao-da-memoria.md) | "Sonho": rodada periódica que junta duplicatas, resolve contradições, aposenta o envelhecido e descobre ligações; exportação no formato Agent Memory Repo | Aberta. Desenho e protocolo; nada implementado |
 | [implementacao-procurador-e-mapa.md](implementacao-procurador-e-mapa.md) | Onde o Procurador e o mapa de cegueira entram no código: sinais de turno, autonomia, livro em sombra, contratos e ordem de entrega | Aberta. Estudo de implementação; nada implementado |
 | [procurador.md](procurador.md) | Procurador: o Xemnas responde ao agente pela pessoa quando uma decisão confirmada cobre a pergunta | Aberta. Desenho e protocolo; nada implementado |
