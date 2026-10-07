@@ -111,6 +111,27 @@ where
     })
 }
 
+/// The project use case as the app composes it: registering prepares the
+/// map. The app and the end-to-end runner both build it here so they cannot
+/// drift apart.
+pub fn prepared_projects<S>(store: S) -> crate::projects::Projects<S>
+where
+    S: GraphStore + RelationStore + ClaimStore + ProjectRepository + JobRepository,
+    S: Clone + Send + Sync + 'static,
+{
+    crate::projects::Projects::new(store.clone()).with_map_preparer(map_preparer(store))
+}
+
+/// The documentation use case as the app composes it: indexing prepares the
+/// map. Shared with the end-to-end runner (see [`prepared_projects`]).
+pub fn prepared_documents<S>(store: S) -> crate::documents::Documents<S>
+where
+    S: GraphStore + RelationStore + ClaimStore + ProjectRepository + JobRepository,
+    S: crate::documents::DocumentStore + Clone + Send + Sync + 'static,
+{
+    crate::documents::Documents::new(store.clone()).with_map_preparer(map_preparer(store))
+}
+
 /// Dependency names added by manifest hunks (`Cargo.toml`, `package.json`),
 /// in order of appearance, without duplicates.
 ///

@@ -14,8 +14,8 @@ mod scope;
 
 pub use ai_link::{ai_link_quote, ai_link_reason, ai_link_why, AI_LINK_REASON};
 pub use derive::{
-    added_dependencies, map_preparer, ComponentProposal, MapPreparer, SuggestionReport,
-    TechnologyProposal,
+    added_dependencies, map_preparer, prepared_documents, prepared_projects, ComponentProposal,
+    MapPreparer, SuggestionReport, TechnologyProposal,
 };
 pub use discover::{declared_components, DeclaredComponent, WorkspaceKind};
 pub use domain::entities::EntityKind;

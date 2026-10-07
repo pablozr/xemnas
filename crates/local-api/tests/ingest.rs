@@ -1375,7 +1375,11 @@ fn seed_convention(store: &SqliteStore, location: &str) {
             valid_until: None,
             source_decision_id: None,
             source_version: None,
-            qualifiers: Vec::new(),
+            qualifiers: vec![application::qualifiers::KnowledgeQualifier {
+                kind: application::qualifiers::QualifierKind::Scope,
+                text: application::context::GLOBAL_SCOPE.into(),
+                artifact_id: None,
+            }],
         })
         .expect("seed claim");
 }

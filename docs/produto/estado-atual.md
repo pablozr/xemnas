@@ -54,10 +54,11 @@ a toca: o texto casa com a tarefa, ela está ligada a um componente que a tarefa
 (`crates/application/src/graph/scope.rs`) ou foi marcada como **global**. Escopo vazio quer dizer
 "não informado", não "vale para tudo": uma regra sem nenhuma dessas três coisas não entra. As
 globais são no máximo 3 por pacote, as confirmadas mais recentemente primeiro, e as decisões
-ocupam o orçamento antes das regras. A marca global é o valor reservado `*`, como texto de um
-qualificador de escopo ou entrada do escopo herdado (sem migração); para dados anteriores à marca,
-uma convenção sem escopo algum (sem vínculo, escopo herdado ou qualificador de escopo) conta
-como global e uma restrição sem escopo não. A IA propõe os componentes de uma regra sem ligação
+ocupam o orçamento antes das regras. Só a marca explícita torna uma regra global: o valor reservado `*`, como texto de um
+qualificador de escopo ou entrada do escopo herdado (sem migração). Uma convenção sem escopo
+se comporta como uma restrição sem escopo: entra só se casar com a tarefa ou se o grafo a ligar
+a um componente tocado (o extrator rotula como convenção muitas regras específicas de um
+componente, e elas não podem ir em toda tarefa). A IA propõe os componentes de uma regra sem ligação
 (e sem decisão de origem ligada) para a revisão confirmar.
 
 **Grafo e mapa.** Componentes e tecnologias do projeto, com os arquivos que cada um cobre e as
