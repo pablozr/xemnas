@@ -124,6 +124,7 @@ fn upgrade_33_to_34_preserves_legacy_artifacts_without_reconstructing_identity()
         ALTER TABLE project_documents DROP COLUMN source;
         ALTER TABLE auto_reviews DROP COLUMN conflicts_kind;
         ALTER TABLE auto_reviews DROP COLUMN conflicts_id;
+        ALTER TABLE assessments DROP COLUMN error_detail;
         DELETE FROM schema_migrations WHERE version >= 38;",
     )
     .unwrap();

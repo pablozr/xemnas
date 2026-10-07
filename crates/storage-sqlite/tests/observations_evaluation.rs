@@ -517,7 +517,13 @@ fn historical_unknown_and_normative_budget_retention() {
             valid_until: None,
             source_decision_id: None,
             source_version: None,
-            qualifiers: vec![],
+            // Project-wide on purpose: the injection policy only admits a
+            // scopeless constraint when it is marked global.
+            qualifiers: vec![application::qualifiers::KnowledgeQualifier {
+                kind: application::qualifiers::QualifierKind::Scope,
+                text: application::context::GLOBAL_SCOPE.into(),
+                artifact_id: None,
+            }],
         })
         .unwrap();
     let packs = ContextPacks::new(fixture.store().clone());

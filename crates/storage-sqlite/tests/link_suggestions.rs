@@ -544,9 +544,11 @@ fn a_rule_without_a_decision_is_scoped_by_the_proposal_once_confirmed() {
     component(store, "testkit", "packages/testkit/**");
     let rule = loose_rule(store, RULE);
 
-    // Global until the tie is confirmed.
+    // Under the injection policy a scopeless constraint is not global: with no
+    // tie and no lexical match it stays out of every pack until the tie is
+    // confirmed.
     let other = &["packages/testkit/src/a.ts"];
-    assert!(pack_claims(store, "ajustar testes", other).contains(&rule));
+    assert!(!pack_claims(store, "ajustar testes", other).contains(&rule));
 
     let (calls, asked) = (Cell::new(0), RefCell::new(Vec::new()));
     let fixture = Fixture {
