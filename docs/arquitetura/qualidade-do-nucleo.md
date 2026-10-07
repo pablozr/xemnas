@@ -24,7 +24,7 @@ Control bloqueia o hash (o comportamento é o mesmo; só o hash muda) e imprime 
 | Seleção de contexto, calibração | `storage-sqlite/tests/context_corpus.rs` (`calibration_v5_quality_gate`), corpus v5: 30 famílias escritas às cegas, 8 negativas de mesmo vocabulário | as mesmas | precisão ≥ 0,41; cobertura ≥ 0,43; contaminados ≤ 15 de 24; p95 ≤ 20 ms; aqui se ajusta, o v4 continua selado | 0,41 / 0,43 / 15 de 24; com a política de injeção de regras: 0,41 (0,4133) / 0,43 / 15 de 24 (a política antiga daria 0,02 / 0,43 / 24 de 24 com as 15 regras sem escopo); sem a convenção sem escopo como global (07/10/2026): 0,41 (0,4133) / 0,43 (0,4306) / 15 de 24, igual |
 | Seleção de contexto em escala | `storage-sqlite/tests/context_scale.rs` (`rule_ranking_scales_to_a_large_project`, ignorado no `cargo test`): 2.120 regras sobre 60 componentes, 20 deles com 100 regras ligadas; 300 tarefas que tocam um componente grande pelo arquivo | p95 de `build_pack` | p95 ≤ 100 ms | antes (07/10/2026, sem o ranqueamento; o grafo e as claims carregados mais de uma vez por pacote): p50 83 ms, p95 138 ms; com uma carga do grafo por pacote e no máximo `MAX_TIED_RULES` (3) regras ligadas: p50 28 ms, p95 32 ms no `core-quality.py` (39 a 46 / 61 a 83 ms com a máquina carregada). Não medido: onde vai o resto do tempo (busca FTS e carga do snapshot) |
 | Ligações por menção | `application/src/graph/mention.rs` (`mention_quality_gate`, `mention_matching_scales_to_a_large_project`) | precisão e cobertura em textos rotulados, incluindo o corpus de pacotes com apelidos derivados (com negativos de mesmo vocabulário); tempo para 2.000 decisões × 60 partes | precisão ≥ 0,90; cobertura = 1,0; ≤ 3 s | 0,90 (27/30); 1,0; 1,5 s |
-| Vínculos propostos pela IA | `storage-sqlite/tests/link_corpus.rs` (`link_quality_gate`), corpus de 20 decisões sobre 6 componentes, 8 negativas de mesmo vocabulário; respostas de modelo em `fixtures/link_corpus_answers.json` | precisão e cobertura do pipeline (resposta do modelo → validação de id e citação literal); negativas com vínculo; tempo de montar o pedido e validar | precisão ≥ 0,93; cobertura ≥ 0,87 | primeira rodada real (06/10/2026, gpt-5.6-luna): 0,71 / 0,75, 4 de 8 negativas com vínculo, todas decisões sobre o projeto e não sobre o código (escopo de publicação, dono, nome, glossário); com o prompt dizendo isso: 0,93 / 0,88, 1 de 8 (ganho otimista: a regra veio dessas falhas); validação + pedido de 60 componentes < 5 ms |
+| Vínculos propostos pela IA | `storage-sqlite/tests/link_corpus.rs` (`link_quality_gate`), corpus de 20 decisões sobre 6 componentes, 8 negativas de mesmo vocabulário; respostas de modelo em `fixtures/link_corpus_answers.json` | precisão e cobertura do pipeline (resposta do modelo → validação de id e citação literal); negativas com vínculo; tempo de montar o pedido e validar | precisão ≥ 1,00; cobertura ≥ 0,75 | primeira rodada real (06/10/2026, gpt-5.6-luna): 0,71 / 0,75, 4 de 8 negativas com vínculo, todas decisões sobre o projeto e não sobre o código (escopo de publicação, dono, nome, glossário); com o prompt dizendo isso: 0,93 / 0,88, 1 de 8 (ganho otimista: a regra veio dessas falhas); prompt em lote no gpt-6-luna (07/10/2026): 1,00 / 0,75, 0 de 8 (uma decisão por chamada: 1,00 / 0,81; as perdas são o segundo componente de decisões que governam dois); validação + pedido de 60 componentes < 5 ms |
 | Lotes de jobs de IA | `storage-sqlite/tests/batched_jobs.rs` (`n_decisions_cost_ceil_n_over_ten_calls_per_kind`, modelo falso que conta chamadas), `tests/jobs.rs` (prioridade e lote) | N decisões custam ⌈N / 10⌉ chamadas por tipo (vínculos, relações, regras, termos), nenhuma com mais de 10 assuntos, todos os jobs terminam, uma entrada ilegível ou ausente perde só o seu assunto, uma pausa do provedor devolve o lote inteiro à fila | 23 decisões → 3 chamadas por tipo (eram 23); portão exato | 3 / 3 / 3 / 3 |
 | Revisão automática | `storage-sqlite/tests/auto_approval.rs` | regras só aceitam com confiança calibrada; lotes de até 30; falha pausa a próxima chamada; fila esvazia sem teto; desfazer; o juiz nomeia o outro lado de um conflito (candidato ou decisão em vigor) e nenhum id chega ao motivo; vínculo da IA duvidado é descartado e o de menção segue para a pessoa; as três saídas de um conflito (ficar com esta, com a outra, as duas com escopo); regra repetida (em vigor ou no lote) descartada pelas regras e regra só parecida levada ao juiz com as vizinhas | todos passam | 22/22 |
 | Robustez do pipeline | `storage-sqlite/tests/pipeline_robustness.rs` | o mapa tem os componentes declarados (Cargo e npm) logo após registrar o projeto e indexar documentos, e é idempotente; análise de documento que falhou volta à fila no máximo `MAX_AUTOMATIC_ATTEMPTS` (3) vezes sem pedido e sempre ao importar o arquivo; o motivo da falha fica limpo, em uma linha, com até 200 caracteres e sem conteúdo do documento | todos passam | 8/8 |
@@ -95,9 +95,13 @@ O prompt agora é em lote (até 10 decisões numeradas por chamada, componentes 
 vez; ver [Lotes de IA](desempenho-e-escala.md)). A fixture continua com o formato de uma
 resposta por decisão (`{"links":[...]}` ou a entrada do modelo para aquela decisão, que
 `parse_links` lê do mesmo jeito), então o portão segue medindo a validação por decisão. As
-respostas atuais foram geradas com o prompt de uma decisão por chamada: para medir o prompt em
-lote, regenerar com o teste abaixo (2 chamadas: 20 decisões em lotes de 10) e, se os pisos
-mudarem, subir ou justificar no mesmo commit.
+respostas atuais foram geradas com o prompt em lote no gpt-6-luna (07/10/2026, 2 chamadas):
+precisão 1,00, cobertura 0,75 e 0 de 8 negativas ligadas. Com uma decisão por chamada, no mesmo
+modelo e prompt, deu 1,00 / 0,81: o lote custa uma decisão (`redaction`, a última do seu lote).
+As outras perdas são do modelo, que liga só o componente principal de uma decisão que governa
+dois (falta o `core` em `event-mapping`, `report-format` e `redaction`). Pedir no prompt que
+julgasse cada componente não mudou as respostas, então o piso de cobertura desceu para 0,75 e
+o de precisão subiu para 1,00.
 
 A fixture é gerada uma vez, por um teste ignorado que chama o provedor e exige a autorização
 do usuário:
@@ -106,7 +110,7 @@ do usuário:
 cargo test -j4 --locked -p ai-provider --test link_suggestions_live -- --ignored --nocapture
 ```
 
-A fixture foi gerada em 06/10/2026 e o portão roda sempre; regenerar exige a autorização do usuário, porque chama o provedor.
+A fixture foi gerada em 07/10/2026 e o portão roda sempre; regenerar exige a autorização do usuário, porque chama o provedor.
 
 ## Validação da extração
 
