@@ -156,7 +156,7 @@ impl StructuredModel for Reader {
     ) -> Result<String, ExtractError> {
         assert_eq!(schema_name, "decision_context");
         assert!(user.contains("Qual banco usar?"));
-        Ok(self.0.clone())
+        Ok(support::batched_answer(&self.0))
     }
 }
 

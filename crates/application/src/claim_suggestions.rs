@@ -335,15 +335,17 @@ where
 
 /// System prompt of the context extractor.
 pub const CLAIM_PROMPT: &str = concat!(
-    "You read one engineering decision a software team adopted and \
-list the lasting context an agent must respect when working on the parts it affects. kind \
-is assumption (believed true but not proven), constraint (a limit the work must respect), \
-convention (an agreed way of working) or goal (an outcome the project pursues). Only what \
-the decision states or directly implies, never general advice; at most 3; an empty list is \
-a correct answer. statement: the rule in one short sentence, in the decision's language. \
-quote: one sentence copied verbatim from the decision text that supports it.\n\
-Reply with one JSON object only, matching exactly: {\"claims\":[{\"kind\":\
-\"assumption|constraint|convention|goal\",\"statement\":string,\"quote\":string}]}.",
+    "You read engineering decisions a software team adopted, numbered in the message, and for \
+each one list the lasting context an agent must respect when working on the parts it affects. \
+kind is assumption (believed true but not proven), constraint (a limit the work must \
+respect), convention (an agreed way of working) or goal (an outcome the project pursues). \
+Only what the decision states or directly implies, never general advice; at most 3 per \
+decision; an empty list is a correct answer. statement: the rule in one short sentence, in \
+the decision's language. quote: one sentence copied verbatim from that decision's text that \
+supports it.\n\
+Reply with one JSON object only, matching exactly: {\"decisions\":[{\"id\":string,\
+\"claims\":[{\"kind\":\"assumption|constraint|convention|goal\",\"statement\":string,\
+\"quote\":string}]}]}, one entry per decision, id being its number.",
     crate::plain_rules!()
 );
 
@@ -352,21 +354,34 @@ pub fn claim_schema() -> serde_json::Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["claims"],
+        "required": ["decisions"],
         "properties": {
-            "claims": {
+            "decisions": {
                 "type": "array",
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["kind", "statement", "quote"],
+                    "required": ["id", "claims"],
                     "properties": {
-                        "kind": {
-                            "type": "string",
-                            "enum": ["assumption", "constraint", "convention", "goal"]
-                        },
-                        "statement": { "type": "string" },
-                        "quote": { "type": "string" }
+                        "id": { "type": "string" },
+                        "claims": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["kind", "statement", "quote"],
+                                "properties": {
+                                    "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                            "assumption", "constraint", "convention", "goal"
+                                        ]
+                                    },
+                                    "statement": { "type": "string" },
+                                    "quote": { "type": "string" }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -374,6 +389,22 @@ pub fn claim_schema() -> serde_json::Value {
     })
 }
 
+/// The user message: the decisions numbered from 1, secrets redacted.
+pub fn claim_request(decisions: &[&StoredDecision]) -> String {
+    let mut user = String::new();
+    for (position, decision) in decisions.iter().enumerate() {
+        user.push_str(&format!(
+            "## Decision {}\nQuestion: {}\nChoice: {}\nWhy: {}\n\n",
+            position + 1,
+            crate::external::protected_text(&decision.question),
+            crate::external::protected_text(&decision.choice),
+            crate::external::limited_text(&decision.rationale, 1500)
+        ));
+    }
+    user
+}
+
+/// What the model said about one decision.
 #[derive(Deserialize)]
 struct RawAnswer {
     #[serde(default)]
@@ -398,8 +429,9 @@ fn normalized(text: &str) -> String {
         .join(" ")
 }
 
-/// Validated items: a known kind, a short statement, a quote found in the
-/// decision, nothing the project already holds.
+/// Validated items of one decision's answer `{"claims":[...]}`: a known kind,
+/// a short statement, a quote found in the decision, nothing the project
+/// already holds.
 pub fn parse_claims(
     answer: &str,
     decision: &StoredDecision,
@@ -408,6 +440,36 @@ pub fn parse_claims(
     let Ok(raw) = serde_json::from_str::<RawAnswer>(answer.trim()) else {
         return Vec::new();
     };
+    validated(raw.claims, decision, existing)
+}
+
+/// Validated items per decision, in decision order, from a batched answer.
+/// A decision the model skipped or answered unreadably gets none; the others
+/// are not affected. Each decision is checked on its own, against its own
+/// text and the rules the project already holds.
+pub fn parse_claims_batch(
+    answer: &str,
+    decisions: &[&StoredDecision],
+    existing: &[String],
+) -> Vec<Vec<(ClaimKind, String, String)>> {
+    let entries = crate::batching::answers::<RawAnswer>(answer, decisions.len())
+        .unwrap_or_else(|| decisions.iter().map(|_| None).collect());
+    decisions
+        .iter()
+        .zip(entries)
+        .map(|(decision, entry)| {
+            entry.map_or_else(Vec::new, |entry| {
+                validated(entry.claims, decision, existing)
+            })
+        })
+        .collect()
+}
+
+fn validated(
+    claims: Vec<RawClaim>,
+    decision: &StoredDecision,
+    existing: &[String],
+) -> Vec<(ClaimKind, String, String)> {
     let text = normalized(&format!(
         "{}\n{}\n{}",
         decision.question, decision.choice, decision.rationale
@@ -417,7 +479,7 @@ pub fn parse_claims(
         .map(|statement| normalized(statement))
         .collect();
     let mut out = Vec::new();
-    for claim in raw.claims {
+    for claim in claims {
         if out.len() >= MAX_DERIVED {
             break;
         }
@@ -472,34 +534,75 @@ where
     ///
     /// `storage`, or `provider` when the call fails.
     pub fn run(&self, decision_id: &str) -> Result<usize, ClaimSuggestionError> {
-        let Some(decision) = self
-            .store
-            .get(decision_id)
-            .map_err(storage)?
-            .filter(|decision| decision.status == DecisionStatus::Accepted)
-        else {
-            return Ok(0);
-        };
+        self.run_many(&[decision_id]).pop().unwrap_or(Ok(0))
+    }
+
+    /// Like [`ClaimFinder::run`] for several decisions at once: the ones of a
+    /// project share one provider call (up to [`crate::batching::BATCH_SIZE`]
+    /// per call). The answer holds, per decision, what it stored; a failed
+    /// call fails every decision of its group, never the others.
+    pub fn run_many(&self, decision_ids: &[&str]) -> Vec<Result<usize, ClaimSuggestionError>> {
+        let mut results: Vec<Result<usize, ClaimSuggestionError>> =
+            decision_ids.iter().map(|_| Ok(0)).collect();
+        let mut decisions: Vec<Option<StoredDecision>> = Vec::with_capacity(decision_ids.len());
+        for (index, id) in decision_ids.iter().enumerate() {
+            match self.store.get(id) {
+                Ok(found) => decisions
+                    .push(found.filter(|decision| decision.status == DecisionStatus::Accepted)),
+                Err(error) => {
+                    results[index] = Err(storage(error));
+                    decisions.push(None);
+                }
+            }
+        }
+        let live: Vec<(usize, &str)> = decisions
+            .iter()
+            .enumerate()
+            .filter_map(|(index, decision)| Some((index, decision.as_ref()?.project_id.as_str())))
+            .collect();
+        for group in crate::batching::project_groups(&live) {
+            let subjects: Vec<&StoredDecision> = group
+                .iter()
+                .filter_map(|index| decisions[*index].as_ref())
+                .collect();
+            match self.run_group(&subjects) {
+                Ok(stored) => {
+                    for (index, stored) in group.iter().zip(stored) {
+                        results[*index] = Ok(stored);
+                    }
+                }
+                Err(error) => {
+                    for index in &group {
+                        results[*index] = Err(error.clone());
+                    }
+                }
+            }
+        }
+        results
+    }
+
+    /// One provider call for decisions of one project; what each stored.
+    fn run_group(&self, decisions: &[&StoredDecision]) -> Result<Vec<usize>, ClaimSuggestionError> {
+        let nothing = Ok(vec![0; decisions.len()]);
         let profile = self.settings.load_or_seed().map_err(storage)?;
         if choose_extractor(Some(&profile)) != ExtractorChoice::ExternalEnabled {
-            return Ok(0);
+            return nothing;
         }
         let secret = match self.settings.secret(&profile.credential_account()) {
             Ok(Some(secret)) => secret,
             Ok(None) if !profile.credential_required() => String::new(),
-            _ => return Ok(0),
+            _ => return nothing,
         };
         let Ok(model) = self.factory.authorized(&profile, secret, &self.settings) else {
-            return Ok(0);
+            return nothing;
         };
-        let user = format!(
-            "Question: {}\nChoice: {}\nWhy: {}\n",
-            crate::external::protected_text(&decision.question),
-            crate::external::protected_text(&decision.choice),
-            crate::external::limited_text(&decision.rationale, 1500)
-        );
         let answer = model
-            .complete(CLAIM_PROMPT, &user, "decision_context", &claim_schema())
+            .complete(
+                CLAIM_PROMPT,
+                &claim_request(decisions),
+                "decision_context",
+                &claim_schema(),
+            )
             .map_err(|error| match error.job_failure() {
                 crate::jobs::JobFailure::Deferred { retry_after } => {
                     ClaimSuggestionError::Deferred(retry_after)
@@ -510,32 +613,39 @@ where
             })?;
         let existing: Vec<String> = self
             .store
-            .project_claims(&decision.project_id)
+            .project_claims(&decisions[0].project_id)
             .map_err(storage)?
             .into_iter()
             .map(|claim| claim.statement)
             .collect();
         let now = now_rfc3339();
-        let mut stored = 0;
-        for (kind, statement, quote) in parse_claims(&answer, &decision, &existing) {
-            if self
-                .store
-                .insert_claim_suggestion(&ClaimSuggestionRecord {
-                    source_version: Some(decision.version),
-                    inherited_scope: decision.scope.clone(),
-                    qualifiers: decision.qualifiers.clone(),
-                    suggestion_id: uuid::Uuid::now_v7().to_string(),
-                    project_id: decision.project_id.clone(),
-                    decision_id: decision.decision_id.clone(),
-                    kind,
-                    statement,
-                    quote,
-                    created_at: now.clone(),
-                })
-                .map_err(storage)?
-            {
-                stored += 1;
+        let mut stored = Vec::with_capacity(decisions.len());
+        for (decision, derived) in decisions
+            .iter()
+            .zip(parse_claims_batch(&answer, decisions, &existing))
+        {
+            let mut count = 0;
+            for (kind, statement, quote) in derived {
+                if self
+                    .store
+                    .insert_claim_suggestion(&ClaimSuggestionRecord {
+                        source_version: Some(decision.version),
+                        inherited_scope: decision.scope.clone(),
+                        qualifiers: decision.qualifiers.clone(),
+                        suggestion_id: uuid::Uuid::now_v7().to_string(),
+                        project_id: decision.project_id.clone(),
+                        decision_id: decision.decision_id.clone(),
+                        kind,
+                        statement,
+                        quote,
+                        created_at: now.clone(),
+                    })
+                    .map_err(storage)?
+                {
+                    count += 1;
+                }
             }
+            stored.push(count);
         }
         Ok(stored)
     }
@@ -585,5 +695,42 @@ mod tests {
         let kinds: Vec<ClaimKind> = derived.iter().map(|(kind, _, _)| *kind).collect();
         assert_eq!(kinds, vec![ClaimKind::Constraint, ClaimKind::Assumption]);
         assert!(parse_claims("{", &decision(), &[]).is_empty());
+    }
+
+    #[test]
+    fn a_batched_answer_is_checked_per_decision_against_its_own_text() {
+        let first = decision();
+        let mut second = decision();
+        second.decision_id = "d2".into();
+        second.choice = "Em arquivo local criptografado.".into();
+        let third = decision();
+        let answer = r#"{"decisions":[
+            {"id":"1","claims":[{"kind":"constraint","statement":"Chaves ficam no cofre.",
+             "quote":"No cofre do sistema."}]},
+            {"id":"2","claims":[{"kind":"constraint","statement":"Citação de outra decisão.",
+             "quote":"No cofre do sistema."},
+             {"kind":"goal","statement":"Cifrar o arquivo.",
+             "quote":"Em arquivo local criptografado."}]},
+            {"id":"3","claims":"not a list"}
+        ]}"#;
+        let derived = parse_claims_batch(answer, &[&first, &second, &third], &[]);
+        assert_eq!(derived.len(), 3);
+        assert_eq!(derived[0].len(), 1);
+        let goals: Vec<ClaimKind> = derived[1].iter().map(|(kind, _, _)| *kind).collect();
+        assert_eq!(
+            goals,
+            vec![ClaimKind::Goal],
+            "the other decision's quote is refused"
+        );
+        assert!(derived[2].is_empty(), "a malformed entry loses only itself");
+        assert!(parse_claims_batch("{", &[&first], &[])[0].is_empty());
+    }
+
+    #[test]
+    fn the_request_numbers_the_decisions() {
+        let (first, second) = (decision(), decision());
+        let request = claim_request(&[&first, &second]);
+        assert!(request.contains("## Decision 1\nQuestion: Onde guardar credenciais?"));
+        assert!(request.contains("## Decision 2\n"));
     }
 }
