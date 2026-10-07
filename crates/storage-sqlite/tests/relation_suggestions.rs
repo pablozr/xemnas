@@ -89,7 +89,7 @@ impl StructuredModel for Judge {
             user.contains("Qual banco usar?"),
             "the shared component brings it"
         );
-        Ok(self.0.clone())
+        Ok(support::batched_answer(&self.0))
     }
 }
 

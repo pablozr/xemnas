@@ -22,7 +22,10 @@ de manifests (`Cargo.toml`, `package.json`) viram observações descritivas loca
 entram na fila de revisão. Documentação do projeto (README, ADRs, `docs/`) é indexada e pode
 gerar candidatos. O mapa do projeto existe desde a primeira análise: ao registrar o projeto
 e ao indexar ou importar documentos, os componentes declarados nos manifests são criados e as
-sugestões derivadas (o que a tela Mapa já fazia ao abrir). Uma análise de documento que falhou
+sugestões derivadas (o que a tela Mapa já fazia ao abrir). As sugestões de IA depois de uma adoção
+(vínculos com o mapa, relações, regras e termos de busca) rodam em lotes de até 10 decisões por
+chamada ao provedor, e os vínculos vão antes do resto; um projeto de dezenas de decisões custa
+algumas chamadas por tipo em vez de uma por decisão. Uma análise de documento que falhou
 volta para a fila na próxima importação do arquivo, ou quando o app propõe documentos de novo
 (até 3 execuções no total por versão), e "Reprocessar" vale sempre. O motivo de uma falha
 (só a mensagem do erro, limpa e com até 200 caracteres) fica guardado e aparece em

@@ -30,6 +30,7 @@ GATES = [
     ('context selection at scale', 'storage-sqlite', 'test:context_scale', 'rule_ranking_scales_to_a_large_project', True),
     ('mention links', 'application', 'lib', 'graph::mention', False),
     ('ai link proposals', 'storage-sqlite', 'test:link_corpus', 'link_quality_gate', False),
+    ('batched ai jobs', 'storage-sqlite', 'test:batched_jobs', '', False),
     ('automatic review', 'storage-sqlite', 'test:auto_approval', '', False),
     ('pipeline robustness', 'storage-sqlite', 'test:pipeline_robustness', '', False),
     ('automatic triage', 'application', 'lib', 'auto_approval', False),
