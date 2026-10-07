@@ -674,4 +674,171 @@ pub const FAMILIES: &[Family] = &[
         partial: &[],
         files: &[],
     },
+    // Big component (`BIG_COMPONENT_RULES`): one component tied to twenty
+    // constraints of varied topics. A task touching it about topic X gets the
+    // one or two rules of X and none of the other eighteen; about an unrelated
+    // topic it gets none.
+    Family {
+        name: "quasar-webhook",
+        positive: true,
+        holdout: false,
+        queries: [
+            "Assinar o corpo dos webhooks de saída",
+            "Sign the body of outgoing webhooks",
+            "Assinar com HMAC o corpo dos webhooks emitidos pelo hub",
+        ],
+        required: &["quasar-webhook"],
+        partial: &[],
+        files: &["crates/quasar/src/hub.rs"],
+    },
+    Family {
+        name: "quasar-sharding",
+        positive: true,
+        holdout: false,
+        queries: [
+            "Particionar a tabela de eventos por tenant",
+            "Partition the events table by tenant",
+            "Particionar por tenant a tabela de eventos do hub",
+        ],
+        required: &["quasar-sharding"],
+        partial: &[],
+        files: &["crates/quasar/src/hub.rs"],
+    },
+    Family {
+        name: "quasar-flag",
+        positive: true,
+        holdout: false,
+        queries: [
+            "Criar uma flag de funcionalidade nova",
+            "Add a new feature flag",
+            "Criar a flag de funcionalidade do novo painel",
+        ],
+        required: &["quasar-flag"],
+        partial: &[],
+        files: &["crates/quasar/src/hub.rs"],
+    },
+    Family {
+        name: "quasar-by-mention",
+        positive: true,
+        holdout: false,
+        queries: [
+            "No quasar, descartar eventos duplicados",
+            "In quasar, drop duplicate events",
+            "No quasar, descartar os eventos duplicados pela chave",
+        ],
+        required: &["quasar-dedup"],
+        partial: &[],
+        files: &[],
+    },
+    Family {
+        name: "quasar-unrelated-topic",
+        positive: false,
+        holdout: false,
+        queries: [
+            "Escolher a trilha sonora do jogo de corrida",
+            "Pick the soundtrack of the racing game",
+            "Escolher a trilha sonora tocada durante a corrida",
+        ],
+        required: &[],
+        partial: &[],
+        files: &["crates/quasar/src/hub.rs"],
+    },
+    Family {
+        name: "quasar-unrelated-mention",
+        positive: false,
+        holdout: false,
+        queries: [
+            "Escolher a paleta de cores do quasar",
+            "Pick the color palette of the quasar",
+            "Escolher a paleta de cores exibida no quasar",
+        ],
+        required: &[],
+        partial: &[],
+        files: &[],
+    },
+];
+
+/// Constraints tied to the `quasar` component (alias, statement), seeded for
+/// every v3 family: the "big component" shape of a real project, where one
+/// component carries rules of many topics. Their vocabulary stays clear of
+/// the other families on purpose, since a rule matched by its words enters
+/// wherever they appear, tied or not.
+pub const BIG_COMPONENT_RULES: &[(&str, &str)] = &[
+    (
+        "quasar-webhook",
+        "Webhooks de saída assinam o corpo com HMAC e rejeitam assinaturas antigas",
+    ),
+    (
+        "quasar-sharding",
+        "Particionar tabelas grandes por tenant antes de passar de cem milhões de linhas",
+    ),
+    (
+        "quasar-flag",
+        "Toda flag de funcionalidade nasce desligada e tem data de remoção",
+    ),
+    (
+        "quasar-dedup",
+        "Eventos duplicados são descartados pela chave de deduplicação",
+    ),
+    (
+        "quasar-i18n",
+        "Textos exibidos ao usuário passam pelo catálogo de idiomas",
+    ),
+    ("quasar-docs", "Toda API pública documenta exemplos de uso"),
+    (
+        "quasar-build",
+        "A esteira de build deve terminar em menos de dez minutos",
+    ),
+    (
+        "quasar-quota",
+        "Cada cliente tem cota de sessenta chamadas por minuto",
+    ),
+    (
+        "quasar-deadline",
+        "Aplicar prazo máximo de dez segundos às conexões",
+    ),
+    (
+        "quasar-a11y",
+        "Controles interativos têm rótulo de acessibilidade",
+    ),
+    (
+        "quasar-money",
+        "Valores monetários são guardados em centavos inteiros",
+    ),
+    (
+        "quasar-upload",
+        "Imagens enviadas por usuários são limitadas a cinco megabytes",
+    ),
+    (
+        "quasar-email",
+        "Notificações por e-mail respeitam o horário de silêncio do usuário",
+    ),
+    (
+        "quasar-csv",
+        "Relatórios exportados em CSV usam ponto e vírgula como separador",
+    ),
+    (
+        "quasar-icons",
+        "Ícones vêm do conjunto único de glifos do produto",
+    ),
+    (
+        "quasar-legal",
+        "Termos de uso mudam apenas com aprovação jurídica",
+    ),
+    (
+        "quasar-support",
+        "Tickets de suporte são respondidos em até um dia útil",
+    ),
+    (
+        "quasar-maps",
+        "Mapas usam tiles guardados no armazenamento local",
+    ),
+    (
+        "quasar-licenses",
+        "Novas dependências exigem aprovação de licença",
+    ),
+    (
+        "quasar-charts",
+        "Gráficos usam escala logarítmica quando a faixa passa de mil vezes",
+    ),
 ];

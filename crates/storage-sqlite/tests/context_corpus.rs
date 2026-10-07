@@ -31,7 +31,14 @@ struct Fixture {
 }
 
 impl Fixture {
+    /// The v4 and v5 corpora are written without the big component: its rules
+    /// would change what their tasks match lexically.
     fn seed(tag: &str) -> Self {
+        Self::seed_with(tag, false)
+    }
+
+    /// `big`: also seeds the `quasar` component and its twenty rules (v3).
+    fn seed_with(tag: &str, big: bool) -> Self {
         let test = support::open(tag, &["p1", "p2"]);
         let mut aliases = BTreeMap::new();
         for (alias, project, question, choice) in corpus::DECISIONS {
@@ -77,10 +84,18 @@ impl Fixture {
                     *statement,
                 )
             });
+        let big_rules = corpus::BIG_COMPONENT_RULES
+            .iter()
+            .filter(|_| big)
+            .map(|(alias, statement)| (alias.to_string(), ClaimKind::Constraint, *statement));
         let claims = CLAIMS
             .iter()
             .map(|(alias, kind, statement, until)| (alias.to_string(), *kind, *statement, *until))
-            .chain(unrelated.map(|(alias, kind, statement)| (alias, kind, statement, None)));
+            .chain(
+                unrelated
+                    .chain(big_rules)
+                    .map(|(alias, kind, statement)| (alias, kind, statement, None)),
+            );
         for (alias, kind, statement, until) in claims {
             let id = Claims::new(test.store.clone())
                 .create(NewClaim {
@@ -146,6 +161,28 @@ impl Fixture {
                 entity_id: ledger,
             })
             .expect("seed scoped rule");
+        let quasar = big.then(|| {
+            graph
+                .create_entity(NewEntity {
+                    project_id: "p1".into(),
+                    kind: Some(EntityKind::Component),
+                    name: "quasar".into(),
+                    patterns: vec!["crates/quasar/**".into()],
+                    ..NewEntity::default()
+                })
+                .expect("seed quasar component")
+                .entity_id
+        });
+        for (alias, _) in corpus::BIG_COMPONENT_RULES.iter().filter(|_| big) {
+            graph
+                .link(LinkRequest {
+                    kind: EdgeKind::AppliesTo,
+                    source_kind: NodeKind::Claim,
+                    source_id: aliases[*alias].clone(),
+                    entity_id: quasar.clone().expect("big"),
+                })
+                .expect("seed big component rule");
+        }
         if WITH_SEARCH_TERMS {
             seed_search_terms(&test.store, &aliases);
         }
@@ -241,10 +278,10 @@ fn selected(fixture: &Fixture, pack: &ContextPack) -> BTreeSet<String> {
 
 #[test]
 fn corpus_integrity_budgets_and_isolation() {
-    let fixture = Fixture::seed("corpus-integrity");
+    let fixture = Fixture::seed_with("corpus-integrity", true);
     let packs = ContextPacks::new(fixture.test.store.clone());
-    assert_eq!(corpus::FAMILIES.len(), 36);
-    assert_eq!(corpus::FAMILIES.iter().filter(|f| f.positive).count(), 26);
+    assert_eq!(corpus::FAMILIES.len(), 42);
+    assert_eq!(corpus::FAMILIES.iter().filter(|f| f.positive).count(), 30);
     assert_eq!(
         corpus::FAMILIES
             .iter()
@@ -259,7 +296,10 @@ fn corpus_integrity_budgets_and_isolation() {
             .count(),
         3
     );
-    assert_eq!(fixture.aliases.len(), 30 + corpus::UNRELATED_RULES.len());
+    assert_eq!(
+        fixture.aliases.len(),
+        30 + corpus::UNRELATED_RULES.len() + corpus::BIG_COMPONENT_RULES.len()
+    );
     let mut queries = BTreeSet::new();
     let mut names = BTreeSet::new();
     for family in corpus::FAMILIES {
@@ -292,6 +332,14 @@ fn corpus_integrity_budgets_and_isolation() {
                 "{}: an unrelated rule entered: {items:?}",
                 family.name
             );
+            // Of the big component, at most the two rules of the topic, and
+            // only for the families that touch it.
+            let big = items.iter().filter(|a| a.starts_with("quasar-")).count();
+            if family.name.starts_with("quasar-") {
+                assert!(big <= 2, "{}: {big} rules of a big component", family.name);
+            } else {
+                assert_eq!(big, 0, "{}: a big component rule entered", family.name);
+            }
             if let Some(block) = render_compact(&pack, 300, &BTreeSet::new()) {
                 assert!(block.tokens <= 300);
                 assert_eq!(block.tokens, block.text.chars().count().div_ceil(4));
@@ -412,7 +460,7 @@ fn score(
 #[test]
 #[ignore = "synthetic baseline report; run with --nocapture --test-threads=1"]
 fn report_context_corpus() {
-    let fixture = Fixture::seed("corpus-report");
+    let fixture = Fixture::seed_with("corpus-report", true);
     let packs = ContextPacks::new(fixture.test.store.clone());
     let mut latency = Vec::new();
     let mut pack_totals = Totals::default();
@@ -552,8 +600,8 @@ struct Measure {
     p95_us: u128,
 }
 
-fn measure(tag: &str, families: &[corpus::Family]) -> Measure {
-    let fixture = Fixture::seed(tag);
+fn measure(tag: &str, families: &[corpus::Family], big: bool) -> Measure {
+    let fixture = Fixture::seed_with(tag, big);
     let packs = ContextPacks::new(fixture.test.store.clone());
     let mut totals = Totals::default();
     let mut development = Totals::default();
@@ -643,7 +691,7 @@ fn assert_floors(measure: &Measure, precision_floor: f64, recall_floor: f64, cei
 
 #[test]
 fn context_quality_gate() {
-    let measure = measure("corpus-gate", corpus::FAMILIES);
+    let measure = measure("corpus-gate", corpus::FAMILIES, true);
     assert!(measure.development.expected > 0 && measure.holdout.expected > 0);
     assert_floors(
         &measure,
@@ -666,7 +714,7 @@ const V4_CONTAMINATED_CASES_CEILING: usize = 4;
 
 #[test]
 fn sealed_v4_quality_gate() {
-    let measure = measure("corpus-v4-gate", corpus_v4::FAMILIES_V4);
+    let measure = measure("corpus-v4-gate", corpus_v4::FAMILIES_V4, false);
     assert_floors(
         &measure,
         V4_PRECISION_FLOOR,
@@ -687,7 +735,7 @@ const V5_CONTAMINATED_CASES_CEILING: usize = 15;
 
 #[test]
 fn calibration_v5_quality_gate() {
-    let measure = measure("corpus-v5-gate", corpus_v5::FAMILIES_V5);
+    let measure = measure("corpus-v5-gate", corpus_v5::FAMILIES_V5, false);
     assert_floors(
         &measure,
         V5_PRECISION_FLOOR,
