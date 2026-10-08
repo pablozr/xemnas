@@ -68,6 +68,18 @@ _Avoid_: Module, tag
 Uma ligação do grafo entre uma decisão, claim ou Entity e uma Entity (`affects`, `uses`, `applies_to`, `part_of`). Nasce humana e confirmada, ou derivada como sugestão; nunca é apagada, só invalidada.
 _Avoid_: Relation, link
 
+**Vínculo estrutural**:
+Uma Edge de decisão para componente que nasce de um sinal conferido no repositório, e não só do texto: o arquivo citado que existe, o componente que declara a dependência citada, o que define o símbolo citado, a raiz do workspace ou a CI. Registra quem a confirmou (pessoa, regras, IA ou herança).
+_Avoid_: Link automático
+
+**Menção afirmativa**:
+Uma ocorrência do nome de um componente no texto de uma decisão que diz algo sobre ele. Não conta o que o texto só cita para excluir ("independente de X", "sem X", "X foi descartado"), o nome do próprio projeto em prosa nem o nome dentro de outro caminho.
+_Avoid_: Citação
+
+**Componente fantasma**:
+Componente cuja pasta não existe mais (ou nunca existiu) no projeto, em geral nascido de um caminho que um documento cita. O app o aponta; só uma pessoa o aposenta.
+_Avoid_: Componente órfão
+
 **Knowledge Graph** (grafo, mapa):
 As Entities e Edges de um Project com as consultas sobre elas: mapa, vizinhança, lente de arquivo, impacto, linha do tempo e conflitos.
 _Avoid_: Graph database, GraphRAG

@@ -1,6 +1,6 @@
 # ADR-0014 — Regras com escopo por componente
 
-**Status:** Vigente. Aceito em 06/10/2026.
+**Status:** Vigente. Aceito em 06/10/2026. A herança do item 3 foi refinada pelo [ADR-0016](0016-vinculos-por-estrutura-e-mencao-afirmativa.md).
 
 ## Contexto
 

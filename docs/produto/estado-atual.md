@@ -69,7 +69,7 @@ componente, e elas não podem ir em toda tarefa). A IA propõe os componentes de
 
 **Grafo e mapa.** Componentes e tecnologias do projeto, com os arquivos que cada um cobre e as
 decisões e regras ligadas a eles. Os componentes vêm do workspace declarado e dos arquivos que
-as decisões tocaram. Vínculos propostos esperam sua confirmação. A tela Mapa tem lista, grafo,
+as decisões tocaram, mais a raiz do workspace e a CI. Os vínculos nascem de menções afirmativas (o que o texto só cita para excluir, o nome do próprio projeto em prosa e o nome dentro de outro caminho não ligam) e de sinais conferidos no repositório: o arquivo citado que existe, o componente que declara a dependência citada, o que define o símbolo citado entre crases. Cada vínculo registra quem o confirmou (pessoa, regras, IA ou herança) e os que a máquina fez e o texto não sustenta mais são desfeitos sozinhos a cada atualização; o que uma pessoa confirmou nunca. O que depende só de uma menção fraca espera sua confirmação ou o juiz da revisão automática, que julga os vínculos à parte, com a pergunta "este componente é onde a regra vale?". Um componente cuja pasta sumiu é apontado para você aposentar. A tela Mapa tem lista, grafo,
 lente de arquivo e linha do tempo. A tela Visão mostra um resumo e os fluxos principais
 escritos pela IA, cada frase com suas fontes. Há também uma página HTML exportável.
 
