@@ -13,11 +13,13 @@ mod mention;
 mod query;
 mod repo_files;
 mod scope;
+mod symbols;
 
 pub use ai_link::{ai_link_quote, ai_link_reason, ai_link_why, AI_LINK_REASON};
 pub use derive::{
     added_dependencies, map_preparer, prepared_documents, prepared_projects, ComponentProposal,
     MapPreparer, SuggestionReport, TechnologyProposal, DEPENDENCY_REASON, DEPENDENCY_SHARED_MARK,
+    SYMBOL_REASON,
 };
 pub(crate) use discover::project_keys;
 pub use discover::{declared_components, project_names, DeclaredComponent, WorkspaceKind};
@@ -29,9 +31,9 @@ pub use query::{
     NodeSummary, PartCount, ProjectGraph, ProjectMap, Suggestion, TimelineEvent, TimelineKind,
     DEFAULT_NEIGHBORHOOD_LIMIT, MAX_NEIGHBORHOOD_DEPTH,
 };
-#[doc(hidden)]
-pub use repo_files::index_repository;
 pub(crate) use repo_files::{counted_files, repo_files};
+#[doc(hidden)]
+pub use repo_files::{index_repository, scan_symbols};
 pub use scope::ClaimScopes;
 
 use domain::entities::{

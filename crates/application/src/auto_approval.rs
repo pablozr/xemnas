@@ -551,6 +551,9 @@ pub fn triage_link(reason: &str) -> Triage {
         } else {
             Triage::Accept("dependência citada que só este componente declara")
         }
+    } else if reason.starts_with(crate::graph::SYMBOL_REASON) {
+        // The text cites a name or a file the code of one component holds.
+        Triage::Accept("símbolo ou arquivo citado que só este componente define")
     } else {
         Triage::Accept("derivado de arquivo ou dependência que a decisão tocou")
     }
@@ -1664,6 +1667,15 @@ mod tests {
         assert_eq!(triage_link(&mention), Triage::Ask);
         let proposed = crate::graph::ai_link_reason("o core grava pela outbox", "Rege o core.");
         assert_eq!(triage_link(&proposed), Triage::Ask);
+    }
+
+    #[test]
+    fn a_cited_symbol_is_accepted_by_the_rules() {
+        let reason = format!(
+            "{}`FLUSH_INTERVAL` (crates/store/src/flush.rs)",
+            crate::graph::SYMBOL_REASON
+        );
+        assert!(matches!(triage_link(&reason), Triage::Accept(_)));
     }
 
     #[test]

@@ -285,6 +285,38 @@ impl Folded {
         }
     }
 
+    /// The words written between backticks (names with `.` kept, so
+    /// `state.rs` stays whole), outside every negation.
+    pub(crate) fn code_words(&self) -> Vec<String> {
+        let mut words = Vec::new();
+        let mut at = 0;
+        while at < self.original.len() {
+            if !self.code[at] {
+                at += 1;
+                continue;
+            }
+            let start = at;
+            while at < self.original.len()
+                && self.code[at]
+                && (self.original[at].is_alphanumeric() || matches!(self.original[at], '_' | '.'))
+            {
+                at += 1;
+            }
+            if at == start {
+                at += 1;
+                continue;
+            }
+            if !self.negated.get(start).copied().unwrap_or(false) {
+                let word: String = self.original[start..at].iter().collect();
+                let word = word.trim_matches('.');
+                if !word.is_empty() {
+                    words.push(word.to_string());
+                }
+            }
+        }
+        words
+    }
+
     /// The quote around the first affirmative mention of `term`, when the text
     /// has one the rule accepts.
     pub(crate) fn mention(&self, term: &Term) -> Option<String> {
@@ -924,6 +956,21 @@ mod tests {
         assert!(affirmative("Usar acme::run aqui.", &acme));
         assert!(affirmative("Editar apps/acme/src/main.rs.", &acme));
         assert!(affirmative("O acme lê a flag.", &acme));
+    }
+
+    #[test]
+    fn code_words_are_the_affirmative_names_between_backticks() {
+        let words = |text: &str| Folded::new(text).code_words();
+        assert_eq!(
+            words("Raise `FLUSH_INTERVAL` and read `state.rs` or `A::b()`."),
+            vec!["FLUSH_INTERVAL", "state.rs", "A", "b"]
+        );
+        assert!(words("Do not touch `FLUSH_INTERVAL`; the rest stays.").is_empty());
+        assert_eq!(
+            words("Do not touch `OLD`; raise `NEW_ONE`."),
+            vec!["NEW_ONE"]
+        );
+        assert!(words("No code here.").is_empty());
     }
 
     #[test]

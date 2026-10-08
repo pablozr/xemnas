@@ -66,12 +66,27 @@ pub struct SuggestionReport {
 /// Prefix of the reason of a link derived from a dependency the decision's text
 /// cites, followed by `"name" (manifest)`.
 pub const DEPENDENCY_REASON: &str = "dependência citada: ";
+/// Prefix of the reason of a link derived from a symbol or a file name the
+/// text cites between backticks, followed by `` `name` (file) ``.
+pub const SYMBOL_REASON: &str = "símbolo citado: ";
 /// Appended to that reason when a second component declares the dependency
 /// too, so the rules do not accept it alone.
 pub const DEPENDENCY_SHARED_MARK: &str = "; também declarada por outro componente";
 /// Components that may declare a dependency for it to point at them; a
 /// dependency of more is shared plumbing, not a place.
 const MAX_OWNERS: usize = 2;
+/// Files that may define a symbol for it to point at a place; a name defined
+/// in more is shared plumbing.
+const MAX_DEFINING_FILES: usize = 8;
+
+/// What a decision cites between backticks and what it is looked up in.
+struct Cited<'a> {
+    words: &'a [String],
+    components: &'a [&'a EntityRecord],
+    reserved: &'a BTreeSet<String>,
+    repo: &'a RepoFiles,
+    root: &'a std::path::Path,
+}
 
 /// A dependency the text may cite and the components that declare it.
 struct OwnedDependency {
@@ -445,6 +460,12 @@ where
             .collect();
 
         let owned = self.dependency_owners(&live, &declared);
+        // Names the text may use for something else: never read as a symbol.
+        let reserved: BTreeSet<String> = live
+            .iter()
+            .flat_map(|entity| entity.keys())
+            .chain(owned.iter().map(|dependency| entity_key(&dependency.name)))
+            .collect();
         for decision in &decisions {
             let texts = decision_texts(decision);
             let has_files = decision
@@ -525,6 +546,21 @@ where
             }
             report.new_edges +=
                 self.suggest_dependencies(&mut edges, project_id, decision, &texts, &owned, &now)?;
+            let words: Vec<String> = texts.iter().flat_map(Folded::code_words).collect();
+            if !words.is_empty() {
+                let repo = Arc::clone(listing.get_or_insert_with(|| repo_files(root)));
+                if let Some(repo) = repo.as_ref().as_ref().filter(|repo| !repo.partial()) {
+                    let cited = Cited {
+                        words: &words,
+                        components: &live,
+                        reserved: &reserved,
+                        repo,
+                        root,
+                    };
+                    report.new_edges +=
+                        self.suggest_symbols(&mut edges, project_id, decision, &cited, &now)?;
+                }
+            }
             report.new_edges +=
                 self.suggest_mentions(&mut edges, project_id, decision, &texts, &named, &now)?;
         }
@@ -737,6 +773,88 @@ where
             .into_values()
             .filter(|dependency| dependency.owners.len() <= MAX_OWNERS)
             .collect()
+    }
+
+    /// Ties the decision to the component that defines a symbol, or holds a
+    /// file, its text cites between backticks. A name defined in two
+    /// components, or a file name that two files share, ties to nothing.
+    fn suggest_symbols(
+        &self,
+        edges: &mut Vec<EdgeRecord>,
+        project_id: &str,
+        decision: &DecisionNode,
+        cited: &Cited<'_>,
+        now: &str,
+    ) -> Result<usize, GraphError> {
+        let source = (NodeKind::Decision, decision.decision_id.as_str());
+        let owners = |file: &str| -> Vec<&str> {
+            cited
+                .components
+                .iter()
+                .filter(|entity| entity.kind == EntityKind::Component)
+                .filter(|entity| {
+                    entity
+                        .patterns
+                        .iter()
+                        .any(|pattern| pattern_matches(pattern, file))
+                })
+                .map(|entity| entity.entity_id.as_str())
+                .collect()
+        };
+        let mut written = 0;
+        for word in cited.words {
+            let files: Vec<String> = if word.contains('.') {
+                if !super::symbols::is_code_file(word) {
+                    continue;
+                }
+                let files: Vec<&str> = cited.repo.named(word).collect();
+                match files.as_slice() {
+                    [only] => vec![(*only).to_string()],
+                    _ => continue,
+                }
+            } else if super::symbols::is_symbol(word) && !cited.reserved.contains(&entity_key(word))
+            {
+                let definitions = cited.repo.definitions(cited.root);
+                if definitions.partial() {
+                    continue;
+                }
+                let positions = definitions.files_defining(word);
+                // A name defined all over the project is not a place.
+                if positions.len() > MAX_DEFINING_FILES {
+                    continue;
+                }
+                positions
+                    .iter()
+                    .map(|position| cited.repo.file(*position).to_string())
+                    .collect()
+            } else {
+                continue;
+            };
+            let Some(first) = files.first() else {
+                continue;
+            };
+            let mut places: BTreeSet<&str> = BTreeSet::new();
+            for file in &files {
+                places.extend(owners(file));
+                if places.len() > 1 {
+                    break;
+                }
+            }
+            let mut places = places.into_iter();
+            if let (Some(entity_id), None) = (places.next(), places.next()) {
+                let reason = format!("{SYMBOL_REASON}`{word}` ({first})");
+                written += self.suggest(
+                    edges,
+                    project_id,
+                    EdgeKind::Affects,
+                    source,
+                    entity_id,
+                    &reason,
+                    now,
+                )?;
+            }
+        }
+        Ok(written)
     }
 
     /// Ties the decision to the component that declares a dependency its text

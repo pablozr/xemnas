@@ -58,6 +58,8 @@ pub(crate) struct RepoFiles {
     by_name: HashMap<String, Vec<usize>>,
     /// The listing was cut: a path missing from it may still exist.
     partial: bool,
+    /// Definitions found in the code, read on first use.
+    definitions: OnceLock<super::symbols::Definitions>,
 }
 
 impl RepoFiles {
@@ -77,12 +79,38 @@ impl RepoFiles {
             exact,
             by_name,
             partial,
+            definitions: OnceLock::new(),
         }
     }
 
     /// Whether the listing was cut, so a missing path proves nothing.
     pub(crate) fn partial(&self) -> bool {
         self.partial
+    }
+
+    /// Every file, sorted; a position in the listing is an index here.
+    pub(crate) fn paths(&self) -> &[String] {
+        &self.files
+    }
+
+    /// The file at `position` of the listing.
+    pub(crate) fn file(&self, position: usize) -> &str {
+        &self.files[position]
+    }
+
+    /// The files whose name is `name`, case aside.
+    pub(crate) fn named(&self, name: &str) -> impl Iterator<Item = &str> {
+        self.by_name
+            .get(&name.to_lowercase())
+            .into_iter()
+            .flatten()
+            .map(|position| self.files[*position].as_str())
+    }
+
+    /// The definitions of the code, scanned once for this listing.
+    pub(crate) fn definitions(&self, root: &Path) -> &super::symbols::Definitions {
+        self.definitions
+            .get_or_init(|| super::symbols::scan(root, self))
     }
 
     /// What `cited` names: the path itself, else the one file that ends with
@@ -137,6 +165,14 @@ pub(crate) fn repo_files(root: &Path) -> Arc<Option<RepoFiles>> {
 #[doc(hidden)]
 pub fn index_repository(root: &Path) -> Option<(usize, bool)> {
     list(root).map(|listing| (listing.files.len(), listing.partial))
+}
+
+/// Scans the definitions of the code under `root` without the cache, for the
+/// scale gate: how many names it found.
+#[doc(hidden)]
+pub fn scan_symbols(root: &Path) -> Option<usize> {
+    let listing = list(root)?;
+    Some(listing.definitions(root).count())
 }
 
 fn list(root: &Path) -> Option<RepoFiles> {

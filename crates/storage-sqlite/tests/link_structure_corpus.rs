@@ -40,8 +40,9 @@ use storage_sqlite::SqliteStore;
 /// with the project's own name restricted: precision 0.857 (18/21), recall 0.581, homonym_linked 0.
 /// with the file index: precision 1.000 (20/20), recall 0.645 (20/31), ghost 0; listing of 5,000 files 69 ms.
 /// with dependency owners: precision 1.000 (24/24), recall 0.774 (24/31).
+/// with symbols and file names: precision 1.000 (27/27), recall 0.871 (27/31); scan of 2,000 code files 0.5 s.
 const PRECISION_FLOOR: f64 = 0.95;
-const RECALL_FLOOR: f64 = 0.77;
+const RECALL_FLOOR: f64 = 0.87;
 /// Ceilings: the count of wrong links of each kind.
 const NEGATED_CEILING: usize = 0;
 const HOMONYM_CEILING: usize = 0;
@@ -929,6 +930,8 @@ const REFRESH_COLD_CEILING_MS: u128 = 4_500;
 const REFRESH_WARM_CEILING_MS: u128 = 3_000;
 /// The listing of the 5,000 files.
 const INDEX_CEILING_MS: u128 = 300;
+/// The definitions scan of the 2,000 code files.
+const SYMBOLS_CEILING_MS: u128 = 800;
 
 #[test]
 #[ignore = "scale gate (seeds 2,000 decisions and 5,000 files); run by tools/core-quality.py"]
@@ -944,9 +947,20 @@ fn link_structure_scales() {
         format!("[workspace]\nmembers = [{}]\n", members.join(", ")),
     )
     .expect("root manifest");
-    let filler: String = (0..250)
-        .map(|line| format!("pub fn generated_{line}(input: u64) -> u64 {{ input + {line} }}\n"))
-        .collect();
+    // About 8 KB of code per file: 30 definitions with their comments.
+    let code_of = |index: usize| -> String {
+        let mut text = String::new();
+        for line in 0..30 {
+            text.push_str(&format!(
+                "/// Adds {line} to the input and returns the sum of both values.\n\
+                 pub fn gen_{index}_{line}(input: u64) -> u64 {{ input + {line} }}\n\
+                 // The sum above never overflows for the inputs the callers use today.\n\
+                 // Keep the doc comments in sync with the callers when the type changes.\n\
+                 // Nothing else in this file is public, so the callers rely on these only.\n\n"
+            ));
+        }
+        text
+    };
     let mut written = 0;
     for part in 0..SCALE_COMPONENTS {
         let dir = root.join(format!("crates/part{part:02}"));
@@ -970,7 +984,7 @@ fn link_structure_scales() {
         ));
         std::fs::create_dir_all(&dir).expect("module folder");
         if code < SCALE_CODE_FILES {
-            std::fs::write(dir.join(format!("file{index}.rs")), &filler).expect("code file");
+            std::fs::write(dir.join(format!("file{index}.rs")), code_of(index)).expect("code file");
             code += 1;
         } else {
             std::fs::write(dir.join(format!("note{index}.md")), "# note\n").expect("note");
@@ -986,7 +1000,7 @@ fn link_structure_scales() {
         "O part{a} grava pela outbox antes de responder.",
         "Usar dep{a} para a compressão.",
         "Sem part{a}, o fluxo continua igual.",
-        "Subir `generated_{a}` para o próximo lote.",
+        "Subir `gen_{n}_3` para o próximo lote.",
         "Revisar crates/part{a}/src/m0/file{a}.rs com cuidado.",
     ];
     let decisions: Vec<Bulk> = (0..SCALE_DECISIONS)
@@ -996,7 +1010,9 @@ fn link_structure_scales() {
                 key: format!("s{number:04}"),
                 text: format!(
                     "{} Lote {number}.",
-                    texts[number % texts.len()].replace("{a}", &a)
+                    texts[number % texts.len()]
+                        .replace("{a}", &a)
+                        .replace("{n}", &(number % 60).to_string())
                 ),
                 file: format!("crates/part{a}/src/m0/file{}.rs", number % 60),
                 document: number % 2 == 0,
@@ -1017,10 +1033,16 @@ fn link_structure_scales() {
     let started = Instant::now();
     let (listed, partial) = application::graph::index_repository(&root).expect("listing");
     let index_ms = started.elapsed().as_millis();
+    // The definitions of the 2,000 code files (about 16 MB), cold.
+    let started = Instant::now();
+    let symbols = application::graph::scan_symbols(&root).expect("symbols");
+    let symbols_ms = started.elapsed().as_millis();
     println!(
-        "latency refresh_ms={cold_ms} refresh_warm_ms={warm_ms} index_ms={index_ms}          files={listed} new_edges={}",
+        "latency refresh_ms={cold_ms} refresh_warm_ms={warm_ms} index_ms={index_ms}          symbols_ms={symbols_ms} files={listed} symbols={symbols} new_edges={}",
         cold.new_edges
     );
+    assert!(symbols >= SCALE_CODE_FILES, "found {symbols} symbols");
+    assert!(symbols_ms <= SYMBOLS_CEILING_MS, "symbols {symbols_ms}ms");
     assert!(!partial && listed >= SCALE_FILES, "listed {listed} files");
     assert!(index_ms <= INDEX_CEILING_MS, "listing {index_ms}ms");
     let _ = std::fs::remove_dir_all(&base);
