@@ -51,6 +51,20 @@ pub struct DeclaredComponent {
     pub description: String,
     /// The manifest that declares it.
     pub source: WorkspaceKind,
+    /// Names of the dependencies its manifest declares (all tables, `target.*`
+    /// ones included; the real package name of a renamed dependency).
+    pub dependencies: Vec<String>,
+}
+
+impl DeclaredComponent {
+    /// The manifest file of the member, relative to the project.
+    pub fn manifest(&self) -> String {
+        let dir = self.pattern.trim_end_matches("/**");
+        match self.source {
+            WorkspaceKind::Cargo => format!("{dir}/Cargo.toml"),
+            WorkspaceKind::Npm | WorkspaceKind::Pnpm => format!("{dir}/package.json"),
+        }
+    }
 }
 
 /// Every member the manifests at `root` declare, Cargo first, by path.
@@ -74,6 +88,7 @@ pub fn declared_components(root: &Path) -> Vec<DeclaredComponent> {
                     pattern: format!("{dir}/**"),
                     description: toml_package_field(&manifest, "description").unwrap_or_default(),
                     source: WorkspaceKind::Cargo,
+                    dependencies: cargo_dependencies(&manifest),
                 });
             }
         }
@@ -114,10 +129,72 @@ pub fn declared_components(root: &Path) -> Vec<DeclaredComponent> {
                 pattern: format!("{dir}/**"),
                 description: field("description").unwrap_or_default(),
                 source,
+                dependencies: npm_dependencies(&value),
             });
         }
     }
     found
+}
+
+/// Tables of a Cargo manifest that list dependencies.
+const CARGO_DEPENDENCY_TABLES: &[&str] =
+    &["dependencies", "dev-dependencies", "build-dependencies"];
+
+/// Dependency names of a Cargo manifest: the three tables and the same three
+/// under each `target.<cfg>`. A renamed dependency (`package = "x"`) counts as
+/// `x`, the name people write.
+fn cargo_dependencies(text: &str) -> Vec<String> {
+    let Ok(manifest) = text.parse::<toml::Table>() else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = Vec::new();
+    let mut collect = |section: Option<&toml::Value>| {
+        let Some(table) = section.and_then(toml::Value::as_table) else {
+            return;
+        };
+        for (key, value) in table {
+            let real = value
+                .as_table()
+                .and_then(|entry| entry.get("package"))
+                .and_then(toml::Value::as_str)
+                .unwrap_or(key);
+            if !names.iter().any(|known| known == real) {
+                names.push(real.to_string());
+            }
+        }
+    };
+    for kind in CARGO_DEPENDENCY_TABLES {
+        collect(manifest.get(*kind));
+    }
+    if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
+        for target in targets.values() {
+            for kind in CARGO_DEPENDENCY_TABLES {
+                collect(target.get(*kind));
+            }
+        }
+    }
+    names
+}
+
+/// Dependency names of a `package.json`.
+fn npm_dependencies(manifest: &serde_json::Value) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for kind in [
+        "dependencies",
+        "devDependencies",
+        "peerDependencies",
+        "optionalDependencies",
+    ] {
+        let Some(table) = manifest.get(kind).and_then(serde_json::Value::as_object) else {
+            continue;
+        };
+        for key in table.keys() {
+            if !names.contains(key) {
+                names.push(key.clone());
+            }
+        }
+    }
+    names
 }
 
 /// The names the project itself answers to: its folder, the `[package].name`
@@ -183,6 +260,10 @@ fn alias_candidates(component: &DeclaredComponent) -> Vec<String> {
         .next()
         .unwrap_or("");
     let mut found: Vec<String> = Vec::new();
+    // Rust code spells a crate `sc_core`, its package `sc-core`.
+    let underscored = (component.source == WorkspaceKind::Cargo)
+        .then(|| component.name.replace('-', "_"))
+        .filter(|form| *form != component.name);
     for term in [last, folder] {
         for form in [term.to_string(), term.replace(['-', '_'], " ")] {
             let usable = !form.starts_with('@') && entity_key(&form).chars().count() >= 3;
@@ -190,6 +271,14 @@ fn alias_candidates(component: &DeclaredComponent) -> Vec<String> {
             if usable && !known(&component.name) && !found.iter().any(|other| known(other)) {
                 found.push(form);
             }
+        }
+    }
+    if let Some(form) = underscored {
+        if !found
+            .iter()
+            .any(|other| other.to_lowercase() == form.to_lowercase())
+        {
+            found.push(form);
         }
     }
     found
@@ -385,7 +474,7 @@ where
         let mut created = 0;
         let declared = declared_components(Path::new(&project.location));
         let aliases = package_aliases(&declared, &vec![BTreeSet::new(); declared.len()]);
-        for (declared, aliases) in declared.into_iter().zip(aliases) {
+        for (declared, aliases) in declared.iter().cloned().zip(aliases) {
             let description: String = declared
                 .description
                 .chars()
@@ -418,13 +507,23 @@ where
     pub fn merge_package_aliases(&self, project_id: &str) -> Result<usize, GraphError> {
         let project =
             ProjectRepository::get(&self.store, project_id)?.ok_or(GraphError::ProjectNotFound)?;
+        let declared = declared_components(Path::new(&project.location));
+        self.merge_aliases(project_id, &declared)
+    }
+
+    /// [`Self::merge_package_aliases`] over members already read, so a refresh
+    /// reads the manifests once.
+    pub(super) fn merge_aliases(
+        &self,
+        project_id: &str,
+        declared: &[DeclaredComponent],
+    ) -> Result<usize, GraphError> {
         let live: Vec<_> = self
             .store
             .project_entities(project_id)?
             .into_iter()
             .filter(|entity| entity.retired_at.is_none())
             .collect();
-        let declared = declared_components(Path::new(&project.location));
         let matched: Vec<Option<&_>> = declared
             .iter()
             .map(|component| {
@@ -444,7 +543,7 @@ where
             })
             .collect();
         let mut updated = 0;
-        for (entity, aliases) in matched.into_iter().zip(package_aliases(&declared, &taken)) {
+        for (entity, aliases) in matched.into_iter().zip(package_aliases(declared, &taken)) {
             let Some(entity) = entity else {
                 continue;
             };
@@ -617,6 +716,7 @@ mod tests {
             pattern: format!("{dir}/**"),
             description: String::new(),
             source: WorkspaceKind::Npm,
+            dependencies: Vec::new(),
         }
     }
 
@@ -632,6 +732,49 @@ mod tests {
         let crate_ = declared("storage_sqlite", "crates/storage_sqlite");
         assert_eq!(alias_candidates(&crate_), vec!["storage sqlite"]);
         assert!(alias_candidates(&declared("ui", "apps/ui")).is_empty());
+    }
+
+    #[test]
+    fn a_cargo_package_is_also_written_with_underscores() {
+        let mut core = declared("sc-core", "crates/sc-core");
+        core.source = WorkspaceKind::Cargo;
+        assert_eq!(alias_candidates(&core), vec!["sc core", "sc_core"]);
+        // An npm package has no such spelling.
+        let web = declared("sc-core", "crates/sc-core");
+        assert_eq!(alias_candidates(&web), vec!["sc core"]);
+    }
+
+    #[test]
+    fn manifests_list_their_dependencies() {
+        let cargo = "[package]\nname = \"x\"\n\n[dependencies]\nquinn = \"0.11\"\n\
+                     serde = { version = \"1\", features = [\"derive\"] }\n\
+                     tls = { package = \"rustls\", version = \"0.23\" }\n\n\
+                     [dev-dependencies]\ntokio = \"1\"\n\n[build-dependencies]\ncc = \"1\"\n\n\
+                     [target.'cfg(windows)'.dependencies]\nwindows-sys = \"0.59\"\n\n\
+                     [dependencies.iroh]\nversion = \"0.9\"\n";
+        let mut found = cargo_dependencies(cargo);
+        found.sort();
+        assert_eq!(
+            found,
+            vec![
+                "cc",
+                "iroh",
+                "quinn",
+                "rustls",
+                "serde",
+                "tokio",
+                "windows-sys"
+            ]
+        );
+        let npm: serde_json::Value = serde_json::from_str(
+            "{\"dependencies\": {\"fastify\": \"^5\"}, \"devDependencies\": {\"vitest\": \"1\"}, \
+             \"peerDependencies\": {\"react\": \"18\"}, \"optionalDependencies\": {\"fsevents\": \"2\"}, \
+             \"scripts\": {\"build\": \"tsc\"}}",
+        )
+        .unwrap();
+        let mut found = npm_dependencies(&npm);
+        found.sort();
+        assert_eq!(found, vec!["fastify", "fsevents", "react", "vitest"]);
     }
 
     #[test]

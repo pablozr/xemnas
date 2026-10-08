@@ -18,7 +18,7 @@ use domain::entities::{
 };
 use domain::time::Timestamp;
 
-use super::mention::{entity_terms, mention_reason, Folded, Term};
+use super::mention::{dependency_term, entity_terms, mention_reason, Folded, Term};
 use super::repo_files::{counted_files, repo_files, RepoFiles};
 use super::{DecisionNode, EdgeRecord, EntityRecord, GraphError, GraphStore, KnowledgeGraph};
 use crate::claims::ClaimStore;
@@ -61,6 +61,23 @@ pub struct SuggestionReport {
     pub components: Vec<ComponentProposal>,
     /// Technologies worth creating, most used first.
     pub technologies: Vec<TechnologyProposal>,
+}
+
+/// Prefix of the reason of a link derived from a dependency the decision's text
+/// cites, followed by `"name" (manifest)`.
+pub const DEPENDENCY_REASON: &str = "dependência citada: ";
+/// Appended to that reason when a second component declares the dependency
+/// too, so the rules do not accept it alone.
+pub const DEPENDENCY_SHARED_MARK: &str = "; também declarada por outro componente";
+/// Components that may declare a dependency for it to point at them; a
+/// dependency of more is shared plumbing, not a place.
+const MAX_OWNERS: usize = 2;
+
+/// A dependency the text may cite and the components that declare it.
+struct OwnedDependency {
+    term: Term,
+    name: String,
+    owners: Vec<(String, String)>,
 }
 
 /// Manifest keys that are not dependency names.
@@ -388,7 +405,8 @@ where
         let project =
             ProjectRepository::get(&self.store, project_id)?.ok_or(GraphError::ProjectNotFound)?;
         // Aliases first, so mentions below already use them.
-        self.merge_package_aliases(project_id)?;
+        let declared = super::declared_components(std::path::Path::new(&project.location));
+        self.merge_aliases(project_id, &declared)?;
         let now = now_rfc3339();
         let at = Timestamp::parse(&now).ok_or(GraphError::Storage("relógio inválido".into()))?;
         let project_keys = super::discover::project_keys(std::path::Path::new(&project.location));
@@ -426,6 +444,7 @@ where
             })
             .collect();
 
+        let owned = self.dependency_owners(&live, &declared);
         for decision in &decisions {
             let texts = decision_texts(decision);
             let has_files = decision
@@ -504,6 +523,8 @@ where
                     }
                 }
             }
+            report.new_edges +=
+                self.suggest_dependencies(&mut edges, project_id, decision, &texts, &owned, &now)?;
             report.new_edges +=
                 self.suggest_mentions(&mut edges, project_id, decision, &texts, &named, &now)?;
         }
@@ -618,25 +639,22 @@ where
             .collect();
         // Members the project declares come first: they are structure the
         // team wrote down, not a guess from a diff.
-        let declared: Vec<ComponentProposal> =
-            super::declared_components(std::path::Path::new(&project.location))
-                .into_iter()
-                .filter(|member| !claimed.contains(&member.pattern))
-                .filter(|member| {
-                    !known.contains(&(EntityKind::Component, entity_key(&member.name)))
-                })
-                .map(|member| ComponentProposal {
-                    decisions: report
-                        .components
-                        .iter()
-                        .find(|inferred| inferred.pattern == member.pattern)
-                        .map_or(0, |inferred| inferred.decisions),
-                    name: member.name,
-                    pattern: member.pattern,
-                    description: member.description,
-                    declared: Some(member.source),
-                })
-                .collect();
+        let declared: Vec<ComponentProposal> = declared
+            .iter()
+            .filter(|member| !claimed.contains(&member.pattern))
+            .filter(|member| !known.contains(&(EntityKind::Component, entity_key(&member.name))))
+            .map(|member| ComponentProposal {
+                decisions: report
+                    .components
+                    .iter()
+                    .find(|inferred| inferred.pattern == member.pattern)
+                    .map_or(0, |inferred| inferred.decisions),
+                name: member.name.clone(),
+                pattern: member.pattern.clone(),
+                description: member.description.clone(),
+                declared: Some(member.source),
+            })
+            .collect();
         report.components.retain(|inferred| {
             !declared
                 .iter()
@@ -664,6 +682,106 @@ where
                 .then(left.name.cmp(&right.name))
         });
         Ok(report)
+    }
+
+    /// The dependencies the members declare, each with the live components
+    /// that declare it. Left out: a dependency that is a member of the
+    /// workspace, one a live component is already named after, and one that
+    /// more than [`MAX_OWNERS`] components declare.
+    fn dependency_owners(
+        &self,
+        live: &[&EntityRecord],
+        declared: &[super::DeclaredComponent],
+    ) -> Vec<OwnedDependency> {
+        let taken: BTreeSet<String> = declared
+            .iter()
+            .map(|member| entity_key(&member.name))
+            .chain(
+                live.iter()
+                    .filter(|entity| entity.kind == EntityKind::Component)
+                    .flat_map(|entity| entity.keys()),
+            )
+            .collect();
+        let mut by_key: BTreeMap<String, OwnedDependency> = BTreeMap::new();
+        for member in declared {
+            let Some(component) = live.iter().find(|entity| {
+                entity.kind == EntityKind::Component && entity.patterns.contains(&member.pattern)
+            }) else {
+                continue;
+            };
+            for dependency in &member.dependencies {
+                let key = entity_key(dependency);
+                if taken.contains(&key) {
+                    continue;
+                }
+                let Some(term) = dependency_term(dependency) else {
+                    continue;
+                };
+                let entry = by_key.entry(key).or_insert_with(|| OwnedDependency {
+                    term,
+                    name: dependency.clone(),
+                    owners: Vec::new(),
+                });
+                if !entry
+                    .owners
+                    .iter()
+                    .any(|(id, _)| *id == component.entity_id)
+                {
+                    entry
+                        .owners
+                        .push((component.entity_id.clone(), member.manifest()));
+                }
+            }
+        }
+        by_key
+            .into_values()
+            .filter(|dependency| dependency.owners.len() <= MAX_OWNERS)
+            .collect()
+    }
+
+    /// Ties the decision to the component that declares a dependency its text
+    /// cites (not to exclude it). With a second declaring component the
+    /// reason says so.
+    fn suggest_dependencies(
+        &self,
+        edges: &mut Vec<EdgeRecord>,
+        project_id: &str,
+        decision: &DecisionNode,
+        texts: &[Folded],
+        owned: &[OwnedDependency],
+        now: &str,
+    ) -> Result<usize, GraphError> {
+        let source = (NodeKind::Decision, decision.decision_id.as_str());
+        let mut written = 0;
+        for dependency in owned {
+            if !texts
+                .iter()
+                .any(|text| text.mention(&dependency.term).is_some())
+            {
+                continue;
+            }
+            let shared = if dependency.owners.len() > 1 {
+                DEPENDENCY_SHARED_MARK
+            } else {
+                ""
+            };
+            for (entity_id, manifest) in &dependency.owners {
+                let reason = format!(
+                    "{DEPENDENCY_REASON}\"{}\" ({manifest}{shared})",
+                    dependency.name
+                );
+                written += self.suggest(
+                    edges,
+                    project_id,
+                    EdgeKind::Affects,
+                    source,
+                    entity_id,
+                    &reason,
+                    now,
+                )?;
+            }
+        }
+        Ok(written)
     }
 
     /// Suggests the entities the decision's text names (question, choice,

@@ -931,6 +931,14 @@ mod tests {
         assert!(needs_links(&[], "d"));
         assert!(!needs_links(&[edge("crates/core/src/lib.rs", true)], "d"));
         assert!(!needs_links(&[edge("", true)], "d"), "a human tie");
+        let cited = format!(
+            "{}\"iroh\" (crates/net/Cargo.toml)",
+            crate::graph::DEPENDENCY_REASON
+        );
+        assert!(
+            !needs_links(&[edge(&cited, true)], "d"),
+            "a cited dependency is a structural tie"
+        );
         assert!(needs_links(&[edge("crates/core/src/lib.rs", false)], "d"));
         let mention = crate::graph::mention_reason("o core");
         assert!(needs_links(&[edge(&mention, true)], "d"));

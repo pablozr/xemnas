@@ -210,6 +210,41 @@ pub(crate) fn entity_terms(entity: &EntityRecord, project_keys: &BTreeSet<String
     terms
 }
 
+/// The term for a dependency name: counts like a name of the same length, and
+/// when it is shorter than [`MIN_PLAIN`] or an ordinary English word (`time`,
+/// `log`) only as code or between quotes.
+pub(crate) fn dependency_term(name: &str) -> Option<Term> {
+    const COMMON_WORDS: &[&str] = &[
+        "time",
+        "log",
+        "rand",
+        "url",
+        "bytes",
+        "once",
+        "either",
+        "home",
+        "dirs",
+        "open",
+        "json",
+        "hex",
+        "ring",
+        "base",
+        "serde_json",
+    ];
+    let chars: Vec<char> = name.trim().chars().map(fold).collect();
+    if chars.len() < MIN_MARKED {
+        return None;
+    }
+    let path = chars.contains(&'/');
+    let lower: String = chars.iter().collect();
+    let restricted = !path && (chars.len() < MIN_PLAIN || COMMON_WORDS.contains(&lower.as_str()));
+    Some(Term {
+        chars,
+        path,
+        restricted,
+    })
+}
+
 /// The term for a path written in a text: a file the text may cite.
 pub(crate) fn path_term(path: &str) -> Option<Term> {
     let chars: Vec<char> = path

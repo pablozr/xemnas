@@ -544,6 +544,13 @@ pub fn triage_relation(kind: RelationKind) -> Triage {
 pub fn triage_link(reason: &str) -> Triage {
     if mention_quote(reason).is_some() || ai_link_quote(reason).is_some() {
         Triage::Ask
+    } else if reason.starts_with(crate::graph::DEPENDENCY_REASON) {
+        // The text cites a dependency; one component declaring it is the place.
+        if reason.contains(crate::graph::DEPENDENCY_SHARED_MARK) {
+            Triage::Ask
+        } else {
+            Triage::Accept("dependência citada que só este componente declara")
+        }
     } else {
         Triage::Accept("derivado de arquivo ou dependência que a decisão tocou")
     }
@@ -1657,6 +1664,21 @@ mod tests {
         assert_eq!(triage_link(&mention), Triage::Ask);
         let proposed = crate::graph::ai_link_reason("o core grava pela outbox", "Rege o core.");
         assert_eq!(triage_link(&proposed), Triage::Ask);
+    }
+
+    #[test]
+    fn a_cited_dependency_is_accepted_only_when_one_component_declares_it() {
+        let single = format!(
+            "{}\"iroh\" (crates/net/Cargo.toml)",
+            crate::graph::DEPENDENCY_REASON
+        );
+        assert!(matches!(triage_link(&single), Triage::Accept(_)));
+        let shared = format!(
+            "{}\"serde\" (crates/net/Cargo.toml{})",
+            crate::graph::DEPENDENCY_REASON,
+            crate::graph::DEPENDENCY_SHARED_MARK
+        );
+        assert_eq!(triage_link(&shared), Triage::Ask);
     }
 
     #[test]

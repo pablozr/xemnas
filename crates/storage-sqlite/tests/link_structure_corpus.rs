@@ -39,8 +39,9 @@ use storage_sqlite::SqliteStore;
 /// (18/23), 0.581 (18/31), 0, 2, 3.
 /// with the project's own name restricted: precision 0.857 (18/21), recall 0.581, homonym_linked 0.
 /// with the file index: precision 1.000 (20/20), recall 0.645 (20/31), ghost 0; listing of 5,000 files 69 ms.
+/// with dependency owners: precision 1.000 (24/24), recall 0.774 (24/31).
 const PRECISION_FLOOR: f64 = 0.95;
-const RECALL_FLOOR: f64 = 0.64;
+const RECALL_FLOOR: f64 = 0.77;
 /// Ceilings: the count of wrong links of each kind.
 const NEGATED_CEILING: usize = 0;
 const HOMONYM_CEILING: usize = 0;

@@ -17,7 +17,7 @@ mod scope;
 pub use ai_link::{ai_link_quote, ai_link_reason, ai_link_why, AI_LINK_REASON};
 pub use derive::{
     added_dependencies, map_preparer, prepared_documents, prepared_projects, ComponentProposal,
-    MapPreparer, SuggestionReport, TechnologyProposal,
+    MapPreparer, SuggestionReport, TechnologyProposal, DEPENDENCY_REASON, DEPENDENCY_SHARED_MARK,
 };
 pub(crate) use discover::project_keys;
 pub use discover::{declared_components, project_names, DeclaredComponent, WorkspaceKind};
