@@ -32,6 +32,7 @@ use crate::graph::{
 use crate::jobs::{JobRecord, JobRepository, JobState};
 use crate::overview::StructuredModel;
 use crate::profile::{choose_extractor, AiSettings, ExtractorChoice, ProfileStore, SecretStore};
+use crate::projects::ProjectRepository;
 
 /// Job kind that proposes the components an adopted decision applies to.
 pub const LINK_JOB_KIND: &str = crate::jobs::JobKind::SuggestLinks.as_str();
@@ -59,7 +60,9 @@ component must follow or implements. Never link by shared vocabulary alone: a de
 only mentions a word, a tool or a topic that a component also uses is not about that \
 component. Decisions about the project rather than the code are not links even when they \
 name a component: who owns or approves changes, how things are named, published, packaged, \
-hosted or announced, and which words to use. Ask: would the component's code or behavior be \
+hosted or announced, and which words to use. A component named like the project (marked \
+\"same name as the project\" in the list) is linked only when the decision is about that \
+component's own code, not about the product as a whole. Ask: would the component's code or behavior be \
 different if this decision were different? If not, do not link. Prefer no link over a weak \
 one; an empty list is a good answer when you are not sure. Give at most 3 links.\n\
 For each link give component_id exactly as listed (c1, c2, ...); quote: the words of the \
@@ -182,7 +185,15 @@ pub fn candidate_components(entities: &[EntityRecord]) -> Vec<&EntityRecord> {
 
 /// The user message: the decisions numbered from 1, then the components
 /// numbered `c1`, `c2`..., listed once for all of them.
-pub fn link_request(subjects: &[&LinkSubject], components: &[&EntityRecord]) -> String {
+///
+/// `project_keys` are the keys of the project's own names: a component whose
+/// name is one of them is marked, because a decision that names the product
+/// is not about that component.
+pub fn link_request(
+    subjects: &[&LinkSubject],
+    components: &[&EntityRecord],
+    project_keys: &std::collections::BTreeSet<String>,
+) -> String {
     let mut user = String::new();
     for (position, subject) in subjects.iter().enumerate() {
         user.push_str(&format!("## Decision {}\n", position + 1));
@@ -202,6 +213,9 @@ pub fn link_request(subjects: &[&LinkSubject], components: &[&EntityRecord]) -> 
     user.push_str("## Components\n");
     for (position, component) in components.iter().enumerate() {
         user.push_str(&format!("- c{} | {}", position + 1, component.name));
+        if component.keys().any(|key| project_keys.contains(&key)) {
+            user.push_str(" | same name as the project");
+        }
         let aliases: Vec<&str> = component
             .aliases
             .iter()
@@ -528,7 +542,7 @@ pub struct LinkFinder<S, P, K, F> {
 
 impl<S, P, K, F> LinkFinder<S, P, K, F>
 where
-    S: DecisionStore + GraphStore + ClaimStore,
+    S: DecisionStore + GraphStore + ClaimStore + ProjectRepository,
     P: ProfileStore,
     K: SecretStore,
     F: ExtractorFactory,
@@ -685,10 +699,14 @@ where
             return nothing;
         };
         let subjects: Vec<&LinkSubject> = targets.iter().map(|target| &target.subject).collect();
+        let project_keys = ProjectRepository::get(&self.store, &targets[0].project_id)
+            .map_err(|error| LinkFindError::Storage(error.to_string()))?
+            .map(|project| crate::graph::project_keys(std::path::Path::new(&project.location)))
+            .unwrap_or_default();
         let answer = model
             .complete(
                 LINK_PROMPT,
-                &link_request(&subjects, &components),
+                &link_request(&subjects, &components, &project_keys),
                 "decision_links",
                 &link_schema(),
             )
@@ -838,13 +856,26 @@ mod tests {
         let mut core = component("e-core-secret-id", "core");
         core.aliases = vec!["núcleo".into()];
         core.description = "Regras\ndo núcleo".into();
-        let request = link_request(&[&subject()], &[&core]);
+        let request = link_request(&[&subject()], &[&core], &BTreeSet::new());
         assert!(request.contains("## Decision 1\nQuestion: Como o veredito"));
         assert!(request.contains("Scope: Política de desfecho V0.1"));
         assert!(request.contains(
             "- c1 | core | aliases: núcleo | paths: packages/core/** | Regras do núcleo"
         ));
         assert!(!request.contains("e-core-secret-id"));
+    }
+
+    #[test]
+    fn a_component_named_like_the_project_is_marked_and_the_prompt_says_how_to_treat_it() {
+        let app = component("e-app", "acme");
+        let other = component("e-other", "store");
+        let keys = BTreeSet::from(["acme".to_string()]);
+        let request = link_request(&[&subject()], &[&app, &other], &keys);
+        assert!(request.contains("- c1 | acme | same name as the project"));
+        assert!(request.contains("- c2 | store | paths:"));
+        assert!(!request.contains("store | same name"));
+        assert!(LINK_PROMPT.contains("named like the project"));
+        assert!(LINK_PROMPT.contains("not about the product as a whole"));
     }
 
     #[test]
@@ -871,7 +902,7 @@ mod tests {
         .to_string();
         let started = std::time::Instant::now();
         for _ in 0..200 {
-            let _ = link_request(&[&subject()], &components);
+            let _ = link_request(&[&subject()], &components, &BTreeSet::new());
             assert_eq!(parse_links(&answer, &subject(), &components).len(), 1);
         }
         let per_run = started.elapsed() / 200;

@@ -1002,6 +1002,9 @@ where
         as_of: &str,
     ) -> Result<PackGraph, GraphError> {
         let snapshot = self.snapshot(project_id, Some(as_of))?;
+        let project =
+            ProjectRepository::get(&self.store, project_id)?.ok_or(GraphError::ProjectNotFound)?;
+        let keys = super::discover::project_keys(std::path::Path::new(&project.location));
         let normalized: Vec<String> = files
             .iter()
             .map(|file| normalize_path(file))
@@ -1019,6 +1022,7 @@ where
             snapshot.entities.values(),
             task,
             files,
+            &keys,
         );
         Ok(PackGraph {
             decisions,

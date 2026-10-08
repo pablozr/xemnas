@@ -387,6 +387,7 @@ where
         self.merge_package_aliases(project_id)?;
         let now = now_rfc3339();
         let at = Timestamp::parse(&now).ok_or(GraphError::Storage("relógio inválido".into()))?;
+        let project_keys = super::discover::project_keys(std::path::Path::new(&project.location));
         let entities = self.store.project_entities(project_id)?;
         let live: Vec<&EntityRecord> = entities
             .iter()
@@ -412,7 +413,7 @@ where
                     EntityKind::Component => EdgeKind::Affects,
                     EntityKind::Technology => EdgeKind::Uses,
                 };
-                let terms = entity_terms(entity);
+                let terms = entity_terms(entity, &project_keys);
                 (!terms.is_empty()).then_some((*entity, kind, terms))
             })
             .collect();

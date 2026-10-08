@@ -6,7 +6,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::sync::{Arc, OnceLock};
 
+use super::cache::FolderCache;
 use super::{EntityEdit, GraphError, GraphStore, KnowledgeGraph, NewEntity, MAX_ENTITY_LIST};
 use crate::claims::ClaimStore;
 use crate::projects::ProjectRepository;
@@ -116,6 +118,54 @@ pub fn declared_components(root: &Path) -> Vec<DeclaredComponent> {
         }
     }
     found
+}
+
+/// The names the project itself answers to: its folder, the `[package].name`
+/// of the root `Cargo.toml` and the `name` of the root `package.json` (with
+/// its last segment, `@acme/shop` -> `shop`). A part named like one of them
+/// cannot be told from the product by its name alone. Names under 3
+/// characters are left out; they never match anyway.
+pub fn project_names(root: &Path) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    let mut push = |name: String| {
+        let name = name.trim().to_string();
+        let known = names
+            .iter()
+            .any(|other| other.to_lowercase() == name.to_lowercase());
+        if entity_key(&name).chars().count() >= 3 && !known {
+            names.push(name);
+        }
+    };
+    if let Some(folder) = root.file_name() {
+        push(folder.to_string_lossy().to_string());
+    }
+    if let Ok(text) = std::fs::read_to_string(root.join("Cargo.toml")) {
+        if let Some(name) = toml_package_field(&text, "name") {
+            push(name);
+        }
+    }
+    if let Ok(text) = std::fs::read_to_string(root.join("package.json")) {
+        let name = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|value| value.get("name")?.as_str().map(str::to_string));
+        if let Some(name) = name {
+            push(name.rsplit('/').next().unwrap_or("").to_string());
+            push(name);
+        }
+    }
+    names
+}
+
+/// The keys of [`project_names`], kept for a few minutes so a context pack or
+/// a refresh does not read the manifests again.
+pub(crate) fn project_keys(root: &Path) -> Arc<BTreeSet<String>> {
+    static KEYS: OnceLock<FolderCache<BTreeSet<String>>> = OnceLock::new();
+    KEYS.get_or_init(FolderCache::new).get_or_make(root, || {
+        project_names(root)
+            .iter()
+            .map(|name| entity_key(name))
+            .collect()
+    })
 }
 
 /// How people write the package in prose: the last segment of its name
@@ -444,6 +494,53 @@ mod tests {
             cargo_members("[workspace]\nmembers = [\"a\", 'b']\n"),
             vec!["a", "b"]
         );
+    }
+
+    #[test]
+    fn the_project_answers_to_its_folder_and_its_root_manifests() {
+        let base = std::env::temp_dir().join(format!("xemnas-names-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let make = |folder: &str, files: &[(&str, &str)]| {
+            let root = base.join(folder);
+            std::fs::create_dir_all(&root).unwrap();
+            for (name, text) in files {
+                std::fs::write(root.join(name), text).unwrap();
+            }
+            root
+        };
+        // A Cargo workspace root has no package: only the folder.
+        let workspace = make(
+            "acme",
+            &[("Cargo.toml", "[workspace]\nmembers = [\"apps/acme\"]\n")],
+        );
+        assert_eq!(project_names(&workspace), vec!["acme"]);
+        // A package at the root adds its name.
+        let package = make(
+            "checkout",
+            &[("Cargo.toml", "[package]\nname = \"shop-cli\"\n")],
+        );
+        assert_eq!(project_names(&package), vec!["checkout", "shop-cli"]);
+        // A scoped npm name adds the whole name and its last segment.
+        let npm = make(
+            "mono",
+            &[(
+                "package.json",
+                "{\"name\": \"@acme/shop\", \"private\": true}",
+            )],
+        );
+        assert_eq!(project_names(&npm), vec!["mono", "shop", "@acme/shop"]);
+        // A name that repeats the folder, or is under 3 characters, is not kept.
+        let pnpm = make(
+            "ui",
+            &[
+                ("package.json", "{\"name\": \"ui\"}"),
+                ("pnpm-workspace.yaml", "packages:\n  - 'packages/*'\n"),
+            ],
+        );
+        assert!(project_names(&pnpm).is_empty());
+        let keys = project_keys(&npm);
+        assert!(keys.contains("mono") && keys.contains("shop") && keys.contains("acmeshop"));
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

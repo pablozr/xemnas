@@ -54,9 +54,12 @@ where
         as_of: &str,
     ) -> Result<ClaimScopes, GraphError> {
         let at = super::resolve_as_of(Some(as_of))?;
+        let project =
+            ProjectRepository::get(&self.store, project_id)?.ok_or(GraphError::ProjectNotFound)?;
+        let keys = super::discover::project_keys(std::path::Path::new(&project.location));
         let edges = self.store.project_edges(project_id)?;
         let entities = self.store.project_entities(project_id)?;
-        Ok(scopes_in(&at, &edges, entities.iter(), task, files))
+        Ok(scopes_in(&at, &edges, entities.iter(), task, files, &keys))
     }
 
     /// Confirmed ties of decisions to components, as `(decision, component)`.
@@ -153,6 +156,7 @@ pub(super) fn scopes_in<'a>(
     entities: impl Iterator<Item = &'a super::EntityRecord>,
     task: &str,
     files: &[String],
+    project_keys: &BTreeSet<String>,
 ) -> ClaimScopes {
     let mut targets: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     for edge in edges.iter().filter(|edge| edge.holds_at(at)) {
@@ -194,7 +198,7 @@ pub(super) fn scopes_in<'a>(
                 .any(|pattern| pattern_matches(pattern, file))
         });
         if by_file
-            || entity_terms(entity)
+            || entity_terms(entity, project_keys)
                 .iter()
                 .any(|term| text.mention(term).is_some())
         {

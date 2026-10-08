@@ -6,6 +6,7 @@
 //! Derived edges start as suggestions and only count once confirmed.
 
 mod ai_link;
+mod cache;
 mod derive;
 mod discover;
 mod mention;
@@ -17,7 +18,8 @@ pub use derive::{
     added_dependencies, map_preparer, prepared_documents, prepared_projects, ComponentProposal,
     MapPreparer, SuggestionReport, TechnologyProposal,
 };
-pub use discover::{declared_components, DeclaredComponent, WorkspaceKind};
+pub(crate) use discover::project_keys;
+pub use discover::{declared_components, project_names, DeclaredComponent, WorkspaceKind};
 pub use domain::entities::EntityKind;
 pub use mention::{mention_quote, mention_reason, MENTION_REASON};
 pub use query::{

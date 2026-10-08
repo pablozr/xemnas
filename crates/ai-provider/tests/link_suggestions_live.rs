@@ -13,7 +13,7 @@
 #[allow(dead_code)]
 mod corpus;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use application::analysis::ExtractorFactory;
@@ -53,7 +53,7 @@ fn generate_link_corpus_answers() {
     for batch in corpus::DECISIONS.chunks(BATCH_SIZE) {
         let subjects: Vec<_> = batch.iter().map(corpus::subject).collect();
         let subjects: Vec<_> = subjects.iter().collect();
-        let request = link_request(&subjects, &components);
+        let request = link_request(&subjects, &components, &BTreeSet::new());
         let answer = model
             .complete(LINK_PROMPT, &request, "decision_links", &link_schema())
             .expect("provider answer");

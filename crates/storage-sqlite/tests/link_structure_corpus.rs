@@ -37,11 +37,12 @@ use storage_sqlite::SqliteStore;
 /// (2026-10-07): before the structural rules precision 0.487, recall 0.613,
 /// 11 negated, 4 homonym, 3 ghost; with affirmative mentions only 0.783
 /// (18/23), 0.581 (18/31), 0, 2, 3.
-const PRECISION_FLOOR: f64 = 0.78;
+/// with the project's own name restricted: precision 0.857 (18/21), recall 0.581, homonym_linked 0.
+const PRECISION_FLOOR: f64 = 0.85;
 const RECALL_FLOOR: f64 = 0.58;
 /// Ceilings: the count of wrong links of each kind.
 const NEGATED_CEILING: usize = 0;
-const HOMONYM_CEILING: usize = 2;
+const HOMONYM_CEILING: usize = 0;
 const GHOST_CEILING: usize = 3;
 
 #[derive(Clone, Copy, PartialEq, Eq)]

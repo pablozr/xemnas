@@ -16,6 +16,9 @@
 //!   it counts only when written as code or as an acronym, i.e. in uppercase
 //!   (`API`) or between backticks or quotes (`` `api` ``, `"api"`).
 //! * Shorter names never count.
+//! * A name that is also the **project's own name** (the app `acme` of the
+//!   project `acme`) cannot be told from the product in prose: it counts only
+//!   as a path, as code or between quotes, whatever its length.
 //! * A name that is a **segment of another path** (`data_dir()/acme/`,
 //!   `logs/core/`, `crate::core`) is not a mention of the part.
 //!
@@ -33,6 +36,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
+
+use std::collections::BTreeSet;
 
 use super::EntityRecord;
 
@@ -165,12 +170,15 @@ pub fn mention_quote(reason: &str) -> Option<&str> {
 pub(crate) struct Term {
     chars: Vec<char>,
     path: bool,
+    /// Named like the project: counts only as code or between quotes.
+    restricted: bool,
 }
 
 /// The terms that name `entity`: name, aliases and, for a component, the
 /// literal part of each path pattern. Terms the rule can never accept are
-/// left out.
-pub(crate) fn entity_terms(entity: &EntityRecord) -> Vec<Term> {
+/// left out. `project_keys` are the keys of the project's own names (see
+/// `discover::project_names`).
+pub(crate) fn entity_terms(entity: &EntityRecord, project_keys: &BTreeSet<String>) -> Vec<Term> {
     let patterns = entity.patterns.iter().filter_map(|pattern| {
         let literal = pattern
             .trim()
@@ -189,7 +197,12 @@ pub(crate) fn entity_terms(entity: &EntityRecord) -> Vec<Term> {
         if chars.is_empty() || (chars.len() < MIN_MARKED && !path) {
             continue;
         }
-        let term = Term { chars, path };
+        let restricted = !path && project_keys.contains(&domain::entities::entity_key(raw));
+        let term = Term {
+            chars,
+            path,
+            restricted,
+        };
         if !terms.contains(&term) {
             terms.push(term);
         }
@@ -260,14 +273,15 @@ impl Folded {
                 return false;
             }
         }
-        if term.path || size >= MIN_PLAIN {
+        if term.path || (size >= MIN_PLAIN && !term.restricted) {
             return true;
         }
-        let written = &self.original[start..start + size];
-        let acronym =
-            written.iter().any(|c| c.is_alphabetic()) && !written.iter().any(|c| c.is_lowercase());
         let marked = before.is_some_and(code_mark) && after.is_some_and(code_mark);
         let in_code = self.code[start] && self.code[start + size - 1];
+        let written = &self.original[start..start + size];
+        let acronym = !term.restricted
+            && written.iter().any(|c| c.is_alphabetic())
+            && !written.iter().any(|c| c.is_lowercase());
         acronym || marked || in_code
     }
 
@@ -645,7 +659,7 @@ mod tests {
     /// The quote of the first term of `entity` that `text` mentions.
     fn hit(text: &str, entity: &EntityRecord) -> Option<String> {
         let folded = Folded::new(text);
-        entity_terms(entity)
+        entity_terms(entity, &BTreeSet::new())
             .iter()
             .find_map(|term| folded.mention(term))
     }
@@ -702,7 +716,7 @@ mod tests {
     /// Whether the text names the entity and every hit is negated.
     fn negated_only(text: &str, entity: &EntityRecord) -> bool {
         let folded = Folded::new(text);
-        let terms = entity_terms(entity);
+        let terms = entity_terms(entity, &BTreeSet::new());
         terms.iter().any(|term| folded.find(term, false).is_some())
             && terms.iter().all(|term| folded.find(term, true).is_none())
     }
@@ -784,6 +798,42 @@ mod tests {
         assert!(affirmative(far, &net));
         let near = "Without one two three four five six seven net-core.";
         assert!(negated_only(near, &net));
+    }
+
+    /// Whether the text mentions `entity` when the project is also called
+    /// `project`.
+    fn named_like_the_project(text: &str, entity: &EntityRecord, project: &str) -> bool {
+        let keys = BTreeSet::from([domain::entities::entity_key(project)]);
+        let folded = Folded::new(text);
+        entity_terms(entity, &keys)
+            .iter()
+            .any(|term| folded.mention(term).is_some())
+    }
+
+    #[test]
+    fn a_part_named_like_the_project_counts_only_as_a_path_or_as_code() {
+        let app = entity("acme", &[], &["apps/acme/**"]);
+        for text in [
+            "How should acme acquire the license?",
+            "ACME ships a new installer.",
+            "O Acme cobra por assento.",
+            "Keep the cache under data_dir()/acme/ by default.",
+        ] {
+            assert!(!named_like_the_project(text, &app, "acme"), "{text}");
+            assert!(
+                affirmative(text, &app) || text.contains("data_dir"),
+                "{text}"
+            );
+        }
+        for text in [
+            "The `acme` binary parses its flags.",
+            "O \"acme\" lê a flag.",
+            "Edit apps/acme/src/main.rs to read the flag.",
+        ] {
+            assert!(named_like_the_project(text, &app, "acme"), "{text}");
+        }
+        // Another project's name changes nothing.
+        assert!(named_like_the_project("O acme lê a flag.", &app, "other"));
     }
 
     #[test]
@@ -1076,7 +1126,7 @@ mod tests {
                 let hits: Vec<&str> = map
                     .iter()
                     .filter(|(_, entity)| {
-                        entity_terms(entity)
+                        entity_terms(entity, &BTreeSet::new())
                             .iter()
                             .any(|term| folded.mention(term).is_some())
                     })
@@ -1114,7 +1164,11 @@ mod tests {
                 )
             })
             .collect();
-        let terms: Vec<Vec<Term>> = map.iter().map(entity_terms).collect();
+        let none = BTreeSet::new();
+        let terms: Vec<Vec<Term>> = map
+            .iter()
+            .map(|entity| entity_terms(entity, &none))
+            .collect();
         let text = "A decisão grava cada captura numa transação, valida a versão e só                     então confirma; o component7 recebe o resultado e o alias12 registra                     a ocorrência em crates/component33/src/lib.rs para a próxima sessão."
             .repeat(2);
         let start = std::time::Instant::now();
