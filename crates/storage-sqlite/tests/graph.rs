@@ -1183,3 +1183,262 @@ fn a_link_discarded_by_the_machine_comes_back_on_a_structural_reason_and_one_a_p
         assert_eq!(graph.refresh_suggestions("p1").expect("again").new_edges, 0);
     }
 }
+
+fn raw_edge(
+    id: &str,
+    kind: EdgeKind,
+    source: (NodeKind, &str),
+    entity: &str,
+    reason: &str,
+    confirmed_by: Option<domain::entities::EdgeActor>,
+) -> application::graph::EdgeRecord {
+    application::graph::EdgeRecord {
+        edge_id: id.into(),
+        project_id: "p1".into(),
+        kind,
+        source_kind: source.0,
+        source_id: source.1.into(),
+        entity_id: entity.into(),
+        origin: domain::entities::EdgeOrigin::Derived,
+        reason: reason.into(),
+        created_at: "2026-01-03T00:00:00Z".into(),
+        confirmed_at: confirmed_by.map(|_| "2026-01-03T00:00:00Z".into()),
+        invalidated_at: None,
+        confirmed_by,
+        invalidated_by: None,
+    }
+}
+
+#[test]
+fn a_refresh_drops_the_machines_links_that_the_rules_no_longer_support_and_spares_a_persons() {
+    use application::graph::{ai_link_reason, mention_reason, GraphStore};
+    use domain::entities::EdgeActor;
+    let test = support::open("graph-revalidate", &["p1"]);
+    let graph = KnowledgeGraph::new(test.store.clone());
+    let core = component(&graph, "core", "crates/core/**");
+    let negated = |key: &str| {
+        support::decision(
+            &test.store,
+            "p1",
+            key,
+            "O servico fica independente de core.",
+            "Sem acoplar",
+        )
+    };
+    let [d1, d2, d3, d4] = ["d1", "d2", "d3", "d4"].map(negated);
+    let fine = support::decision(
+        &test.store,
+        "p1",
+        "d5",
+        "Como o core valida?",
+        "Pelo schema",
+    );
+    let quote = mention_reason("O servico fica independente de core.");
+    let store = &test.store;
+    for edge in [
+        raw_edge(
+            "pending",
+            EdgeKind::Affects,
+            (NodeKind::Decision, &d1),
+            &core,
+            &quote,
+            None,
+        ),
+        raw_edge(
+            "by-rules",
+            EdgeKind::Affects,
+            (NodeKind::Decision, &d2),
+            &core,
+            &quote,
+            Some(EdgeActor::Rules),
+        ),
+        raw_edge(
+            "by-person",
+            EdgeKind::Affects,
+            (NodeKind::Decision, &d3),
+            &core,
+            &quote,
+            Some(EdgeActor::Person),
+        ),
+        raw_edge(
+            "by-ai-guess",
+            EdgeKind::Affects,
+            (NodeKind::Decision, &d4),
+            &core,
+            &ai_link_reason("O servico fica independente de core.", "Rege o core."),
+            None,
+        ),
+        raw_edge(
+            "affirmative",
+            EdgeKind::Affects,
+            (NodeKind::Decision, &fine),
+            &core,
+            &mention_reason("Como o core valida?"),
+            None,
+        ),
+    ] {
+        store.insert_edge(&edge).expect("edge");
+    }
+    // A rule that inherited a tie its decision does not hold, and one a person applied.
+    let orphan = support::decision(store, "p1", "d6", "Como gravar?", "Com cuidado");
+    let derived_claim = |statement: &str| {
+        application::claims::Claims::new(store.clone())
+            .create(application::claims::NewClaim {
+                source_version: None,
+                qualifiers: Vec::new(),
+                project_id: "p1".into(),
+                kind: domain::claims::ClaimKind::Constraint,
+                statement: statement.into(),
+                valid_from: Some("2020-01-01".into()),
+                valid_until: None,
+                source_decision_id: Some(orphan.clone()),
+            })
+            .expect("claim")
+            .claim_id
+    };
+    let orphan_claim = derived_claim("Regra herdada");
+    let person_claim = derived_claim("Regra aplicada por uma pessoa");
+    store
+        .insert_edge(&raw_edge(
+            "inherited",
+            EdgeKind::AppliesTo,
+            (NodeKind::Claim, &orphan_claim),
+            &core,
+            "herdado da decisão de origem",
+            Some(EdgeActor::Inherited),
+        ))
+        .expect("inherited");
+    store
+        .insert_edge(&raw_edge(
+            "applied",
+            EdgeKind::AppliesTo,
+            (NodeKind::Claim, &person_claim),
+            &core,
+            "",
+            Some(EdgeActor::Person),
+        ))
+        .expect("applied");
+
+    let report = graph.refresh_suggestions("p1").expect("refresh");
+    assert_eq!(report.revalidated, 3);
+    let state = |id: &str| {
+        let edge = store.get_edge(id).expect("get").expect("edge");
+        (edge.invalidated_at.is_some(), edge.invalidated_by)
+    };
+    assert_eq!(state("pending"), (true, Some(EdgeActor::Rules)));
+    assert_eq!(state("by-rules"), (true, Some(EdgeActor::Rules)));
+    assert_eq!(state("by-person"), (false, None), "a person's word stays");
+    assert_eq!(
+        state("by-ai-guess"),
+        (false, None),
+        "the AI's own quote is not re-judged"
+    );
+    assert_eq!(state("affirmative"), (false, None));
+    assert_eq!(state("inherited"), (true, Some(EdgeActor::Inherited)));
+    assert_eq!(state("applied"), (false, None));
+    // Idempotent: nothing more to drop, and nothing comes back.
+    let again = graph.refresh_suggestions("p1").expect("again");
+    assert_eq!(again.revalidated, 0);
+    assert_eq!(state("pending"), (true, Some(EdgeActor::Rules)));
+}
+
+#[test]
+fn a_component_whose_folder_is_gone_is_reported_with_where_its_files_belong() {
+    use application::projects::{ProjectRecord, ProjectRepository};
+    let test = support::open("graph-phantom", &[]);
+    let repo = test.root.join("repo");
+    std::fs::create_dir_all(repo.join("crates/sc-session/examples")).expect("dirs");
+    std::fs::write(
+        repo.join("crates/sc-session/examples/jam.rs"),
+        "fn main() {}",
+    )
+    .expect("file");
+    std::fs::write(
+        repo.join("crates/sc-session/Cargo.toml"),
+        "[package]\nname = \"sc-session\"\n",
+    )
+    .expect("manifest");
+    std::fs::write(
+        repo.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"crates/*\"]\n",
+    )
+    .expect("root");
+    test.store
+        .insert(&ProjectRecord::new(
+            "ws".into(),
+            repo.to_string_lossy().replace('\\', "/"),
+            "2026-01-01T00:00:00Z".into(),
+        ))
+        .expect("project");
+    let graph = KnowledgeGraph::new(test.store.clone());
+    graph.assemble("ws").expect("assemble");
+    // The ghost somebody created from a proposal: `examples/**` exists nowhere.
+    let ghost = graph
+        .create_entity(NewEntity {
+            project_id: "ws".into(),
+            kind: Some(EntityKind::Component),
+            name: "examples".into(),
+            patterns: vec!["examples/**".into()],
+            ..NewEntity::default()
+        })
+        .expect("ghost")
+        .entity_id;
+    let location = repo.to_string_lossy().replace('\\', "/");
+    let decision = support::decision_at(
+        &test.store,
+        "ws",
+        &location,
+        "jam",
+        "Como o exemplo toca?",
+        &["examples/jam.rs"],
+        "",
+    );
+    use application::graph::GraphStore;
+    test.store
+        .insert_edge(&raw_edge_in(
+            "ws",
+            "ghost-edge",
+            &decision,
+            &ghost,
+            "examples/jam.rs",
+        ))
+        .expect("edge");
+
+    let report = graph.refresh_suggestions("ws").expect("refresh");
+    assert_eq!(
+        report.stale_components.len(),
+        1,
+        "{:?}",
+        report.stale_components
+    );
+    let stale = &report.stale_components[0];
+    assert_eq!(stale.name, "examples");
+    assert_eq!(stale.patterns, vec!["examples/**"]);
+    assert_eq!(stale.owner.as_deref(), Some("sc-session"));
+    // Nothing was retired by itself.
+    assert!(graph
+        .entities("ws")
+        .expect("entities")
+        .iter()
+        .all(|entity| entity.retired_at.is_none()));
+}
+
+fn raw_edge_in(
+    project: &str,
+    id: &str,
+    decision: &str,
+    entity: &str,
+    reason: &str,
+) -> application::graph::EdgeRecord {
+    application::graph::EdgeRecord {
+        project_id: project.into(),
+        ..raw_edge(
+            id,
+            EdgeKind::Affects,
+            (NodeKind::Decision, decision),
+            entity,
+            reason,
+            Some(domain::entities::EdgeActor::Person),
+        )
+    }
+}

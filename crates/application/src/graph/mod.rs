@@ -12,6 +12,7 @@ mod discover;
 mod mention;
 mod query;
 mod repo_files;
+mod revalidate;
 mod scope;
 mod symbols;
 
@@ -37,6 +38,7 @@ pub use query::{
 pub(crate) use repo_files::{counted_files, repo_files};
 #[doc(hidden)]
 pub use repo_files::{index_repository, scan_symbols};
+pub use revalidate::StaleComponent;
 pub use scope::ClaimScopes;
 pub(crate) use scope::INHERITED_REASON;
 

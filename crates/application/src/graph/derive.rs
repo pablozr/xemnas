@@ -63,6 +63,12 @@ pub struct SuggestionReport {
     pub components: Vec<ComponentProposal>,
     /// Technologies worth creating, most used first.
     pub technologies: Vec<TechnologyProposal>,
+    /// Links of the machine this refresh invalidated because the text they
+    /// rested on no longer supports them (see `revalidate`).
+    pub revalidated: usize,
+    /// Components whose folder is gone from the project; nothing is retired
+    /// by itself.
+    pub stale_components: Vec<super::StaleComponent>,
 }
 
 /// Prefix of the reason of a link derived from a dependency the decision's text
@@ -538,6 +544,7 @@ where
             super::infrastructure_components(std::path::Path::new(&project.location), &declared);
         declared.extend(infrastructure);
         self.merge_aliases(project_id, &declared)?;
+        let declared_all = declared.clone();
         let now = now_rfc3339();
         let at = Timestamp::parse(&now).ok_or(GraphError::Storage("relógio inválido".into()))?;
         let project_keys = super::discover::project_keys(std::path::Path::new(&project.location));
@@ -574,6 +581,13 @@ where
                 (!terms.is_empty()).then_some((*entity, kind, terms))
             })
             .collect();
+
+        let claims = self
+            .store
+            .project_claims(project_id)
+            .map_err(|error| GraphError::Storage(error.to_string()))?;
+        report.revalidated =
+            self.revalidate(project_id, &mut edges, &decisions, &named, &claims)?;
 
         let owned = Self::dependency_owners(&live, &declared);
         // Names the text may use for something else: never read as a symbol.
@@ -695,10 +709,6 @@ where
 
         // Rules adopted from Revisão apply to the components their evidence
         // touched: suggested, like any derived edge.
-        let claims = self
-            .store
-            .project_claims(project_id)
-            .map_err(|error| GraphError::Storage(error.to_string()))?;
         // Claims derived from a decision follow its confirmed component ties
         // (backfill for ties made before the claim or before this rule).
         let ties = Self::decision_ties(&edges);
@@ -821,6 +831,36 @@ where
                 .then(left.name.cmp(&right.name))
         });
         report.components.splice(0..0, declared);
+        // Phantoms: a component nobody declared whose folder is gone.
+        let declared_patterns: BTreeSet<String> = declared_all
+            .iter()
+            .flat_map(|member| {
+                std::iter::once(member.pattern.clone()).chain(member.more_patterns.clone())
+            })
+            .collect();
+        let candidates = live.iter().any(|entity| {
+            entity.kind == EntityKind::Component
+                && !entity
+                    .patterns
+                    .iter()
+                    .any(|p| declared_patterns.contains(p))
+                && entity
+                    .patterns
+                    .iter()
+                    .any(|p| !p.contains(['*', '?']) || p.ends_with("/**"))
+        });
+        if candidates {
+            let repo = Arc::clone(listing.get_or_insert_with(|| repo_files(root)));
+            if let Some(repo) = repo.as_ref().as_ref() {
+                report.stale_components = super::revalidate::stale_components(
+                    &live,
+                    &declared_patterns,
+                    &edges,
+                    &decisions,
+                    repo,
+                );
+            }
+        }
         report.technologies = technologies
             .into_iter()
             .filter(|(key, _)| !known.contains(&(EntityKind::Technology, key.clone())))
@@ -1029,7 +1069,7 @@ fn blocked(
 
 /// The text of a decision, ready to be searched: question, choice, rationale,
 /// assumptions, scope and consequences.
-fn decision_texts(decision: &DecisionNode) -> Vec<Folded> {
+pub(super) fn decision_texts(decision: &DecisionNode) -> Vec<Folded> {
     [&decision.question, &decision.choice, &decision.rationale]
         .into_iter()
         .chain(&decision.context)

@@ -60,6 +60,8 @@ pub(crate) struct RepoFiles {
     partial: bool,
     /// Definitions found in the code, read on first use.
     definitions: OnceLock<super::symbols::Definitions>,
+    /// Every folder that holds a file, lowercase, built on first use.
+    folders: OnceLock<std::collections::HashSet<String>>,
 }
 
 impl RepoFiles {
@@ -80,12 +82,36 @@ impl RepoFiles {
             by_name,
             partial,
             definitions: OnceLock::new(),
+            folders: OnceLock::new(),
         }
     }
 
     /// Whether the listing was cut, so a missing path proves nothing.
     pub(crate) fn partial(&self) -> bool {
         self.partial
+    }
+
+    /// Whether `path` (a file or a folder, relative, case aside) exists.
+    pub(crate) fn has_path(&self, path: &str) -> bool {
+        let lower = normalize_path(path).trim_end_matches('/').to_lowercase();
+        if self.exact.contains_key(&lower) {
+            return true;
+        }
+        self.folders
+            .get_or_init(|| {
+                let mut folders = std::collections::HashSet::new();
+                for file in self.exact.keys() {
+                    let mut end = file.len();
+                    while let Some(slash) = file[..end].rfind('/') {
+                        end = slash;
+                        if !folders.insert(file[..end].to_string()) {
+                            break;
+                        }
+                    }
+                }
+                folders
+            })
+            .contains(&lower)
     }
 
     /// Every file, sorted; a position in the listing is an index here.
@@ -441,6 +467,24 @@ mod tests {
         assert!(!partial);
         assert_eq!(files, vec![".gitignore", "new.rs", "src/lib.rs"]);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_path_exists_as_a_file_or_as_a_folder_that_holds_one() {
+        let files = repo(&["crates/net/examples/chat.rs", "README.md"]);
+        for present in [
+            "README.md",
+            "crates",
+            "crates/net",
+            "crates/net/examples/",
+            "CRATES/Net",
+            "crates/net/examples/chat.rs",
+        ] {
+            assert!(files.has_path(present), "{present}");
+        }
+        for absent in ["examples", "crates/core", "crates/net/exam", "chat.rs"] {
+            assert!(!files.has_path(absent), "{absent}");
+        }
     }
 
     #[test]
