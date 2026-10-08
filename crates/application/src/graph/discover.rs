@@ -890,7 +890,8 @@ mod tests {
         );
         let npm: serde_json::Value = serde_json::from_str(
             "{\"dependencies\": {\"fastify\": \"^5\"}, \"devDependencies\": {\"vitest\": \"1\"}, \
-             \"peerDependencies\": {\"react\": \"18\"}, \"optionalDependencies\": {\"fsevents\": \"2\"}, \
+             \"peerDependencies\": {\"react\": \"18\"}, \
+             \"optionalDependencies\": {\"fsevents\": \"2\"}, \
              \"scripts\": {\"build\": \"tsc\"}}",
         )
         .unwrap();

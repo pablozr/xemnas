@@ -301,7 +301,8 @@ fn walk_listing(root: &Path) -> (Vec<String>, bool) {
                 format!("{folder}/{name}")
             };
             if kind.is_dir() {
-                let hidden = name.starts_with('.') && !KEPT_HIDDEN_FOLDERS.contains(&name.as_str());
+                let kept = KEPT_HIDDEN_FOLDERS.contains(&name.as_str());
+                let hidden = name.starts_with('.') && !kept;
                 if !hidden && !SKIPPED_FOLDERS.contains(&name.as_str()) {
                     pending.push(relative);
                 }
