@@ -16,6 +16,23 @@
 //!   it counts only when written as code or as an acronym, i.e. in uppercase
 //!   (`API`) or between backticks or quotes (`` `api` ``, `"api"`).
 //! * Shorter names never count.
+//! * A name that is a **segment of another path** (`data_dir()/acme/`,
+//!   `logs/core/`, `crate::core`) is not a mention of the part.
+//!
+//! # Affirmative mentions only
+//!
+//! A hit counts only when the text says something about the part. A part named
+//! to be excluded ("independent of X", "sem X", "instead of X", "X foi
+//! descartado") is not linked. The rule is the lexical part of NegEx and
+//! ConText (Chapman et al.): trigger phrases that negate what follows
+//! ([`NEGATION_BEFORE`]) or what precedes ([`NEGATION_AFTER`]), pseudo
+//! triggers that look like them and do not negate ([`PSEUDO_TRIGGERS`]), and a
+//! scope that ends at clause punctuation, a terminating word, a connector
+//! followed by a new clause or [`MAX_SCOPE_WORDS`] words. No AI, and a single
+//! pass over the text.
+
+use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
 
 use super::EntityRecord;
 
@@ -29,6 +46,103 @@ const QUOTE_CONTEXT: usize = 48;
 const MIN_PLAIN: usize = 4;
 /// Characters a name needs to count when written as code or acronym.
 const MIN_MARKED: usize = 3;
+/// Words a negation reaches, at most.
+const MAX_SCOPE_WORDS: usize = 8;
+
+/// Phrases that negate what follows them. English and Portuguese; the plain
+/// English `no` is left out because it is the Portuguese "in the" (`no core`).
+const NEGATION_BEFORE: &[&str] = &[
+    "not",
+    "never",
+    "without",
+    "nor",
+    "neither",
+    "instead of",
+    "rather than",
+    "independent of",
+    "independently of",
+    "independent from",
+    "regardless of",
+    "except",
+    "except for",
+    "excluding",
+    "other than",
+    "apart from",
+    "unlike",
+    "outside",
+    "avoid",
+    "avoids",
+    "avoiding",
+    "must not",
+    "do not",
+    "does not",
+    "don't",
+    "doesn't",
+    "cannot",
+    "no longer",
+    "nothing about",
+    "decoupled from",
+    "isolated from",
+    "free of",
+    "não",
+    "nunca",
+    "sem",
+    "nem",
+    "em vez de",
+    "ao invés de",
+    "no lugar de",
+    "independente de",
+    "independentemente de",
+    "exceto",
+    "salvo",
+    "fora de",
+    "evitar",
+    "evita",
+    "nenhum",
+    "nenhuma",
+    "desacoplado de",
+    "isolado de",
+    "não mais",
+];
+
+/// Phrases that negate what precedes them.
+const NEGATION_AFTER: &[&str] = &[
+    "foi descartado",
+    "foi rejeitado",
+    "was rejected",
+    "was discarded",
+    "is out of scope",
+    "não entra no escopo",
+    "is not used",
+    "não é usado",
+];
+
+/// Phrases that contain a trigger and do not negate.
+const PSEUDO_TRIGGERS: &[&str] = &[
+    "not only",
+    "not just",
+    "não só",
+    "não apenas",
+    "no doubt",
+    "sem dúvida",
+];
+
+/// Words that end the scope of a negation.
+const TERMINATORS: &[&str] = &[
+    "but", "however", "while", "whereas", "although", "though", "yet", "so", "because", "since",
+    "which", "that", "where", "when", "mas", "porém", "enquanto", "embora", "porque", "pois",
+    "que", "onde", "quando",
+];
+
+/// Words that join the items of a list.
+const CONNECTORS: &[&str] = &["and", "or", "e", "ou"];
+
+/// Articles: a connector followed by one keeps the list going (`sem o X e o
+/// Y`). After a comma it starts a new clause (`sem o X, o Y faz Z`), so only a
+/// name or code goes on there.
+const ARTICLES: &[&str] = &[
+    "a", "an", "the", "o", "os", "as", "um", "uma", "uns", "umas", "do", "da", "dos", "das",
+];
 
 /// The reason stored on a suggestion derived from `quote`.
 pub fn mention_reason(quote: &str) -> String {
@@ -84,31 +198,49 @@ pub(crate) fn entity_terms(entity: &EntityRecord) -> Vec<Term> {
 }
 
 /// A text ready to be searched: the original characters and their folded
-/// form, one to one.
+/// form, one to one, with the spans of code and the words a negation reaches.
 pub(crate) struct Folded {
     original: Vec<char>,
     folded: Vec<char>,
+    /// Between a pair of backticks.
+    code: Vec<bool>,
+    /// Inside the scope of a negation; empty when the text has none.
+    negated: Vec<bool>,
 }
 
 impl Folded {
     pub(crate) fn new(text: &str) -> Self {
         let original: Vec<char> = text.chars().collect();
-        let folded = original.iter().copied().map(fold).collect();
-        Self { original, folded }
+        let folded: Vec<char> = original.iter().copied().map(fold).collect();
+        let code = code_spans(&original);
+        let negated = negation_mask(&folded, &code);
+        Self {
+            original,
+            folded,
+            code,
+            negated,
+        }
     }
 
-    /// The quote around the first mention of `term`, when the text has one
-    /// the rule accepts.
+    /// The quote around the first affirmative mention of `term`, when the text
+    /// has one the rule accepts.
     pub(crate) fn mention(&self, term: &Term) -> Option<String> {
+        self.find(term, true)
+            .map(|start| self.quote(start, term.chars.len()))
+    }
+
+    /// The first hit the rule accepts; one inside a negation is skipped when
+    /// `affirmative`.
+    fn find(&self, term: &Term, affirmative: bool) -> Option<usize> {
         let size = term.chars.len();
         if size == 0 || size > self.folded.len() {
             return None;
         }
-        (0..=self.folded.len() - size)
-            .find(|&start| {
-                self.folded[start..start + size] == term.chars[..] && self.accepts(start, term)
-            })
-            .map(|start| self.quote(start, size))
+        (0..=self.folded.len() - size).find(|&start| {
+            self.folded[start..start + size] == term.chars[..]
+                && self.accepts(start, term)
+                && !(affirmative && self.negated.get(start).copied().unwrap_or(false))
+        })
     }
 
     fn accepts(&self, start: usize, term: &Term) -> bool {
@@ -118,6 +250,16 @@ impl Folded {
         if before.is_some_and(word_char) || after.is_some_and(word_char) {
             return false;
         }
+        if !term.path {
+            // A segment of another path (`data_dir()/acme/`, `crate::core`)
+            // is not the part. `::` after is the part's own item
+            // (`sc_core::X`).
+            let separator = |character: char| matches!(character, '/' | '\\');
+            let scoped = start >= 2 && self.original[start - 2..start] == [':', ':'];
+            if before.is_some_and(separator) || after.is_some_and(separator) || scoped {
+                return false;
+            }
+        }
         if term.path || size >= MIN_PLAIN {
             return true;
         }
@@ -125,7 +267,8 @@ impl Folded {
         let acronym =
             written.iter().any(|c| c.is_alphabetic()) && !written.iter().any(|c| c.is_lowercase());
         let marked = before.is_some_and(code_mark) && after.is_some_and(code_mark);
-        acronym || marked
+        let in_code = self.code[start] && self.code[start + size - 1];
+        acronym || marked || in_code
     }
 
     fn quote(&self, start: usize, size: usize) -> String {
@@ -178,6 +321,304 @@ fn word_char(character: char) -> bool {
 /// Characters that mark a name as code or as a quoted name.
 fn code_mark(character: char) -> bool {
     matches!(character, '`' | '"' | '\'' | '“' | '”' | '‘' | '’')
+}
+
+/// Which characters sit between a pair of backticks. An unpaired backtick
+/// opens nothing.
+fn code_spans(original: &[char]) -> Vec<bool> {
+    let mut code = vec![false; original.len()];
+    let mut ticks = original
+        .iter()
+        .enumerate()
+        .filter(|(_, character)| **character == '`')
+        .map(|(at, _)| at);
+    while let (Some(open), Some(close)) = (ticks.next(), ticks.next()) {
+        for flag in &mut code[open + 1..close] {
+            *flag = true;
+        }
+    }
+    code
+}
+
+/// One piece of the text as the negation scope reads it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Piece {
+    Word,
+    Comma,
+    /// Ends a clause: `.` before a space, `;`, `:`, `!`, `?`, a bracket or a
+    /// line break.
+    Stop,
+}
+
+struct Token {
+    start: usize,
+    end: usize,
+    piece: Piece,
+}
+
+/// Splits the folded text into words, commas and clause stops.
+fn tokenize(folded: &[char]) -> Vec<Token> {
+    let count = folded.len();
+    let ends_clause = |at: usize| folded.get(at + 1).is_none_or(|next| next.is_whitespace());
+    let stop = |at: usize| Token {
+        start: at,
+        end: at + 1,
+        piece: Piece::Stop,
+    };
+    let mut tokens = Vec::new();
+    let mut at = 0;
+    while at < count {
+        let character = folded[at];
+        match character {
+            '\n' | '\r' | ';' | '!' | '?' | '(' | ')' | '[' | ']' | '{' | '}' => {
+                tokens.push(stop(at));
+                at += 1;
+            }
+            '.' | ':' if ends_clause(at) => {
+                tokens.push(stop(at));
+                at += 1;
+            }
+            ',' => {
+                tokens.push(Token {
+                    start: at,
+                    end: at + 1,
+                    piece: Piece::Comma,
+                });
+                at += 1;
+            }
+            _ if character.is_whitespace() || is_quote(character) => at += 1,
+            _ => {
+                let start = at;
+                while at < count {
+                    let next = folded[at];
+                    let splits = next.is_whitespace()
+                        || matches!(
+                            next,
+                            ',' | ';' | '!' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '"' | '`'
+                        )
+                        || matches!(next, '\u{201c}' | '\u{201d}')
+                        || (matches!(next, '.' | ':') && ends_clause(at));
+                    if splits {
+                        break;
+                    }
+                    at += 1;
+                }
+                let mut end = at;
+                while end > start && is_quote(folded[end - 1]) {
+                    end -= 1;
+                }
+                if end > start {
+                    tokens.push(Token {
+                        start,
+                        end,
+                        piece: Piece::Word,
+                    });
+                }
+            }
+        }
+    }
+    tokens
+}
+
+/// Quote marks that wrap a word without being part of it.
+fn is_quote(character: char) -> bool {
+    matches!(
+        character,
+        '\'' | '"' | '\u{2018}' | '\u{2019}' | '\u{201c}' | '\u{201d}' | '`'
+    )
+}
+
+/// Trigger phrases, folded and indexed by their first word.
+struct Phrases {
+    by_first: HashMap<String, Vec<Vec<String>>>,
+}
+
+impl Phrases {
+    fn new(list: &[&str]) -> Self {
+        let mut by_first: HashMap<String, Vec<Vec<String>>> = HashMap::new();
+        for phrase in list {
+            let words: Vec<String> = phrase.split_whitespace().map(fold_word).collect();
+            // "independente de" is also written "independente do/da/dos/das".
+            let mut variants = vec![words.clone()];
+            if words.len() > 1 && words.last().is_some_and(|last| last == "de") {
+                for contraction in ["do", "da", "dos", "das"] {
+                    let mut variant = words.clone();
+                    variant.pop();
+                    variant.push(contraction.to_string());
+                    variants.push(variant);
+                }
+            }
+            for variant in variants {
+                if let Some(first) = variant.first() {
+                    by_first.entry(first.clone()).or_default().push(variant);
+                }
+            }
+        }
+        for phrases in by_first.values_mut() {
+            phrases.sort_by_key(|words| std::cmp::Reverse(words.len()));
+        }
+        Self { by_first }
+    }
+
+    /// Tokens the longest phrase starting at `at` covers; 0 when none does.
+    /// Only consecutive words match: a comma or a stop breaks a phrase.
+    fn longest(&self, tokens: &[Token], words: &[String], at: usize) -> usize {
+        let Some(phrases) = self.by_first.get(&words[at]) else {
+            return 0;
+        };
+        phrases
+            .iter()
+            .find(|phrase| {
+                phrase.iter().enumerate().all(|(offset, word)| {
+                    tokens
+                        .get(at + offset)
+                        .is_some_and(|token| token.piece == Piece::Word)
+                        && words[at + offset] == *word
+                })
+            })
+            .map_or(0, Vec::len)
+    }
+}
+
+struct Lexicon {
+    before: Phrases,
+    after: Phrases,
+    pseudo: Phrases,
+    terminators: HashSet<String>,
+    connectors: HashSet<String>,
+    articles: HashSet<String>,
+}
+
+fn lexicon() -> &'static Lexicon {
+    static LEXICON: OnceLock<Lexicon> = OnceLock::new();
+    LEXICON.get_or_init(|| {
+        let set = |list: &[&str]| list.iter().map(|word| fold_word(word)).collect();
+        Lexicon {
+            before: Phrases::new(NEGATION_BEFORE),
+            after: Phrases::new(NEGATION_AFTER),
+            pseudo: Phrases::new(PSEUDO_TRIGGERS),
+            terminators: set(TERMINATORS),
+            connectors: set(CONNECTORS),
+            articles: set(ARTICLES),
+        }
+    })
+}
+
+/// A word folded the way the text is, with typographic apostrophes plain.
+fn fold_word(word: &str) -> String {
+    word.chars()
+        .map(|character| match fold(character) {
+            '\u{2019}' | '\u{2018}' => '\'',
+            other => other,
+        })
+        .collect()
+}
+
+/// Which characters a negation reaches; empty when no trigger is present.
+fn negation_mask(folded: &[char], code: &[bool]) -> Vec<bool> {
+    let tokens = tokenize(folded);
+    let words: Vec<String> = tokens
+        .iter()
+        .map(|token| match token.piece {
+            Piece::Word => fold_word(&folded[token.start..token.end].iter().collect::<String>()),
+            _ => String::new(),
+        })
+        .collect();
+    let lexicon = lexicon();
+    let mut mask: Vec<bool> = Vec::new();
+    let mut mark = |token: &Token| {
+        if mask.is_empty() {
+            mask = vec![false; folded.len()];
+        }
+        for flag in &mut mask[token.start..token.end] {
+            *flag = true;
+        }
+    };
+    // Whether the word at `at` goes on with a list: an article (only after a
+    // connector), code, a name-shaped word or another trigger.
+    let continues = |at: usize, after_comma: bool| {
+        let Some(token) = tokens.get(at).filter(|token| token.piece == Piece::Word) else {
+            return false;
+        };
+        let word = &words[at];
+        (!after_comma && lexicon.articles.contains(word))
+            || code.get(token.start).copied().unwrap_or(false)
+            || word.contains(['-', '_', '/', '.', ':', '@'])
+            || word.chars().any(|character| character.is_ascii_digit())
+            || lexicon.before.longest(&tokens, &words, at) > 0
+    };
+    let mut at = 0;
+    while at < tokens.len() {
+        if tokens[at].piece != Piece::Word {
+            at += 1;
+            continue;
+        }
+        let pseudo = lexicon.pseudo.longest(&tokens, &words, at);
+        if pseudo > 0 {
+            at += pseudo;
+            continue;
+        }
+        let before = lexicon.before.longest(&tokens, &words, at);
+        let after = lexicon.after.longest(&tokens, &words, at);
+        if before > 0 {
+            // Forward, to the end of the clause or the list.
+            let mut reached = 0;
+            let mut next = at + before;
+            while let Some(token) = tokens.get(next) {
+                match token.piece {
+                    Piece::Stop => break,
+                    Piece::Comma => {
+                        if !continues(next + 1, true) {
+                            break;
+                        }
+                    }
+                    Piece::Word => {
+                        let word = &words[next];
+                        if lexicon.terminators.contains(word) {
+                            break;
+                        }
+                        if lexicon.connectors.contains(word) {
+                            if !continues(next + 1, false) {
+                                break;
+                            }
+                        } else {
+                            reached += 1;
+                            if reached > MAX_SCOPE_WORDS {
+                                break;
+                            }
+                            mark(token);
+                        }
+                    }
+                }
+                next += 1;
+            }
+        }
+        if after > 0 {
+            // Backward, to the start of the clause.
+            let mut reached = 0;
+            let mut previous = at;
+            while previous > 0 {
+                previous -= 1;
+                let token = &tokens[previous];
+                match token.piece {
+                    Piece::Stop => break,
+                    Piece::Comma => {}
+                    Piece::Word => {
+                        if lexicon.terminators.contains(&words[previous]) {
+                            break;
+                        }
+                        reached += 1;
+                        if reached > MAX_SCOPE_WORDS {
+                            break;
+                        }
+                        mark(token);
+                    }
+                }
+            }
+        }
+        at += before.max(after).max(1);
+    }
+    mask
 }
 
 #[cfg(test)]
@@ -251,6 +692,145 @@ mod tests {
         // A one-segment pattern is a name and follows the name rule.
         let ui = entity("Interface", &[], &["ui/**"]);
         assert!(hit("a ui mostra", &ui).is_none());
+    }
+
+    /// Whether the text mentions `entity` affirmatively.
+    fn affirmative(text: &str, entity: &EntityRecord) -> bool {
+        hit(text, entity).is_some()
+    }
+
+    /// Whether the text names the entity and every hit is negated.
+    fn negated_only(text: &str, entity: &EntityRecord) -> bool {
+        let folded = Folded::new(text);
+        let terms = entity_terms(entity);
+        terms.iter().any(|term| folded.find(term, false).is_some())
+            && terms.iter().all(|term| folded.find(term, true).is_none())
+    }
+
+    #[test]
+    fn a_part_named_to_be_left_out_is_not_a_mention() {
+        let net = entity("net-core", &[], &[]);
+        for text in [
+            "The service is independent of net-core.",
+            "Persistir sem net-core.",
+            "Usar o outro em vez de net-core.",
+            "Rather than net-core, write to disk.",
+            "Instead of net-core we use sockets.",
+            "Não usar net-core aqui.",
+            "O transporte nem net-core nem o outro.",
+            "Do not import net-core from the CLI.",
+            "It must not call net-core.",
+            "Avoid net-core in hot paths.",
+            "Everything except net-core is public.",
+            "Isolado de net-core, o resto compila.",
+            "Adotar net-core foi descartado.",
+            "Using net-core was rejected in the review.",
+            "net-core is out of scope for this decision.",
+            "Usar net-core não entra no escopo.",
+        ] {
+            assert!(negated_only(text, &net), "{text}");
+            assert!(!affirmative(text, &net), "{text}");
+        }
+    }
+
+    #[test]
+    fn pseudo_triggers_do_not_negate() {
+        let net = entity("net-core", &[], &[]);
+        for text in [
+            "Not only net-core but also the cache changes.",
+            "Not just net-core: the cache changes too.",
+            "Não só o net-core muda.",
+            "Não apenas o net-core muda.",
+            "No doubt net-core changes.",
+            "Sem dúvida net-core muda.",
+        ] {
+            assert!(affirmative(text, &net), "{text}");
+        }
+    }
+
+    #[test]
+    fn the_scope_ends_at_the_clause_a_terminator_or_a_new_subject() {
+        let net = entity("net-core", &[], &[]);
+        let store = entity("store-core", &[], &[]);
+        // Punctuation, terminating words and a connector that starts a clause.
+        for text in [
+            "Without a cache. net-core changes.",
+            "Without a cache; net-core changes.",
+            "Without a cache: net-core changes.",
+            "Without a cache (as before) net-core changes.",
+            "Without a cache\nnet-core changes.",
+            "Without a cache but net-core changes.",
+            "Sem cache, mas net-core muda.",
+            "Sem cache porque net-core muda.",
+        ] {
+            assert!(affirmative(text, &net), "{text}");
+        }
+        // A list of names keeps the negation.
+        for text in [
+            "Without store-core, net-core or the cache.",
+            "Não usar store-core, net-core e o cache.",
+            "Instead of `store-core` and `net-core`.",
+        ] {
+            assert!(negated_only(text, &net), "{text}");
+        }
+        // The subject before the trigger stays affirmative.
+        let text = "net-core stays independent of store-core.";
+        assert!(affirmative(text, &net) && negated_only(text, &store));
+        // A later clause names the part again.
+        let text = "Without net-core nor store-core; net-core still owns the sockets.";
+        assert!(affirmative(text, &net) && negated_only(text, &store));
+        // Beyond the cap of words the negation has ended.
+        let far = "Without one two three four five six seven eight nine net-core.";
+        assert!(affirmative(far, &net));
+        let near = "Without one two three four five six seven net-core.";
+        assert!(negated_only(near, &net));
+    }
+
+    #[test]
+    fn a_negated_verb_phrase_also_reaches_the_nouns_after_it() {
+        // Known limit of a lexical rule: "sem perder nenhum evento no X" negates
+        // the action, and X is only where it happens, yet X is left out.
+        let sqlite = entity("sqlite", &[], &[]);
+        assert!(negated_only(
+            "Gravar sem perder nenhum evento no sqlite.",
+            &sqlite
+        ));
+        // Said the other way round, it is a mention.
+        assert!(affirmative(
+            "Gravar no sqlite, sem perder nenhum evento.",
+            &sqlite
+        ));
+    }
+
+    #[test]
+    fn in_portuguese_no_is_not_a_negation() {
+        let core = entity("core", &[], &[]);
+        assert!(affirmative(
+            "O plugin grava no core antes de responder.",
+            &core
+        ));
+    }
+
+    #[test]
+    fn a_name_inside_another_path_is_not_the_part() {
+        let acme = entity("acme", &[], &["apps/acme/**"]);
+        assert!(!affirmative(
+            "Guardar em data_dir()/acme/ por padrão.",
+            &acme
+        ));
+        assert!(!affirmative("Guardar em logs\\acme\\run.", &acme));
+        assert!(!affirmative("Usar crate::acme::run aqui.", &acme));
+        // Its own item and its own path still count.
+        assert!(affirmative("Usar acme::run aqui.", &acme));
+        assert!(affirmative("Editar apps/acme/src/main.rs.", &acme));
+        assert!(affirmative("O acme lê a flag.", &acme));
+    }
+
+    #[test]
+    fn a_short_name_counts_inside_code() {
+        let api = entity("api", &[], &[]);
+        assert!(affirmative("Chamar `api::start` no boot.", &api));
+        assert!(!affirmative("Chamar api::start no boot.", &api));
     }
 
     #[test]
@@ -349,6 +929,40 @@ mod tests {
                 "Hooks do opencode plugin capturam cada turno.",
                 vec!["hooks"],
             ),
+            // Negation: the part is named to be left out.
+            (
+                "O core fica independente do storage-sqlite e da outbox.",
+                vec!["core"],
+            ),
+            (
+                "Gravar na outbox em vez de no storage-sqlite.",
+                vec!["outbox"],
+            ),
+            ("The core stays independent of the local api.", vec!["core"]),
+            (
+                "Não usar storage-sqlite nem outbox; o storage-sqlite fica só para leitura.",
+                vec!["storage"],
+            ),
+            (
+                "Without the mcp server, the app desktop still starts.",
+                vec!["app"],
+            ),
+            (
+                "Rather than the outbox, the core writes straight to the sqlite store.",
+                vec!["core", "storage"],
+            ),
+            ("O app desktop não depende do núcleo.", vec!["app"]),
+            (
+                "Not only the core but also the outbox writes the capture.",
+                vec!["core", "outbox"],
+            ),
+            // The name inside another path is not the part.
+            ("Os logs ficam em data_dir()/outbox/ por padrão.", vec![]),
+            ("Gravar em logs/core/ a cada execução.", vec![]),
+            (
+                "Mudar adapters/outbox/pending não afeta o resto.",
+                vec!["outbox"],
+            ),
         ];
         (map, texts)
     }
@@ -421,19 +1035,35 @@ mod tests {
                 vec![],
             ),
             ("O kit de testes compartilhado foi descartado.", vec![]),
-            // Same words in other senses: known false positives of the rule.
+            // Same words in other senses: a known false positive of the rule.
             ("The core of the problem is the message ordering.", vec![]),
+            // Out of scope: named to be left out.
             ("Um plugin de navegador não entra no escopo.", vec![]),
+            (
+                "Fica sem o testkit, mas o core valida o schema.",
+                vec!["pcore"],
+            ),
+            (
+                "Instead of the opencode adapter, the plugin calls the core directly.",
+                vec!["pplugin", "pcore"],
+            ),
+            (
+                "O core grava `@jevguard/testkit` só em testes, nunca no plugin.",
+                vec!["pcore", "ptestkit"],
+            ),
         ];
         (map, texts)
     }
 
-    /// Floors measured on 2026-10-05; raise them when the rule improves. The
-    /// precision floor went from 0.92 (12/13) to 0.90 (27/30) when the
-    /// package corpus added two known false positives of plain-word aliases
-    /// ("the core of the problem", "plugin de navegador"): the price of
-    /// recall on how people write.
-    const MENTION_PRECISION_FLOOR: f64 = 0.90;
+    /// Floors measured on 2026-10-07. The precision floor went from 0.92
+    /// (12/13) to 0.90 (27/30) when the package corpus added two known false
+    /// positives of plain-word aliases ("the core of the problem", "plugin de
+    /// navegador"), the price of recall on how people write, and to 0.95
+    /// (43/45) when the corpus gained negation, lists and paths: "plugin de
+    /// navegador não entra no escopo" is now left out, and the two
+    /// remaining false positives are the plain-word alias in a figurative
+    /// sense, which no lexical rule can tell apart.
+    const MENTION_PRECISION_FLOOR: f64 = 0.95;
     const MENTION_RECALL_FLOOR: f64 = 1.0;
 
     #[test]
@@ -452,6 +1082,9 @@ mod tests {
                     })
                     .map(|(label, _)| *label)
                     .collect();
+                if hits.len() != truth.len() || !hits.iter().all(|hit| truth.contains(hit)) {
+                    println!("mention differs: {text} -> {hits:?}, expected {truth:?}");
+                }
                 tp += hits.iter().filter(|hit| truth.contains(hit)).count();
                 found += hits.len();
                 expected += truth.len();

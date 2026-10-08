@@ -165,7 +165,7 @@ fn a_decision_from_a_document_is_tied_to_what_its_text_names_not_to_docs() {
         &test.store,
         "p1",
         "adr",
-        "Como o core grava os eventos vindos da api sem perder nenhum no SQLite?",
+        "Como o core grava os eventos vindos da api no SQLite, sem perder nenhum?",
         &["docs/adr/0003-outbox.md"],
         "",
     );
