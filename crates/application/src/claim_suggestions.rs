@@ -12,7 +12,7 @@
 use std::collections::BTreeSet;
 
 use domain::claims::ClaimKind;
-use domain::entities::{EdgeKind, NodeKind};
+use domain::entities::{EdgeActor, EdgeKind, EdgeOrigin, NodeKind};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -169,17 +169,22 @@ where
         Self { store }
     }
 
-    /// Entities the decision is tied to by live `affects`/`uses` edges.
+    /// Entities the rule applies to: the ones the decision is tied to by a
+    /// confirmed, live `affects`/`uses` edge (a pending suggestion is not a
+    /// tie), narrowed to the ones the rule's own words (`texts`) name, when
+    /// they name some.
     fn scope(
         &self,
         project_id: &str,
         decision_id: &str,
+        texts: &[&str],
     ) -> Result<Vec<(String, String)>, ClaimSuggestionError> {
         let entities = self.store.project_entities(project_id).map_err(storage)?;
         let mut scope = Vec::new();
         for edge in self.store.project_edges(project_id).map_err(storage)? {
             if edge.source_kind == NodeKind::Decision
                 && edge.source_id == decision_id
+                && edge.confirmed_at.is_some()
                 && edge.invalidated_at.is_none()
                 && matches!(edge.kind, EdgeKind::Affects | EdgeKind::Uses)
                 && !scope.iter().any(|(id, _)| *id == edge.entity_id)
@@ -191,6 +196,11 @@ where
                 }
             }
         }
+        let ids: Vec<String> = scope.iter().map(|(id, _)| id.clone()).collect();
+        let kept = KnowledgeGraph::new(self.store.clone())
+            .narrow_scope(project_id, &ids, texts)
+            .map_err(storage)?;
+        scope.retain(|(id, _)| kept.contains(id));
         Ok(scope)
     }
 
@@ -218,7 +228,11 @@ where
                 continue;
             }
             views.push(ClaimSuggestionView {
-                scope: self.scope(project_id, &record.decision_id)?,
+                scope: self.scope(
+                    project_id,
+                    &record.decision_id,
+                    &[record.statement.as_str(), record.quote.as_str()],
+                )?,
                 decision_question: decision.question,
                 record,
             });
@@ -261,13 +275,24 @@ where
             })
             .map_err(|error: ClaimsError| ClaimSuggestionError::Claim(error.to_string()))?;
         let graph = KnowledgeGraph::new(self.store.clone());
-        for (entity_id, _) in self.scope(&record.project_id, &record.decision_id)? {
-            match graph.link(LinkRequest {
-                kind: EdgeKind::AppliesTo,
-                source_kind: NodeKind::Claim,
-                source_id: claim.claim_id.clone(),
-                entity_id,
-            }) {
+        let scope = self.scope(
+            &record.project_id,
+            &record.decision_id,
+            &[record.statement.as_str(), record.quote.as_str()],
+        )?;
+        for (entity_id, _) in scope {
+            // The rule follows its decision: an inherited tie, not a person's.
+            match graph.link_as(
+                LinkRequest {
+                    kind: EdgeKind::AppliesTo,
+                    source_kind: NodeKind::Claim,
+                    source_id: claim.claim_id.clone(),
+                    entity_id,
+                },
+                EdgeOrigin::Derived,
+                crate::graph::INHERITED_REASON,
+                EdgeActor::Inherited,
+            ) {
                 Ok(_) | Err(GraphError::DuplicateEdge) => {}
                 Err(error) => return Err(storage(error)),
             }

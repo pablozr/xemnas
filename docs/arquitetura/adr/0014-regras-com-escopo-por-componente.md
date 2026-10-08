@@ -20,9 +20,7 @@ regras a componentes por arestas `applies_to`.
    (depois a oração principal, a mais recente e o id). O nome do componente, que o tocou, não
    conta como tema.
 2. **Regra sem ligação continua global.** Ausência de escopo não restringe nada.
-3. **Regra derivada herda o escopo da decisão de origem.** As arestas confirmadas da decisão
-   passam para a regra no mesmo ponto em que a sugestão é confirmada, e o preenchimento de
-   regras antigas é idempotente. Uma aresta existente, mesmo invalidada, impede religar.
+3. **Regra derivada herda o escopo da decisão de origem, só o que foi confirmado.** Uma aresta pendente da decisão não conta. Se o texto da regra (enunciado ou citação) nomeia afirmativamente algum dos componentes da decisão, por nome, caminho, dependência ou símbolo (ADR-0016), a regra fica só com esses; se não nomeia nenhum, herda todos os confirmados. A herança é gravada como aresta derivada com autor `inherited` (não como `human`), no mesmo ponto em que a sugestão é confirmada, e o preenchimento de regras antigas é idempotente. Invalidar o vínculo da decisão com um componente invalida, em cascata, o que as regras herdaram dele; o que uma pessoa confirmou na regra fica. Uma aresta existente impede religar, salvo o religar estrutural do ADR-0016 (descartada pelas regras ou pela IA, nunca a removida por uma pessoa).
 
 ## Consequências
 

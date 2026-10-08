@@ -91,6 +91,12 @@ fn a_confirmed_decision_link_reaches_its_derived_claims() {
         "Gravar pela outbox",
         Some(&decision),
     );
+    let neutral = claim(
+        store,
+        ClaimKind::Constraint,
+        "Validar antes de gravar",
+        Some(&decision),
+    );
     let loose = claim(store, ClaimKind::Constraint, "Regra solta", None);
     let outbox = component(store, "outbox", "adapters/outbox/**");
     let storage = component(store, "storage", "crates/storage/**");
@@ -125,7 +131,11 @@ fn a_confirmed_decision_link_reaches_its_derived_claims() {
     store.insert_edge(&pending).expect("pending");
     assert!(applies(store, &derived, &storage).is_empty());
     graph.confirm("pending-edge").expect("confirm");
-    assert_eq!(applies(store, &derived, &storage), vec![(true, false)]);
+    // The rule names the outbox, so it keeps to the outbox; one that names
+    // nothing follows every confirmed tie of its decision.
+    assert!(applies(store, &derived, &storage).is_empty());
+    assert_eq!(applies(store, &neutral, &outbox), vec![(true, false)]);
+    assert_eq!(applies(store, &neutral, &storage), vec![(true, false)]);
 }
 
 #[test]
@@ -151,7 +161,7 @@ fn refresh_backfills_once_and_respects_a_removed_tie() {
     let derived = claim(
         store,
         ClaimKind::Convention,
-        "Gravar pela outbox",
+        "Gravar com atomicidade",
         Some(&decision),
     );
     assert!(applies(store, &derived, &outbox).is_empty());
@@ -280,4 +290,61 @@ fn a_decision_of_the_pack_tied_to_the_component_does_not_bring_its_rules() {
         &["crates/contabil/src/lib.rs"],
     );
     assert!(pack.contains(&scoped), "{pack:?}");
+}
+
+#[test]
+fn invalidating_a_decision_tie_takes_down_what_its_rules_inherited_and_keeps_a_persons() {
+    use domain::entities::EdgeActor;
+    let test = support::open("scope-cascade", &["p1"]);
+    let store = &test.store;
+    let graph = KnowledgeGraph::new(store.clone());
+    let decision = support::decision(store, "p1", "d1", "Como gravar?", "Com cuidado");
+    let outbox = component(store, "outbox", "adapters/outbox/**");
+    let storage = component(store, "storage", "crates/storage/**");
+    let docs = component(store, "guides", "docs/**");
+    let tie = |entity: &str| {
+        graph
+            .link(LinkRequest {
+                kind: EdgeKind::Affects,
+                source_kind: NodeKind::Decision,
+                source_id: decision.clone(),
+                entity_id: entity.into(),
+            })
+            .expect("tie")
+    };
+    let to_outbox = tie(&outbox);
+    tie(&storage);
+    let derived = claim(
+        store,
+        ClaimKind::Convention,
+        "Validar antes de gravar",
+        Some(&decision),
+    );
+    graph.refresh_suggestions("p1").expect("inherit");
+    // A person also applies the rule to the guides.
+    link(
+        store,
+        EdgeKind::AppliesTo,
+        (NodeKind::Claim, &derived),
+        &docs,
+    );
+    assert_eq!(applies(store, &derived, &outbox), vec![(true, false)]);
+
+    graph
+        .invalidate_as(&to_outbox.edge_id, EdgeActor::Person)
+        .expect("remove the tie");
+    assert_eq!(applies(store, &derived, &outbox), vec![(true, true)]);
+    assert_eq!(applies(store, &derived, &storage), vec![(true, false)]);
+    assert_eq!(applies(store, &derived, &docs), vec![(true, false)]);
+    let removed = store
+        .project_edges("p1")
+        .expect("edges")
+        .into_iter()
+        .find(|edge| edge.source_id == derived && edge.entity_id == outbox)
+        .expect("edge");
+    assert_eq!(removed.invalidated_by, Some(EdgeActor::Inherited));
+    assert_eq!(removed.confirmed_by, Some(EdgeActor::Inherited));
+    // The refresh does not bring the tie back.
+    graph.refresh_suggestions("p1").expect("refresh");
+    assert_eq!(applies(store, &derived, &outbox), vec![(true, true)]);
 }

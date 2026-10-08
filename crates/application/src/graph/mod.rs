@@ -38,6 +38,7 @@ pub(crate) use repo_files::{counted_files, repo_files};
 #[doc(hidden)]
 pub use repo_files::{index_repository, scan_symbols};
 pub use scope::ClaimScopes;
+pub(crate) use scope::INHERITED_REASON;
 
 use domain::entities::{
     check_part_of, entity_description, entity_key, entity_name, path_pattern, EdgeActor, EdgeKind,
@@ -586,11 +587,44 @@ where
         if !self.store.invalidate_edge(edge_id, &now, by)? {
             return Err(GraphError::Conflict);
         }
+        self.cascade_to_claims(&edge, &now)?;
         Ok(EdgeRecord {
             invalidated_at: Some(now),
             invalidated_by: Some(by),
             ..edge
         })
+    }
+
+    /// A decision's tie to a component that no longer holds takes down the
+    /// ties its rules inherited from it for that component. What a person
+    /// confirmed on a rule stays.
+    fn cascade_to_claims(&self, edge: &EdgeRecord, now: &str) -> Result<(), GraphError> {
+        if edge.source_kind != NodeKind::Decision || edge.kind != EdgeKind::Affects {
+            return Ok(());
+        }
+        let claims: Vec<String> = self
+            .store
+            .project_claims(&edge.project_id)?
+            .into_iter()
+            .filter(|claim| claim.source_decision_id.as_deref() == Some(edge.source_id.as_str()))
+            .map(|claim| claim.claim_id)
+            .collect();
+        if claims.is_empty() {
+            return Ok(());
+        }
+        for inherited in self.store.project_edges(&edge.project_id)? {
+            if inherited.kind == EdgeKind::AppliesTo
+                && inherited.source_kind == NodeKind::Claim
+                && claims.contains(&inherited.source_id)
+                && inherited.entity_id == edge.entity_id
+                && inherited.is_live()
+                && inherited.confirmed_by == Some(EdgeActor::Inherited)
+            {
+                self.store
+                    .invalidate_edge(&inherited.edge_id, now, EdgeActor::Inherited)?;
+            }
+        }
+        Ok(())
     }
 
     fn edge(&self, edge_id: &str) -> Result<EdgeRecord, GraphError> {

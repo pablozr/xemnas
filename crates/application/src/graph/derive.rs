@@ -81,20 +81,131 @@ const MAX_OWNERS: usize = 2;
 /// in more is shared plumbing.
 const MAX_DEFINING_FILES: usize = 8;
 
+impl<S> KnowledgeGraph<S> {
+    /// The dependencies the members declare, each with the live components
+    /// that declare it. Left out: a dependency that is a member of the
+    /// workspace, one a live component is already named after, and one that
+    /// more than [`MAX_OWNERS`] components declare.
+    pub(super) fn dependency_owners(
+        live: &[&EntityRecord],
+        declared: &[super::DeclaredComponent],
+    ) -> Vec<OwnedDependency> {
+        let taken: BTreeSet<String> = declared
+            .iter()
+            .map(|member| entity_key(&member.name))
+            .chain(
+                live.iter()
+                    .filter(|entity| entity.kind == EntityKind::Component)
+                    .flat_map(|entity| entity.keys()),
+            )
+            .collect();
+        let mut by_key: BTreeMap<String, OwnedDependency> = BTreeMap::new();
+        for member in declared {
+            let Some(component) = live.iter().find(|entity| {
+                entity.kind == EntityKind::Component && entity.patterns.contains(&member.pattern)
+            }) else {
+                continue;
+            };
+            for dependency in &member.dependencies {
+                let key = entity_key(dependency);
+                if taken.contains(&key) {
+                    continue;
+                }
+                let Some(term) = dependency_term(dependency) else {
+                    continue;
+                };
+                let entry = by_key.entry(key).or_insert_with(|| OwnedDependency {
+                    term,
+                    name: dependency.clone(),
+                    owners: Vec::new(),
+                });
+                if !entry
+                    .owners
+                    .iter()
+                    .any(|(id, _)| *id == component.entity_id)
+                {
+                    entry
+                        .owners
+                        .push((component.entity_id.clone(), member.manifest()));
+                }
+            }
+        }
+        by_key
+            .into_values()
+            .filter(|dependency| dependency.owners.len() <= MAX_OWNERS)
+            .collect()
+    }
+}
+
 /// What a decision cites between backticks and what it is looked up in.
-struct Cited<'a> {
-    words: &'a [String],
-    components: &'a [&'a EntityRecord],
-    reserved: &'a BTreeSet<String>,
-    repo: &'a RepoFiles,
-    root: &'a std::path::Path,
+pub(super) struct Cited<'a> {
+    pub(super) words: &'a [String],
+    pub(super) components: &'a [&'a EntityRecord],
+    pub(super) reserved: &'a BTreeSet<String>,
+    pub(super) repo: &'a RepoFiles,
+    pub(super) root: &'a std::path::Path,
+}
+
+/// The one component that defines the symbol, or holds the file, `word` names,
+/// with the file that says so. A name defined in two components, in more than
+/// [`MAX_DEFINING_FILES`] files, or a file name that two files share, names
+/// no component.
+pub(super) fn symbol_owner(cited: &Cited<'_>, word: &str) -> Option<(String, String)> {
+    let files: Vec<String> = if word.contains('.') {
+        if !super::symbols::is_code_file(word) {
+            return None;
+        }
+        let files: Vec<&str> = cited.repo.named(word).collect();
+        match files.as_slice() {
+            [only] => vec![(*only).to_string()],
+            _ => return None,
+        }
+    } else if super::symbols::is_symbol(word) && !cited.reserved.contains(&entity_key(word)) {
+        let definitions = cited.repo.definitions(cited.root);
+        if definitions.partial() {
+            return None;
+        }
+        let positions = definitions.files_defining(word);
+        // A name defined all over the project is not a place.
+        if positions.len() > MAX_DEFINING_FILES {
+            return None;
+        }
+        positions
+            .iter()
+            .map(|position| cited.repo.file(*position).to_string())
+            .collect()
+    } else {
+        return None;
+    };
+    let first = files.first()?;
+    let mut places: BTreeSet<&str> = BTreeSet::new();
+    for file in &files {
+        places.extend(
+            cited
+                .components
+                .iter()
+                .filter(|entity| entity.kind == EntityKind::Component)
+                .filter(|entity| {
+                    entity
+                        .patterns
+                        .iter()
+                        .any(|pattern| pattern_matches(pattern, file))
+                })
+                .map(|entity| entity.entity_id.as_str()),
+        );
+        if places.len() > 1 {
+            return None;
+        }
+    }
+    let only = places.into_iter().next()?;
+    Some((only.to_string(), first.clone()))
 }
 
 /// A dependency the text may cite and the components that declare it.
-struct OwnedDependency {
-    term: Term,
-    name: String,
-    owners: Vec<(String, String)>,
+pub(super) struct OwnedDependency {
+    pub(super) term: Term,
+    pub(super) name: String,
+    pub(super) owners: Vec<(String, String)>,
 }
 
 /// Manifest keys that are not dependency names.
@@ -464,7 +575,7 @@ where
             })
             .collect();
 
-        let owned = self.dependency_owners(&live, &declared);
+        let owned = Self::dependency_owners(&live, &declared);
         // Names the text may use for something else: never read as a symbol.
         let reserved: BTreeSet<String> = live
             .iter()
@@ -727,143 +838,6 @@ where
         Ok(report)
     }
 
-    /// The dependencies the members declare, each with the live components
-    /// that declare it. Left out: a dependency that is a member of the
-    /// workspace, one a live component is already named after, and one that
-    /// more than [`MAX_OWNERS`] components declare.
-    fn dependency_owners(
-        &self,
-        live: &[&EntityRecord],
-        declared: &[super::DeclaredComponent],
-    ) -> Vec<OwnedDependency> {
-        let taken: BTreeSet<String> = declared
-            .iter()
-            .map(|member| entity_key(&member.name))
-            .chain(
-                live.iter()
-                    .filter(|entity| entity.kind == EntityKind::Component)
-                    .flat_map(|entity| entity.keys()),
-            )
-            .collect();
-        let mut by_key: BTreeMap<String, OwnedDependency> = BTreeMap::new();
-        for member in declared {
-            let Some(component) = live.iter().find(|entity| {
-                entity.kind == EntityKind::Component && entity.patterns.contains(&member.pattern)
-            }) else {
-                continue;
-            };
-            for dependency in &member.dependencies {
-                let key = entity_key(dependency);
-                if taken.contains(&key) {
-                    continue;
-                }
-                let Some(term) = dependency_term(dependency) else {
-                    continue;
-                };
-                let entry = by_key.entry(key).or_insert_with(|| OwnedDependency {
-                    term,
-                    name: dependency.clone(),
-                    owners: Vec::new(),
-                });
-                if !entry
-                    .owners
-                    .iter()
-                    .any(|(id, _)| *id == component.entity_id)
-                {
-                    entry
-                        .owners
-                        .push((component.entity_id.clone(), member.manifest()));
-                }
-            }
-        }
-        by_key
-            .into_values()
-            .filter(|dependency| dependency.owners.len() <= MAX_OWNERS)
-            .collect()
-    }
-
-    /// Ties the decision to the component that defines a symbol, or holds a
-    /// file, its text cites between backticks. A name defined in two
-    /// components, or a file name that two files share, ties to nothing.
-    fn suggest_symbols(
-        &self,
-        edges: &mut Vec<EdgeRecord>,
-        project_id: &str,
-        decision: &DecisionNode,
-        cited: &Cited<'_>,
-        now: &str,
-    ) -> Result<usize, GraphError> {
-        let source = (NodeKind::Decision, decision.decision_id.as_str());
-        let owners = |file: &str| -> Vec<&str> {
-            cited
-                .components
-                .iter()
-                .filter(|entity| entity.kind == EntityKind::Component)
-                .filter(|entity| {
-                    entity
-                        .patterns
-                        .iter()
-                        .any(|pattern| pattern_matches(pattern, file))
-                })
-                .map(|entity| entity.entity_id.as_str())
-                .collect()
-        };
-        let mut written = 0;
-        for word in cited.words {
-            let files: Vec<String> = if word.contains('.') {
-                if !super::symbols::is_code_file(word) {
-                    continue;
-                }
-                let files: Vec<&str> = cited.repo.named(word).collect();
-                match files.as_slice() {
-                    [only] => vec![(*only).to_string()],
-                    _ => continue,
-                }
-            } else if super::symbols::is_symbol(word) && !cited.reserved.contains(&entity_key(word))
-            {
-                let definitions = cited.repo.definitions(cited.root);
-                if definitions.partial() {
-                    continue;
-                }
-                let positions = definitions.files_defining(word);
-                // A name defined all over the project is not a place.
-                if positions.len() > MAX_DEFINING_FILES {
-                    continue;
-                }
-                positions
-                    .iter()
-                    .map(|position| cited.repo.file(*position).to_string())
-                    .collect()
-            } else {
-                continue;
-            };
-            let Some(first) = files.first() else {
-                continue;
-            };
-            let mut places: BTreeSet<&str> = BTreeSet::new();
-            for file in &files {
-                places.extend(owners(file));
-                if places.len() > 1 {
-                    break;
-                }
-            }
-            let mut places = places.into_iter();
-            if let (Some(entity_id), None) = (places.next(), places.next()) {
-                let reason = format!("{SYMBOL_REASON}`{word}` ({first})");
-                written += self.suggest(
-                    edges,
-                    project_id,
-                    EdgeKind::Affects,
-                    source,
-                    entity_id,
-                    &reason,
-                    now,
-                )?;
-            }
-        }
-        Ok(written)
-    }
-
     /// Ties the decision to the component that declares a dependency its text
     /// cites (not to exclude it). With a second declaring component the
     /// reason says so.
@@ -901,6 +875,36 @@ where
                     EdgeKind::Affects,
                     source,
                     entity_id,
+                    &reason,
+                    now,
+                )?;
+            }
+        }
+        Ok(written)
+    }
+
+    /// Ties the decision to the component that defines a symbol, or holds a
+    /// file, its text cites between backticks. A name defined in two
+    /// components, or a file name that two files share, ties to nothing.
+    fn suggest_symbols(
+        &self,
+        edges: &mut Vec<EdgeRecord>,
+        project_id: &str,
+        decision: &DecisionNode,
+        cited: &Cited<'_>,
+        now: &str,
+    ) -> Result<usize, GraphError> {
+        let source = (NodeKind::Decision, decision.decision_id.as_str());
+        let mut written = 0;
+        for word in cited.words {
+            if let Some((entity_id, file)) = symbol_owner(cited, word) {
+                let reason = format!("{SYMBOL_REASON}`{word}` ({file})");
+                written += self.suggest(
+                    edges,
+                    project_id,
+                    EdgeKind::Affects,
+                    source,
+                    &entity_id,
                     &reason,
                     now,
                 )?;

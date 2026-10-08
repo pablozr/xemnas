@@ -344,3 +344,110 @@ fn backfill_leaves_a_revised_decision_whose_quote_is_gone_untouched() {
         .confirm("legacy")
         .is_err());
 }
+
+#[test]
+fn a_rule_that_names_a_component_applies_only_there_and_a_pending_tie_is_not_inherited() {
+    use application::graph::{EdgeRecord, GraphStore};
+    use domain::entities::{EdgeActor, EdgeOrigin};
+    let test = support::open("claim-scope-text", &["p1"]);
+    let decision = support::decision(
+        &test.store,
+        "p1",
+        "wal",
+        "Qual banco usar?",
+        "Gravar na outbox com SQLite embutido",
+    );
+    let graph = KnowledgeGraph::new(test.store.clone());
+    let make = |name: &str, pattern: &str| {
+        graph
+            .create_entity(NewEntity {
+                project_id: "p1".into(),
+                kind: Some(EntityKind::Component),
+                name: name.into(),
+                patterns: vec![pattern.into()],
+                ..NewEntity::default()
+            })
+            .expect("component")
+            .entity_id
+    };
+    let storage = make("storage", "crates/storage/**");
+    let outbox = make("outbox", "adapters/outbox/**");
+    let cache = make("cache", "crates/cache/**");
+    for entity in [&storage, &outbox] {
+        graph
+            .link(LinkRequest {
+                kind: EdgeKind::Affects,
+                source_kind: NodeKind::Decision,
+                source_id: decision.clone(),
+                entity_id: entity.clone(),
+            })
+            .expect("link");
+    }
+    // A suggestion nobody confirmed is not a tie.
+    test.store
+        .insert_edge(&EdgeRecord {
+            edge_id: "pending-cache".into(),
+            project_id: "p1".into(),
+            kind: EdgeKind::Affects,
+            source_kind: NodeKind::Decision,
+            source_id: decision.clone(),
+            entity_id: cache.clone(),
+            origin: EdgeOrigin::Derived,
+            reason: "citado no texto: \"cache\"".into(),
+            created_at: "2026-01-03T00:00:00Z".into(),
+            confirmed_at: None,
+            invalidated_at: None,
+            confirmed_by: None,
+            invalidated_by: None,
+        })
+        .expect("pending");
+
+    let answer = r#"{"claims":[
+        {"kind":"constraint","statement":"A outbox grava antes de responder.",
+         "quote":"Gravar na outbox"},
+        {"kind":"constraint","statement":"Os dados ficam num arquivo embutido.",
+         "quote":"SQLite embutido"}
+    ]}"#;
+    let finder = ClaimFinder::new(
+        test.store.clone(),
+        AiSettings::new(Profiles(RefCell::new(consented())), NoSecrets),
+        Factory(answer.into()),
+    );
+    assert_eq!(finder.run(&decision).expect("derive"), 2);
+    let suggestions = ClaimSuggestions::new(test.store.clone());
+    let pending = suggestions.pending("p1").expect("pending");
+    let scope_of = |text: &str| -> Vec<String> {
+        let view = pending
+            .iter()
+            .find(|view| view.record.statement.contains(text))
+            .expect("suggestion");
+        let mut names: Vec<String> = view.scope.iter().map(|(_, name)| name.clone()).collect();
+        names.sort();
+        names
+    };
+    assert_eq!(scope_of("outbox"), vec!["outbox"], "it names the outbox");
+    assert_eq!(
+        scope_of("arquivo"),
+        vec!["outbox", "storage"],
+        "it names nothing: every confirmed tie, and not the pending one"
+    );
+
+    let named = pending
+        .iter()
+        .find(|view| view.record.statement.contains("outbox"))
+        .expect("named");
+    let claim_id = suggestions
+        .confirm(&named.record.suggestion_id)
+        .expect("confirm");
+    let edges: Vec<EdgeRecord> = test
+        .store
+        .project_edges("p1")
+        .expect("edges")
+        .into_iter()
+        .filter(|edge| edge.source_id == claim_id)
+        .collect();
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0].entity_id, outbox);
+    assert_eq!(edges[0].origin, EdgeOrigin::Derived);
+    assert_eq!(edges[0].confirmed_by, Some(EdgeActor::Inherited));
+}
