@@ -119,6 +119,8 @@ fn a_confirmed_decision_link_reaches_its_derived_claims() {
         created_at: "2026-01-03T00:00:00Z".into(),
         confirmed_at: None,
         invalidated_at: None,
+        confirmed_by: None,
+        invalidated_by: None,
     };
     store.insert_edge(&pending).expect("pending");
     assert!(applies(store, &derived, &storage).is_empty());

@@ -615,6 +615,8 @@ fn a_link_the_ai_proposed_is_judged_with_its_quote_and_reason() {
             created_at: NOW.into(),
             confirmed_at: None,
             invalidated_at: None,
+            confirmed_by: None,
+            invalidated_by: None,
         })
         .expect("proposed by the AI");
 
@@ -877,6 +879,8 @@ fn a_doubted_ai_link_is_discarded_and_a_doubted_mention_still_waits() {
             created_at: NOW.into(),
             confirmed_at: None,
             invalidated_at: None,
+            confirmed_by: None,
+            invalidated_by: None,
         })
         .expect("proposed by the AI");
 

@@ -10,7 +10,7 @@
 
 use std::collections::BTreeSet;
 
-use domain::entities::{pattern_matches, EdgeKind, EntityKind, NodeKind};
+use domain::entities::{pattern_matches, EdgeActor, EdgeKind, EdgeOrigin, EntityKind, NodeKind};
 
 use crate::claim_suggestions::CLAIM_JOB_KIND;
 use crate::claims::ClaimStore;
@@ -92,6 +92,18 @@ pub trait AdoptionApi: Send + Sync {
         edits: Option<CandidateEdits>,
         kept: &[ProposedLink],
         declined: &[ProposedLink],
+    ) -> Result<AdoptOutcome, AdoptionError>;
+
+    /// Like [`AdoptionApi::adopt`] on behalf of `by`: what the automatic review
+    /// adopts is not a person's word, so its ties are derived edges that name
+    /// the actor that confirmed them.
+    fn adopt_as(
+        &self,
+        candidate_id: &str,
+        edits: Option<CandidateEdits>,
+        kept: &[ProposedLink],
+        declined: &[ProposedLink],
+        by: EdgeActor,
     ) -> Result<AdoptOutcome, AdoptionError>;
 
     /// Adopts only the exact displayed candidate snapshot.
@@ -250,10 +262,26 @@ where
         kept: &[ProposedLink],
         declined: &[ProposedLink],
     ) -> Result<AdoptOutcome, AdoptionError> {
+        self.adopt_as(candidate_id, edits, kept, declined, EdgeActor::Person)
+    }
+
+    /// [`Adoption::adopt`] on behalf of `by`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Adoption::adopt`].
+    pub fn adopt_as(
+        &self,
+        candidate_id: &str,
+        edits: Option<CandidateEdits>,
+        kept: &[ProposedLink],
+        declined: &[ProposedLink],
+        by: EdgeActor,
+    ) -> Result<AdoptOutcome, AdoptionError> {
         let reviewed = Inbox::new(self.store.clone())
             .detail(candidate_id)
             .map_err(AdoptionError::Inbox)?;
-        self.adopt_reviewed(&reviewed, edits, kept, declined)
+        self.adopt_reviewed_as(&reviewed, edits, kept, declined, by)
     }
 
     /// Confirms the displayed snapshot before graph writes. Graph updates retain
@@ -264,6 +292,24 @@ where
         edits: Option<CandidateEdits>,
         kept: &[ProposedLink],
         declined: &[ProposedLink],
+    ) -> Result<AdoptOutcome, AdoptionError> {
+        self.adopt_reviewed_as(reviewed, edits, kept, declined, EdgeActor::Person)
+    }
+
+    /// [`Adoption::adopt_reviewed`] on behalf of `by`. A person's ties are
+    /// `human` edges; anyone else's are `derived` ones that keep the reason
+    /// (the file or dependency) and name `by`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Adoption::adopt_reviewed`].
+    pub fn adopt_reviewed_as(
+        &self,
+        reviewed: &crate::CandidateDetail,
+        edits: Option<CandidateEdits>,
+        kept: &[ProposedLink],
+        declined: &[ProposedLink],
+        by: EdgeActor,
     ) -> Result<AdoptOutcome, AdoptionError> {
         let preview = self.preview(&reviewed.summary.id)?;
         if kept
@@ -292,12 +338,18 @@ where
             if !allowed {
                 continue;
             }
-            match graph.link(LinkRequest {
+            let request = LinkRequest {
                 kind: link.kind,
                 source_kind,
                 source_id: confirmed.decision_id.clone(),
                 entity_id: link.entity_id.clone(),
-            }) {
+            };
+            let made = if by == EdgeActor::Person {
+                graph.link(request)
+            } else {
+                graph.link_as(request, EdgeOrigin::Derived, &link.reason, by)
+            };
+            match made {
                 Ok(_) => linked += 1,
                 Err(GraphError::DuplicateEdge) => {}
                 Err(error) => return Err(AdoptionError::Graph(error)),
@@ -327,7 +379,7 @@ where
                     .find(|edge| edge.kind == link.kind && edge.entity_id == link.entity_id)
                 {
                     graph
-                        .invalidate(&edge.edge_id)
+                        .invalidate_as(&edge.edge_id, by)
                         .map_err(AdoptionError::Graph)?;
                     suggested = suggested.saturating_sub(1);
                 }
@@ -417,6 +469,17 @@ where
     }
     fn preview(&self, candidate_id: &str) -> Result<AdoptionPreview, AdoptionError> {
         Adoption::preview(self, candidate_id)
+    }
+
+    fn adopt_as(
+        &self,
+        candidate_id: &str,
+        edits: Option<CandidateEdits>,
+        kept: &[ProposedLink],
+        declined: &[ProposedLink],
+        by: EdgeActor,
+    ) -> Result<AdoptOutcome, AdoptionError> {
+        Adoption::adopt_as(self, candidate_id, edits, kept, declined, by)
     }
 
     fn adopt(

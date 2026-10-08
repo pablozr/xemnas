@@ -747,6 +747,8 @@ where
                     created_at: now.clone(),
                     confirmed_at: None,
                     invalidated_at: None,
+                    confirmed_by: None,
+                    invalidated_by: None,
                 };
                 self.store.insert_edge(&record).map_err(storage)?;
                 edges.push(record);
@@ -923,6 +925,8 @@ mod tests {
             created_at: "2026-01-01T00:00:00Z".into(),
             confirmed_at: None,
             invalidated_at: (!live).then(|| "2026-01-02T00:00:00Z".into()),
+            confirmed_by: None,
+            invalidated_by: None,
         }
     }
 

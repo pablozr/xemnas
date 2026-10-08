@@ -37,6 +37,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use domain::entities::EdgeActor;
 use domain::relations::RelationKind;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -1058,7 +1059,11 @@ where
 
     /// Accepts or discards one item through the use case a person's press
     /// would run; the id of what accepting created, when it created one.
-    fn apply(&self, item: &Item, accept: bool) -> Result<Option<String>, ReviewError> {
+    fn apply(&self, item: &Item, accept: bool, by: By) -> Result<Option<String>, ReviewError> {
+        let actor = match by {
+            By::Rules => EdgeActor::Rules,
+            By::Ai => EdgeActor::Ai,
+        };
         let failed = |detail: String| ReviewError::Apply(detail);
         match (item.kind, accept) {
             (ItemKind::Candidate, true) => {
@@ -1069,7 +1074,7 @@ where
                     .unwrap_or_default();
                 let outcome = self
                     .adoption
-                    .adopt(&item.id, None, &links, &[])
+                    .adopt_as(&item.id, None, &links, &[], actor)
                     .map_err(|error| failed(error.to_string()))?;
                 Ok(Some(outcome.id))
             }
@@ -1094,11 +1099,11 @@ where
                 .map(|_| None)
                 .map_err(|error| failed(error.to_string())),
             (ItemKind::Link, true) => KnowledgeGraph::new(self.store.clone())
-                .confirm(&item.id)
+                .confirm_as(&item.id, actor)
                 .map(|_| None)
                 .map_err(|error| failed(error.to_string())),
             (ItemKind::Link, false) => KnowledgeGraph::new(self.store.clone())
-                .invalidate(&item.id)
+                .invalidate_as(&item.id, actor)
                 .map(|_| None)
                 .map_err(|error| failed(error.to_string())),
         }
@@ -1132,7 +1137,7 @@ where
         let result_id = match verdict {
             Verdict::NeedsHuman => None,
             Verdict::Accepted | Verdict::Discarded => {
-                match self.apply(item, verdict == Verdict::Accepted) {
+                match self.apply(item, verdict == Verdict::Accepted, by) {
                     Ok(result) => result,
                     Err(_) => {
                         // A person got there first: nothing to record.

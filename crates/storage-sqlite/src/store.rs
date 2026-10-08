@@ -188,6 +188,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 46,
         sql: include_str!("migrations/0046_assessment_error_detail.sql"),
     },
+    Migration {
+        version: 47,
+        sql: include_str!("migrations/0047_edge_actors.sql"),
+    },
 ];
 
 /// Schema version this build migrates to: the last embedded migration.

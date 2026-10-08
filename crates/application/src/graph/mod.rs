@@ -40,8 +40,8 @@ pub use repo_files::{index_repository, scan_symbols};
 pub use scope::ClaimScopes;
 
 use domain::entities::{
-    check_part_of, entity_description, entity_key, entity_name, path_pattern, EdgeKind, EdgeOrigin,
-    EntityError, NodeKind,
+    check_part_of, entity_description, entity_key, entity_name, path_pattern, EdgeActor, EdgeKind,
+    EdgeOrigin, EntityError, NodeKind,
 };
 use domain::time::Timestamp;
 
@@ -210,6 +210,10 @@ pub struct EdgeRecord {
     pub confirmed_at: Option<String>,
     /// RFC 3339 invalidation time, when invalidated.
     pub invalidated_at: Option<String>,
+    /// Who confirmed it; `None` while it is a suggestion.
+    pub confirmed_by: Option<EdgeActor>,
+    /// Who invalidated it; `None` while it is not invalidated.
+    pub invalidated_by: Option<EdgeActor>,
 }
 
 impl EdgeRecord {
@@ -299,10 +303,10 @@ pub trait GraphStore {
     fn insert_edge(&self, record: &EdgeRecord) -> Result<(), GraphError>;
 
     /// Confirms a pending edge; `false` when it is no longer pending.
-    fn confirm_edge(&self, edge_id: &str, at: &str) -> Result<bool, GraphError>;
+    fn confirm_edge(&self, edge_id: &str, at: &str, by: EdgeActor) -> Result<bool, GraphError>;
 
     /// Invalidates a live edge; `false` when it was already invalidated.
-    fn invalidate_edge(&self, edge_id: &str, at: &str) -> Result<bool, GraphError>;
+    fn invalidate_edge(&self, edge_id: &str, at: &str, by: EdgeActor) -> Result<bool, GraphError>;
 
     /// Every decision of the project that was ever confirmed, with the files
     /// and diff hunks of its capture.
@@ -455,7 +459,8 @@ where
             let touches = edge.entity_id == entity_id
                 || (edge.source_kind == NodeKind::Entity && edge.source_id == entity_id);
             if touches && edge.is_live() {
-                self.store.invalidate_edge(&edge.edge_id, &now)?;
+                self.store
+                    .invalidate_edge(&edge.edge_id, &now, EdgeActor::Person)?;
             }
         }
         Ok(EntityRecord {
@@ -471,6 +476,23 @@ where
     /// `invalid_source` for a source outside the project, the domain's edge
     /// rules, `duplicate_edge`, or `not_found` for an unknown entity.
     pub fn link(&self, request: LinkRequest) -> Result<EdgeRecord, GraphError> {
+        self.link_as(request, EdgeOrigin::Human, "", EdgeActor::Person)
+    }
+
+    /// Records a confirmed edge made by `by`: a person's is `Human` with no
+    /// reason; one the automatic review or an inheritance made is `Derived`
+    /// and carries the `reason` it was derived from.
+    ///
+    /// # Errors
+    ///
+    /// As [`KnowledgeGraph::link`].
+    pub fn link_as(
+        &self,
+        request: LinkRequest,
+        origin: EdgeOrigin,
+        reason: &str,
+        by: EdgeActor,
+    ) -> Result<EdgeRecord, GraphError> {
         let entity = self.live_entity(&request.entity_id)?;
         request.kind.check(request.source_kind, entity.kind)?;
         self.check_source(&entity.project_id, request.source_kind, &request.source_id)?;
@@ -489,7 +511,7 @@ where
         {
             if pending.is_pending() {
                 // Linking what was already suggested confirms the suggestion.
-                return self.confirm(&pending.edge_id);
+                return self.confirm_as(&pending.edge_id, by);
             }
             return Err(GraphError::DuplicateEdge);
         }
@@ -501,11 +523,13 @@ where
             source_kind: request.source_kind,
             source_id: request.source_id,
             entity_id: request.entity_id,
-            origin: EdgeOrigin::Human,
-            reason: String::new(),
+            origin,
+            reason: reason.to_string(),
             created_at: now.clone(),
             confirmed_at: Some(now),
             invalidated_at: None,
+            confirmed_by: Some(by),
+            invalidated_by: None,
         };
         self.store.insert_edge(&record)?;
         self.propagate_to_claims(&record)?;
@@ -518,13 +542,23 @@ where
     ///
     /// `not_found`, or `conflict` when it is no longer a suggestion.
     pub fn confirm(&self, edge_id: &str) -> Result<EdgeRecord, GraphError> {
+        self.confirm_as(edge_id, EdgeActor::Person)
+    }
+
+    /// Confirms a suggested edge on behalf of `by`.
+    ///
+    /// # Errors
+    ///
+    /// `not_found`, or `conflict` when it is no longer a suggestion.
+    pub fn confirm_as(&self, edge_id: &str, by: EdgeActor) -> Result<EdgeRecord, GraphError> {
         let edge = self.edge(edge_id)?;
         let now = now_rfc3339();
-        if !self.store.confirm_edge(edge_id, &now)? {
+        if !self.store.confirm_edge(edge_id, &now, by)? {
             return Err(GraphError::Conflict);
         }
         let confirmed = EdgeRecord {
             confirmed_at: Some(now),
+            confirmed_by: Some(by),
             ..edge
         };
         self.propagate_to_claims(&confirmed)?;
@@ -538,13 +572,23 @@ where
     ///
     /// `not_found`, or `conflict` when it was already invalidated.
     pub fn invalidate(&self, edge_id: &str) -> Result<EdgeRecord, GraphError> {
+        self.invalidate_as(edge_id, EdgeActor::Person)
+    }
+
+    /// Rejects or removes an edge on behalf of `by`.
+    ///
+    /// # Errors
+    ///
+    /// `not_found`, or `conflict` when it was already invalidated.
+    pub fn invalidate_as(&self, edge_id: &str, by: EdgeActor) -> Result<EdgeRecord, GraphError> {
         let edge = self.edge(edge_id)?;
         let now = now_rfc3339();
-        if !self.store.invalidate_edge(edge_id, &now)? {
+        if !self.store.invalidate_edge(edge_id, &now, by)? {
             return Err(GraphError::Conflict);
         }
         Ok(EdgeRecord {
             invalidated_at: Some(now),
+            invalidated_by: Some(by),
             ..edge
         })
     }

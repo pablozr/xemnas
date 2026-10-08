@@ -1323,6 +1323,8 @@ mod tests {
             created_at: "2026-01-02T00:00:00Z".into(),
             confirmed_at: Some("2026-01-02T00:00:00Z".into()),
             invalidated_at: None,
+            confirmed_by: None,
+            invalidated_by: None,
         }
     }
 

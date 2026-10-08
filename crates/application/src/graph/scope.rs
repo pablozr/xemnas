@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use domain::entities::{
-    normalize_path, pattern_matches, EdgeKind, EdgeOrigin, EntityKind, NodeKind,
+    normalize_path, pattern_matches, EdgeActor, EdgeKind, EdgeOrigin, EntityKind, NodeKind,
 };
 use domain::time::Timestamp;
 
@@ -117,6 +117,8 @@ where
                     created_at: now.to_string(),
                     confirmed_at: Some(now.to_string()),
                     invalidated_at: None,
+                    confirmed_by: Some(EdgeActor::Inherited),
+                    invalidated_by: None,
                 };
                 self.store.insert_edge(&record)?;
                 edges.push(record);

@@ -14,11 +14,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use domain::entities::{
-    component_prefix, entity_key, pattern_matches, EdgeKind, EdgeOrigin, EntityKind, NodeKind,
+    component_prefix, entity_key, pattern_matches, EdgeActor, EdgeKind, EdgeOrigin, EntityKind,
+    NodeKind,
 };
 use domain::time::Timestamp;
 
-use super::mention::{dependency_term, entity_terms, mention_reason, Folded, Term};
+use super::ai_link::ai_link_quote;
+use super::mention::{dependency_term, entity_terms, mention_quote, mention_reason, Folded, Term};
 use super::repo_files::{counted_files, repo_files, RepoFiles};
 use super::{DecisionNode, EdgeRecord, EntityRecord, GraphError, GraphStore, KnowledgeGraph};
 use crate::claims::ClaimStore;
@@ -961,7 +963,7 @@ where
         now: &str,
     ) -> Result<usize, GraphError> {
         let (source_kind, source_id) = source;
-        if edge_exists(edges, kind, source, entity_id) {
+        if blocked(edges, kind, source, entity_id, reason) {
             return Ok(0);
         }
         let record = EdgeRecord {
@@ -976,12 +978,49 @@ where
             created_at: now.to_string(),
             confirmed_at: None,
             invalidated_at: None,
+            confirmed_by: None,
+            invalidated_by: None,
         };
         self.store.insert_edge(&record)?;
         // Later files of the same decision see it and do not repeat it.
         edges.push(record);
         Ok(1)
     }
+}
+
+/// Whether a row already stops a derivation from writing the edge again.
+/// Any live row does (pending or confirmed). An invalidated one does too,
+/// except when the evidence is a structural one (a file, a dependency or a
+/// symbol, not a mention nor the AI's guess) that differs from the reason
+/// the machine invalidated it for: a link the AI or the rules discarded on a
+/// weak reason comes back on a strong one. One a person invalidated, or whose
+/// author is unknown, never comes back.
+fn blocked(
+    edges: &[EdgeRecord],
+    kind: EdgeKind,
+    source: (NodeKind, &str),
+    entity_id: &str,
+    reason: &str,
+) -> bool {
+    let structural = mention_quote(reason).is_none() && ai_link_quote(reason).is_none();
+    edges
+        .iter()
+        .filter(|edge| {
+            edge.kind == kind
+                && edge.source_kind == source.0
+                && edge.source_id == source.1
+                && edge.entity_id == entity_id
+        })
+        .any(|edge| {
+            if edge.is_live() {
+                return true;
+            }
+            let revisable = matches!(
+                edge.invalidated_by,
+                Some(EdgeActor::Rules | EdgeActor::Ai | EdgeActor::Inherited)
+            );
+            !(structural && revisable && edge.reason != reason)
+        })
 }
 
 /// The text of a decision, ready to be searched: question, choice, rationale,

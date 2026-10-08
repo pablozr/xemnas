@@ -4,7 +4,7 @@ use application::graph::{
     json_strings, summary_files, DecisionNode, EdgeRecord, EntityRecord, GraphError, GraphStore,
     RuleSource,
 };
-use domain::entities::{EdgeKind, EdgeOrigin, EntityKind, NodeKind};
+use domain::entities::{EdgeActor, EdgeKind, EdgeOrigin, EntityKind, NodeKind};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
 use crate::store::SqliteStore;
@@ -14,7 +14,7 @@ pub(crate) const ENTITY_COLUMNS: &str =
 
 pub(crate) const EDGE_COLUMNS: &str =
     "edge_id, project_id, kind, source_kind, source_id, entity_id, origin, \
-     reason, created_at, confirmed_at, invalidated_at";
+     reason, created_at, confirmed_at, invalidated_at, confirmed_by, invalidated_by";
 
 impl GraphStore for SqliteStore {
     fn project_entities(&self, project_id: &str) -> Result<Vec<EntityRecord>, GraphError> {
@@ -157,7 +157,7 @@ impl GraphStore for SqliteStore {
         let inserted = self.lock().execute(
             &format!(
                 "INSERT INTO entity_edges ({EDGE_COLUMNS}) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)"
             ),
             params![
                 record.edge_id,
@@ -171,6 +171,8 @@ impl GraphStore for SqliteStore {
                 record.created_at,
                 record.confirmed_at,
                 record.invalidated_at,
+                record.confirmed_by.map(|actor| actor.as_str()),
+                record.invalidated_by.map(|actor| actor.as_str()),
             ],
         );
         match inserted {
@@ -184,25 +186,25 @@ impl GraphStore for SqliteStore {
         }
     }
 
-    fn confirm_edge(&self, edge_id: &str, at: &str) -> Result<bool, GraphError> {
+    fn confirm_edge(&self, edge_id: &str, at: &str, by: EdgeActor) -> Result<bool, GraphError> {
         let changed = self
             .lock()
             .execute(
-                "UPDATE entity_edges SET confirmed_at = ?2 \
+                "UPDATE entity_edges SET confirmed_at = ?2, confirmed_by = ?3 \
                  WHERE edge_id = ?1 AND confirmed_at IS NULL AND invalidated_at IS NULL",
-                params![edge_id, at],
+                params![edge_id, at, by.as_str()],
             )
             .map_err(storage_error)?;
         Ok(changed == 1)
     }
 
-    fn invalidate_edge(&self, edge_id: &str, at: &str) -> Result<bool, GraphError> {
+    fn invalidate_edge(&self, edge_id: &str, at: &str, by: EdgeActor) -> Result<bool, GraphError> {
         let changed = self
             .lock()
             .execute(
-                "UPDATE entity_edges SET invalidated_at = ?2 \
+                "UPDATE entity_edges SET invalidated_at = ?2, invalidated_by = ?3 \
                  WHERE edge_id = ?1 AND invalidated_at IS NULL",
-                params![edge_id, at],
+                params![edge_id, at, by.as_str()],
             )
             .map_err(storage_error)?;
         Ok(changed == 1)
@@ -432,7 +434,20 @@ pub(crate) fn map_edge(row: &Row<'_>) -> rusqlite::Result<EdgeRecord> {
         created_at: row.get(8)?,
         confirmed_at: row.get(9)?,
         invalidated_at: row.get(10)?,
+        confirmed_by: actor(row, 11)?,
+        invalidated_by: actor(row, 12)?,
     })
+}
+
+/// The actor stored in column `index`, if any.
+fn actor(row: &Row<'_>, index: usize) -> rusqlite::Result<Option<EdgeActor>> {
+    let value: Option<String> = row.get(index)?;
+    value
+        .map(|value| {
+            EdgeActor::parse(&value)
+                .ok_or_else(|| invalid_column(index, "autor do vínculo", &value))
+        })
+        .transpose()
 }
 
 fn storage_error(error: rusqlite::Error) -> GraphError {
