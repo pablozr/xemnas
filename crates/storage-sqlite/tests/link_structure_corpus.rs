@@ -41,8 +41,9 @@ use storage_sqlite::SqliteStore;
 /// with the file index: precision 1.000 (20/20), recall 0.645 (20/31), ghost 0; listing of 5,000 files 69 ms.
 /// with dependency owners: precision 1.000 (24/24), recall 0.774 (24/31).
 /// with symbols and file names: precision 1.000 (27/27), recall 0.871 (27/31); scan of 2,000 code files 0.5 s.
+/// with root and CI components: precision 1.000 (31/31), recall 1.000 (31/31).
 const PRECISION_FLOOR: f64 = 0.95;
-const RECALL_FLOOR: f64 = 0.87;
+const RECALL_FLOOR: f64 = 0.95;
 /// Ceilings: the count of wrong links of each kind.
 const NEGATED_CEILING: usize = 0;
 const HOMONYM_CEILING: usize = 0;

@@ -22,7 +22,10 @@ pub use derive::{
     SYMBOL_REASON,
 };
 pub(crate) use discover::project_keys;
-pub use discover::{declared_components, project_names, DeclaredComponent, WorkspaceKind};
+pub use discover::{
+    declared_components, infrastructure_components, project_names, DeclaredComponent, InfraKind,
+    WorkspaceKind,
+};
 pub use domain::entities::EntityKind;
 pub(crate) use mention::Folded;
 pub use mention::{mention_quote, mention_reason, MENTION_REASON};

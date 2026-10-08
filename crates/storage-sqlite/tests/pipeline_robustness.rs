@@ -48,10 +48,11 @@ fn registering_a_cargo_workspace_gives_the_map_its_components() {
         .register(&repo)
         .expect("register");
 
-    // What a `suggest_links` job reads: it no longer returns early.
+    // What a `suggest_links` job reads: it no longer returns early. The
+    // workspace root is a component too.
     assert_eq!(
         component_names(&test, project.id().as_str()),
-        vec!["api", "core"]
+        vec!["api", "core", "workspace"]
     );
 }
 
@@ -78,14 +79,14 @@ fn registering_an_npm_workspace_gives_the_map_its_components() {
     let project = projects.register(&repo).expect("register");
     assert_eq!(
         component_names(&test, project.id().as_str()),
-        vec!["server", "web"]
+        vec!["server", "web", "workspace"]
     );
 
     // Idempotent: preparing again changes nothing.
     map_preparer(test.store.clone())(project.id().as_str());
     assert_eq!(
         component_names(&test, project.id().as_str()),
-        vec!["server", "web"]
+        vec!["server", "web", "workspace"]
     );
 }
 
@@ -149,7 +150,7 @@ fn indexing_documents_prepares_the_map_before_the_analysis_they_start() {
 
     assert!(component_names(&test, "rb-p").is_empty());
     documents.index("rb-p").expect("index");
-    assert_eq!(component_names(&test, "rb-p"), vec!["core"]);
+    assert_eq!(component_names(&test, "rb-p"), vec!["core", "workspace"]);
 }
 
 fn set_job(test: &support::TestStore, state: &str, attempts: i64) {

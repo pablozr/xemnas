@@ -420,7 +420,10 @@ where
         let project =
             ProjectRepository::get(&self.store, project_id)?.ok_or(GraphError::ProjectNotFound)?;
         // Aliases first, so mentions below already use them.
-        let declared = super::declared_components(std::path::Path::new(&project.location));
+        let mut declared = super::declared_components(std::path::Path::new(&project.location));
+        let infrastructure =
+            super::infrastructure_components(std::path::Path::new(&project.location), &declared);
+        declared.extend(infrastructure);
         self.merge_aliases(project_id, &declared)?;
         let now = now_rfc3339();
         let at = Timestamp::parse(&now).ok_or(GraphError::Storage("relógio inválido".into()))?;
@@ -688,7 +691,9 @@ where
                 name: member.name.clone(),
                 pattern: member.pattern.clone(),
                 description: member.description.clone(),
-                declared: Some(member.source),
+                // Root files and CI are not a workspace member: no manifest
+                // declares them.
+                declared: member.infra.is_none().then_some(member.source),
             })
             .collect();
         report.components.retain(|inferred| {

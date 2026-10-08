@@ -715,9 +715,16 @@ fn an_empty_map_assembles_itself_from_the_declared_workspace() {
         .expect("project");
 
     let graph = KnowledgeGraph::new(test.store.clone());
-    assert_eq!(graph.assemble("ws").expect("assemble"), 2);
+    // Two members and the files at the root of the workspace.
+    assert_eq!(graph.assemble("ws").expect("assemble"), 3);
     assert_eq!(graph.assemble("ws").expect("again"), 0, "only an empty map");
     let entities = graph.entities("ws").expect("entities");
+    let root_files = entities
+        .iter()
+        .find(|entity| entity.name == "workspace")
+        .expect("workspace root");
+    assert_eq!(root_files.patterns, vec!["*"]);
+    assert!(root_files.aliases.contains(&"workspace root".to_string()));
     let core = entities
         .iter()
         .find(|entity| entity.name == "core")

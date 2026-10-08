@@ -40,6 +40,16 @@ impl WorkspaceKind {
     }
 }
 
+/// What a component that is not a workspace member stands for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InfraKind {
+    /// The files at the root of a workspace: its manifest, toolchain and
+    /// shared configuration.
+    Root,
+    /// A continuous integration system and its pipelines.
+    Ci,
+}
+
 /// One member the project declares.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeclaredComponent {
@@ -51,6 +61,13 @@ pub struct DeclaredComponent {
     pub description: String,
     /// The manifest that declares it.
     pub source: WorkspaceKind,
+    /// Set for the root files and the CI of the project, which are structure
+    /// too but no workspace member.
+    pub infra: Option<InfraKind>,
+    /// Patterns after `pattern` (only for an infrastructure component).
+    pub more_patterns: Vec<String>,
+    /// Aliases written out (only for an infrastructure component).
+    pub aliases: Vec<String>,
     /// Names of the dependencies its manifest declares (all tables, `target.*`
     /// ones included; the real package name of a renamed dependency).
     pub dependencies: Vec<String>,
@@ -88,6 +105,9 @@ pub fn declared_components(root: &Path) -> Vec<DeclaredComponent> {
                     pattern: format!("{dir}/**"),
                     description: toml_package_field(&manifest, "description").unwrap_or_default(),
                     source: WorkspaceKind::Cargo,
+                    infra: None,
+                    more_patterns: Vec::new(),
+                    aliases: Vec::new(),
                     dependencies: cargo_dependencies(&manifest),
                 });
             }
@@ -129,9 +149,100 @@ pub fn declared_components(root: &Path) -> Vec<DeclaredComponent> {
                 pattern: format!("{dir}/**"),
                 description: field("description").unwrap_or_default(),
                 source,
+                infra: None,
+                more_patterns: Vec::new(),
+                aliases: Vec::new(),
                 dependencies: npm_dependencies(&value),
             });
         }
+    }
+    found
+}
+
+/// CI systems: where their pipelines live, how people call them, and whether
+/// the path is a folder (`dir/**`) or a file.
+const CI_SYSTEMS: &[(&str, &str, bool)] = &[
+    (".github/workflows", "GitHub Actions", true),
+    (".gitlab-ci.yml", "GitLab CI", false),
+    (".circleci", "CircleCI", true),
+    ("azure-pipelines.yml", "Azure Pipelines", false),
+    ("Jenkinsfile", "Jenkins", false),
+    (".buildkite", "Buildkite", true),
+];
+
+/// The structure of the project that no workspace member covers: the files
+/// at the root of a workspace (its manifest, toolchain, shared configuration)
+/// and the continuous integration pipelines. The root only exists when the
+/// project declares `members`; the folder of a pipeline must exist.
+pub fn infrastructure_components(
+    root: &Path,
+    members: &[DeclaredComponent],
+) -> Vec<DeclaredComponent> {
+    let infra = |name: &str,
+                 kind: InfraKind,
+                 patterns: Vec<String>,
+                 description: String,
+                 aliases: Vec<&str>| {
+        let mut patterns = patterns.into_iter();
+        DeclaredComponent {
+            name: name.to_string(),
+            pattern: patterns.next().unwrap_or_default(),
+            description,
+            source: members
+                .first()
+                .map_or(WorkspaceKind::Cargo, |first| first.source),
+            infra: Some(kind),
+            more_patterns: patterns.collect(),
+            aliases: aliases.into_iter().map(str::to_string).collect(),
+            dependencies: Vec::new(),
+        }
+    };
+    let mut found = Vec::new();
+    if !members.is_empty() {
+        let taken = members
+            .iter()
+            .any(|member| entity_key(&member.name) == entity_key("workspace"));
+        let mut patterns = vec!["*".to_string()];
+        if root.join(".cargo").is_dir() {
+            patterns.push(".cargo/**".to_string());
+        }
+        found.push(infra(
+            if taken { "workspace-root" } else { "workspace" },
+            InfraKind::Root,
+            patterns,
+            "Arquivos da raiz: manifesto do workspace, toolchain e configuração comum".into(),
+            vec!["workspace root", "raiz do workspace"],
+        ));
+    }
+    let systems: Vec<&(&str, &str, bool)> = CI_SYSTEMS
+        .iter()
+        .filter(|(path, _, folder)| {
+            let found = root.join(path);
+            if *folder {
+                found.is_dir()
+            } else {
+                found.is_file()
+            }
+        })
+        .collect();
+    for (path, provider, folder) in &systems {
+        let pattern = if *folder {
+            format!("{path}/**")
+        } else {
+            (*path).to_string()
+        };
+        let name = if systems.len() == 1 {
+            "CI".to_string()
+        } else {
+            format!("CI {provider}")
+        };
+        found.push(infra(
+            &name,
+            InfraKind::Ci,
+            vec![pattern.clone()],
+            format!("Integração contínua e publicação ({pattern})"),
+            vec![provider],
+        ));
     }
     found
 }
@@ -252,6 +363,9 @@ pub(crate) fn project_keys(root: &Path) -> Arc<BTreeSet<String>> {
 /// matcher apply later; terms that can never match (under 3 characters) are
 /// not worth storing.
 fn alias_candidates(component: &DeclaredComponent) -> Vec<String> {
+    if component.infra.is_some() {
+        return component.aliases.clone();
+    }
     let last = component.name.rsplit('/').next().unwrap_or("");
     let folder = component
         .pattern
@@ -472,7 +586,10 @@ where
             return Ok(0);
         }
         let mut created = 0;
-        let declared = declared_components(Path::new(&project.location));
+        let root = Path::new(&project.location);
+        let mut declared = declared_components(root);
+        let infrastructure = infrastructure_components(root, &declared);
+        declared.extend(infrastructure);
         let aliases = package_aliases(&declared, &vec![BTreeSet::new(); declared.len()]);
         for (declared, aliases) in declared.iter().cloned().zip(aliases) {
             let description: String = declared
@@ -485,7 +602,9 @@ where
                 kind: Some(EntityKind::Component),
                 name: declared.name,
                 description,
-                patterns: vec![declared.pattern],
+                patterns: std::iter::once(declared.pattern)
+                    .chain(declared.more_patterns)
+                    .collect(),
                 aliases,
             }) {
                 Ok(_) => created += 1,
@@ -716,6 +835,9 @@ mod tests {
             pattern: format!("{dir}/**"),
             description: String::new(),
             source: WorkspaceKind::Npm,
+            infra: None,
+            more_patterns: Vec::new(),
+            aliases: Vec::new(),
             dependencies: Vec::new(),
         }
     }
@@ -775,6 +897,75 @@ mod tests {
         let mut found = npm_dependencies(&npm);
         found.sort();
         assert_eq!(found, vec!["fastify", "fsevents", "react", "vitest"]);
+    }
+
+    fn tree(name: &str, files: &[&str]) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("xemnas-infra-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for file in files {
+            let path = root.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "x").unwrap();
+        }
+        root
+    }
+
+    #[test]
+    fn a_workspace_has_a_root_component_and_one_per_ci_system() {
+        let root = tree(
+            "both",
+            &[
+                ".github/workflows/ci.yml",
+                ".cargo/config.toml",
+                "Jenkinsfile",
+            ],
+        );
+        let members = vec![declared("core", "crates/core")];
+        let found = infrastructure_components(&root, &members);
+        let names: Vec<(&str, &str, InfraKind)> = found
+            .iter()
+            .map(|component| {
+                (
+                    component.name.as_str(),
+                    component.pattern.as_str(),
+                    component.infra.unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                ("workspace", "*", InfraKind::Root),
+                ("CI GitHub Actions", ".github/workflows/**", InfraKind::Ci),
+                ("CI Jenkins", "Jenkinsfile", InfraKind::Ci),
+            ]
+        );
+        assert_eq!(found[0].more_patterns, vec![".cargo/**"]);
+        assert_eq!(
+            found[0].aliases,
+            vec!["workspace root", "raiz do workspace"]
+        );
+        assert_eq!(found[1].aliases, vec!["GitHub Actions"]);
+        assert!(found[1].description.contains(".github/workflows/**"));
+        // One system is just "CI"; a member called workspace takes the name.
+        let single = tree("single", &[".gitlab-ci.yml"]);
+        let taken = vec![declared("workspace", "crates/workspace")];
+        let found = infrastructure_components(&single, &taken);
+        let names: Vec<&str> = found
+            .iter()
+            .map(|component| component.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["workspace-root", "CI"]);
+        assert_eq!(found[1].pattern, ".gitlab-ci.yml");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&single);
+    }
+
+    #[test]
+    fn a_project_without_members_has_no_root_component() {
+        let root = tree("single-package", &["src/main.rs"]);
+        assert!(infrastructure_components(&root, &[]).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
