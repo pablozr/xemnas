@@ -51,7 +51,7 @@ use crate::conflicts::{ConflictView, Conflicts, Resolution};
 use crate::decisions::{DecisionQuery, DecisionStatus, DecisionStore, StoredDecision};
 use crate::extract::{CandidateKind, MIN_SIGNIFICANCE};
 use crate::graph::{
-    ai_link_quote, ai_link_why, mention_quote, GraphStore, KnowledgeGraph, Suggestion,
+    ai_link_quote, ai_link_why, mention_quote, EntityRecord, GraphStore, KnowledgeGraph, Suggestion,
 };
 use crate::inbox::{
     CandidateStatus, Cursor, Inbox, InboxQuery, InboxStore, StoredCandidate, MAX_PAGE_LIMIT,
@@ -560,22 +560,64 @@ pub fn triage_link(reason: &str) -> Triage {
     }
 }
 
-/// What the AI is told about a suggested tie.
-fn link_text(suggestion: &Suggestion) -> String {
+/// What the AI is told about a suggested tie: the decision or rule (its
+/// question and choice), the component (description and a few paths), and
+/// what suggested it.
+fn link_text(suggestion: &Suggestion, component: Option<&EntityRecord>) -> String {
     let evidence = if let Some(quote) = mention_quote(&suggestion.reason) {
-        format!("Citação: {}", clip(quote, SENT_CHARS))
+        format!("Evidência (menção no texto): {}", clip(quote, SENT_CHARS))
     } else if let Some(quote) = ai_link_quote(&suggestion.reason) {
         let why = ai_link_why(&suggestion.reason).unwrap_or_default();
         format!(
-            "Citação proposta pela IA: {} | Motivo da IA: {}",
+            "Evidência (proposta pela IA): {} | Motivo da IA: {}",
             clip(quote, SENT_CHARS),
             clip(why, 160)
         )
+    } else if suggestion
+        .reason
+        .starts_with(crate::graph::DEPENDENCY_REASON)
+    {
+        format!(
+            "Evidência (dependência citada): {}",
+            clip(&suggestion.reason, 160)
+        )
+    } else if suggestion.reason.starts_with(crate::graph::SYMBOL_REASON) {
+        format!(
+            "Evidência (símbolo citado): {}",
+            clip(&suggestion.reason, 160)
+        )
     } else {
-        format!("Arquivo ou dependência: {}", clip(&suggestion.reason, 160))
+        format!(
+            "Evidência (arquivo tocado): {}",
+            clip(&suggestion.reason, 160)
+        )
     };
+    let choice = if suggestion.source.detail.is_empty() {
+        String::new()
+    } else {
+        format!(" | Escolha: {}", clip(&suggestion.source.detail, 200))
+    };
+    let part = component.map_or_else(String::new, |component| {
+        let paths: Vec<&str> = component
+            .patterns
+            .iter()
+            .take(3)
+            .map(String::as_str)
+            .collect();
+        let mut part = String::new();
+        if !component.description.trim().is_empty() {
+            part.push_str(&format!(
+                " | Componente: {}",
+                clip(&component.description, 160)
+            ));
+        }
+        if !paths.is_empty() {
+            part.push_str(&format!(" | Caminhos: {}", paths.join(", ")));
+        }
+        part
+    });
     format!(
-        "[vínculo {}] \"{}\" -> {} \"{}\" | {evidence}",
+        "[vínculo {}] \"{}\"{choice} -> {} \"{}\"{part} | {evidence}",
         suggestion.kind.as_str(),
         clip(&suggestion.source.label, 160),
         suggestion.entity.detail,
@@ -609,11 +651,11 @@ pub const REVIEW_PROMPT: &str = concat!(
 decisions of a software project. Items wait for the developer to approve them; you decide \
 which can go ahead without them. For each item answer accept (it is clearly right, useful \
 and safe for coding agents to rely on), discard (it is wrong, trivial or repeats something) \
-or human (it is ambiguous, high impact, contradicts something or you are not sure). When in \
+or human (it is ambiguous, high impact, contradicts another recorded decision or rule \
+(two statements that cannot both hold; wording inside one item is not a contradiction) or you \
+are not sure). When in \
 doubt answer human: a wrong accept becomes context given to agents. A rule or relation that \
-conflicts with or replaces another decision is accept only when its quote clearly supports it. \
-A link from a decision to a part of the project map found by a mention is accept only when \
-its quote shows the decision really affects or uses that part, not a passing remark.\n\
+conflicts with or replaces another decision is accept only when its quote clearly supports it.\n\
 An item may list rules in force that resemble it after the items: discard it when it \
 only restates one of them, and keep it (accept or human) when it adds a real constraint, \
 a different condition or another scope.\n\
@@ -625,6 +667,28 @@ list or one of the decisions in force listed after the items, put that id in con
 only, matching exactly: {\"verdicts\":[{\"id\":string,\"verdict\":\"accept|discard|human\",\
 \"reason\":string,\"conflicts_with\":string|null}]}, one entry per item, using its id exactly \
 as given.",
+    crate::plain_rules!()
+);
+
+/// System prompt of the judge of links between a decision (or rule) and a part
+/// of the project map. It asks its own question, apart from the other items:
+/// a link always restates its decision, so repeating is never a reason.
+pub const LINK_REVIEW_PROMPT: &str = concat!(
+    "You help a developer keep the map of a software project right. Each item is a suggested \
+link from an engineering decision or rule to a component of the project, with the decision's \
+choice, the component's description and paths, and the evidence that suggested it. Decide for \
+each: accept (the link is right), discard (it is wrong) or human (the evidence does not \
+decide). The question is: is this component where the decision or rule applies or is \
+implemented, so that its code or behavior would change if the decision changed?\n\
+A link always restates its decision, so never discard a link for repeating it. Discard it \
+when the component is only named in passing, is named to be excluded or compared against, or \
+is the product as a whole rather than a part of it. A test or tooling component is the place \
+only when the rule is checked there. Answer human only when the evidence does not decide; when \
+in doubt between accept and discard, answer human.\n\
+Give in reason one short sentence in the language of the item. The ids (I1, I2) are only for \
+matching the answer to the items: never write an id in the reason. Reply with one JSON object \
+only, matching exactly: {\"verdicts\":[{\"id\":string,\"verdict\":\"accept|discard|human\",\
+\"reason\":string,\"conflicts_with\":null}]}, one entry per item, using its id exactly as given.",
     crate::plain_rules!()
 );
 
@@ -971,6 +1035,8 @@ where
         }
 
         let graph = KnowledgeGraph::new(self.store.clone());
+        let entities = GraphStore::project_entities(&self.store, project_id)
+            .map_err(|error| storage(error.to_string()))?;
         for suggestion in graph
             .suggestions(project_id)
             .map_err(|error| storage(error.to_string()))?
@@ -982,7 +1048,12 @@ where
                 kind: ItemKind::Link,
                 id: suggestion.edge_id.clone(),
                 title: format!("{} → {}", suggestion.source.label, suggestion.entity.label),
-                text: link_text(&suggestion),
+                text: link_text(
+                    &suggestion,
+                    entities
+                        .iter()
+                        .find(|entity| entity.entity_id == suggestion.entity.node.id),
+                ),
                 waiting_since: suggestion.created_at.clone(),
                 triage: triage_link(&suggestion.reason),
                 ai_link: ai_link_quote(&suggestion.reason).is_some(),
@@ -1240,18 +1311,37 @@ where
             )?;
         }
 
-        // The rest, in one batched call.
-        let ambiguous: Vec<&Item> = items
+        // The rest in one batched call, the links in another with their own
+        // question: a link restates its decision by nature, and mixing the two
+        // kinds in a batch lets the criterion of one leak into the other.
+        let (links, rest): (Vec<&Item>, Vec<&Item>) = items
             .iter()
             .filter(|item| item.triage == Triage::Ask)
-            .collect();
-        if ambiguous.is_empty() || !self.may_ask(now)? {
-            return Ok(report);
+            .partition(|item| item.kind == ItemKind::Link);
+        for (group, prompt) in [(rest, REVIEW_PROMPT), (links, LINK_REVIEW_PROMPT)] {
+            if group.is_empty() || !self.may_ask(now)? {
+                continue;
+            }
+            let Some(model) = self.judge() else {
+                return Ok(report);
+            };
+            self.ask(project_id, group, prompt, &model, now, &mut report)?;
         }
-        let Some(model) = self.judge() else {
-            return Ok(report);
-        };
-        let mut oldest_first = ambiguous;
+        Ok(report)
+    }
+
+    /// One batched call about the oldest items of `group`, up to [`BATCH`],
+    /// and the verdicts it brings.
+    fn ask(
+        &self,
+        project_id: &str,
+        group: Vec<&Item>,
+        prompt: &str,
+        model: &F::Extractor,
+        now: &str,
+        report: &mut RunReport,
+    ) -> Result<(), ReviewError> {
+        let mut oldest_first = group;
         oldest_first.sort_by(|a, b| a.waiting_since.cmp(&b.waiting_since));
         let batch: Vec<&Item> = oldest_first.into_iter().take(BATCH).collect();
         let ids: Vec<String> = (1..=batch.len()).map(|at| format!("I{at}")).collect();
@@ -1330,17 +1420,16 @@ where
             }
         }
         report.asked = true;
-        let answer =
-            match model.complete(REVIEW_PROMPT, &user, "approval_verdicts", &review_schema()) {
-                Ok(answer) => {
-                    self.store.record_review_call(now, batch.len(), true)?;
-                    answer
-                }
-                Err(error) => {
-                    self.store.record_review_call(now, batch.len(), false)?;
-                    return Err(ReviewError::Provider(error.to_string()));
-                }
-            };
+        let answer = match model.complete(prompt, &user, "approval_verdicts", &review_schema()) {
+            Ok(answer) => {
+                self.store.record_review_call(now, batch.len(), true)?;
+                answer
+            }
+            Err(error) => {
+                self.store.record_review_call(now, batch.len(), false)?;
+                return Err(ReviewError::Provider(error.to_string()));
+            }
+        };
 
         let mut names: Vec<(String, String)> = ids
             .iter()
@@ -1417,10 +1506,10 @@ where
                 &reason,
                 conflict,
                 now,
-                &mut report,
+                &mut *report,
             )?;
         }
-        Ok(report)
+        Ok(())
     }
 
     /// The decisions in force of a project, newest first, up to the same
