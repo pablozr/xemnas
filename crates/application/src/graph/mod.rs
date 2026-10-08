@@ -11,6 +11,7 @@ mod derive;
 mod discover;
 mod mention;
 mod query;
+mod repo_files;
 mod scope;
 
 pub use ai_link::{ai_link_quote, ai_link_reason, ai_link_why, AI_LINK_REASON};
@@ -21,12 +22,16 @@ pub use derive::{
 pub(crate) use discover::project_keys;
 pub use discover::{declared_components, project_names, DeclaredComponent, WorkspaceKind};
 pub use domain::entities::EntityKind;
+pub(crate) use mention::Folded;
 pub use mention::{mention_quote, mention_reason, MENTION_REASON};
 pub use query::{
     DecisionParts, EntityDetail, FileLens, GraphEdge, GraphNode, MapEntity, Neighborhood, NodeRef,
     NodeSummary, PartCount, ProjectGraph, ProjectMap, Suggestion, TimelineEvent, TimelineKind,
     DEFAULT_NEIGHBORHOOD_LIMIT, MAX_NEIGHBORHOOD_DEPTH,
 };
+#[doc(hidden)]
+pub use repo_files::index_repository;
+pub(crate) use repo_files::{counted_files, repo_files};
 pub use scope::ClaimScopes;
 
 use domain::entities::{
@@ -244,6 +249,10 @@ pub struct DecisionNode {
     pub files: Vec<String>,
     /// Diff hunks of the decision's evidence, for dependency detection.
     pub diffs: Vec<String>,
+    /// Taken from a document (an ADR, a spec): its evidence has a document
+    /// artifact and no diff hunk. The files of such a decision are the paths
+    /// the whole document cites, not the ones it changed.
+    pub from_document: bool,
 }
 
 /// A rule adopted from a candidate, with the files its evidence touched.
@@ -253,6 +262,8 @@ pub struct RuleSource {
     pub claim_id: String,
     /// Files of the candidate's evidence (`diff_summary.files`).
     pub files: Vec<String>,
+    /// Taken from a document, like [`DecisionNode::from_document`].
+    pub from_document: bool,
 }
 
 /// Persistence port of the graph.

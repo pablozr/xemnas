@@ -210,6 +210,21 @@ pub(crate) fn entity_terms(entity: &EntityRecord, project_keys: &BTreeSet<String
     terms
 }
 
+/// The term for a path written in a text: a file the text may cite.
+pub(crate) fn path_term(path: &str) -> Option<Term> {
+    let chars: Vec<char> = path
+        .trim()
+        .trim_start_matches("./")
+        .chars()
+        .map(fold)
+        .collect();
+    (!chars.is_empty()).then_some(Term {
+        chars,
+        path: true,
+        restricted: false,
+    })
+}
+
 /// A text ready to be searched: the original characters and their folded
 /// form, one to one, with the spans of code and the words a negation reaches.
 pub(crate) struct Folded {

@@ -1336,6 +1336,7 @@ mod tests {
             confirmed_at: confirmed_at.into(),
             files: vec![],
             diffs: vec![],
+            from_document: false,
         }
     }
 

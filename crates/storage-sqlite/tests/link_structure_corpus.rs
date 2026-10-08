@@ -38,12 +38,13 @@ use storage_sqlite::SqliteStore;
 /// 11 negated, 4 homonym, 3 ghost; with affirmative mentions only 0.783
 /// (18/23), 0.581 (18/31), 0, 2, 3.
 /// with the project's own name restricted: precision 0.857 (18/21), recall 0.581, homonym_linked 0.
-const PRECISION_FLOOR: f64 = 0.85;
-const RECALL_FLOOR: f64 = 0.58;
+/// with the file index: precision 1.000 (20/20), recall 0.645 (20/31), ghost 0; listing of 5,000 files 69 ms.
+const PRECISION_FLOOR: f64 = 0.95;
+const RECALL_FLOOR: f64 = 0.64;
 /// Ceilings: the count of wrong links of each kind.
 const NEGATED_CEILING: usize = 0;
 const HOMONYM_CEILING: usize = 0;
-const GHOST_CEILING: usize = 3;
+const GHOST_CEILING: usize = 0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
@@ -925,6 +926,8 @@ const SCALE_CODE_FILES: usize = 2_000;
 /// Ceilings, about twice the baseline (cold 2.1 s, warm 1.3 s).
 const REFRESH_COLD_CEILING_MS: u128 = 4_500;
 const REFRESH_WARM_CEILING_MS: u128 = 3_000;
+/// The listing of the 5,000 files.
+const INDEX_CEILING_MS: u128 = 300;
 
 #[test]
 #[ignore = "scale gate (seeds 2,000 decisions and 5,000 files); run by tools/core-quality.py"]
@@ -962,7 +965,7 @@ fn link_structure_scales() {
         let part = index % SCALE_COMPONENTS;
         let dir = root.join(format!(
             "crates/part{part:02}/src/m{}",
-            index / SCALE_COMPONENTS
+            index / SCALE_COMPONENTS / 20
         ));
         std::fs::create_dir_all(&dir).expect("module folder");
         if code < SCALE_CODE_FILES {
@@ -1009,10 +1012,16 @@ fn link_structure_scales() {
     let started = Instant::now();
     graph.refresh_suggestions("big").expect("refresh again");
     let warm_ms = started.elapsed().as_millis();
+    // The listing alone, without the cache.
+    let started = Instant::now();
+    let (listed, partial) = application::graph::index_repository(&root).expect("listing");
+    let index_ms = started.elapsed().as_millis();
     println!(
-        "latency refresh_ms={cold_ms} refresh_warm_ms={warm_ms} new_edges={}",
+        "latency refresh_ms={cold_ms} refresh_warm_ms={warm_ms} index_ms={index_ms}          files={listed} new_edges={}",
         cold.new_edges
     );
+    assert!(!partial && listed >= SCALE_FILES, "listed {listed} files");
+    assert!(index_ms <= INDEX_CEILING_MS, "listing {index_ms}ms");
     let _ = std::fs::remove_dir_all(&base);
     assert!(
         cold_ms <= REFRESH_COLD_CEILING_MS,

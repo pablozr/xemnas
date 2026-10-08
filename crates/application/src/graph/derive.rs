@@ -1,14 +1,17 @@
 //! Deterministic suggestions from captured work (ADR-0005): which components
 //! the decisions touched, which dependencies they added, which map entities
-//! their text names, and the `affects` / `uses` edges those imply. No AI, no
-//! reading of the repository.
+//! their text names, and the `affects` / `uses` edges those imply. No AI.
 //!
 //! Documentation files a decision touched are evidence, not the part it
 //! affects: they never yield `affects` nor a component proposal. A decision
 //! taken from an ADR reaches the parts it is about through the mentions in
-//! its text ([`super::mention`]).
+//! its text ([`super::mention`]) and through the files that text cites. A file
+//! counts only when it exists in the project folder (the listing of
+//! [`super::repo_files`]), so a path an ADR cites relative to a crate, or one
+//! that does not exist, never becomes a component.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use domain::entities::{
     component_prefix, entity_key, pattern_matches, EdgeKind, EdgeOrigin, EntityKind, NodeKind,
@@ -16,6 +19,7 @@ use domain::entities::{
 use domain::time::Timestamp;
 
 use super::mention::{entity_terms, mention_reason, Folded, Term};
+use super::repo_files::{counted_files, repo_files, RepoFiles};
 use super::{DecisionNode, EdgeRecord, EntityRecord, GraphError, GraphStore, KnowledgeGraph};
 use crate::claims::ClaimStore;
 use crate::clock::now_rfc3339;
@@ -402,6 +406,10 @@ where
             .filter(|decision| super::query::decision_in_force(decision, &relations, &at))
             .collect();
 
+        let root = std::path::Path::new(&project.location);
+        // The listing of the project folder, read when a decision first has a
+        // file to check.
+        let mut listing: Option<Arc<Option<RepoFiles>>> = None;
         let mut report = SuggestionReport::default();
         let mut prefixes: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         let mut technologies: BTreeMap<String, (String, BTreeSet<String>)> = BTreeMap::new();
@@ -419,11 +427,20 @@ where
             .collect();
 
         for decision in &decisions {
-            for file in decision
+            let texts = decision_texts(decision);
+            let has_files = decision
                 .files
                 .iter()
-                .filter(|file| !is_documentation_path(file))
-            {
+                .any(|file| !is_documentation_path(file));
+            let repo =
+                has_files.then(|| Arc::clone(listing.get_or_insert_with(|| repo_files(root))));
+            let files = counted_files(
+                &decision.files,
+                decision.from_document,
+                &texts,
+                repo.as_deref().and_then(Option::as_ref),
+            );
+            for file in &files {
                 let components: Vec<&&EntityRecord> = live
                     .iter()
                     .filter(|entity| entity.kind == EntityKind::Component)
@@ -435,7 +452,10 @@ where
                     })
                     .collect();
                 if components.is_empty() {
-                    if let Some(prefix) = component_prefix(file) {
+                    // A folder that leaves the project is never a component.
+                    let prefix = component_prefix(file)
+                        .filter(|prefix| !prefix.split('/').any(|part| part == ".."));
+                    if let Some(prefix) = prefix {
                         prefixes
                             .entry(prefix)
                             .or_default()
@@ -485,7 +505,7 @@ where
                 }
             }
             report.new_edges +=
-                self.suggest_mentions(&mut edges, project_id, decision, &named, &now)?;
+                self.suggest_mentions(&mut edges, project_id, decision, &texts, &named, &now)?;
         }
 
         // Decisions no file tied to the map ask the AI which components they
@@ -513,6 +533,10 @@ where
         // Standing rules still without a component tie, and whose source
         // decision gives none, ask the AI which components they govern.
         crate::link_suggestions::queue_untied_claims(&self.store, &claims, &edges, components, &at);
+        let statements: BTreeMap<String, String> = claims
+            .iter()
+            .map(|claim| (claim.claim_id.clone(), claim.statement.clone()))
+            .collect();
         let valid_claims: BTreeSet<String> = claims
             .into_iter()
             .filter(|claim| claim.is_valid_at(&at))
@@ -522,11 +546,19 @@ where
             if !valid_claims.contains(&rule.claim_id) {
                 continue;
             }
-            for file in rule
-                .files
-                .iter()
-                .filter(|file| !is_documentation_path(file))
-            {
+            let has_files = rule.files.iter().any(|file| !is_documentation_path(file));
+            let repo =
+                has_files.then(|| Arc::clone(listing.get_or_insert_with(|| repo_files(root))));
+            let statement = [Folded::new(
+                statements.get(&rule.claim_id).map_or("", String::as_str),
+            )];
+            let files = counted_files(
+                &rule.files,
+                rule.from_document,
+                &statement,
+                repo.as_deref().and_then(Option::as_ref),
+            );
+            for file in &files {
                 for component in live.iter().filter(|entity| {
                     entity.kind == EntityKind::Component
                         && entity
@@ -642,17 +674,13 @@ where
         edges: &mut Vec<EdgeRecord>,
         project_id: &str,
         decision: &DecisionNode,
+        texts: &[Folded],
         named: &[(&EntityRecord, EdgeKind, Vec<Term>)],
         now: &str,
     ) -> Result<usize, GraphError> {
         if named.is_empty() {
             return Ok(0);
         }
-        let texts: Vec<Folded> = [&decision.question, &decision.choice, &decision.rationale]
-            .into_iter()
-            .chain(&decision.context)
-            .map(|text| Folded::new(text))
-            .collect();
         let source = (NodeKind::Decision, decision.decision_id.as_str());
         let mut written = 0;
         for (entity, kind, terms) in named {
@@ -713,6 +741,16 @@ where
         edges.push(record);
         Ok(1)
     }
+}
+
+/// The text of a decision, ready to be searched: question, choice, rationale,
+/// assumptions, scope and consequences.
+fn decision_texts(decision: &DecisionNode) -> Vec<Folded> {
+    [&decision.question, &decision.choice, &decision.rationale]
+        .into_iter()
+        .chain(&decision.context)
+        .map(|text| Folded::new(text))
+        .collect()
 }
 
 /// Whether any row (pending, confirmed or rejected) ties `source` to the

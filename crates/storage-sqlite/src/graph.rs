@@ -238,6 +238,7 @@ impl GraphStore for SqliteStore {
                     confirmed_at: row.get(3)?,
                     files: summary_files(&row.get::<_, String>(4)?),
                     diffs: Vec::new(),
+                    from_document: false,
                 };
                 Ok((decision, row.get::<_, Option<String>>(5)?))
             })
@@ -255,9 +256,26 @@ impl GraphStore for SqliteStore {
                  ORDER BY l.position",
             )
             .map_err(storage_error)?;
+        // How many documents and diff hunks the decision cites.
+        let mut kinds = connection
+            .prepare(
+                "SELECT COALESCE(SUM(a.kind = 'document'), 0), \
+                        COALESCE(SUM(a.kind = 'diff_hunk'), 0) \
+                 FROM evidence_links l \
+                 JOIN capture_artifacts a \
+                   ON a.artifact_id = l.artifact_id AND a.capture_id = ?2 \
+                 WHERE l.decision_id = ?1",
+            )
+            .map_err(storage_error)?;
         let mut decisions = Vec::with_capacity(rows.len());
         for (mut decision, capture_id) in rows {
             if let Some(capture_id) = &capture_id {
+                let (documents, diff_hunks): (i64, i64) = kinds
+                    .query_row(params![decision.decision_id, capture_id], |row| {
+                        Ok((row.get(0)?, row.get(1)?))
+                    })
+                    .map_err(storage_error)?;
+                decision.from_document = documents > 0 && diff_hunks == 0;
                 decision.diffs = hunks
                     .query_map(params![decision.decision_id, capture_id], |row| {
                         row.get::<_, String>(0)
@@ -281,7 +299,7 @@ impl SqliteStore {
         let connection = self.lock();
         let mut statement = connection
             .prepare(
-                "SELECT c.claim_id, COALESCE(d.diff_summary, '{}') \
+                "SELECT c.claim_id, COALESCE(d.diff_summary, '{}'), d.capture_id, d.evidence_refs \
                  FROM context_claims c \
                  JOIN decision_candidates d ON d.id = c.source_candidate_id \
                  WHERE c.project_id = ?1 ORDER BY c.claim_id",
@@ -289,18 +307,44 @@ impl SqliteStore {
             .map_err(storage_error)?;
         let rows = statement
             .query_map([project_id], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
             })
             .map_err(storage_error)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(storage_error)?;
-        Ok(rows
-            .into_iter()
-            .map(|(claim_id, summary)| RuleSource {
+        // A rule comes from a document when the artifacts its candidate cites
+        // include a document and no diff hunk.
+        let mut kind = connection
+            .prepare(
+                "SELECT kind FROM capture_artifacts WHERE capture_id = ?1 AND artifact_id = ?2",
+            )
+            .map_err(storage_error)?;
+        let mut sources = Vec::with_capacity(rows.len());
+        for (claim_id, summary, capture_id, refs) in rows {
+            let (mut documents, mut hunks) = (0, 0);
+            for artifact in json_strings(&refs) {
+                let found: Option<String> = kind
+                    .query_row(params![capture_id, artifact], |row| row.get(0))
+                    .optional()
+                    .map_err(storage_error)?;
+                match found.as_deref() {
+                    Some("document") => documents += 1,
+                    Some("diff_hunk") => hunks += 1,
+                    _ => {}
+                }
+            }
+            sources.push(RuleSource {
                 claim_id,
                 files: summary_files(&summary),
-            })
-            .collect())
+                from_document: documents > 0 && hunks == 0,
+            });
+        }
+        Ok(sources)
     }
 }
 

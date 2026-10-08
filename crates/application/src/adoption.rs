@@ -148,13 +148,33 @@ where
         let rule = detail.summary.kind == CandidateKind::Rule;
         let mut preview = AdoptionPreview::default();
         let mut seen: BTreeSet<(EdgeKind, String)> = BTreeSet::new();
-        // Documentation is evidence, not the part a decision affects.
-        for file in detail
-            .diff_summary
-            .files
+        // Documentation is evidence, not the part a decision affects. The
+        // files must exist in the project folder; for a document, the text
+        // must cite them.
+        let documents = detail
+            .artifacts
             .iter()
-            .filter(|file| !crate::documents::is_documentation_path(file))
-        {
+            .any(|artifact| artifact.kind == crate::documents::DOCUMENT_ARTIFACT);
+        let hunks = detail
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.kind == "diff_hunk");
+        let texts: Vec<crate::graph::Folded> = [
+            &detail.summary.question,
+            &detail.summary.choice,
+            &detail.rationale,
+        ]
+        .into_iter()
+        .map(|text| crate::graph::Folded::new(text))
+        .collect();
+        let repo = crate::graph::repo_files(std::path::Path::new(&detail.summary.project_location));
+        let files = crate::graph::counted_files(
+            &detail.diff_summary.files,
+            documents && !hunks,
+            &texts,
+            repo.as_ref().as_ref(),
+        );
+        for file in &files {
             let covering: Vec<_> = live
                 .iter()
                 .filter(|entity| entity.kind == EntityKind::Component)
