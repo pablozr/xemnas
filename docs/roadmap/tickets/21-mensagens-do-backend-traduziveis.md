@@ -29,6 +29,14 @@ idioma:
 - [ ] Motivo de `InvalidRelation` ao relacionar decisões
   (`screens/decisions.rs`).
 
+- [ ] Motivos do juiz da revisão automática, do proponente de vínculos e do de relações:
+  seguem "no idioma do item" (o ADR-0017 só passou o idioma à Visão, por
+  `application::output_language::OutputLanguage`; o mesmo tipo é o ponto de extensão).
+- [ ] Razões de vínculo gravadas em português: `citado no texto`, `dependência citada`,
+  `símbolo citado`, `sugerido pela IA`, `indicado pelo extrator junto com a decisão`
+  (`EXTRACTED_LINK_WHY`) e a marca `polaridade duvidosa` (`DOUBT_MARK`); a tela do Mapa e o
+  juiz as leem como prefixo.
+
 **Aceite:** cada caso vira um enum (ou código estável) no contrato do
 `application`; a tela traduz por `crate::i18n`; nenhuma frase em português
 sai do backend para a interface. Texto destinado a agentes (MCP,

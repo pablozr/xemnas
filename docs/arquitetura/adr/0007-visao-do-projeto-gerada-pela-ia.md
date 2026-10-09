@@ -9,7 +9,8 @@
 1. **Resumo e fluxos são escritos pelo provedor de IA configurado** (`application::overview::ProjectOverviews`), a partir de decisões em vigor (com motivo), regras válidas e o mapa (componentes, partes e o que cada um liga). Nada do código nem de capturas cruas é enviado.
 2. **Toda frase precisa de fonte.** Cada parágrafo e cada passo cita `D:`/`R:` conhecidos; o que vier sem citação é descartado, e um fluxo precisa de pelo menos dois passos citados. O componente do passo é resolvido pelo nome no mapa; nome desconhecido fica sem vínculo.
 3. **Gerada sob pedido e guardada** (migration 16, `project_overviews`). Abrir a aba só lê a versão salva; "Atualizar visão" chama o provedor. A página informa quantas decisões foram confirmadas depois da geração.
-4. **Somente leitura.** A visão não é autoridade nem vira contexto do agente; citações abrem em Decisões e componentes no Mapa.
+4. **Idioma.** A Visão sai no idioma da interface: o app passa a tag (`OutputLanguage`) a `OverviewApi::generate` e o backend a põe na primeira linha da mensagem; nomes de componentes, arquivos, código e ids ficam como escritos ([ADR-0017](0017-polaridade-como-alarme-componentes-na-extracao-e-idioma-da-saida.md)).
+5. **Somente leitura.** A visão não é autoridade nem vira contexto do agente; citações abrem em Decisões e componentes no Mapa.
 
 ## Consequências
 

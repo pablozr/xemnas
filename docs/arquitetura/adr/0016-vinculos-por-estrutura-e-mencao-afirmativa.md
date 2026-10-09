@@ -1,6 +1,8 @@
 # ADR-0016 — Vínculos por estrutura e por menção afirmativa
 
-**Status:** Vigente. Aceito em 08/10/2026. Estende o [ADR-0005](0005-grafo-de-entidades.md) (grafo,
+**Status:** Vigente; item 1 emendado pelo
+[ADR-0017](0017-polaridade-como-alarme-componentes-na-extracao-e-idioma-da-saida.md) (a polaridade
+fora de inglês e português vira alarme, não decisão). Aceito em 08/10/2026. Estende o [ADR-0005](0005-grafo-de-entidades.md) (grafo,
 a alternativa "ler a árvore do repositório", rejeitada ali, volta de forma limitada) e o
 [ADR-0014](0014-regras-com-escopo-por-componente.md) (herança do escopo da regra).
 
