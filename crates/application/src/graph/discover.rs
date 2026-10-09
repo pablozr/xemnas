@@ -181,28 +181,43 @@ fn ci_pattern(path: &str, folder: bool) -> String {
     }
 }
 
+/// What a component created by discovery stands for, with the pattern that
+/// says so.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Infra<'a> {
+    /// Root files or CI.
+    pub kind: InfraKind,
+    /// The pattern that tells: `*` for the root, the pipelines' for CI.
+    pub pattern: &'a str,
+}
+
 /// What a component created by discovery as the workspace root or as CI
 /// stands for, told by its patterns: `*` is the root, the pattern of a CI
 /// system is CI. Those components carry no stored description: the interface
 /// writes it in its language and the model reads it in English
 /// ([`description_for_model`]).
-pub fn infra_kind(entity: &EntityRecord) -> Option<InfraKind> {
+pub fn infra_kind(entity: &EntityRecord) -> Option<Infra<'_>> {
     if entity.kind != EntityKind::Component {
         return None;
     }
-    if entity.patterns.iter().any(|pattern| pattern == "*") {
-        return Some(InfraKind::Root);
+    if let Some(pattern) = entity.patterns.iter().find(|pattern| *pattern == "*") {
+        return Some(Infra {
+            kind: InfraKind::Root,
+            pattern,
+        });
     }
-    ci_pattern_of(entity).map(|_| InfraKind::Ci)
-}
-
-/// The pattern of `entity` that belongs to a CI system.
-fn ci_pattern_of(entity: &EntityRecord) -> Option<&str> {
-    entity.patterns.iter().map(String::as_str).find(|pattern| {
-        CI_SYSTEMS
-            .iter()
-            .any(|(path, _, folder)| *pattern == ci_pattern(path, *folder))
-    })
+    entity
+        .patterns
+        .iter()
+        .find(|pattern| {
+            CI_SYSTEMS
+                .iter()
+                .any(|(path, _, folder)| **pattern == ci_pattern(path, *folder))
+        })
+        .map(|pattern| Infra {
+            kind: InfraKind::Ci,
+            pattern,
+        })
 }
 
 /// What the model is told about a component: its description, or for the
@@ -213,24 +228,16 @@ pub fn description_for_model(entity: &EntityRecord) -> std::borrow::Cow<'_, str>
         return Cow::Borrowed(entity.description.as_str());
     }
     match infra_kind(entity) {
-        Some(InfraKind::Root) => {
-            Cow::Borrowed("Root files: workspace manifest, toolchain and shared configuration")
-        }
-        Some(InfraKind::Ci) => Cow::Owned(format!(
-            "Continuous integration and release ({})",
-            ci_pattern_of(entity).unwrap_or_default()
-        )),
+        Some(Infra {
+            kind: InfraKind::Root,
+            ..
+        }) => Cow::Borrowed("Root files: workspace manifest, toolchain and shared configuration"),
+        Some(Infra {
+            kind: InfraKind::Ci,
+            pattern,
+        }) => Cow::Owned(format!("Continuous integration and release ({pattern})")),
         None => Cow::Borrowed(""),
     }
-}
-
-/// The description the first versions stored on the workspace root.
-const LEGACY_ROOT_DESCRIPTION: &str =
-    "Arquivos da raiz: manifesto do workspace, toolchain e configuração comum";
-
-/// The description the first versions stored on a CI component.
-fn legacy_ci_description(pattern: &str) -> String {
-    format!("Integração contínua e publicação ({pattern})")
 }
 
 /// The structure of the project that no workspace member covers: the files
@@ -750,46 +757,6 @@ where
     }
 }
 
-impl<S> KnowledgeGraph<S>
-where
-    S: GraphStore + ClaimStore + RelationStore + ProjectRepository,
-{
-    /// Clears, once, the description the first versions stored on the root and
-    /// CI components: only when it is exactly the old Portuguese literal, so
-    /// a description someone wrote is never touched. Idempotent.
-    pub(super) fn clear_legacy_descriptions(&self, project_id: &str) -> Result<usize, GraphError> {
-        let mut cleared = 0;
-        for entity in self.store.project_entities(project_id)? {
-            if entity.retired_at.is_some() {
-                continue;
-            }
-            let legacy = match infra_kind(&entity) {
-                Some(InfraKind::Root) => entity.description == LEGACY_ROOT_DESCRIPTION,
-                Some(InfraKind::Ci) => entity
-                    .patterns
-                    .iter()
-                    .any(|pattern| entity.description == legacy_ci_description(pattern)),
-                None => false,
-            };
-            if !legacy {
-                continue;
-            }
-            let edit = EntityEdit {
-                name: entity.name.clone(),
-                description: String::new(),
-                patterns: entity.patterns.clone(),
-                aliases: entity.aliases.clone(),
-            };
-            match self.update_entity(&entity.entity_id, edit) {
-                Ok(_) => cleared += 1,
-                Err(GraphError::Invalid(_) | GraphError::Conflict) => {}
-                Err(error) => return Err(error),
-            }
-        }
-        Ok(cleared)
-    }
-}
-
 fn merged_has(aliases: &[String], alias: &str) -> bool {
     aliases
         .iter()
@@ -1085,10 +1052,13 @@ mod tests {
         let ci = stored("CI", &[".github/workflows/**"], "");
         let jenkins = stored("CI Jenkins", &["Jenkinsfile"], "");
         let plain = stored("core", &["crates/core/**"], "");
-        assert_eq!(infra_kind(&root), Some(InfraKind::Root));
-        assert_eq!(infra_kind(&ci), Some(InfraKind::Ci));
-        assert_eq!(infra_kind(&jenkins), Some(InfraKind::Ci));
-        assert_eq!(infra_kind(&plain), None);
+        fn kind(entity: &EntityRecord) -> Option<(InfraKind, &str)> {
+            infra_kind(entity).map(|infra| (infra.kind, infra.pattern))
+        }
+        assert_eq!(kind(&root), Some((InfraKind::Root, "*")));
+        assert_eq!(kind(&ci), Some((InfraKind::Ci, ".github/workflows/**")));
+        assert_eq!(kind(&jenkins), Some((InfraKind::Ci, "Jenkinsfile")));
+        assert_eq!(kind(&plain), None);
         assert_eq!(
             description_for_model(&root),
             "Root files: workspace manifest, toolchain and shared configuration"

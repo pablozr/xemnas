@@ -17,6 +17,7 @@ mod scope;
 mod symbols;
 
 pub use ai_link::{ai_link_quote, ai_link_reason, ai_link_why, AI_LINK_REASON, EXTRACTED_LINK_WHY};
+pub(crate) use derive::edge_exists;
 pub use derive::{
     added_dependencies, map_preparer, prepared_documents, prepared_projects, ComponentProposal,
     MapPreparer, SuggestionReport, TechnologyProposal, DEPENDENCY_REASON, DEPENDENCY_SHARED_MARK,
@@ -25,12 +26,13 @@ pub use derive::{
 pub(crate) use discover::project_keys;
 pub use discover::{
     declared_components, description_for_model, infra_kind, infrastructure_components,
-    project_names, DeclaredComponent, InfraKind, WorkspaceKind,
+    project_names, DeclaredComponent, Infra, InfraKind, WorkspaceKind,
 };
 pub use domain::entities::EntityKind;
 pub(crate) use mention::Folded;
 pub use mention::{
-    doubt_of, mention_quote, mention_reason, with_doubt, without_doubt, DOUBT_MARK, MENTION_REASON,
+    doubt_of, doubt_parts, mention_quote, mention_reason, with_doubt, without_doubt, DOUBT_MARK,
+    MENTION_REASON,
 };
 pub use query::{
     DecisionParts, EntityDetail, FileLens, GraphEdge, GraphNode, MapEntity, Neighborhood, NodeRef,
@@ -222,6 +224,32 @@ pub struct EdgeRecord {
 }
 
 impl EdgeRecord {
+    /// A suggestion the machine derived: pending, with its reason.
+    pub fn pending_derived(
+        project_id: &str,
+        kind: EdgeKind,
+        source: (NodeKind, &str),
+        entity_id: &str,
+        reason: String,
+        now: &str,
+    ) -> Self {
+        Self {
+            edge_id: uuid::Uuid::now_v7().to_string(),
+            project_id: project_id.to_string(),
+            kind,
+            source_kind: source.0,
+            source_id: source.1.to_string(),
+            entity_id: entity_id.to_string(),
+            origin: EdgeOrigin::Derived,
+            reason,
+            created_at: now.to_string(),
+            confirmed_at: None,
+            invalidated_at: None,
+            confirmed_by: None,
+            invalidated_by: None,
+        }
+    }
+
     /// Whether the edge holds at `at`: confirmed by then and not invalidated.
     pub fn holds_at(&self, at: &Timestamp) -> bool {
         self.confirmed_at

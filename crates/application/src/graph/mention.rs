@@ -45,18 +45,6 @@
 //! reads the quote. A doubt reaches [`DOUBT_SCOPE_WORDS`] words, fewer than a
 //! sure negation: it must catch `no usa rusqlite` without catching the rest
 //! of the sentence.
-//!
-//! # Polarity in any language
-//!
-//! The lexicon only decides what is unambiguous in English and Portuguese.
-//! Any other trigger, in any language, raises doubt instead ([`DOUBT_BEFORE`],
-//! [`DOUBT_AFTER`]): the plain `no` is "not" in Spanish and English and "in
-//! the" in Portuguese, so the text cannot tell. The hit comes back with the
-//! trigger as a [`Mention::doubt`], the reason of the link carries the alarm
-//! ([`with_doubt`]), the rules never accept it, and the judge (or the person)
-//! reads the quote. A doubt reaches [`DOUBT_SCOPE_WORDS`] words, fewer than a
-//! sure negation: it must catch `no usa rusqlite` without catching the rest
-//! of the sentence.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
@@ -150,7 +138,7 @@ const DOUBT_BEFORE: &[&str] = &[
     "save for",
     "outside",
     "apart from",
-    // Portuguese.
+    // Portuguese (and French `jamais`).
     "salvo",
     "jamais",
     "tampouco",
@@ -159,7 +147,6 @@ const DOUBT_BEFORE: &[&str] = &[
     // Spanish.
     "sin",
     "ni",
-    "nunca",
     "jamás",
     "en vez de",
     "en lugar de",
@@ -168,14 +155,12 @@ const DOUBT_BEFORE: &[&str] = &[
     "ninguna",
     "ninguno",
     "tampoco",
-    "evitar",
     "independiente de",
     "fuera de",
     // French.
     "ne",
     "pas",
     "sans",
-    "jamais",
     "aucun",
     "aucune",
     "au lieu de",
@@ -299,6 +284,14 @@ pub fn doubt_of(reason: &str) -> Option<&str> {
     reason.split_once(DOUBT_MARK).map(|(_, alarm)| alarm)
 }
 
+/// The trigger and the quote of the alarm of a reason, apart.
+pub fn doubt_parts(reason: &str) -> Option<(&str, &str)> {
+    let (trigger, quote) = doubt_of(reason)?
+        .strip_prefix('"')?
+        .split_once("\" em \"")?;
+    Some((trigger, quote.strip_suffix('"').unwrap_or(quote)))
+}
+
 /// The reason without its polarity alarm.
 pub fn without_doubt(reason: &str) -> &str {
     reason
@@ -420,6 +413,15 @@ pub(crate) struct Mention {
     pub doubt: Option<String>,
 }
 
+impl Mention {
+    /// The trigger and the quote of the alarm, when the hit is in doubt.
+    pub(crate) fn alarm(&self) -> Option<(&str, &str)> {
+        self.doubt
+            .as_deref()
+            .map(|trigger| (trigger, self.quote.as_str()))
+    }
+}
+
 /// A text ready to be searched: the original characters and their folded
 /// form, one to one, with the spans of code and the words a negation reaches.
 pub(crate) struct Folded {
@@ -444,14 +446,18 @@ pub(crate) type CodeWord = (String, Option<(String, String)>);
 /// over one in doubt.
 pub(crate) fn code_words_of(texts: &[Folded]) -> Vec<CodeWord> {
     let mut words: Vec<CodeWord> = Vec::new();
+    let mut at: HashMap<String, usize> = HashMap::new();
     for (word, doubt) in texts.iter().flat_map(Folded::code_words) {
-        match words.iter_mut().find(|(known, _)| *known == word) {
-            Some(known) => {
+        match at.get(&word) {
+            Some(&index) => {
                 if doubt.is_none() {
-                    known.1 = None;
+                    words[index].1 = None;
                 }
             }
-            None => words.push((word, doubt)),
+            None => {
+                at.insert(word.clone(), words.len());
+                words.push((word, doubt));
+            }
         }
     }
     words
@@ -862,11 +868,11 @@ impl Polarity {
     /// reach a character keeps it. A trigger that reaches nothing is not
     /// recorded.
     fn raise(&mut self, reached: &[usize], tokens: &[Token], size: usize, trigger: String) {
+        if reached.is_empty() {
+            return;
+        }
         // A decision never has more than `u16::MAX` triggers.
-        let Some(index) = u16::try_from(self.triggers.len() + 1)
-            .ok()
-            .filter(|_| !reached.is_empty())
-        else {
+        let Ok(index) = u16::try_from(self.triggers.len() + 1) else {
             return;
         };
         self.triggers.push(trigger);

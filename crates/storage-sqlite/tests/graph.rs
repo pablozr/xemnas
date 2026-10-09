@@ -1528,74 +1528,58 @@ fn a_rule_accepted_dependency_in_doubt_goes_back_to_the_judge() {
 }
 
 #[test]
-fn a_refresh_clears_the_old_portuguese_text_of_root_and_ci_once_and_spares_written_ones() {
-    use application::projects::{ProjectRecord, ProjectRepository};
-
-    let test = support::open("graph-legacy-descriptions", &[]);
-    let repo = test.root.join("repo");
-    std::fs::create_dir_all(repo.join("crates/core")).expect("dirs");
-    std::fs::create_dir_all(repo.join(".github/workflows")).expect("workflows");
-    std::fs::write(
-        repo.join("Cargo.toml"),
-        "[workspace]\nmembers = [\"crates/*\"]\n",
-    )
-    .expect("root");
-    std::fs::write(
-        repo.join("crates/core/Cargo.toml"),
-        "[package]\nname = \"core\"\n",
-    )
-    .expect("core");
-    std::fs::write(repo.join(".github/workflows/ci.yml"), "name: ci\n").expect("ci");
-    std::fs::write(repo.join("Jenkinsfile"), "pipeline {}\n").expect("jenkins");
-    test.store
-        .insert(&ProjectRecord::new(
-            "ws".into(),
-            repo.to_string_lossy().replace('\\', "/"),
-            "2026-01-01T00:00:00Z".into(),
-        ))
-        .expect("project");
-    let graph = KnowledgeGraph::new(test.store.clone());
+fn the_migration_clears_the_old_portuguese_text_of_root_and_ci_and_spares_written_ones() {
+    let test = support::open("graph-legacy-descriptions", &["p1"]);
+    let path = test.root.join("app.db");
     let legacy_root = "Arquivos da raiz: manifesto do workspace, toolchain e configuração comum";
-    let make = |name: &str, pattern: &str, description: &str| {
-        graph
-            .create_entity(NewEntity {
-                project_id: "ws".into(),
-                kind: Some(EntityKind::Component),
-                name: name.into(),
-                patterns: vec![pattern.into()],
-                description: description.into(),
-                ..NewEntity::default()
-            })
-            .expect("component")
-            .entity_id
-    };
-    let root = make("workspace", "*", legacy_root);
-    let ci = make(
-        "CI GitHub Actions",
-        ".github/workflows/**",
-        "Integração contínua e publicação (.github/workflows/**)",
-    );
-    let written = make("Jenkins", "Jenkinsfile", "O nosso Jenkins de releases.");
-    // The same old text on a component that is neither root nor CI stays.
-    let docs = make("docs", "docs/**", legacy_root);
-
-    graph.refresh_suggestions("ws").expect("refresh");
+    let legacy_ci = "Integração contínua e publicação (.github/workflows/**)";
+    {
+        let raw = rusqlite::Connection::open(&path).expect("raw");
+        // (entity, pattern, description)
+        let entities = [
+            ("root", "*", legacy_root),
+            ("ci", ".github/workflows/**", legacy_ci),
+            ("written-root", "*", "Manifestos e toolchain do workspace."),
+            ("written-ci", "Jenkinsfile", "O nosso Jenkins de releases."),
+            // Another pattern with the same old text is not root nor CI.
+            ("docs", "docs/**", legacy_root),
+            // The text of one CI on the pattern of another.
+            ("mixed", ".circleci/**", legacy_ci),
+        ];
+        for (entity, pattern, description) in entities {
+            raw.execute(
+                "INSERT INTO entities (entity_id, project_id, kind, name, key, description,                  created_at) VALUES (?1, 'p1', 'component', ?1, ?1, ?2, '2026-01-01T00:00:00Z')",
+                rusqlite::params![entity, description],
+            )
+            .expect("entity");
+            raw.execute(
+                "INSERT INTO entity_patterns (entity_id, position, pattern) VALUES (?1, 0, ?2)",
+                rusqlite::params![entity, pattern],
+            )
+            .expect("pattern");
+        }
+        raw.execute("DELETE FROM schema_migrations WHERE version = 49", [])
+            .expect("downgrade");
+    }
+    // Opening again applies the migration.
+    let upgraded = storage_sqlite::SqliteStore::open(&path).expect("upgrade");
+    let graph = KnowledgeGraph::new(upgraded);
     let description = |id: &str| {
         graph
-            .entities("ws")
+            .entities("p1")
             .expect("entities")
             .into_iter()
             .find(|entity| entity.entity_id == id)
             .expect("entity")
             .description
     };
-    assert_eq!(description(&root), "");
-    assert_eq!(description(&ci), "");
-    assert_eq!(description(&written), "O nosso Jenkins de releases.");
-    assert_eq!(description(&docs), legacy_root);
-
-    // Once: nothing is rewritten the next time.
-    graph.refresh_suggestions("ws").expect("again");
-    assert_eq!(description(&root), "");
-    assert_eq!(description(&written), "O nosso Jenkins de releases.");
+    assert_eq!(description("root"), "");
+    assert_eq!(description("ci"), "");
+    assert_eq!(
+        description("written-root"),
+        "Manifestos e toolchain do workspace."
+    );
+    assert_eq!(description("written-ci"), "O nosso Jenkins de releases.");
+    assert_eq!(description("docs"), legacy_root);
+    assert_eq!(description("mixed"), legacy_ci);
 }

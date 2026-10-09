@@ -14,15 +14,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use domain::entities::{
-    component_prefix, entity_key, pattern_matches, EdgeActor, EdgeKind, EdgeOrigin, EntityKind,
-    NodeKind,
+    component_prefix, entity_key, pattern_matches, EdgeActor, EdgeKind, EntityKind, NodeKind,
 };
 use domain::time::Timestamp;
 
 use super::ai_link::ai_link_quote;
 use super::mention::{
     code_words_of, dependency_term, entity_terms, mention_quote, mention_reason, with_doubt,
-    CodeWord, Folded, Mention, Term,
+    without_doubt, CodeWord, Folded, Mention, Term,
 };
 use super::repo_files::{counted_files, repo_files, RepoFiles};
 use super::{DecisionNode, EdgeRecord, EntityRecord, GraphError, GraphStore, KnowledgeGraph};
@@ -86,6 +85,37 @@ pub const SYMBOL_REASON: &str = "símbolo citado: ";
 /// Appended to that reason when a second component declares the dependency
 /// too, so the rules do not accept it alone.
 pub const DEPENDENCY_SHARED_MARK: &str = "; também declarada por outro componente";
+/// The reason of a link derived from the dependency `name`, declared by
+/// `manifest` (and by another component too when `shared`).
+pub fn dependency_reason(name: &str, manifest: &str, shared: bool) -> String {
+    let shared = if shared { DEPENDENCY_SHARED_MARK } else { "" };
+    format!("{DEPENDENCY_REASON}\"{name}\" ({manifest}{shared})")
+}
+
+/// The dependency a reason cites, `None` for any other reason.
+pub fn cited_dependency(reason: &str) -> Option<&str> {
+    without_doubt(reason)
+        .strip_prefix(DEPENDENCY_REASON)?
+        .strip_prefix('"')?
+        .split('"')
+        .next()
+}
+
+/// The reason of a link derived from the symbol or file name `word`, defined
+/// in `file`.
+pub fn symbol_reason(word: &str, file: &str) -> String {
+    format!("{SYMBOL_REASON}`{word}` ({file})")
+}
+
+/// The symbol or file name a reason cites, `None` for any other reason.
+pub fn cited_symbol(reason: &str) -> Option<&str> {
+    without_doubt(reason)
+        .strip_prefix(SYMBOL_REASON)?
+        .strip_prefix('`')?
+        .split('`')
+        .next()
+}
+
 /// Components that may declare a dependency for it to point at them; a
 /// dependency of more is shared plumbing, not a place.
 const MAX_OWNERS: usize = 2;
@@ -550,7 +580,6 @@ where
             super::infrastructure_components(std::path::Path::new(&project.location), &declared);
         declared.extend(infrastructure);
         self.merge_aliases(project_id, &declared)?;
-        self.clear_legacy_descriptions(project_id)?;
         let declared_all = declared.clone();
         let now = now_rfc3339();
         let at = Timestamp::parse(&now).ok_or(GraphError::Storage("relógio inválido".into()))?;
@@ -905,21 +934,11 @@ where
             let Some(mention) = best_mention(texts, &dependency.term) else {
                 continue;
             };
-            let shared = if dependency.owners.len() > 1 {
-                DEPENDENCY_SHARED_MARK
-            } else {
-                ""
-            };
+            let shared = dependency.owners.len() > 1;
             for (entity_id, manifest) in &dependency.owners {
                 let reason = with_doubt(
-                    &format!(
-                        "{DEPENDENCY_REASON}\"{}\" ({manifest}{shared})",
-                        dependency.name
-                    ),
-                    mention
-                        .doubt
-                        .as_deref()
-                        .map(|trigger| (trigger, mention.quote.as_str())),
+                    &dependency_reason(&dependency.name, manifest, shared),
+                    mention.alarm(),
                 );
                 written += self.suggest(
                     edges,
@@ -951,7 +970,7 @@ where
         for (word, doubt) in cited.words {
             if let Some((entity_id, file)) = symbol_owner(cited, word) {
                 let reason = with_doubt(
-                    &format!("{SYMBOL_REASON}`{word}` ({file})"),
+                    &symbol_reason(word, &file),
                     doubt
                         .as_ref()
                         .map(|(trigger, quote)| (trigger.as_str(), quote.as_str())),
@@ -988,7 +1007,12 @@ where
         let source = (NodeKind::Decision, decision.decision_id.as_str());
         let mut written = 0;
         for (entity, kind, terms) in named {
-            if edge_exists(edges, *kind, source, &entity.entity_id) {
+            // Any row stands in the way, except one the rules themselves
+            // invalidated: its evidence may have changed.
+            if edges.iter().any(|edge| {
+                (edge.is_live() || edge.invalidated_by != Some(EdgeActor::Rules))
+                    && same_edge(edge, *kind, source, &entity.entity_id)
+            }) {
                 continue;
             }
             let found = terms.iter().find_map(|term| best_mention(texts, term));
@@ -999,13 +1023,7 @@ where
                     *kind,
                     source,
                     &entity.entity_id,
-                    &with_doubt(
-                        &mention_reason(&found.quote),
-                        found
-                            .doubt
-                            .as_deref()
-                            .map(|trigger| (trigger, found.quote.as_str())),
-                    ),
+                    &with_doubt(&mention_reason(&found.quote), found.alarm()),
                     now,
                 )?;
             }
@@ -1027,25 +1045,17 @@ where
         reason: &str,
         now: &str,
     ) -> Result<usize, GraphError> {
-        let (source_kind, source_id) = source;
         if blocked(edges, kind, source, entity_id, reason) {
             return Ok(0);
         }
-        let record = EdgeRecord {
-            edge_id: uuid::Uuid::now_v7().to_string(),
-            project_id: project_id.to_string(),
+        let record = EdgeRecord::pending_derived(
+            project_id,
             kind,
-            source_kind,
-            source_id: source_id.to_string(),
-            entity_id: entity_id.to_string(),
-            origin: EdgeOrigin::Derived,
-            reason: reason.to_string(),
-            created_at: now.to_string(),
-            confirmed_at: None,
-            invalidated_at: None,
-            confirmed_by: None,
-            invalidated_by: None,
-        };
+            source,
+            entity_id,
+            reason.to_string(),
+            now,
+        );
         self.store.insert_edge(&record)?;
         // Later files of the same decision see it and do not repeat it.
         edges.push(record);
@@ -1068,17 +1078,24 @@ fn blocked(
     reason: &str,
 ) -> bool {
     let structural = mention_quote(reason).is_none() && ai_link_quote(reason).is_none();
+    // What `revalidate` looks at: a dependency, a symbol or a mention. When
+    // the rules invalidated one of them, the evidence could not support it;
+    // if the derivation writes it again (the same reason or one with the
+    // alarm), the evidence is back, and the old row must not stop it. A
+    // row the rules invalidated on another reason (a file the person
+    // declined while adopting) still blocks.
+    let revalidated = reason.starts_with(DEPENDENCY_REASON)
+        || reason.starts_with(SYMBOL_REASON)
+        || mention_quote(reason).is_some();
     edges
         .iter()
-        .filter(|edge| {
-            edge.kind == kind
-                && edge.source_kind == source.0
-                && edge.source_id == source.1
-                && edge.entity_id == entity_id
-        })
+        .filter(|edge| same_edge(edge, kind, source, entity_id))
         .any(|edge| {
             if edge.is_live() {
                 return true;
+            }
+            if revalidated && edge.invalidated_by == Some(EdgeActor::Rules) {
+                return false;
             }
             let revisable = matches!(
                 edge.invalidated_by,
@@ -1113,18 +1130,23 @@ pub(super) fn decision_texts(decision: &DecisionNode) -> Vec<Folded> {
 
 /// Whether any row (pending, confirmed or rejected) ties `source` to the
 /// entity with `kind`.
-fn edge_exists(
+fn same_edge(edge: &EdgeRecord, kind: EdgeKind, source: (NodeKind, &str), entity_id: &str) -> bool {
+    edge.kind == kind
+        && edge.source_kind == source.0
+        && edge.source_id == source.1
+        && edge.entity_id == entity_id
+}
+
+/// Whether any row, in any state, exists for the edge.
+pub(crate) fn edge_exists(
     edges: &[EdgeRecord],
     kind: EdgeKind,
     source: (NodeKind, &str),
     entity_id: &str,
 ) -> bool {
-    edges.iter().any(|edge| {
-        edge.kind == kind
-            && edge.source_kind == source.0
-            && edge.source_id == source.1
-            && edge.entity_id == entity_id
-    })
+    edges
+        .iter()
+        .any(|edge| same_edge(edge, kind, source, entity_id))
 }
 
 #[cfg(test)]
