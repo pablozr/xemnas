@@ -441,7 +441,7 @@ fn the_components_of_a_candidate_are_kept_once_and_go_with_it() {
 }
 
 #[test]
-fn the_background_lists_the_live_components_of_the_map_by_name() {
+fn the_store_hands_over_the_map_and_the_use_case_lists_the_live_components_by_name() {
     use application::graph::{KnowledgeGraph, NewEntity};
     use domain::entities::EntityKind;
 
@@ -481,14 +481,13 @@ fn the_background_lists_the_live_components_of_the_map_by_name() {
     let retired = make("legacy", EntityKind::Component);
     graph.retire_entity(&retired).expect("retire");
 
-    let background = store.background("project-1", &[]).expect("background");
-    let names: Vec<&str> = background
-        .components
-        .iter()
-        .map(|component| component.name.as_str())
-        .collect();
+    // The store hands the whole map over; the use case picks what is listed.
+    let entities = store.map_entities("project-1").expect("map");
+    assert_eq!(entities.len(), 4, "retired and technologies come too");
+    let listed = application::link_suggestions::candidate_components(&entities);
+    let names: Vec<&str> = listed.iter().map(|entity| entity.name.as_str()).collect();
     assert_eq!(names, ["core", "outbox"], "live components, by name");
-    assert_eq!(background.components[1].entity_id, outbox);
+    assert_eq!(listed[1].entity_id, outbox);
 
     let _ = std::fs::remove_dir_all(&root);
 }

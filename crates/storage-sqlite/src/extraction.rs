@@ -267,6 +267,13 @@ impl ExtractionStore for SqliteStore {
         }
         Ok(())
     }
+    fn map_entities(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<application::graph::EntityRecord>, ExtractError> {
+        application::graph::GraphStore::project_entities(self, project_id)
+            .map_err(|error| ExtractError::Storage(error.to_string()))
+    }
     fn background(
         &self,
         project_id: &str,
@@ -276,16 +283,6 @@ impl ExtractionStore for SqliteStore {
         let (tied_decisions, tied_claims) = KnowledgeGraph::new(self.clone())
             .context_for_files(project_id, files, None)
             .unwrap_or_default();
-        let entities = KnowledgeGraph::new(self.clone())
-            .entities(project_id)
-            .unwrap_or_default();
-        let components = application::link_suggestions::candidate_components(&entities)
-            .into_iter()
-            .map(|entity| application::extract::MapComponent {
-                entity_id: entity.entity_id.clone(),
-                name: entity.name.clone(),
-            })
-            .collect();
         let connection = self.lock();
         let mut known: Vec<String> = Vec::new();
         let mut decision = connection
@@ -372,7 +369,7 @@ impl ExtractionStore for SqliteStore {
             known,
             confirmed,
             rejected,
-            components,
+            components: Vec::new(),
         })
     }
 

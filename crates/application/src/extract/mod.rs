@@ -114,6 +114,8 @@ pub struct MapComponent {
     pub entity_id: String,
     /// The name the extractor writes back.
     pub name: String,
+    /// The entity's key (`entity_key(name)`), what a written name is compared by.
+    pub key: String,
 }
 
 /// A component a candidate applies to, checked against the map and against
@@ -382,6 +384,15 @@ pub trait ExtractionStore {
         Ok(ExtractionBackground::default())
     }
 
+    /// Every entity of the project's map, retired ones included; the use case
+    /// picks the components to list to the extractor. Empty by default.
+    fn map_entities(
+        &self,
+        _project_id: &str,
+    ) -> Result<Vec<crate::graph::EntityRecord>, ExtractError> {
+        Ok(Vec::new())
+    }
+
     /// Inserts candidates, ignoring rows whose `dedup_hash` already exists.
     fn insert_candidates(&self, records: &[DecisionCandidateRecord])
         -> Result<usize, ExtractError>;
@@ -427,8 +438,24 @@ where
     }
 
     // Background is a hint: a failure to read it never blocks extraction.
-    let background = store
+    let mut background = store
         .background(&evidence.project_id, &relevance::diff_file_list(&evidence))
+        .unwrap_or_default();
+    // The map's components are a hint too: without them the extractor simply
+    // names none. (This crate has no logging; the failure leaves the list
+    // empty, like a failed background.)
+    background.components = store
+        .map_entities(&evidence.project_id)
+        .map(|entities| {
+            crate::link_suggestions::candidate_components(&entities)
+                .into_iter()
+                .map(|entity| MapComponent {
+                    entity_id: entity.entity_id.clone(),
+                    name: entity.name.clone(),
+                    key: entity.key.clone(),
+                })
+                .collect()
+        })
         .unwrap_or_default();
     let proposals = match extractor.extract_with(&evidence, &signals, &background) {
         Ok(proposals) => proposals,
@@ -590,27 +617,24 @@ pub(crate) fn resolve_components(
     proposal: &CandidateProposal,
     map: &[MapComponent],
 ) -> Vec<CandidateComponent> {
-    let texts = [
+    let texts = crate::link_suggestions::normalized_texts(&[
         proposal.question.as_str(),
         proposal.choice.as_str(),
         proposal.rationale.as_str(),
-    ];
+    ]);
     let mut resolved: Vec<CandidateComponent> = Vec::new();
     for named in &proposal.components {
         if resolved.len() >= MAX_CANDIDATE_COMPONENTS {
             break;
         }
         let key = domain::entities::entity_key(&named.name);
-        let Some(component) = map
-            .iter()
-            .find(|component| domain::entities::entity_key(&component.name) == key)
-        else {
+        let Some(component) = map.iter().find(|component| component.key == key) else {
             continue;
         };
         if resolved
             .iter()
             .any(|known| known.entity_id == component.entity_id)
-            || !crate::link_suggestions::quote_in(&texts, &named.quote)
+            || !crate::link_suggestions::quote_matches(&texts, &named.quote)
         {
             continue;
         }
@@ -947,6 +971,7 @@ Applies to the Claude Code adapter only.",
             .map(|(n, name)| MapComponent {
                 entity_id: format!("e{n}"),
                 name: (*name).into(),
+                key: domain::entities::entity_key(name),
             })
             .collect()
     }

@@ -320,18 +320,25 @@ where
             return Err(AdoptionError::Inbox(InboxError::InvalidState));
         }
         let project = reviewed.summary.project_id.clone();
-        // The text the adopted record will have: the edits, else the review.
-        let texts = match &edits {
-            Some(edits) => [
+        // What the extractor said about the candidate, and the text the adopted
+        // record will have (the edits, else the review) to check its quotes
+        // against; the text is only copied when there is something to check.
+        let named = InboxStore::candidate_components(&self.store, &reviewed.summary.id)
+            .map_err(AdoptionError::Inbox)?;
+        let texts: Vec<String> = if named.is_empty() {
+            Vec::new()
+        } else if let Some(edits) = &edits {
+            vec![
                 edits.question.clone(),
                 edits.choice.clone(),
                 edits.rationale.clone(),
-            ],
-            None => [
+            ]
+        } else {
+            vec![
                 reviewed.summary.question.clone(),
                 reviewed.summary.choice.clone(),
                 reviewed.rationale.clone(),
-            ],
+            ]
         };
         let confirmed = Inbox::new(self.store.clone())
             .confirm_reviewed(reviewed, edits)
@@ -400,8 +407,8 @@ where
         }
         suggested += self.suggest_extracted(
             &project,
-            &reviewed.summary.id,
             (source_kind, &confirmed.decision_id),
+            named,
             &texts,
         )?;
         // A new decision may depend on, conflict with or replace earlier ones:
@@ -477,12 +484,30 @@ where
     fn suggest_extracted(
         &self,
         project: &str,
-        candidate_id: &str,
         source: (NodeKind, &str),
-        texts: &[String; 3],
+        named: Vec<crate::extract::CandidateComponent>,
+        texts: &[String],
     ) -> Result<usize, AdoptionError> {
-        let named = InboxStore::candidate_components(&self.store, candidate_id)
-            .map_err(AdoptionError::Inbox)?;
+        if named.is_empty() {
+            return Ok(0);
+        }
+        let texts = crate::link_suggestions::normalized_texts(
+            &texts.iter().map(String::as_str).collect::<Vec<_>>(),
+        );
+        let entities = self
+            .store
+            .project_entities(project)
+            .map_err(AdoptionError::Graph)?;
+        let named: Vec<_> = named
+            .into_iter()
+            .filter(|component| {
+                entities.iter().any(|entity| {
+                    entity.entity_id == component.entity_id
+                        && entity.kind == EntityKind::Component
+                        && entity.retired_at.is_none()
+                }) && crate::link_suggestions::quote_matches(&texts, &component.quote)
+            })
+            .collect();
         if named.is_empty() {
             return Ok(0);
         }
@@ -491,54 +516,27 @@ where
         } else {
             EdgeKind::Affects
         };
-        let texts: Vec<&str> = texts.iter().map(String::as_str).collect();
-        let entities = self
-            .store
-            .project_entities(project)
-            .map_err(AdoptionError::Graph)?;
-        let mut edges = self
+        let edges = self
             .store
             .project_edges(project)
             .map_err(AdoptionError::Graph)?;
         let now = crate::clock::now_rfc3339();
         let mut written = 0;
         for component in named {
-            let live = entities.iter().any(|entity| {
-                entity.entity_id == component.entity_id
-                    && entity.kind == EntityKind::Component
-                    && entity.retired_at.is_none()
-            });
-            let tied = edges.iter().any(|edge| {
-                edge.kind == kind
-                    && edge.source_kind == source.0
-                    && edge.source_id == source.1
-                    && edge.entity_id == component.entity_id
-            });
-            if !live || tied || !crate::link_suggestions::quote_in(&texts, &component.quote) {
+            if crate::graph::edge_exists(&edges, kind, source, &component.entity_id) {
                 continue;
             }
-            let record = crate::graph::EdgeRecord {
-                edge_id: uuid::Uuid::now_v7().to_string(),
-                project_id: project.to_string(),
+            let record = crate::graph::EdgeRecord::pending_derived(
+                project,
                 kind,
-                source_kind: source.0,
-                source_id: source.1.to_string(),
-                entity_id: component.entity_id,
-                origin: EdgeOrigin::Derived,
-                reason: crate::graph::ai_link_reason(
-                    &component.quote,
-                    crate::graph::EXTRACTED_LINK_WHY,
-                ),
-                created_at: now.clone(),
-                confirmed_at: None,
-                invalidated_at: None,
-                confirmed_by: None,
-                invalidated_by: None,
-            };
+                source,
+                &component.entity_id,
+                crate::graph::ai_link_reason(&component.quote, crate::graph::EXTRACTED_LINK_WHY),
+                &now,
+            );
             self.store
                 .insert_edge(&record)
                 .map_err(AdoptionError::Graph)?;
-            edges.push(record);
             written += 1;
         }
         Ok(written)

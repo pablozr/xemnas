@@ -17,7 +17,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use domain::claims::ClaimKind;
-use domain::entities::{EdgeKind, EdgeOrigin, EntityKind, NodeKind};
+use domain::entities::{EdgeKind, EntityKind, NodeKind};
 use domain::time::Timestamp;
 use serde::Deserialize;
 use serde_json::json;
@@ -275,16 +275,15 @@ fn normalized(text: &str) -> String {
 
 /// Whether `quote` (at least [`MIN_QUOTE_CHARS`] characters of words) is
 /// verbatim in one of the already `normalized` texts.
-fn quote_matches(texts: &[String], quote: &str) -> bool {
+pub(crate) fn quote_matches(texts: &[String], quote: &str) -> bool {
     let needle = normalized(quote);
     needle.chars().count() >= MIN_QUOTE_CHARS && texts.iter().any(|text| text.contains(&needle))
 }
 
-/// Whether `quote` is copied from one of the `texts`, case, accents and
-/// punctuation aside, and long enough to say something.
-pub(crate) fn quote_in(texts: &[&str], quote: &str) -> bool {
-    let texts: Vec<String> = texts.iter().map(|text| normalized(text)).collect();
-    quote_matches(&texts, quote)
+/// The texts in the form [`quote_matches`] compares: words only, lowercase,
+/// without accents.
+pub(crate) fn normalized_texts(texts: &[&str]) -> Vec<String> {
+    texts.iter().map(|text| normalized(text)).collect()
 }
 
 /// Links from one decision's answer `{"links":[...]}` that name a sent
@@ -751,21 +750,14 @@ where
                 }) {
                     continue;
                 }
-                let record = EdgeRecord {
-                    edge_id: uuid::Uuid::now_v7().to_string(),
-                    project_id: target.project_id.clone(),
-                    kind: target.edge_kind,
-                    source_kind: target.source_kind,
-                    source_id: target.source_id.clone(),
-                    entity_id: link.entity_id,
-                    origin: EdgeOrigin::Derived,
-                    reason: ai_link_reason(&link.quote, &link.reason),
-                    created_at: now.clone(),
-                    confirmed_at: None,
-                    invalidated_at: None,
-                    confirmed_by: None,
-                    invalidated_by: None,
-                };
+                let record = EdgeRecord::pending_derived(
+                    &target.project_id,
+                    target.edge_kind,
+                    (target.source_kind, &target.source_id),
+                    &link.entity_id,
+                    ai_link_reason(&link.quote, &link.reason),
+                    &now,
+                );
                 self.store.insert_edge(&record).map_err(storage)?;
                 edges.push(record);
                 count += 1;
@@ -953,7 +945,7 @@ mod tests {
             source_kind: NodeKind::Decision,
             source_id: "d".into(),
             entity_id: "e".into(),
-            origin: EdgeOrigin::Derived,
+            origin: domain::entities::EdgeOrigin::Derived,
             reason: reason.into(),
             created_at: "2026-01-01T00:00:00Z".into(),
             confirmed_at: None,

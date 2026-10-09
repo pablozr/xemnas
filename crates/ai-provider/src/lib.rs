@@ -843,9 +843,32 @@ struct ModelProposal {
     /// Significance criteria ticked; unknown ones are dropped.
     #[serde(default)]
     criteria: Vec<String>,
-    /// Map components the item applies to; absent reads as none.
+    /// Map components the item applies to; absent reads as none. Read item
+    /// by item ([`read_components`]): a bad one is dropped, never the answer.
     #[serde(default)]
-    components: Vec<ModelComponent>,
+    components: serde_json::Value,
+}
+
+/// The components of an item, one by one: an item with a field too many, a
+/// field too long or the wrong shape is dropped, and so is everything past
+/// the first three; the rest of the answer stands.
+fn read_components(value: serde_json::Value) -> Vec<application::extract::ProposedComponent> {
+    let serde_json::Value::Array(items) = value else {
+        return Vec::new();
+    };
+    items
+        .into_iter()
+        .filter_map(|item| serde_json::from_value::<ModelComponent>(item).ok())
+        .filter(|component| {
+            component.name.chars().count() <= MAX_FIELD_CHARS
+                && component.quote.chars().count() <= MAX_FIELD_CHARS
+        })
+        .take(application::extract::MAX_CANDIDATE_COMPONENTS)
+        .map(|component| application::extract::ProposedComponent {
+            name: component.name,
+            quote: component.quote,
+        })
+        .collect()
 }
 
 /// A component of the project map the model says an item applies to.
@@ -903,15 +926,6 @@ impl ModelEnvelope {
                     ));
                 }
             }
-            for component in &proposal.components {
-                if component.name.chars().count() > MAX_FIELD_CHARS
-                    || component.quote.chars().count() > MAX_FIELD_CHARS
-                {
-                    return Err(ExtractError::Extractor(
-                        "resposta do provedor com componente longo demais".to_string(),
-                    ));
-                }
-            }
             let diff_summary = serde_json::to_string(&proposal.diff_summary).map_err(|_| {
                 ExtractError::Extractor("resposta do provedor inválida".to_string())
             })?;
@@ -937,14 +951,7 @@ impl ModelEnvelope {
                     .into_iter()
                     .filter(|criterion| SIGNIFICANCE_CRITERIA.contains(&criterion.as_str()))
                     .collect(),
-                components: proposal
-                    .components
-                    .into_iter()
-                    .map(|component| application::extract::ProposedComponent {
-                        name: component.name,
-                        quote: component.quote,
-                    })
-                    .collect(),
+                components: read_components(proposal.components),
             });
         }
         Ok(proposals)
@@ -1071,8 +1078,18 @@ mod tests {
         assert_eq!(proposals[0].components[0].quote, "grava no banco");
         let without = parse_model_output(&proposal_json(""), &signals).expect("old answer");
         assert!(without[0].components.is_empty());
-        let extra = proposal_json(r#","components":[{"name":"a","quote":"b","why":"c"}]"#);
-        assert!(parse_model_output(&extra, &signals).is_err(), "extra field");
+        // One bad item costs only itself, never the answer.
+        let long = "x".repeat(MAX_FIELD_CHARS + 1);
+        let mixed = proposal_json(&format!(
+            r#","components":[{{"name":"a","quote":"b","why":"c"}},{{"name":"{long}","quote":"b"}},
+            {{"name":"core","quote":"grava no banco"}},"text",{{"name":"x"}}]"#
+        ));
+        let proposals = parse_model_output(&mixed, &signals).expect("a bad item is dropped");
+        assert_eq!(proposals[0].components.len(), 1);
+        assert_eq!(proposals[0].components[0].name, "core");
+        let shapeless = proposal_json(r#","components":"core""#);
+        let proposals = parse_model_output(&shapeless, &signals).expect("not a list");
+        assert!(proposals[0].components.is_empty());
     }
 
     fn evidence(content: &str) -> DecisionEvidence {
@@ -1110,6 +1127,7 @@ mod tests {
                 .map(|n| application::extract::MapComponent {
                     entity_id: format!("e{n}"),
                     name: format!("component-{n:06}-xxx"),
+                    key: format!("component{n:06}xxx"),
                 })
                 .collect(),
             known: vec!["q → c".into()],
