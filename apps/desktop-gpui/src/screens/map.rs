@@ -14,9 +14,9 @@ use application::claim_suggestions::{ClaimSuggestionStore, ClaimSuggestionView, 
 use application::claims::{ClaimStore, Claims};
 use application::decisions::{DecisionFilter, DecisionStatus, DecisionStore, Decisions};
 use application::graph::{
-    EntityDetail, EntityEdit, EntityRecord, FileLens, GraphStore, KnowledgeGraph, LinkRequest,
-    MapEntity, NewEntity, NodeSummary, ProjectGraph, ProjectMap, Suggestion, SuggestionReport,
-    TimelineEvent, TimelineKind,
+    EntityDetail, EntityEdit, EntityRecord, FileLens, GraphStore, InfraKind, KnowledgeGraph,
+    LinkRequest, MapEntity, NewEntity, NodeSummary, ProjectGraph, ProjectMap, Suggestion,
+    SuggestionReport, TimelineEvent, TimelineKind,
 };
 use application::projects::ProjectRepository;
 use application::relation_suggestions::{
@@ -1708,6 +1708,9 @@ impl<S: MapStores> MapScreen<S> {
                         proposal.decisions,
                         proposal.description.clone(),
                         proposal.declared,
+                        proposal
+                            .infra
+                            .map(|kind| infra_description(kind, &proposal.pattern)),
                     )
                 })
                 .chain(technologies.iter().map(|proposal| {
@@ -1718,12 +1721,19 @@ impl<S: MapStores> MapScreen<S> {
                         proposal.decisions,
                         String::new(),
                         None,
+                        None,
                     )
                 }));
-            for (index, (kind, name, pattern, decisions, description, declared)) in
+            for (index, (kind, name, pattern, decisions, description, declared, infra)) in
                 proposals.enumerate()
             {
                 let create_description = description.clone();
+                // A root or CI component has no stored text: the screen writes it.
+                let description = if description.is_empty() {
+                    infra.unwrap_or_default()
+                } else {
+                    description
+                };
                 let project = self.project.clone().unwrap_or_default();
                 let (create_name, create_pattern) = (name.clone(), pattern.clone());
                 let create = self.button(
@@ -1958,6 +1968,7 @@ impl<S: MapStores> MapScreen<S> {
         });
 
         let picker = self.render_picker(theme, cx);
+        let shown_description = shown_description(&entity);
 
         let mut column = div().flex().flex_col().gap(px(SpacingScale::S8)).child(
             div()
@@ -1966,11 +1977,11 @@ impl<S: MapStores> MapScreen<S> {
                 .gap(px(SpacingScale::S2))
                 .child(section_label(theme, kind_label(entity.kind)))
                 .child(text_style(div(), TypeScale::HEADING_1).child(entity.name.clone()))
-                .when(!entity.description.is_empty(), |header| {
+                .when(!shown_description.is_empty(), |header| {
                     header.child(
                         text_style(div(), TypeScale::BODY)
                             .text_color(colors.text_secondary())
-                            .child(entity.description.clone()),
+                            .child(shown_description.clone()),
                     )
                 })
                 .when(!entity.patterns.is_empty(), |header| {
@@ -3972,6 +3983,26 @@ fn item_wording(
         ),
     };
     (t::spans(&sentence), effect)
+}
+
+/// The text of a root or CI component, which the database stores empty so
+/// each language writes its own.
+fn infra_description(kind: InfraKind, pattern: &str) -> String {
+    match kind {
+        InfraKind::Root => t::infra_root_description().to_owned(),
+        InfraKind::Ci => t::infra_ci_description(pattern),
+    }
+}
+
+/// The description shown for an entity: the stored one, else the text of its
+/// kind of structure (root files, CI).
+fn shown_description(entity: &EntityRecord) -> String {
+    if !entity.description.is_empty() {
+        return entity.description.clone();
+    }
+    application::graph::infra_kind(entity)
+        .map(|kind| infra_description(kind, entity.patterns.first().map_or("", String::as_str)))
+        .unwrap_or_default()
 }
 
 fn kind_label(kind: EntityKind) -> &'static str {

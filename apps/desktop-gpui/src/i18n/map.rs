@@ -96,6 +96,19 @@ strings! {
         it: "Una frase su cos’è", ja: "何であるかを一文で",
         zh: "用一句话说明它是什么", ko: "무엇인지 한 문장으로",
         ru: "Одно предложение о том, что это" }
+    /// Description of the component that holds the files at the root of a
+    /// workspace; the database stores none, so every language shows its own.
+    infra_root_description {
+        en: "Root files: workspace manifest, toolchain and shared configuration",
+        pt: "Arquivos da raiz: manifesto do workspace, toolchain e configuração comum",
+        es: "Archivos de la raíz: manifiesto del workspace, toolchain y configuración común",
+        fr: "Fichiers de la racine : manifeste du workspace, toolchain et configuration commune",
+        de: "Dateien im Wurzelverzeichnis: Workspace-Manifest, Toolchain und gemeinsame Konfiguration",
+        it: "File della radice: manifesto del workspace, toolchain e configurazione comune",
+        ja: "ルートのファイル: ワークスペースのマニフェスト、ツールチェーン、共通設定",
+        zh: "根目录文件:工作区清单、工具链和公共配置",
+        ko: "루트 파일: 워크스페이스 매니페스트, 툴체인, 공통 설정",
+        ru: "Файлы в корне: манифест рабочей области, инструментарий и общая конфигурация" }
     /// Placeholder of the file path field.
     path_placeholder { en: "E.g. crates/storage-sqlite/src/store.rs",
         pt: "Ex.: crates/storage-sqlite/src/store.rs",
@@ -694,6 +707,19 @@ pub fn claim_label(kind: &str) -> &'static str {
 }
 
 formats! {
+    /// Description of a continuous integration component; `pattern` is where
+    /// its pipelines live.
+    infra_ci_description(pattern: &str) {
+        en: "Continuous integration and release ({pattern})",
+        pt: "Integração contínua e publicação ({pattern})",
+        es: "Integración continua y publicación ({pattern})",
+        fr: "Intégration continue et publication ({pattern})",
+        de: "Continuous Integration und Veröffentlichung ({pattern})",
+        it: "Integrazione continua e pubblicazione ({pattern})",
+        ja: "継続的インテグレーションとリリース ({pattern})",
+        zh: "持续集成与发布({pattern})",
+        ko: "지속적 통합 및 배포 ({pattern})",
+        ru: "Непрерывная интеграция и выпуск ({pattern})" }
     /// Button: show the next page of a long list.
     show_more(step: usize) { en: "Show {step} more", pt: "Mostrar mais {step}",
         es: "Mostrar {step} más", fr: "Afficher {step} de plus",
