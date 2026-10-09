@@ -1,6 +1,6 @@
 //! SQLite implementation of the assessment provenance port.
 
-use application::extract::{AssessmentRecord, AssessmentStore, ExtractError};
+use application::extract::{AssessmentRecord, AssessmentStore, ComponentTally, ExtractError};
 use rusqlite::{params, OptionalExtension};
 
 use crate::store::SqliteStore;
@@ -48,6 +48,28 @@ impl AssessmentStore for SqliteStore {
                     row.durable_count as i64,
                     row.detail_count as i64,
                     row.error_detail,
+                ],
+            )
+            .map(|_| ())
+            .map_err(storage_error)
+    }
+
+    fn record_component_tally(
+        &self,
+        assessment_id: &str,
+        tally: &ComponentTally,
+    ) -> Result<(), ExtractError> {
+        self.lock()
+            .execute(
+                "UPDATE assessments SET components_listed=?2, components_proposed=?3, \
+                 components_kept=?4, components_unknown=?5, components_unquoted=?6 WHERE id=?1",
+                params![
+                    assessment_id,
+                    tally.listed as i64,
+                    tally.proposed as i64,
+                    tally.kept as i64,
+                    tally.unknown as i64,
+                    tally.unquoted as i64,
                 ],
             )
             .map(|_| ())

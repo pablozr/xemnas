@@ -33,6 +33,27 @@ impl AssessmentOutcome {
     }
 }
 
+/// What became of the map components the extractor named in one run, counted
+/// without keeping any text. Read it as: of `proposed` names, `kept` reached
+/// the candidates; the rest were `unknown` to the map or had a quote the
+/// candidate's own text does not back (`unquoted`); a repeated name or one
+/// beyond the cap is in `proposed` only. `listed` is the size of the map the
+/// extractor was shown. Items the provider adapter dropped as malformed are
+/// not counted.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ComponentTally {
+    /// Components listed to the extractor.
+    pub listed: usize,
+    /// Components the extractor named, over the candidates that validated.
+    pub proposed: usize,
+    /// Names kept as the candidates' components.
+    pub kept: usize,
+    /// Names the map does not list.
+    pub unknown: usize,
+    /// Names the map lists whose quote the candidate's text does not back.
+    pub unquoted: usize,
+}
+
 /// One provenance row written to `assessments` (MVP-SPEC §12 line 645).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssessmentRecord {
@@ -104,6 +125,15 @@ pub trait AssessmentStore {
     }
     /// Inserts one assessment row.
     fn record_assessment(&self, row: &AssessmentRecord) -> Result<(), ExtractError>;
+    /// Adds the component counts of a run to the row `assessment_id` just
+    /// inserted. The default keeps nothing.
+    fn record_component_tally(
+        &self,
+        _assessment_id: &str,
+        _tally: &ComponentTally,
+    ) -> Result<(), ExtractError> {
+        Ok(())
+    }
 }
 
 /// Provenance context for one extraction run.
@@ -113,6 +143,9 @@ pub struct RunContext {
     pub attempt: Option<i64>,
     /// Classified durable/detail counts for the terminal insert.
     pub classification: Option<(usize, usize)>,
+    /// What became of the components the extractor named, for the terminal
+    /// insert.
+    pub components: Option<ComponentTally>,
     /// AI Execution Profile identifier.
     pub profile_id: String,
     /// Adapter literal: `fake` or `openai-compatible`.
@@ -134,6 +167,7 @@ impl RunContext {
         Self {
             attempt: None,
             classification: None,
+            components: None,
             profile_id: profile.id.clone(),
             adapter: profile_adapter(profile).to_string(),
             model: if external {
@@ -157,6 +191,7 @@ impl RunContext {
         Self {
             attempt: None,
             classification: None,
+            components: None,
             profile_id: "unavailable".to_string(),
             adapter: "unknown".to_string(),
             model: None,
@@ -368,5 +403,9 @@ pub(super) fn record_assessment<S: AssessmentStore>(
         error_code: error_code.map(str::to_string),
         error_detail,
     };
-    store.record_assessment(&row)
+    store.record_assessment(&row)?;
+    match context.components {
+        Some(tally) => store.record_component_tally(&row.id, &tally),
+        None => Ok(()),
+    }
 }

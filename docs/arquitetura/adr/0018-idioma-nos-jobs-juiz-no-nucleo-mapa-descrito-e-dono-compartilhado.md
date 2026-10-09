@@ -75,3 +75,51 @@ da Revisão): com a tela fechada nada era julgado.
 **Lacunas e pedidos ao front.** O refresh disparado pela tela do Mapa não aciona o job (a
 Revisão cobre quando é aberta). Pedir ao front: simplificar `review_pass` em `inbox.rs` e dar
 nome i18n ao tipo `auto_review` em `diagnostics.rs` (hoje cai em "auto review").
+
+## Mapa descrito ao extrator
+
+**O que os dados reais permitiram concluir.** No `cloudrs` (`state/app.db`, só leitura), as 44
+candidatas são todas de documento, o mapa (10 componentes) existia antes da extração (componentes
+15:14:50, candidatas a partir de 15:15:38) e nenhuma citou um componente. A premissa de que o
+nome precisaria ser normalizado estava errada: `resolve_components` já casava por `entity_key`
+(caixa, hífen, espaço e crases) e a citação já usava `quote_matches`. O que os dados **não**
+permitem separar é qual das causas prováveis pesou, porque a resposta bruta do modelo não é
+guardada de propósito:
+
+1. o extrator recebia só os nomes: sem descrição, ele não tem como saber que "updater/release
+   channel" é `sc-platform` ("OS integration: … tray icon and updates");
+2. o prompt dizia "never just a word they share", o que pode inibir até citar o nome;
+3. a citação pode vir do documento-fonte em vez do texto da candidata.
+
+**Decisão.** Atacar as três e medir, em vez de provar uma:
+
+- a lista do extrator traz `- nome: descrição` (descrição de `description_for_model`, cortada em
+  100 caracteres, uma linha; 60 cortaria justamente "updates" em `sc-platform`);
+- o prompt passa a dizer que a parte pode ser nomeada **ou só descrita pelo que faz**, que a
+  citação sai do texto que o modelo escreveu para o item e não da fonte, e que palavra comum aos
+  dois não conta; mantém "at most 3";
+- o nome casa também por apelido (`MapComponent::keys`) e por prefixo antes de `::` ou `/`
+  (`sc-platform::update`). Um espaço **não** corta o nome: `sc-platform crate` continua
+  desconhecido (o plano pedia as duas coisas, que se contradizem; vale o caso de teste).
+- cada análise grava contagens, sem texto: `components_listed` (tamanho do mapa mostrado),
+  `components_proposed`, `components_kept`, `components_unknown` (nome fora do mapa) e
+  `components_unquoted` (nome do mapa, citação que o texto não sustenta). Repetição e o que passa
+  de 3 entram só em `proposed`. Itens malformados que o adaptador descarta em `read_components`
+  não são contados (limitação). Linhas antigas ficam `NULL`.
+
+**Como ler o diagnóstico** depois da próxima rodada:
+
+```sql
+SELECT components_listed, components_proposed, components_kept,
+       components_unknown, components_unquoted FROM assessments;
+```
+
+`proposed = 0` com `listed > 0`: o modelo não nomeia (prompt ou descrição); `unknown` alto: ele
+inventa ou abrevia nomes; `unquoted` alto: ele cita a fonte ou parafraseia; `kept` próximo de
+`proposed`: o recall é do modelo, não da validação.
+
+**Custo.** O prefixo do mapa foi de 1.440 para 7.560 bytes com 60 componentes de descrição cheia
+(100 caracteres), teto do gate 8.192. É um prefixo idêntico entre capturas, então o cache do
+provedor o paga uma vez. Descrições menores custam menos.
+
+**Não verificável aqui:** o recall real só aparece numa nova rodada no `cloudrs`.

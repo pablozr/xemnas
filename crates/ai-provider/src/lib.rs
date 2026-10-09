@@ -91,10 +91,12 @@ confidence_reason: one sentence. evidence_refs: copy the ids exactly as written 
 both).\n\
 When the message lists \"Project map components\", say in components where each item \
 applies or is implemented: the part of the project whose code or behavior would change if the \
-item changed. name: copy it exactly as listed. quote: copy a stretch of the item's own \
-question, choice or rationale that names or clearly points to that part; never a part named \
-only to be excluded, avoided, replaced or compared, and never just a word they share. At most \
-3, and an empty list when nothing is listed or you are not sure.\n\
+item changed. name: copy it exactly as listed (a line may add what the part does after a \
+colon: use it to recognize a part the item describes without naming it). quote: copy a \
+stretch of the question, choice or rationale you wrote for this item, not of the source, that \
+names the part or describes what it does; never a part named only to be excluded, avoided, \
+replaced or compared, and a word that merely appears in both does not count. At most 3, and \
+an empty list when nothing is listed or you are not sure.\n\
 Keep explicit attribution, scope and validation restrictions in qualifiers, even when rationale \
 is long. Each qualifier text must be a literal excerpt from the cited artifact_id. Do not infer \
 missing qualifications; use an empty array when none are stated. \
@@ -728,10 +730,12 @@ pub(crate) fn build_user_content(
     if !background.components.is_empty() {
         text.push_str("## Project map components (write a name exactly as listed)\n");
         for component in &background.components {
-            text.push_str(&format!(
-                "- {}\n",
-                application::external::limited_text(&component.name, 80)
-            ));
+            let name = application::external::limited_text(&component.name, 80);
+            if component.description.is_empty() {
+                text.push_str(&format!("- {name}\n"));
+            } else {
+                text.push_str(&format!("- {name}: {}\n", component.description));
+            }
         }
         text.push('\n');
     }
@@ -1128,6 +1132,9 @@ mod tests {
                     entity_id: format!("e{n}"),
                     name: format!("component-{n:06}-xxx"),
                     key: format!("component{n:06}xxx"),
+                    keys: vec![format!("component{n:06}xxx")],
+                    // The longest description the app lists (100 characters).
+                    description: format!("{n:06} ").repeat(16)[..100].to_string(),
                 })
                 .collect(),
             known: vec!["q → c".into()],
@@ -1158,9 +1165,46 @@ mod tests {
         assert_ne!(one, other);
         let bare = build_user_content(&profile(), &evidence("+one"), &signals, &map(0));
         assert!(!bare.contains("Project map components"));
-        // What the list costs: 60 names of 20 characters.
+        // What the list costs: 60 names of 20 characters, each with a
+        // description of the full 100. The description is what lets the model
+        // tell that "the updater" is the part that does "tray icon and
+        // updates"; the prefix is the same bytes for every capture, so the
+        // provider's cache pays it once. Measured: 7,560 bytes; raise the ceiling only with a number.
         let bytes = prefix(&one).len();
         println!("gate extracted links: prompt_bytes_60_components={bytes}");
-        assert!(bytes <= 2_048, "{bytes} bytes");
+        assert!(bytes <= 8_192, "{bytes} bytes");
+    }
+
+    #[test]
+    fn a_component_is_listed_with_what_it_does() {
+        let mut background = map(0);
+        background.components = vec![
+            application::extract::MapComponent {
+                entity_id: "e1".into(),
+                name: "sc-platform".into(),
+                key: "scplatform".into(),
+                keys: vec!["scplatform".into()],
+                description: "OS integration: window chrome, tray icon and updates".into(),
+            },
+            application::extract::MapComponent {
+                entity_id: "e2".into(),
+                name: "CI".into(),
+                key: "ci".into(),
+                ..Default::default()
+            },
+        ];
+        let text = build_user_content(
+            &profile(),
+            &evidence("+one"),
+            &[RelevanceSignal::SecurityPrivacy],
+            &background,
+        );
+        assert!(
+            text.contains("- sc-platform: OS integration: window chrome, tray icon and updates\n"),
+            "{text}"
+        );
+        assert!(text.contains("- CI\n\n"), "{text}");
+        assert!(SYSTEM_PROMPT.contains("describes what it does"));
+        assert!(SYSTEM_PROMPT.contains("not of the source"));
     }
 }

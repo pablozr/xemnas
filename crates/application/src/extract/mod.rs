@@ -12,9 +12,9 @@ use crate::clock::now_rfc3339;
 
 pub use assessment::{
     fail_provider_setup, failure_detail, input_hash, policy_snapshot, record_skipped_assessment,
-    AssessmentOutcome, AssessmentRecord, AssessmentStore, ProviderSetupError, RunContext,
-    ERROR_CODE_CONSENT, ERROR_CODE_KEYSTORE, ERROR_CODE_PROFILE, ERROR_CODE_PROVIDER_CONFIG,
-    ERROR_CODE_SECRET, FAILURE_DETAIL_MAX_CHARS,
+    AssessmentOutcome, AssessmentRecord, AssessmentStore, ComponentTally, ProviderSetupError,
+    RunContext, ERROR_CODE_CONSENT, ERROR_CODE_KEYSTORE, ERROR_CODE_PROFILE,
+    ERROR_CODE_PROVIDER_CONFIG, ERROR_CODE_SECRET, FAILURE_DETAIL_MAX_CHARS,
 };
 pub use connection_test::{
     connection_test_evidence, run_connection_test, ConnectionTestReport, CONNECTION_TEST_CAPTURE_ID,
@@ -108,7 +108,7 @@ pub struct ProposedComponent {
 }
 
 /// A live component of the project map, listed to the extractor by name.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MapComponent {
     /// The entity id.
     pub entity_id: String,
@@ -116,6 +116,11 @@ pub struct MapComponent {
     pub name: String,
     /// The entity's key (`entity_key(name)`), what a written name is compared by.
     pub key: String,
+    /// The keys of the name and of its aliases: a written name matches any.
+    pub keys: Vec<String>,
+    /// What the component does, short, for the extractor to recognize it by
+    /// something other than its name. Empty when the map has none.
+    pub description: String,
 }
 
 /// A component a candidate applies to, checked against the map and against
@@ -453,6 +458,8 @@ where
                     entity_id: entity.entity_id.clone(),
                     name: entity.name.clone(),
                     key: entity.key.clone(),
+                    keys: entity.keys().collect(),
+                    description: short_description(entity),
                 })
                 .collect()
         })
@@ -533,13 +540,19 @@ where
         .iter()
         .map(|(p, signals)| (dedup_hash(capture_id, p, signals), p.nature))
         .collect();
+    let mut tally = ComponentTally {
+        listed: background.components.len(),
+        ..ComponentTally::default()
+    };
     let components: Vec<_> = validated
         .iter()
         .map(|(p, signals)| {
-            (
-                dedup_hash(capture_id, p, signals),
-                resolve_components(p, &background.components),
-            )
+            let (resolved, each) = resolve_components(p, &background.components);
+            tally.proposed += each.proposed;
+            tally.kept += each.kept;
+            tally.unknown += each.unknown;
+            tally.unquoted += each.unquoted;
+            (dedup_hash(capture_id, p, signals), resolved)
         })
         .collect();
     let records: Vec<DecisionCandidateRecord> = validated
@@ -590,6 +603,9 @@ where
         inserted,
         signals,
     };
+    let mut counted_context = context.clone();
+    counted_context.components = Some(tally);
+    let context = &counted_context;
     record_assessment(
         store,
         context,
@@ -605,37 +621,76 @@ where
     Ok(report)
 }
 
+/// Characters of a component's description listed to the extractor: enough to
+/// say what it does ("OS integration: ... tray icon and updates"), not its docs.
+const MAP_DESCRIPTION_CHARS: usize = 100;
+
+/// The description of a component as the extractor sees it: the one the model
+/// reads elsewhere, cut short, on one line.
+fn short_description(entity: &crate::graph::EntityRecord) -> String {
+    let described = crate::graph::description_for_model(entity);
+    crate::external::limited_text(&described, MAP_DESCRIPTION_CHARS)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Components a candidate can apply to at most.
 pub const MAX_CANDIDATE_COMPONENTS: usize = 3;
 
+/// The component of the map a written name points to: the name or an alias as
+/// the map keys it (case, accents, hyphens, spaces and backticks aside), or,
+/// failing that, the part of the name before a path suffix (`sc-platform::update`,
+/// `sc-platform/src/tray.rs`).
+fn find_component<'m>(map: &'m [MapComponent], name: &str) -> Option<&'m MapComponent> {
+    let by_key = |key: &str| {
+        map.iter()
+            .find(|component| component.key == key || component.keys.iter().any(|each| each == key))
+    };
+    by_key(&domain::entities::entity_key(name)).or_else(|| {
+        let head = name.split("::").next()?.split('/').next()?;
+        (head.len() < name.len())
+            .then(|| by_key(&domain::entities::entity_key(head)))
+            .flatten()
+    })
+}
+
 /// The components the extractor named for `proposal` that the map has and that
-/// the proposal's own text backs: the name matches a listed component (case,
-/// accents and punctuation aside), the quote is copied from the question,
-/// choice or rationale, and each component counts once. A name the map does
-/// not list, a paraphrase and a quote too short to say anything are dropped.
+/// the proposal's own text backs: the name matches a listed component or one
+/// of its aliases (see [`find_component`]), the quote is copied from the
+/// question, choice or rationale, and each component counts once. A name the
+/// map does not list, a paraphrase and a quote too short to say anything are
+/// dropped. The tally says how many fell where; `listed` is left for the caller.
 pub(crate) fn resolve_components(
     proposal: &CandidateProposal,
     map: &[MapComponent],
-) -> Vec<CandidateComponent> {
+) -> (Vec<CandidateComponent>, ComponentTally) {
     let texts = crate::link_suggestions::normalized_texts(&[
         proposal.question.as_str(),
         proposal.choice.as_str(),
         proposal.rationale.as_str(),
     ]);
+    let mut tally = ComponentTally {
+        proposed: proposal.components.len(),
+        ..ComponentTally::default()
+    };
     let mut resolved: Vec<CandidateComponent> = Vec::new();
     for named in &proposal.components {
         if resolved.len() >= MAX_CANDIDATE_COMPONENTS {
             break;
         }
-        let key = domain::entities::entity_key(&named.name);
-        let Some(component) = map.iter().find(|component| component.key == key) else {
+        let Some(component) = find_component(map, &named.name) else {
+            tally.unknown += 1;
             continue;
         };
         if resolved
             .iter()
             .any(|known| known.entity_id == component.entity_id)
-            || !crate::link_suggestions::quote_matches(&texts, &named.quote)
         {
+            continue;
+        }
+        if !crate::link_suggestions::quote_matches(&texts, &named.quote) {
+            tally.unquoted += 1;
             continue;
         }
         resolved.push(CandidateComponent {
@@ -643,7 +698,8 @@ pub(crate) fn resolve_components(
             quote: named.quote.trim().to_string(),
         });
     }
-    resolved
+    tally.kept = resolved.len();
+    (resolved, tally)
 }
 
 /// Replaces what the extractor cannot know better than the app: the diff
@@ -757,8 +813,8 @@ fn dedup_hash(
 mod tests {
     use super::{
         filter_relevant, reconcile_with_evidence, resolve_components, truncate_content,
-        CandidateKind, CandidateProposal, DecisionEvidence, EvidenceArtifact, MapComponent,
-        ProposedComponent, RelevanceSignal,
+        CandidateKind, CandidateProposal, ComponentTally, DecisionEvidence, EvidenceArtifact,
+        MapComponent, ProposedComponent, RelevanceSignal,
     };
 
     fn proposal(refs: &[&str]) -> CandidateProposal {
@@ -972,6 +1028,7 @@ Applies to the Claude Code adapter only.",
                 entity_id: format!("e{n}"),
                 name: (*name).into(),
                 key: domain::entities::entity_key(name),
+                ..MapComponent::default()
             })
             .collect()
     }
@@ -983,16 +1040,25 @@ Applies to the Claude Code adapter only.",
         }
     }
 
-    fn resolved(components: Vec<ProposedComponent>) -> Vec<String> {
+    fn resolved_in(
+        map: &[MapComponent],
+        components: Vec<ProposedComponent>,
+    ) -> (Vec<String>, ComponentTally) {
         let mut candidate = proposal(&[]);
         candidate.question = "Onde o núcleo grava as capturas?".into();
         candidate.choice = "Gravar cada captura na outbox antes de responder.".into();
         candidate.rationale = "Evita perder eventos se o processo cair.".into();
         candidate.components = components;
-        resolve_components(&candidate, &map())
+        let (resolved, tally) = resolve_components(&candidate, map);
+        let ids = resolved
             .into_iter()
             .map(|component| component.entity_id)
-            .collect()
+            .collect();
+        (ids, tally)
+    }
+
+    fn resolved(components: Vec<ProposedComponent>) -> Vec<String> {
+        resolved_in(&map(), components).0
     }
 
     #[test]
@@ -1022,5 +1088,47 @@ Applies to the Claude Code adapter only.",
         let many = ["Storage SQLite", "Núcleo", "outbox", "ui"]
             .map(|name| named(name, "Evita perder eventos se o processo cair"));
         assert_eq!(resolved(many.to_vec()).len(), 3);
+    }
+
+    #[test]
+    fn an_alias_and_a_path_suffix_name_the_component_and_the_tally_says_where_names_fell() {
+        let mut platform = MapComponent {
+            entity_id: "e-platform".into(),
+            name: "sc-platform".into(),
+            key: domain::entities::entity_key("sc-platform"),
+            ..MapComponent::default()
+        };
+        platform.keys = vec![platform.key.clone(), domain::entities::entity_key("Tray")];
+        let map = [platform];
+        let quote = "Gravar cada captura na outbox";
+        for name in ["sc-platform", "SC_Platform", "`sc-platform`", "Tray"] {
+            let (ids, _) = resolved_in(&map, vec![named(name, quote)]);
+            assert_eq!(ids, ["e-platform"], "{name}");
+        }
+        for name in ["sc-platform::update", "sc-platform/src/tray.rs"] {
+            let (ids, _) = resolved_in(&map, vec![named(name, quote)]);
+            assert_eq!(ids, ["e-platform"], "{name}");
+        }
+        let (ids, tally) = resolved_in(
+            &map,
+            vec![
+                named("sc-platform crate", quote),
+                named("sc-platform", "um trecho que o texto não tem"),
+                named("sc-platform", quote),
+                named("tray", quote),
+            ],
+        );
+        assert_eq!(ids, ["e-platform"]);
+        assert_eq!(
+            tally,
+            ComponentTally {
+                listed: 0,
+                proposed: 4,
+                kept: 1,
+                unknown: 1,
+                unquoted: 1
+            },
+            "the repeated name is only proposed"
+        );
     }
 }

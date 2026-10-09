@@ -200,6 +200,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 49,
         sql: include_str!("migrations/0049_clear_legacy_infra_descriptions.sql"),
     },
+    Migration {
+        version: 50,
+        sql: include_str!("migrations/0050_assessment_component_counts.sql"),
+    },
 ];
 
 /// Schema version this build migrates to: the last embedded migration.
