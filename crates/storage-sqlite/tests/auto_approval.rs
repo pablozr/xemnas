@@ -18,7 +18,9 @@ use application::extract::{
     ExtractionStore, RelevanceSignal,
 };
 use application::inbox::{CandidateStatus, InboxStore};
-use application::jobs::{JobState, Jobs, Lane, ANALYZE_CAPTURE_KIND};
+use application::jobs::{
+    JobFailure, JobKind, JobRecord, JobState, Jobs, Lane, ANALYZE_CAPTURE_KIND,
+};
 use application::overview::{JsonValue, StructuredModel};
 use application::profile::{
     build_preview, grant_consent, offline_default_profile, AiProfile, AiSettings, ProfileError,
@@ -79,6 +81,9 @@ struct Judge {
     asked: Arc<Mutex<Vec<String>>>,
     /// The system prompt of each call.
     prompts: Arc<Mutex<Vec<String>>>,
+    /// A call waits here after it was counted: held by a test, it keeps the
+    /// judge in the middle of a pass.
+    hold: Arc<Mutex<()>>,
 }
 
 impl Judge {
@@ -88,6 +93,7 @@ impl Judge {
             calls: Arc::new(AtomicUsize::new(0)),
             asked: Arc::new(Mutex::new(Vec::new())),
             prompts: Arc::new(Mutex::new(Vec::new())),
+            hold: Arc::new(Mutex::new(())),
         }
     }
 
@@ -118,6 +124,7 @@ impl StructuredModel for Judge {
     ) -> Result<String, ExtractError> {
         assert_eq!(schema_name, "approval_verdicts");
         self.calls.fetch_add(1, Ordering::SeqCst);
+        drop(self.hold.lock().expect("lock"));
         self.prompts.lock().expect("lock").push(system.to_owned());
         self.asked.lock().expect("lock").push(user.to_owned());
         self.answer
@@ -1609,8 +1616,11 @@ fn a_new_candidate_is_judged_without_the_screen_in_automatic_mode() {
         .expect("run")
         .expect("analysis ran");
     assert_eq!(analysis.state, JobState::Completed);
-    queue_review_after(&test.store, &analysis.kind, analysis.state);
-    queue_review_after(&test.store, &analysis.kind, analysis.state);
+    assert!(queue_review_after(&test.store, &analysis.kind, analysis.state).expect("queue"));
+    assert!(
+        !queue_review_after(&test.store, &analysis.kind, analysis.state).expect("queue again"),
+        "a judge is already waiting"
+    );
     assert_eq!(queued_reviews(&test.store), 1, "a second trigger adds none");
 
     let judging = jobs
@@ -1624,7 +1634,7 @@ fn a_new_candidate_is_judged_without_the_screen_in_automatic_mode() {
     assert_eq!(status_of(&test.store, "amb"), CandidateStatus::Accepted);
     assert_eq!(judge.calls.load(Ordering::SeqCst), 1);
 
-    queue_review_after(&test.store, &analysis.kind, analysis.state);
+    queue_review_after(&test.store, &analysis.kind, analysis.state).expect("queue");
     jobs.run_next_in(Lane::Suggestions).expect("run");
     assert_eq!(
         judge.calls.load(Ordering::SeqCst),
@@ -1642,15 +1652,120 @@ fn in_manual_mode_no_review_job_is_queued() {
         .insert_candidates(&[old("amb", 0.60, "qual formato exportar relatorios")])
         .expect("pending");
     assert!(!review.status().expect("status").automatic);
-    queue_review_after(&test.store, ANALYZE_CAPTURE_KIND, JobState::Completed);
+    assert!(
+        !queue_review_after(&test.store, ANALYZE_CAPTURE_KIND, JobState::Completed)
+            .expect("manual")
+    );
     assert_eq!(queued_reviews(&test.store), 0);
     assert_eq!(judge.calls.load(Ordering::SeqCst), 0);
     assert_eq!(status_of(&test.store, "amb"), CandidateStatus::Pending);
     // Neither a failed job nor one that cannot create items queues a judge.
     review.set_mode(Mode::Automatic).expect("on");
-    queue_review_after(&test.store, ANALYZE_CAPTURE_KIND, JobState::Failed);
-    queue_review_after(&test.store, "derive_search_terms", JobState::Completed);
+    for (kind, state) in [
+        (ANALYZE_CAPTURE_KIND, JobState::Failed),
+        ("derive_search_terms", JobState::Completed),
+    ] {
+        assert!(!queue_review_after(&test.store, kind, state).expect("not feeding"));
+    }
     assert_eq!(queued_reviews(&test.store), 0);
+    let queued: Vec<bool> = JobKind::ALL
+        .into_iter()
+        .filter(|kind| kind.feeds_review())
+        .map(|kind| queue_review_after(&test.store, kind.as_str(), JobState::Completed))
+        .collect::<Result<_, _>>()
+        .expect("feeding");
+    assert_eq!(queued.iter().filter(|each| **each).count(), 1);
+    assert_eq!(queued_reviews(&test.store), 1, "one judge covers them all");
+}
+
+/// What the background job does with the pause that follows a failed call:
+/// the items it could not ask about are not forgotten.
+#[test]
+fn the_pause_after_a_failed_call_defers_the_job_for_what_is_left_of_it() {
+    let test = support::open("review-deferred", &[PROJECT]);
+    let judge = Judge::failing();
+    let review = review_with(&test.store, consented(), &judge);
+    review.set_mode(Mode::Automatic).expect("on");
+    test.store
+        .insert_candidates(&[old("amb", 0.60, "qual formato exportar relatorios")])
+        .expect("pending");
+
+    assert!(matches!(
+        review.run_all_at(NOW),
+        Err(ReviewError::Provider(_))
+    ));
+    let soon = review
+        .run_all_at("2026-03-01T10:05:00Z")
+        .expect("paused pass");
+    assert!(!soon.asked);
+    assert_eq!(soon.deferred, Some(std::time::Duration::from_secs(15 * 60)));
+    assert_eq!(status_of(&test.store, "amb"), CandidateStatus::Pending);
+
+    let later = review.run_all_at("2026-03-01T10:20:00Z");
+    assert!(
+        matches!(later, Err(ReviewError::Provider(_))),
+        "asked again"
+    );
+
+    // Through the job: the pause that just started ends in about 20 minutes.
+    let handler = review_job(Arc::new(review));
+    let record = JobRecord {
+        id: "j".into(),
+        kind: REVIEW_JOB_KIND.into(),
+        payload: String::new(),
+        state: JobState::Running,
+        idempotent: true,
+        attempts: 1,
+        last_error: None,
+        created_at: NOW.into(),
+        updated_at: NOW.into(),
+    };
+    let first = handler(&record);
+    let Err(JobFailure::Deferred {
+        retry_after: Some(wait),
+    }) = first
+    else {
+        panic!("the provider failed: {first:?}");
+    };
+    assert!(
+        wait.as_secs() > 19 * 60 && wait.as_secs() <= 20 * 60,
+        "{wait:?}"
+    );
+    let second = handler(&record);
+    let Err(JobFailure::Deferred {
+        retry_after: Some(left),
+    }) = second
+    else {
+        panic!("the pause is on: {second:?}");
+    };
+    assert!(left <= wait && left.as_secs() > 19 * 60, "{left:?}");
+}
+
+/// The screen and the background job share one review: while the job judges,
+/// the screen's pass returns at once instead of waiting or judging twice.
+#[test]
+fn the_screen_does_not_wait_for_the_pass_of_the_job() {
+    let test = support::open("review-lock", &[PROJECT]);
+    let judge = Judge::answering(r#"{"verdicts":[{"id":"I1","verdict":"accept","reason":"ok"}]}"#);
+    let review = review_with(&test.store, consented(), &judge);
+    review.set_mode(Mode::Automatic).expect("on");
+    test.store
+        .insert_candidates(&[old("amb", 0.60, "qual formato exportar relatorios")])
+        .expect("pending");
+    let held = judge.hold.lock().expect("hold");
+    std::thread::scope(|scope| {
+        let job = scope.spawn(|| review.run_all_at(NOW));
+        while judge.calls.load(Ordering::SeqCst) == 0 {
+            std::thread::yield_now();
+        }
+        let screen = review.run_at(PROJECT, NOW).expect("screen");
+        assert!(!screen.asked && !screen.changed(), "the job covers it");
+        drop(held);
+        let report = job.join().expect("job").expect("pass");
+        assert!(report.asked && report.accepted == 1);
+    });
+    assert_eq!(judge.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(status_of(&test.store, "amb"), CandidateStatus::Accepted);
 }
 
 #[test]
@@ -1667,8 +1782,8 @@ fn a_pass_with_nothing_new_asks_nothing_and_is_cheap() {
     assert!(first.asked);
     let calls = judge.calls.load(Ordering::SeqCst);
 
-    // The best of a few: a pass of another test in this binary may hold the
-    // process-wide lock for a moment, and that wait is not the idle cost.
+    // The best of a few, so a busy machine does not count as the idle cost.
+
     let mut elapsed = std::time::Duration::MAX;
     for _ in 0..5 {
         let started = std::time::Instant::now();

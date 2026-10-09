@@ -59,18 +59,29 @@ da Revisão): com a tela fechada nada era julgado.
   esvaziaram e cobre tudo numa passada.
 - `queue_review_after` é chamada pelo observer de jobs em `main.rs` (uma linha) quando termina,
   com sucesso, `analyze_capture`, `analyze_document`, `suggest_links`, `suggest_relations` ou
-  `derive_claims`. Não enfileira em modo manual nem se já há um `auto_review` na fila
-  (`JobRepository::counts`, consulta agrupada). Os quatro produtores não mudaram.
+  `derive_claims`, o que `JobKind::feeds_review` diz (`match` exaustivo ao lado de `lane`).
+  Não enfileira em modo manual nem se já há um `auto_review` na fila: `insert_unless_queued`
+  faz as duas coisas num só `INSERT ... WHERE NOT EXISTS` (índice `state`), sem varrer a tabela
+  por evento e sem a corrida entre conferir e inserir. Devolve `Result<bool>` (enfileirou) e o
+  `main.rs` registra o erro com `tracing::warn!`. Os quatro produtores não mudaram.
 - O job percorre todos os projetos (`Approvals::run_all_at`), porque o observer não sabe qual.
   Com o já revisado excluído, uma passada sem nada novo custa algumas leituras e nenhuma
   chamada: `latency auto_review_idle_ms` fica em 6 a 17 ms com 3 projetos.
-- Um `static PASS: Mutex` faz a tela e o job julgarem um de cada vez; a segunda passada acha
-  tudo em `reviewed()` e não chama a IA de novo. O `review_pass` da tela fica, redundante e seguro.
+- Tela e job compartilham **uma** instância de `Approvals` (o `main.rs` a constrói uma vez, com o
+  limiter e o idioma, e a entrega à tela), e o `Mutex` é um campo dela, não um `static`: nunca
+  julgam juntos e pedem à IA pelo mesmo limiter. O modo é lido **depois** de pegar o lock. A
+  tela (`ApprovalsApi::run`) usa `try_lock` e, com uma passada em curso, devolve um relatório
+  vazio na hora, porque o job cobre os mesmos itens; o job (`run_all`) espera. O `review_pass`
+  da tela fica, redundante e seguro.
 - Quando a passada aceita candidatas, a adoção cria vínculos novos que ela não viu: roda uma
   segunda passada (no máximo), **só sobre os vínculos**, para não drenar o resto da fila fora da
   cadência.
-- Falha do provedor devolve o job à fila em 20 min (`JobFailure::Deferred`, até 8 vezes); outro
-  erro termina o job sem `Failed`, e o próximo gatilho tenta de novo.
+- Falha do provedor devolve o job à fila em 20 min (`JobFailure::Deferred`, até 8 vezes). A
+  pausa de 20 min que segue uma chamada falha também não termina o job em silêncio: se sobraram
+  itens que precisavam do juiz e a pausa os impediu, `RunReport::deferred` traz o que resta
+  dela e o job volta à fila para esse momento. Outro erro (armazenamento, por exemplo) termina
+  o job como `Failed`, para aparecer no diagnóstico (antes virava `Ok`).
+
 
 **Lacunas e pedidos ao front.** O refresh disparado pela tela do Mapa não aciona o job (a
 Revisão cobre quando é aberta). Pedir ao front: simplificar `review_pass` em `inbox.rs` e dar

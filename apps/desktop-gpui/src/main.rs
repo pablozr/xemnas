@@ -355,17 +355,20 @@ fn main() {
     );
     // The automatic judge runs here, not on a screen: it is queued when a job
     // that may create items completes (nothing in manual mode) and covers all
-    // projects in one pass.
-    let reviewer = application::auto_approval::Approvals::new(
-        store.clone(),
-        Arc::new(application::adoption::Adoption::new(store.clone())),
-        settings.clone(),
-        ai_provider::ProviderFactory::new(chatgpt.clone()).with_limiter(limiter.clone()),
-    )
-    .with_language(interface_language());
+    // projects in one pass. The Revisão screen shares this instance, so the
+    // two never judge together and ask the provider through the same limiter.
+    let judge: Arc<dyn application::auto_approval::ApprovalsApi> = Arc::new(
+        application::auto_approval::Approvals::new(
+            store.clone(),
+            Arc::new(application::adoption::Adoption::new(store.clone())),
+            settings.clone(),
+            ai_provider::ProviderFactory::new(chatgpt.clone()).with_limiter(limiter.clone()),
+        )
+        .with_language(interface_language()),
+    );
     jobs.register(
         application::auto_approval::REVIEW_JOB_KIND,
-        application::auto_approval::review_job(Arc::new(reviewer)),
+        application::auto_approval::review_job(judge.clone()),
     );
     let observed = store.clone();
     jobs.observe_with(move |event| match event {
@@ -377,7 +380,13 @@ fn main() {
                 attempts = outcome.attempts,
                 "job finished"
             );
-            application::auto_approval::queue_review_after(&observed, &outcome.kind, outcome.state);
+            if let Err(error) = application::auto_approval::queue_review_after(
+                &observed,
+                &outcome.kind,
+                outcome.state,
+            ) {
+                tracing::warn!(error = %error, operation = "queue_review", "could not queue");
+            }
         }
         application::jobs::JobEvent::StorageError(detail) => {
             tracing::error!(
@@ -464,7 +473,7 @@ fn main() {
     );
     let overview = overview_api(ai_settings(&paths.ai_profile), chatgpt.clone());
     let reviewer = review_api(ai_settings(&paths.ai_profile), chatgpt.clone());
-    let approvals = approvals_api(ai_settings(&paths.ai_profile), chatgpt.clone());
+    let approvals: ApprovalsFactory = Box::new(move |_| judge);
     run_shell_mode(
         Ok(store),
         services,

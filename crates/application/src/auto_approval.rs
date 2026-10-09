@@ -45,10 +45,9 @@ use serde_json::json;
 
 use crate::adoption::AdoptionApi;
 use crate::analysis::ExtractorFactory;
-use crate::claim_suggestions::CLAIM_JOB_KIND;
 use crate::claim_suggestions::{ClaimSuggestionStore, ClaimSuggestions};
 use crate::claims::ClaimStore;
-use crate::clock::{add_hours, add_seconds, now_rfc3339};
+use crate::clock::{add_hours, add_seconds, now_rfc3339, seconds_between};
 use crate::conflicts::{ConflictView, Conflicts, Resolution};
 use crate::decisions::{DecisionQuery, DecisionStatus, DecisionStore, StoredDecision};
 use crate::extract::{CandidateKind, MIN_SIGNIFICANCE};
@@ -59,23 +58,13 @@ use crate::graph::{
 use crate::inbox::{
     CandidateStatus, Cursor, Inbox, InboxQuery, InboxStore, StoredCandidate, MAX_PAGE_LIMIT,
 };
-use crate::jobs::{
-    JobFailure, JobKind, JobRecord, JobRepository, JobState, ANALYZE_CAPTURE_KIND,
-    ANALYZE_DOCUMENT_KIND,
-};
-use crate::link_suggestions::LINK_JOB_KIND;
+use crate::jobs::{JobFailure, JobKind, JobRecord, JobRepository, JobState};
 use crate::output_language::{fixed, header, LanguageSource, OutputLanguage};
 use crate::overview::StructuredModel;
 use crate::profile::{choose_extractor, AiSettings, ExtractorChoice, ProfileStore, SecretStore};
 use crate::projects::ProjectRepository;
-use crate::relation_suggestions::{
-    RelationSuggestionStore, RelationSuggestions, RELATION_JOB_KIND,
-};
+use crate::relation_suggestions::{RelationSuggestionStore, RelationSuggestions};
 use crate::relations::RelationStore;
-
-/// Held by a pass of the review: the screen and the background job never
-/// judge at the same time.
-static PASS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Items sent to the AI in one call: each is a short text, so a call carries
 /// a backlog's worth without growing much.
@@ -312,6 +301,10 @@ pub struct RunReport {
     /// Candidates among the accepted: each one's adoption may have created
     /// ties to the map that the pass has not seen.
     pub adopted: usize,
+    /// How long the pause after a failed call still lasts, when it kept the
+    /// pass from asking about items that needed the judge: they wait for a
+    /// later pass, which the background job schedules for that moment.
+    pub deferred: Option<Duration>,
 }
 
 impl std::ops::AddAssign for RunReport {
@@ -321,6 +314,7 @@ impl std::ops::AddAssign for RunReport {
         self.left += other.left;
         self.asked |= other.asked;
         self.adopted += other.adopted;
+        self.deferred = self.deferred.max(other.deferred);
     }
 }
 
@@ -408,9 +402,13 @@ pub trait ApprovalsApi: Send + Sync {
     fn status(&self) -> Result<Status, ReviewError>;
     /// Turns the automatic mode on or off.
     fn set_mode(&self, mode: Mode) -> Result<(), ReviewError>;
-    /// One pass for a project.
+    /// One pass for a project, as the screen runs it. Only one pass runs at a
+    /// time: when another is on (the background job's, say) it returns an
+    /// empty report at once instead of waiting, because that pass covers the
+    /// same items.
     fn run(&self, project_id: &str) -> Result<RunReport, ReviewError>;
-    /// One pass for every project, as the background job runs it.
+    /// One pass for every project, as the background job runs it. It waits
+    /// for a pass that is on, so what it reports is the state after it.
     fn run_all(&self) -> Result<RunReport, ReviewError>;
     /// What the review decided in a project.
     fn ledger(&self, project_id: &str) -> Result<Vec<Entry>, ReviewError>;
@@ -941,6 +939,9 @@ pub struct Approvals<S, P, K, F> {
     settings: AiSettings<P, K>,
     factory: F,
     language: LanguageSource,
+    /// Held by a pass: the screen and the background job share one instance
+    /// of the review, so they never judge at the same time.
+    pass: std::sync::Mutex<()>,
 }
 
 impl<S, P, K, F> Approvals<S, P, K, F>
@@ -973,6 +974,7 @@ where
             settings,
             factory,
             language: fixed(OutputLanguage::ENGLISH),
+            pass: std::sync::Mutex::new(()),
         }
     }
 
@@ -1383,40 +1385,46 @@ where
         self.factory.external(&profile, secret).ok()
     }
 
-    /// Whether a call may go now: always, unless the last one failed less
-    /// than [`FAILURE_PAUSE_MINUTES`] ago.
-    fn may_ask(&self, now: &str) -> Result<bool, ReviewError> {
+    /// How long a call must still wait: nothing, unless the last one failed
+    /// less than [`FAILURE_PAUSE_MINUTES`] ago.
+    fn pause_left(&self, now: &str) -> Result<Option<Duration>, ReviewError> {
         let day_ago = add_hours(now, -24).unwrap_or_default();
         let calls = self.store.review_calls(&day_ago)?;
         let Some((last, false)) = calls.last() else {
-            return Ok(true);
+            return Ok(None);
         };
         let ready_at = add_minutes(last, FAILURE_PAUSE_MINUTES).unwrap_or_default();
-        Ok(now >= ready_at.as_str())
+        Ok(seconds_between(now, &ready_at)
+            .filter(|seconds| *seconds > 0)
+            .map(|seconds| Duration::from_secs(seconds.unsigned_abs())))
     }
 
-    /// One pass at the given moment (RFC 3339), so tests do not wait. One
-    /// pass runs at a time in the process (the screen and the background job
-    /// share it), so the second finds everything already reviewed. A pass that
+    /// One pass at the given moment (RFC 3339), so tests do not wait, as the
+    /// screen runs it: when another pass is on, the background job's, it
+    /// returns at once, because that one covers the same items. A pass that
     /// accepted a candidate is followed by one over the ties its adoption
     /// created, which the first had not seen.
     pub fn run_at(&self, project_id: &str, now: &str) -> Result<RunReport, ReviewError> {
+        let _one_at_a_time = match self.pass.try_lock() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return Ok(RunReport::default()),
+        };
+        // Read after the lock: a mode turned off while this waited stands.
         if self.store.approval_mode()? != Mode::Automatic {
             return Ok(RunReport::default());
         }
-        let _one_at_a_time = PASS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut report = self.pass(project_id, now, false)?;
-        if report.adopted > 0 {
-            report += self.pass(project_id, now, true)?;
-        }
-        Ok(report)
+        self.project_passes(project_id, now)
     }
 
     /// One pass over every project, at the given moment: what the background
-    /// job runs. A provider failure stops it and is returned.
+    /// job runs. It waits for a pass that is on. A provider failure stops it
+    /// and is returned.
     pub fn run_all_at(&self, now: &str) -> Result<RunReport, ReviewError> {
+        let _one_at_a_time = self
+            .pass
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut report = RunReport::default();
         if self.store.approval_mode()? != Mode::Automatic {
             return Ok(report);
@@ -1424,7 +1432,16 @@ where
         let projects = ProjectRepository::list(&self.store)
             .map_err(|error| ReviewError::Storage(error.to_string()))?;
         for project in projects {
-            report += self.run_at(&project.id, now)?;
+            report += self.project_passes(&project.id, now)?;
+        }
+        Ok(report)
+    }
+
+    /// The passes over one project, with the lock held and the mode checked.
+    fn project_passes(&self, project_id: &str, now: &str) -> Result<RunReport, ReviewError> {
+        let mut report = self.pass(project_id, now, false)?;
+        if report.adopted > 0 {
+            report += self.pass(project_id, now, true)?;
         }
         Ok(report)
     }
@@ -1437,7 +1454,6 @@ where
         links_only: bool,
     ) -> Result<RunReport, ReviewError> {
         let mut report = RunReport::default();
-        let language = (self.language)();
         let mut items = self.gather(project_id)?;
         if links_only {
             items.retain(|item| item.kind == ItemKind::Link);
@@ -1471,34 +1487,28 @@ where
             .filter(|item| item.triage == Triage::Ask)
             .partition(|item| item.kind == ItemKind::Link);
         for (group, prompt) in [(rest, REVIEW_PROMPT), (links, LINK_REVIEW_PROMPT)] {
-            if group.is_empty() || !self.may_ask(now)? {
+            if group.is_empty() {
+                continue;
+            }
+            if let Some(wait) = self.pause_left(now)? {
+                report.deferred = report.deferred.max(Some(wait));
                 continue;
             }
             let Some(model) = self.judge() else {
                 return Ok(report);
             };
-            self.ask(
-                project_id,
-                group,
-                prompt,
-                language,
-                &model,
-                now,
-                &mut report,
-            )?;
+            self.ask(project_id, group, prompt, &model, now, &mut report)?;
         }
         Ok(report)
     }
 
     /// One batched call about the oldest items of `group`, up to [`BATCH`],
     /// and the verdicts it brings.
-    #[allow(clippy::too_many_arguments)]
     fn ask(
         &self,
         project_id: &str,
         group: Vec<&Item>,
         prompt: &str,
-        language: OutputLanguage,
         model: &F::Extractor,
         now: &str,
         report: &mut RunReport,
@@ -1516,7 +1526,7 @@ where
         } else {
             Vec::new()
         };
-        let (user, shown, shown_rules) = review_message(language, &ids, &batch, &in_force);
+        let (user, shown, shown_rules) = review_message((self.language)(), &ids, &batch, &in_force);
         report.asked = true;
         let answer = match model.complete(prompt, &user, "approval_verdicts", &review_schema()) {
             Ok(answer) => {
@@ -1650,13 +1660,9 @@ fn review_message<'a>(
             let named: Vec<String> = near
                 .into_iter()
                 .map(|decision| {
-                    let at = shown
-                        .iter()
-                        .position(|seen| seen.decision_id == decision.decision_id)
-                        .unwrap_or_else(|| {
-                            shown.push(decision);
-                            shown.len() - 1
-                        });
+                    let at = position_or_push(&mut shown, decision, |seen, other| {
+                        seen.decision_id == other.decision_id
+                    });
                     format!("D{}", at + 1)
                 })
                 .collect();
@@ -1670,13 +1676,9 @@ fn review_message<'a>(
                 .similar_rules
                 .iter()
                 .map(|rule| {
-                    let at = shown_rules
-                        .iter()
-                        .position(|seen| *seen == rule.as_str())
-                        .unwrap_or_else(|| {
-                            shown_rules.push(rule);
-                            shown_rules.len() - 1
-                        });
+                    let at = position_or_push(&mut shown_rules, rule.as_str(), |seen, other| {
+                        seen == other
+                    });
                     format!("R{}", at + 1)
                 })
                 .collect();
@@ -1702,6 +1704,21 @@ fn review_message<'a>(
         }
     }
     (user, shown, shown_rules)
+}
+
+/// Where `value` sits in `shown`, appended first when it is not there yet.
+fn position_or_push<'a, T: ?Sized>(
+    shown: &mut Vec<&'a T>,
+    value: &'a T,
+    same: impl Fn(&T, &T) -> bool,
+) -> usize {
+    shown
+        .iter()
+        .position(|seen| same(seen, value))
+        .unwrap_or_else(|| {
+            shown.push(value);
+            shown.len() - 1
+        })
 }
 
 /// Decisions in force that resemble a question, the closest first, at most
@@ -1819,53 +1836,25 @@ where
 /// The kind of the background job that runs the judge over every project.
 pub const REVIEW_JOB_KIND: &str = JobKind::AutoReview.as_str();
 
-/// Jobs whose completion can leave items waiting for a person.
-const FEEDING_KINDS: [&str; 5] = [
-    ANALYZE_CAPTURE_KIND,
-    ANALYZE_DOCUMENT_KIND,
-    LINK_JOB_KIND,
-    RELATION_JOB_KIND,
-    CLAIM_JOB_KIND,
-];
-
 /// Queues the judge after a job that may have created items: nothing when the
 /// job did not complete or is not one of those, when the mode is manual, or
-/// when a judge is already waiting (it covers everything in one pass). Errors
-/// are swallowed: the screen's pass and the next trigger cover a missed one.
+/// when a judge is already waiting (it covers everything in one pass; the
+/// store checks that in the same statement that inserts). Whether one was
+/// queued is returned; a failure is for the caller to log, since the screen's
+/// pass and the next trigger cover a missed one.
 pub fn queue_review_after<S: JobRepository + ApprovalStore>(
     store: &S,
     kind: &str,
     state: JobState,
-) {
-    if state != JobState::Completed || !FEEDING_KINDS.contains(&kind) {
-        return;
+) -> Result<bool, ReviewError> {
+    if state != JobState::Completed || !JobKind::parse(kind).is_some_and(JobKind::feeds_review) {
+        return Ok(false);
     }
-    if !matches!(store.approval_mode(), Ok(Mode::Automatic)) {
-        return;
+    if store.approval_mode()? != Mode::Automatic {
+        return Ok(false);
     }
-    let waiting = JobRepository::counts(store).map_or(true, |counts| {
-        counts.iter().any(|(each, state, count)| {
-            each == REVIEW_JOB_KIND && *state == JobState::Queued && *count > 0
-        })
-    });
-    if waiting {
-        return;
-    }
-    let now = now_rfc3339();
-    let _ = JobRepository::insert(
-        store,
-        &JobRecord {
-            id: uuid::Uuid::now_v7().to_string(),
-            kind: REVIEW_JOB_KIND.to_string(),
-            payload: String::new(),
-            state: JobState::Queued,
-            idempotent: true,
-            attempts: 0,
-            last_error: None,
-            created_at: now.clone(),
-            updated_at: now,
-        },
-    );
+    JobRepository::insert_unless_queued(store, &JobRecord::queued(REVIEW_JOB_KIND, ""))
+        .map_err(|error| ReviewError::Storage(error.to_string()))
 }
 
 /// What the job queue runs for the judge job.
@@ -1873,14 +1862,22 @@ pub type ReviewHandler = Arc<dyn Fn(&JobRecord) -> Result<(), JobFailure> + Send
 
 /// The handler of the judge job: one pass over every project. A provider
 /// failure sends the job back to the queue after the pause that follows a
-/// failed call; any other error is left for the next trigger, so the
-/// interface never shows a failed job for it.
+/// failed call, and so does a pass that left items unasked because that pause
+/// was on, for the moment it ends. Any other error fails the job, to show in
+/// the diagnostics.
 pub fn review_job(api: Arc<dyn ApprovalsApi>) -> ReviewHandler {
     Arc::new(move |_| match api.run_all() {
+        Ok(RunReport {
+            deferred: Some(wait),
+            ..
+        }) => Err(JobFailure::Deferred {
+            retry_after: Some(wait),
+        }),
+        Ok(_) => Ok(()),
         Err(ReviewError::Provider(_)) => Err(JobFailure::Deferred {
             retry_after: Some(Duration::from_secs(FAILURE_PAUSE_MINUTES as u64 * 60)),
         }),
-        _ => Ok(()),
+        Err(_) => Err(JobFailure::Failed),
     })
 }
 
