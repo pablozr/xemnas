@@ -1,21 +1,27 @@
 //! Deterministic suggestions from captured work (ADR-0005): which components
 //! the decisions touched, which dependencies they added, which map entities
-//! their text names, and the `affects` / `uses` edges those imply. No AI, no
-//! reading of the repository.
+//! their text names, and the `affects` / `uses` edges those imply. No AI.
 //!
 //! Documentation files a decision touched are evidence, not the part it
 //! affects: they never yield `affects` nor a component proposal. A decision
 //! taken from an ADR reaches the parts it is about through the mentions in
-//! its text ([`super::mention`]).
+//! its text ([`super::mention`]) and through the files that text cites. A file
+//! counts only when it exists in the project folder (the listing of
+//! [`super::repo_files`]), so a path an ADR cites relative to a crate, or one
+//! that does not exist, never becomes a component.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use domain::entities::{
-    component_prefix, entity_key, pattern_matches, EdgeKind, EdgeOrigin, EntityKind, NodeKind,
+    component_prefix, entity_key, pattern_matches, EdgeActor, EdgeKind, EdgeOrigin, EntityKind,
+    NodeKind,
 };
 use domain::time::Timestamp;
 
-use super::mention::{entity_terms, mention_reason, Folded, Term};
+use super::ai_link::ai_link_quote;
+use super::mention::{dependency_term, entity_terms, mention_quote, mention_reason, Folded, Term};
+use super::repo_files::{counted_files, repo_files, RepoFiles};
 use super::{DecisionNode, EdgeRecord, EntityRecord, GraphError, GraphStore, KnowledgeGraph};
 use crate::claims::ClaimStore;
 use crate::clock::now_rfc3339;
@@ -57,6 +63,155 @@ pub struct SuggestionReport {
     pub components: Vec<ComponentProposal>,
     /// Technologies worth creating, most used first.
     pub technologies: Vec<TechnologyProposal>,
+    /// Links of the machine this refresh invalidated because the text they
+    /// rested on no longer supports them (see `revalidate`).
+    pub revalidated: usize,
+    /// Components whose folder is gone from the project; nothing is retired
+    /// by itself.
+    pub stale_components: Vec<super::StaleComponent>,
+}
+
+/// Prefix of the reason of a link derived from a dependency the decision's text
+/// cites, followed by `"name" (manifest)`.
+pub const DEPENDENCY_REASON: &str = "dependência citada: ";
+/// Prefix of the reason of a link derived from a symbol or a file name the
+/// text cites between backticks, followed by `` `name` (file) ``.
+pub const SYMBOL_REASON: &str = "símbolo citado: ";
+/// Appended to that reason when a second component declares the dependency
+/// too, so the rules do not accept it alone.
+pub const DEPENDENCY_SHARED_MARK: &str = "; também declarada por outro componente";
+/// Components that may declare a dependency for it to point at them; a
+/// dependency of more is shared plumbing, not a place.
+const MAX_OWNERS: usize = 2;
+/// Files that may define a symbol for it to point at a place; a name defined
+/// in more is shared plumbing.
+const MAX_DEFINING_FILES: usize = 8;
+
+impl<S> KnowledgeGraph<S> {
+    /// The dependencies the members declare, each with the live components
+    /// that declare it. Left out: a dependency that is a member of the
+    /// workspace, one a live component is already named after, and one that
+    /// more than [`MAX_OWNERS`] components declare.
+    pub(super) fn dependency_owners(
+        live: &[&EntityRecord],
+        declared: &[super::DeclaredComponent],
+    ) -> Vec<OwnedDependency> {
+        let taken: BTreeSet<String> = declared
+            .iter()
+            .map(|member| entity_key(&member.name))
+            .chain(
+                live.iter()
+                    .filter(|entity| entity.kind == EntityKind::Component)
+                    .flat_map(|entity| entity.keys()),
+            )
+            .collect();
+        let mut by_key: BTreeMap<String, OwnedDependency> = BTreeMap::new();
+        for member in declared {
+            let Some(component) = live.iter().find(|entity| {
+                entity.kind == EntityKind::Component && entity.patterns.contains(&member.pattern)
+            }) else {
+                continue;
+            };
+            for dependency in &member.dependencies {
+                let key = entity_key(dependency);
+                if taken.contains(&key) {
+                    continue;
+                }
+                let Some(term) = dependency_term(dependency) else {
+                    continue;
+                };
+                let entry = by_key.entry(key).or_insert_with(|| OwnedDependency {
+                    term,
+                    name: dependency.clone(),
+                    owners: Vec::new(),
+                });
+                if !entry
+                    .owners
+                    .iter()
+                    .any(|(id, _)| *id == component.entity_id)
+                {
+                    entry
+                        .owners
+                        .push((component.entity_id.clone(), member.manifest()));
+                }
+            }
+        }
+        by_key
+            .into_values()
+            .filter(|dependency| dependency.owners.len() <= MAX_OWNERS)
+            .collect()
+    }
+}
+
+/// What a decision cites between backticks and what it is looked up in.
+pub(super) struct Cited<'a> {
+    pub(super) words: &'a [String],
+    pub(super) components: &'a [&'a EntityRecord],
+    pub(super) reserved: &'a BTreeSet<String>,
+    pub(super) repo: &'a RepoFiles,
+    pub(super) root: &'a std::path::Path,
+}
+
+/// The one component that defines the symbol, or holds the file, `word` names,
+/// with the file that says so. A name defined in two components, in more than
+/// [`MAX_DEFINING_FILES`] files, or a file name that two files share, names
+/// no component.
+pub(super) fn symbol_owner(cited: &Cited<'_>, word: &str) -> Option<(String, String)> {
+    let files: Vec<String> = if word.contains('.') {
+        if !super::symbols::is_code_file(word) {
+            return None;
+        }
+        let files: Vec<&str> = cited.repo.named(word).collect();
+        match files.as_slice() {
+            [only] => vec![(*only).to_string()],
+            _ => return None,
+        }
+    } else if super::symbols::is_symbol(word) && !cited.reserved.contains(&entity_key(word)) {
+        let definitions = cited.repo.definitions(cited.root);
+        if definitions.partial() {
+            return None;
+        }
+        let positions = definitions.files_defining(word);
+        // A name defined all over the project is not a place.
+        if positions.len() > MAX_DEFINING_FILES {
+            return None;
+        }
+        positions
+            .iter()
+            .map(|position| cited.repo.file(*position).to_string())
+            .collect()
+    } else {
+        return None;
+    };
+    let first = files.first()?;
+    let mut places: BTreeSet<&str> = BTreeSet::new();
+    for file in &files {
+        places.extend(
+            cited
+                .components
+                .iter()
+                .filter(|entity| entity.kind == EntityKind::Component)
+                .filter(|entity| {
+                    entity
+                        .patterns
+                        .iter()
+                        .any(|pattern| pattern_matches(pattern, file))
+                })
+                .map(|entity| entity.entity_id.as_str()),
+        );
+        if places.len() > 1 {
+            return None;
+        }
+    }
+    let only = places.into_iter().next()?;
+    Some((only.to_string(), first.clone()))
+}
+
+/// A dependency the text may cite and the components that declare it.
+pub(super) struct OwnedDependency {
+    pub(super) term: Term,
+    pub(super) name: String,
+    pub(super) owners: Vec<(String, String)>,
 }
 
 /// Manifest keys that are not dependency names.
@@ -109,6 +264,27 @@ where
     std::sync::Arc::new(move |project_id: &str| {
         let _ = graph.prepare(project_id);
     })
+}
+
+/// The project use case as the app composes it: registering prepares the
+/// map. The app and the end-to-end runner both build it here so they cannot
+/// drift apart.
+pub fn prepared_projects<S>(store: S) -> crate::projects::Projects<S>
+where
+    S: GraphStore + RelationStore + ClaimStore + ProjectRepository + JobRepository,
+    S: Clone + Send + Sync + 'static,
+{
+    crate::projects::Projects::new(store.clone()).with_map_preparer(map_preparer(store))
+}
+
+/// The documentation use case as the app composes it: indexing prepares the
+/// map. Shared with the end-to-end runner (see [`prepared_projects`]).
+pub fn prepared_documents<S>(store: S) -> crate::documents::Documents<S>
+where
+    S: GraphStore + RelationStore + ClaimStore + ProjectRepository + JobRepository,
+    S: crate::documents::DocumentStore + Clone + Send + Sync + 'static,
+{
+    crate::documents::Documents::new(store.clone()).with_map_preparer(map_preparer(store))
 }
 
 /// Dependency names added by manifest hunks (`Cargo.toml`, `package.json`),
@@ -363,9 +539,15 @@ where
         let project =
             ProjectRepository::get(&self.store, project_id)?.ok_or(GraphError::ProjectNotFound)?;
         // Aliases first, so mentions below already use them.
-        self.merge_package_aliases(project_id)?;
+        let mut declared = super::declared_components(std::path::Path::new(&project.location));
+        let infrastructure =
+            super::infrastructure_components(std::path::Path::new(&project.location), &declared);
+        declared.extend(infrastructure);
+        self.merge_aliases(project_id, &declared)?;
+        let declared_all = declared.clone();
         let now = now_rfc3339();
         let at = Timestamp::parse(&now).ok_or(GraphError::Storage("relógio inválido".into()))?;
+        let project_keys = super::discover::project_keys(std::path::Path::new(&project.location));
         let entities = self.store.project_entities(project_id)?;
         let live: Vec<&EntityRecord> = entities
             .iter()
@@ -380,6 +562,10 @@ where
             .filter(|decision| super::query::decision_in_force(decision, &relations, &at))
             .collect();
 
+        let root = std::path::Path::new(&project.location);
+        // The listing of the project folder, read when a decision first has a
+        // file to check.
+        let mut listing: Option<Arc<Option<RepoFiles>>> = None;
         let mut report = SuggestionReport::default();
         let mut prefixes: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         let mut technologies: BTreeMap<String, (String, BTreeSet<String>)> = BTreeMap::new();
@@ -391,17 +577,40 @@ where
                     EntityKind::Component => EdgeKind::Affects,
                     EntityKind::Technology => EdgeKind::Uses,
                 };
-                let terms = entity_terms(entity);
+                let terms = entity_terms(entity, &project_keys);
                 (!terms.is_empty()).then_some((*entity, kind, terms))
             })
             .collect();
 
+        let claims = self
+            .store
+            .project_claims(project_id)
+            .map_err(|error| GraphError::Storage(error.to_string()))?;
+        report.revalidated =
+            self.revalidate(project_id, &mut edges, &decisions, &named, &claims)?;
+
+        let owned = Self::dependency_owners(&live, &declared);
+        // Names the text may use for something else: never read as a symbol.
+        let reserved: BTreeSet<String> = live
+            .iter()
+            .flat_map(|entity| entity.keys())
+            .chain(owned.iter().map(|dependency| entity_key(&dependency.name)))
+            .collect();
         for decision in &decisions {
-            for file in decision
+            let texts = decision_texts(decision);
+            let has_files = decision
                 .files
                 .iter()
-                .filter(|file| !is_documentation_path(file))
-            {
+                .any(|file| !is_documentation_path(file));
+            let repo =
+                has_files.then(|| Arc::clone(listing.get_or_insert_with(|| repo_files(root))));
+            let files = counted_files(
+                &decision.files,
+                decision.from_document,
+                &texts,
+                repo.as_deref().and_then(Option::as_ref),
+            );
+            for file in &files {
                 let components: Vec<&&EntityRecord> = live
                     .iter()
                     .filter(|entity| entity.kind == EntityKind::Component)
@@ -413,7 +622,10 @@ where
                     })
                     .collect();
                 if components.is_empty() {
-                    if let Some(prefix) = component_prefix(file) {
+                    // A folder that leaves the project is never a component.
+                    let prefix = component_prefix(file)
+                        .filter(|prefix| !prefix.split('/').any(|part| part == ".."));
+                    if let Some(prefix) = prefix {
                         prefixes
                             .entry(prefix)
                             .or_default()
@@ -463,7 +675,24 @@ where
                 }
             }
             report.new_edges +=
-                self.suggest_mentions(&mut edges, project_id, decision, &named, &now)?;
+                self.suggest_dependencies(&mut edges, project_id, decision, &texts, &owned, &now)?;
+            let words: Vec<String> = texts.iter().flat_map(Folded::code_words).collect();
+            if !words.is_empty() {
+                let repo = Arc::clone(listing.get_or_insert_with(|| repo_files(root)));
+                if let Some(repo) = repo.as_ref().as_ref().filter(|repo| !repo.partial()) {
+                    let cited = Cited {
+                        words: &words,
+                        components: &live,
+                        reserved: &reserved,
+                        repo,
+                        root,
+                    };
+                    report.new_edges +=
+                        self.suggest_symbols(&mut edges, project_id, decision, &cited, &now)?;
+                }
+            }
+            report.new_edges +=
+                self.suggest_mentions(&mut edges, project_id, decision, &texts, &named, &now)?;
         }
 
         // Decisions no file tied to the map ask the AI which components they
@@ -480,10 +709,6 @@ where
 
         // Rules adopted from Revisão apply to the components their evidence
         // touched: suggested, like any derived edge.
-        let claims = self
-            .store
-            .project_claims(project_id)
-            .map_err(|error| GraphError::Storage(error.to_string()))?;
         // Claims derived from a decision follow its confirmed component ties
         // (backfill for ties made before the claim or before this rule).
         let ties = Self::decision_ties(&edges);
@@ -491,6 +716,10 @@ where
         // Standing rules still without a component tie, and whose source
         // decision gives none, ask the AI which components they govern.
         crate::link_suggestions::queue_untied_claims(&self.store, &claims, &edges, components, &at);
+        let statements: BTreeMap<String, String> = claims
+            .iter()
+            .map(|claim| (claim.claim_id.clone(), claim.statement.clone()))
+            .collect();
         let valid_claims: BTreeSet<String> = claims
             .into_iter()
             .filter(|claim| claim.is_valid_at(&at))
@@ -500,11 +729,19 @@ where
             if !valid_claims.contains(&rule.claim_id) {
                 continue;
             }
-            for file in rule
-                .files
-                .iter()
-                .filter(|file| !is_documentation_path(file))
-            {
+            let has_files = rule.files.iter().any(|file| !is_documentation_path(file));
+            let repo =
+                has_files.then(|| Arc::clone(listing.get_or_insert_with(|| repo_files(root))));
+            let statement = [Folded::new(
+                statements.get(&rule.claim_id).map_or("", String::as_str),
+            )];
+            let files = counted_files(
+                &rule.files,
+                rule.from_document,
+                &statement,
+                repo.as_deref().and_then(Option::as_ref),
+            );
+            for file in &files {
                 for component in live.iter().filter(|entity| {
                     entity.kind == EntityKind::Component
                         && entity
@@ -564,25 +801,24 @@ where
             .collect();
         // Members the project declares come first: they are structure the
         // team wrote down, not a guess from a diff.
-        let declared: Vec<ComponentProposal> =
-            super::declared_components(std::path::Path::new(&project.location))
-                .into_iter()
-                .filter(|member| !claimed.contains(&member.pattern))
-                .filter(|member| {
-                    !known.contains(&(EntityKind::Component, entity_key(&member.name)))
-                })
-                .map(|member| ComponentProposal {
-                    decisions: report
-                        .components
-                        .iter()
-                        .find(|inferred| inferred.pattern == member.pattern)
-                        .map_or(0, |inferred| inferred.decisions),
-                    name: member.name,
-                    pattern: member.pattern,
-                    description: member.description,
-                    declared: Some(member.source),
-                })
-                .collect();
+        let declared: Vec<ComponentProposal> = declared
+            .iter()
+            .filter(|member| !claimed.contains(&member.pattern))
+            .filter(|member| !known.contains(&(EntityKind::Component, entity_key(&member.name))))
+            .map(|member| ComponentProposal {
+                decisions: report
+                    .components
+                    .iter()
+                    .find(|inferred| inferred.pattern == member.pattern)
+                    .map_or(0, |inferred| inferred.decisions),
+                name: member.name.clone(),
+                pattern: member.pattern.clone(),
+                description: member.description.clone(),
+                // Root files and CI are not a workspace member: no manifest
+                // declares them.
+                declared: member.infra.is_none().then_some(member.source),
+            })
+            .collect();
         report.components.retain(|inferred| {
             !declared
                 .iter()
@@ -595,6 +831,36 @@ where
                 .then(left.name.cmp(&right.name))
         });
         report.components.splice(0..0, declared);
+        // Phantoms: a component nobody declared whose folder is gone.
+        let declared_patterns: BTreeSet<String> = declared_all
+            .iter()
+            .flat_map(|member| {
+                std::iter::once(member.pattern.clone()).chain(member.more_patterns.clone())
+            })
+            .collect();
+        let candidates = live.iter().any(|entity| {
+            entity.kind == EntityKind::Component
+                && !entity
+                    .patterns
+                    .iter()
+                    .any(|p| declared_patterns.contains(p))
+                && entity
+                    .patterns
+                    .iter()
+                    .any(|p| !p.contains(['*', '?']) || p.ends_with("/**"))
+        });
+        if candidates {
+            let repo = Arc::clone(listing.get_or_insert_with(|| repo_files(root)));
+            if let Some(repo) = repo.as_ref().as_ref() {
+                report.stale_components = super::revalidate::stale_components(
+                    &live,
+                    &declared_patterns,
+                    &edges,
+                    &decisions,
+                    repo,
+                );
+            }
+        }
         report.technologies = technologies
             .into_iter()
             .filter(|(key, _)| !known.contains(&(EntityKind::Technology, key.clone())))
@@ -612,6 +878,81 @@ where
         Ok(report)
     }
 
+    /// Ties the decision to the component that declares a dependency its text
+    /// cites (not to exclude it). With a second declaring component the
+    /// reason says so.
+    fn suggest_dependencies(
+        &self,
+        edges: &mut Vec<EdgeRecord>,
+        project_id: &str,
+        decision: &DecisionNode,
+        texts: &[Folded],
+        owned: &[OwnedDependency],
+        now: &str,
+    ) -> Result<usize, GraphError> {
+        let source = (NodeKind::Decision, decision.decision_id.as_str());
+        let mut written = 0;
+        for dependency in owned {
+            if !texts
+                .iter()
+                .any(|text| text.mention(&dependency.term).is_some())
+            {
+                continue;
+            }
+            let shared = if dependency.owners.len() > 1 {
+                DEPENDENCY_SHARED_MARK
+            } else {
+                ""
+            };
+            for (entity_id, manifest) in &dependency.owners {
+                let reason = format!(
+                    "{DEPENDENCY_REASON}\"{}\" ({manifest}{shared})",
+                    dependency.name
+                );
+                written += self.suggest(
+                    edges,
+                    project_id,
+                    EdgeKind::Affects,
+                    source,
+                    entity_id,
+                    &reason,
+                    now,
+                )?;
+            }
+        }
+        Ok(written)
+    }
+
+    /// Ties the decision to the component that defines a symbol, or holds a
+    /// file, its text cites between backticks. A name defined in two
+    /// components, or a file name that two files share, ties to nothing.
+    fn suggest_symbols(
+        &self,
+        edges: &mut Vec<EdgeRecord>,
+        project_id: &str,
+        decision: &DecisionNode,
+        cited: &Cited<'_>,
+        now: &str,
+    ) -> Result<usize, GraphError> {
+        let source = (NodeKind::Decision, decision.decision_id.as_str());
+        let mut written = 0;
+        for word in cited.words {
+            if let Some((entity_id, file)) = symbol_owner(cited, word) {
+                let reason = format!("{SYMBOL_REASON}`{word}` ({file})");
+                written += self.suggest(
+                    edges,
+                    project_id,
+                    EdgeKind::Affects,
+                    source,
+                    &entity_id,
+                    &reason,
+                    now,
+                )?;
+            }
+        }
+        Ok(written)
+    }
+
     /// Suggests the entities the decision's text names (question, choice,
     /// rationale, assumptions, scope, consequences), with the quote as the
     /// reason. An entity already tied to the decision is not searched for.
@@ -620,17 +961,13 @@ where
         edges: &mut Vec<EdgeRecord>,
         project_id: &str,
         decision: &DecisionNode,
+        texts: &[Folded],
         named: &[(&EntityRecord, EdgeKind, Vec<Term>)],
         now: &str,
     ) -> Result<usize, GraphError> {
         if named.is_empty() {
             return Ok(0);
         }
-        let texts: Vec<Folded> = [&decision.question, &decision.choice, &decision.rationale]
-            .into_iter()
-            .chain(&decision.context)
-            .map(|text| Folded::new(text))
-            .collect();
         let source = (NodeKind::Decision, decision.decision_id.as_str());
         let mut written = 0;
         for (entity, kind, terms) in named {
@@ -670,7 +1007,7 @@ where
         now: &str,
     ) -> Result<usize, GraphError> {
         let (source_kind, source_id) = source;
-        if edge_exists(edges, kind, source, entity_id) {
+        if blocked(edges, kind, source, entity_id, reason) {
             return Ok(0);
         }
         let record = EdgeRecord {
@@ -685,12 +1022,59 @@ where
             created_at: now.to_string(),
             confirmed_at: None,
             invalidated_at: None,
+            confirmed_by: None,
+            invalidated_by: None,
         };
         self.store.insert_edge(&record)?;
         // Later files of the same decision see it and do not repeat it.
         edges.push(record);
         Ok(1)
     }
+}
+
+/// Whether a row already stops a derivation from writing the edge again.
+/// Any live row does (pending or confirmed). An invalidated one does too,
+/// except when the evidence is a structural one (a file, a dependency or a
+/// symbol, not a mention nor the AI's guess) that differs from the reason
+/// the machine invalidated it for: a link the AI or the rules discarded on a
+/// weak reason comes back on a strong one. One a person invalidated, or whose
+/// author is unknown, never comes back.
+fn blocked(
+    edges: &[EdgeRecord],
+    kind: EdgeKind,
+    source: (NodeKind, &str),
+    entity_id: &str,
+    reason: &str,
+) -> bool {
+    let structural = mention_quote(reason).is_none() && ai_link_quote(reason).is_none();
+    edges
+        .iter()
+        .filter(|edge| {
+            edge.kind == kind
+                && edge.source_kind == source.0
+                && edge.source_id == source.1
+                && edge.entity_id == entity_id
+        })
+        .any(|edge| {
+            if edge.is_live() {
+                return true;
+            }
+            let revisable = matches!(
+                edge.invalidated_by,
+                Some(EdgeActor::Rules | EdgeActor::Ai | EdgeActor::Inherited)
+            );
+            !(structural && revisable && edge.reason != reason)
+        })
+}
+
+/// The text of a decision, ready to be searched: question, choice, rationale,
+/// assumptions, scope and consequences.
+pub(super) fn decision_texts(decision: &DecisionNode) -> Vec<Folded> {
+    [&decision.question, &decision.choice, &decision.rationale]
+        .into_iter()
+        .chain(&decision.context)
+        .map(|text| Folded::new(text))
+        .collect()
 }
 
 /// Whether any row (pending, confirmed or rejected) ties `source` to the

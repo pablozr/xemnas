@@ -14,7 +14,7 @@
 //! (manual or automatic) confirms or discards. Similarity of vocabulary never
 //! creates a link, and a rejected or existing edge is never suggested again.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use domain::claims::ClaimKind;
 use domain::entities::{EdgeKind, EdgeOrigin, EntityKind, NodeKind};
@@ -32,6 +32,7 @@ use crate::graph::{
 use crate::jobs::{JobRecord, JobRepository, JobState};
 use crate::overview::StructuredModel;
 use crate::profile::{choose_extractor, AiSettings, ExtractorChoice, ProfileStore, SecretStore};
+use crate::projects::ProjectRepository;
 
 /// Job kind that proposes the components an adopted decision applies to.
 pub const LINK_JOB_KIND: &str = crate::jobs::JobKind::SuggestLinks.as_str();
@@ -50,22 +51,26 @@ const MAX_LISTED: usize = 6;
 
 /// System prompt of the link proposer.
 pub const LINK_PROMPT: &str = concat!(
-    "You connect one engineering decision of a software project to the parts of the project \
-map it governs. The map lists components; each has an id, a name, aliases, path patterns and \
-a description. Link the decision to a component only when the decision governs or constrains \
+    "You connect each of several engineering decisions of a software project, numbered in the \
+message, to the parts of the project map it governs. The map lists components; each has an \
+id, a name, aliases, path patterns and a description. Link the decision to a component only \
+when the decision governs or constrains \
 that component's behavior or code: a rule, contract, policy, format or limit that the \
 component must follow or implements. Never link by shared vocabulary alone: a decision that \
 only mentions a word, a tool or a topic that a component also uses is not about that \
 component. Decisions about the project rather than the code are not links even when they \
 name a component: who owns or approves changes, how things are named, published, packaged, \
-hosted or announced, and which words to use. Ask: would the component's code or behavior be \
+hosted or announced, and which words to use. A component named like the project (marked \
+\"same name as the project\" in the list) is linked only when the decision is about that \
+component's own code, not about the product as a whole. Ask: would the component's code or behavior be \
 different if this decision were different? If not, do not link. Prefer no link over a weak \
 one; an empty list is a good answer when you are not sure. Give at most 3 links.\n\
 For each link give component_id exactly as listed (c1, c2, ...); quote: the words of the \
 decision, copied verbatim from its question, choice, why or scope, that tie it to the \
 component; and reason: one short sentence, in the language of the decision.\n\
-Reply with one JSON object only, matching exactly: {\"links\":[{\"component_id\":string,\
-\"quote\":string,\"reason\":string}]}.",
+Reply with one JSON object only, matching exactly: {\"decisions\":[{\"id\":string,\
+\"links\":[{\"component_id\":string,\"quote\":string,\"reason\":string}]}]}, one entry per \
+decision, id being its number.",
     crate::plain_rules!()
 );
 
@@ -74,18 +79,29 @@ pub fn link_schema() -> serde_json::Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["links"],
+        "required": ["decisions"],
         "properties": {
-            "links": {
+            "decisions": {
                 "type": "array",
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["component_id", "quote", "reason"],
+                    "required": ["id", "links"],
                     "properties": {
-                        "component_id": { "type": "string" },
-                        "quote": { "type": "string" },
-                        "reason": { "type": "string" }
+                        "id": { "type": "string" },
+                        "links": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["component_id", "quote", "reason"],
+                                "properties": {
+                                    "component_id": { "type": "string" },
+                                    "quote": { "type": "string" },
+                                    "reason": { "type": "string" }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -167,23 +183,39 @@ pub fn candidate_components(entities: &[EntityRecord]) -> Vec<&EntityRecord> {
     components
 }
 
-/// The user message: the decision, then the components numbered `c1`, `c2`...
-pub fn link_request(subject: &LinkSubject, components: &[&EntityRecord]) -> String {
-    let mut user = String::from("## Decision\n");
-    // A claim has only a statement: its empty fields are left out.
-    if !subject.question.is_empty() {
-        user.push_str(&format!("Question: {}\n", subject.question));
+/// The user message: the decisions numbered from 1, then the components
+/// numbered `c1`, `c2`..., listed once for all of them.
+///
+/// `project_keys` are the keys of the project's own names: a component whose
+/// name is one of them is marked, because a decision that names the product
+/// is not about that component.
+pub fn link_request(
+    subjects: &[&LinkSubject],
+    components: &[&EntityRecord],
+    project_keys: &std::collections::BTreeSet<String>,
+) -> String {
+    let mut user = String::new();
+    for (position, subject) in subjects.iter().enumerate() {
+        user.push_str(&format!("## Decision {}\n", position + 1));
+        // A claim has only a statement: its empty fields are left out.
+        if !subject.question.is_empty() {
+            user.push_str(&format!("Question: {}\n", subject.question));
+        }
+        user.push_str(&format!("Choice: {}\n", subject.choice));
+        if !subject.rationale.is_empty() {
+            user.push_str(&format!("Why: {}\n", subject.rationale));
+        }
+        for item in &subject.scope {
+            user.push_str(&format!("Scope: {item}\n"));
+        }
+        user.push('\n');
     }
-    user.push_str(&format!("Choice: {}\n", subject.choice));
-    if !subject.rationale.is_empty() {
-        user.push_str(&format!("Why: {}\n", subject.rationale));
-    }
-    for item in &subject.scope {
-        user.push_str(&format!("Scope: {item}\n"));
-    }
-    user.push_str("\n## Components\n");
+    user.push_str("## Components\n");
     for (position, component) in components.iter().enumerate() {
         user.push_str(&format!("- c{} | {}", position + 1, component.name));
+        if component.keys().any(|key| project_keys.contains(&key)) {
+            user.push_str(" | same name as the project");
+        }
         let aliases: Vec<&str> = component
             .aliases
             .iter()
@@ -241,9 +273,10 @@ fn normalized(text: &str) -> String {
         .join(" ")
 }
 
-/// Links from the answer that name a sent component and quote the decision
-/// verbatim (case and accents aside), once per component, at most
-/// [`MAX_LINKS`]. Anything else is dropped; an unreadable answer gives none.
+/// Links from one decision's answer `{"links":[...]}` that name a sent
+/// component and quote the decision verbatim (case and accents aside), once
+/// per component, at most [`MAX_LINKS`]. Anything else is dropped; an
+/// unreadable answer gives none.
 pub fn parse_links(
     answer: &str,
     subject: &LinkSubject,
@@ -252,11 +285,40 @@ pub fn parse_links(
     let Ok(answer) = serde_json::from_str::<Answer>(answer.trim()) else {
         return Vec::new();
     };
+    validated(answer.links, subject, components)
+}
+
+/// Links per decision, in order, from a batched answer. A decision the model
+/// skipped or answered unreadably gets none; each one is checked against its
+/// own text only.
+pub fn parse_links_batch(
+    answer: &str,
+    subjects: &[&LinkSubject],
+    components: &[&EntityRecord],
+) -> Vec<Vec<AiLink>> {
+    let entries = crate::batching::answers::<Answer>(answer, subjects.len())
+        .unwrap_or_else(|| subjects.iter().map(|_| None).collect());
+    subjects
+        .iter()
+        .zip(entries)
+        .map(|(subject, entry)| {
+            entry.map_or_else(Vec::new, |entry| {
+                validated(entry.links, subject, components)
+            })
+        })
+        .collect()
+}
+
+fn validated(
+    links: Vec<RawLink>,
+    subject: &LinkSubject,
+    components: &[&EntityRecord],
+) -> Vec<AiLink> {
     let texts: Vec<String> = subject.texts().map(normalized).collect();
     let mut seen = BTreeSet::new();
-    let mut links = Vec::new();
-    for raw in answer.links {
-        if links.len() >= MAX_LINKS {
+    let mut kept = Vec::new();
+    for raw in links {
+        if kept.len() >= MAX_LINKS {
             break;
         }
         let id = raw.component_id.trim().to_lowercase();
@@ -276,14 +338,14 @@ pub fn parse_links(
             continue;
         }
         if seen.insert(component.entity_id.clone()) {
-            links.push(AiLink {
+            kept.push(AiLink {
                 entity_id: component.entity_id.clone(),
                 quote: quote.to_string(),
                 reason: raw.reason.trim().to_string(),
             });
         }
     }
-    links
+    kept
 }
 
 /// Whether the decision still needs the AI's help to reach the map: it has
@@ -480,7 +542,7 @@ pub struct LinkFinder<S, P, K, F> {
 
 impl<S, P, K, F> LinkFinder<S, P, K, F>
 where
-    S: DecisionStore + GraphStore + ClaimStore,
+    S: DecisionStore + GraphStore + ClaimStore + ProjectRepository,
     P: ProfileStore,
     K: SecretStore,
     F: ExtractorFactory,
@@ -495,49 +557,58 @@ where
         }
     }
 
-    /// The decision or the claim of the job, with its project's edges, when
-    /// it still needs links.
-    fn target(&self, id: &str) -> Result<Option<(Target, Vec<EdgeRecord>)>, LinkFindError> {
+    /// The project's edges, read once per project and kept in `cache` for the
+    /// whole batch.
+    fn cached_edges<'c>(
+        &self,
+        cache: &'c mut BTreeMap<String, Vec<EdgeRecord>>,
+        project_id: &str,
+    ) -> Result<&'c mut Vec<EdgeRecord>, LinkFindError> {
+        if !cache.contains_key(project_id) {
+            let edges = self.store.project_edges(project_id).map_err(storage)?;
+            cache.insert(project_id.to_string(), edges);
+        }
+        Ok(cache.entry(project_id.to_string()).or_default())
+    }
+
+    /// The decision or the claim of the job, when it still needs links.
+    fn target(
+        &self,
+        id: &str,
+        cache: &mut BTreeMap<String, Vec<EdgeRecord>>,
+    ) -> Result<Option<Target>, LinkFindError> {
         if let Some(decision) = DecisionStore::get(&self.store, id).map_err(storage)? {
             if decision.status != DecisionStatus::Accepted {
                 return Ok(None);
             }
-            let edges = self
-                .store
-                .project_edges(&decision.project_id)
-                .map_err(storage)?;
-            if !needs_links(&edges, id) {
+            let edges = self.cached_edges(cache, &decision.project_id)?;
+            if !needs_links(edges, id) {
                 return Ok(None);
             }
-            let target = Target {
+            return Ok(Some(Target {
                 subject: LinkSubject::of(&decision),
                 project_id: decision.project_id,
                 source_kind: NodeKind::Decision,
                 source_id: decision.decision_id,
                 edge_kind: EdgeKind::Affects,
-            };
-            return Ok(Some((target, edges)));
+            }));
         }
         let Some(claim) = ClaimStore::get_claim(&self.store, id).map_err(storage)? else {
             return Ok(None);
         };
-        let edges = self
-            .store
-            .project_edges(&claim.project_id)
-            .map_err(storage)?;
+        let edges = self.cached_edges(cache, &claim.project_id)?;
         let standing = Timestamp::parse(&now_rfc3339())
-            .is_some_and(|at| claim_needs_links(&edges, &claim, &at));
+            .is_some_and(|at| claim_needs_links(edges, &claim, &at));
         if !standing {
             return Ok(None);
         }
-        let target = Target {
+        Ok(Some(Target {
             subject: LinkSubject::of_claim(&claim),
             project_id: claim.project_id,
             source_kind: NodeKind::Claim,
             source_id: claim.claim_id,
             edge_kind: EdgeKind::AppliesTo,
-        };
-        Ok(Some((target, edges)))
+        }))
     }
 
     /// Asks the model about the decision or rule and stores what survives the
@@ -548,33 +619,94 @@ where
     ///
     /// `storage`, or `provider` when the call fails.
     pub fn run(&self, id: &str) -> Result<usize, LinkFindError> {
-        let Some((target, mut edges)) = self.target(id)? else {
-            return Ok(0);
-        };
+        self.run_many(&[id]).pop().unwrap_or(Ok(0))
+    }
+
+    /// Like [`LinkFinder::run`] for several decisions or rules at once: those
+    /// of a project share one provider call (up to
+    /// [`crate::batching::BATCH_SIZE`] per call). The answer holds, per item,
+    /// what it stored; a failed call fails every item of its group, never the
+    /// others.
+    pub fn run_many(&self, ids: &[&str]) -> Vec<Result<usize, LinkFindError>> {
+        let mut results: Vec<Result<usize, LinkFindError>> = ids.iter().map(|_| Ok(0)).collect();
+        let mut cache = BTreeMap::new();
+        let mut targets: Vec<Option<Target>> = Vec::with_capacity(ids.len());
+        for (index, id) in ids.iter().enumerate() {
+            match self.target(id, &mut cache) {
+                Ok(target) => targets.push(target),
+                Err(error) => {
+                    results[index] = Err(error);
+                    targets.push(None);
+                }
+            }
+        }
+        let live: Vec<(usize, &str)> = targets
+            .iter()
+            .enumerate()
+            .filter_map(|(index, target)| Some((index, target.as_ref()?.project_id.as_str())))
+            .collect();
+        for group in crate::batching::project_groups(&live) {
+            let group_targets: Vec<&Target> = group
+                .iter()
+                .filter_map(|index| targets[*index].as_ref())
+                .collect();
+            let outcome = match self.cached_edges(&mut cache, &group_targets[0].project_id) {
+                Ok(edges) => self.run_group(&group_targets, edges),
+                Err(error) => Err(error),
+            };
+            match outcome {
+                Ok(stored) => {
+                    for (index, stored) in group.iter().zip(stored) {
+                        results[*index] = Ok(stored);
+                    }
+                }
+                Err(error) => {
+                    for index in &group {
+                        results[*index] = Err(error.clone());
+                    }
+                }
+            }
+        }
+        results
+    }
+
+    /// One provider call for targets of one project; what each stored. New
+    /// edges are added to `edges` so later targets see them.
+    fn run_group(
+        &self,
+        targets: &[&Target],
+        edges: &mut Vec<EdgeRecord>,
+    ) -> Result<Vec<usize>, LinkFindError> {
+        let nothing = Ok(vec![0; targets.len()]);
         let entities = self
             .store
-            .project_entities(&target.project_id)
+            .project_entities(&targets[0].project_id)
             .map_err(storage)?;
         let components = candidate_components(&entities);
         if components.is_empty() {
-            return Ok(0);
+            return nothing;
         }
         let profile = self.settings.load_or_seed().map_err(storage)?;
         if choose_extractor(Some(&profile)) != ExtractorChoice::ExternalEnabled {
-            return Ok(0);
+            return nothing;
         }
         let secret = match self.settings.secret(&profile.credential_account()) {
             Ok(Some(secret)) => secret,
             Ok(None) if !profile.credential_required() => String::new(),
-            _ => return Ok(0),
+            _ => return nothing,
         };
         let Ok(model) = self.factory.authorized(&profile, secret, &self.settings) else {
-            return Ok(0);
+            return nothing;
         };
+        let subjects: Vec<&LinkSubject> = targets.iter().map(|target| &target.subject).collect();
+        let project_keys = ProjectRepository::get(&self.store, &targets[0].project_id)
+            .map_err(|error| LinkFindError::Storage(error.to_string()))?
+            .map(|project| crate::graph::project_keys(std::path::Path::new(&project.location)))
+            .unwrap_or_default();
         let answer = model
             .complete(
                 LINK_PROMPT,
-                &link_request(&target.subject, &components),
+                &link_request(&subjects, &components, &project_keys),
                 "decision_links",
                 &link_schema(),
             )
@@ -585,34 +717,44 @@ where
                 crate::jobs::JobFailure::Failed => LinkFindError::Provider(error.to_string()),
             })?;
         let now = now_rfc3339();
-        let mut stored = 0;
-        for link in parse_links(&answer, &target.subject, &components) {
-            // Any row for the same edge blocks it: pending, confirmed or
-            // invalidated by a person.
-            if edges.iter().any(|edge| {
-                edge.kind == target.edge_kind
-                    && edge.source_kind == target.source_kind
-                    && edge.source_id == target.source_id
-                    && edge.entity_id == link.entity_id
-            }) {
-                continue;
+        let mut stored = Vec::with_capacity(targets.len());
+        for (target, links) in
+            targets
+                .iter()
+                .zip(parse_links_batch(&answer, &subjects, &components))
+        {
+            let mut count = 0;
+            for link in links {
+                // Any row for the same edge blocks it: pending, confirmed or
+                // invalidated by a person.
+                if edges.iter().any(|edge| {
+                    edge.kind == target.edge_kind
+                        && edge.source_kind == target.source_kind
+                        && edge.source_id == target.source_id
+                        && edge.entity_id == link.entity_id
+                }) {
+                    continue;
+                }
+                let record = EdgeRecord {
+                    edge_id: uuid::Uuid::now_v7().to_string(),
+                    project_id: target.project_id.clone(),
+                    kind: target.edge_kind,
+                    source_kind: target.source_kind,
+                    source_id: target.source_id.clone(),
+                    entity_id: link.entity_id,
+                    origin: EdgeOrigin::Derived,
+                    reason: ai_link_reason(&link.quote, &link.reason),
+                    created_at: now.clone(),
+                    confirmed_at: None,
+                    invalidated_at: None,
+                    confirmed_by: None,
+                    invalidated_by: None,
+                };
+                self.store.insert_edge(&record).map_err(storage)?;
+                edges.push(record);
+                count += 1;
             }
-            let record = EdgeRecord {
-                edge_id: uuid::Uuid::now_v7().to_string(),
-                project_id: target.project_id.clone(),
-                kind: target.edge_kind,
-                source_kind: target.source_kind,
-                source_id: target.source_id.clone(),
-                entity_id: link.entity_id,
-                origin: EdgeOrigin::Derived,
-                reason: ai_link_reason(&link.quote, &link.reason),
-                created_at: now.clone(),
-                confirmed_at: None,
-                invalidated_at: None,
-            };
-            self.store.insert_edge(&record).map_err(storage)?;
-            edges.push(record);
-            stored += 1;
+            stored.push(count);
         }
         Ok(stored)
     }
@@ -668,6 +810,33 @@ mod tests {
     }
 
     #[test]
+    fn a_batched_answer_is_checked_per_decision_and_a_bad_entry_loses_only_itself() {
+        let (core, plugin) = (component("e-core", "core"), component("e-plugin", "plugin"));
+        let components = [&core, &plugin];
+        let (first, mut second) = (subject(), subject());
+        second.choice = "Toda mensagem é assinada antes de sair.".into();
+        let third = subject();
+        let answer = r#"{"decisions":[
+            {"id":"1","links":[{"component_id":"c1",
+              "quote":"O núcleo devolve sempre um desfecho explícito","reason":"r"}]},
+            {"id":"2","links":"not a list"},
+            {"id":"3","links":[
+              {"component_id":"c2","quote":"nenhum texto diz isto","reason":"inventada"},
+              {"component_id":"c2","quote":"Toda mensagem é assinada antes de sair",
+               "reason":"citação de outra decisão"}]}
+        ]}"#;
+        let parsed = parse_links_batch(answer, &[&first, &second, &third], &components);
+        assert_eq!(parsed.len(), 3);
+        assert_eq!(parsed[0][0].entity_id, "e-core");
+        assert!(parsed[1].is_empty(), "malformed entry");
+        assert!(
+            parsed[2].is_empty(),
+            "a quote of another decision does not count"
+        );
+        assert!(parse_links_batch("not json", &[&first], &components)[0].is_empty());
+    }
+
+    #[test]
     fn at_most_three_links_are_kept() {
         let all: Vec<EntityRecord> = (0..5)
             .map(|n| component(&format!("e{n}"), &format!("part{n}")))
@@ -689,13 +858,26 @@ mod tests {
         let mut core = component("e-core-secret-id", "core");
         core.aliases = vec!["núcleo".into()];
         core.description = "Regras\ndo núcleo".into();
-        let request = link_request(&subject(), &[&core]);
-        assert!(request.contains("Question: Como o veredito"));
+        let request = link_request(&[&subject()], &[&core], &BTreeSet::new());
+        assert!(request.contains("## Decision 1\nQuestion: Como o veredito"));
         assert!(request.contains("Scope: Política de desfecho V0.1"));
         assert!(request.contains(
             "- c1 | core | aliases: núcleo | paths: packages/core/** | Regras do núcleo"
         ));
         assert!(!request.contains("e-core-secret-id"));
+    }
+
+    #[test]
+    fn a_component_named_like_the_project_is_marked_and_the_prompt_says_how_to_treat_it() {
+        let app = component("e-app", "acme");
+        let other = component("e-other", "store");
+        let keys = BTreeSet::from(["acme".to_string()]);
+        let request = link_request(&[&subject()], &[&app, &other], &keys);
+        assert!(request.contains("- c1 | acme | same name as the project"));
+        assert!(request.contains("- c2 | store | paths:"));
+        assert!(!request.contains("store | same name"));
+        assert!(LINK_PROMPT.contains("named like the project"));
+        assert!(LINK_PROMPT.contains("not about the product as a whole"));
     }
 
     #[test]
@@ -722,7 +904,7 @@ mod tests {
         .to_string();
         let started = std::time::Instant::now();
         for _ in 0..200 {
-            let _ = link_request(&subject(), &components);
+            let _ = link_request(&[&subject()], &components, &BTreeSet::new());
             assert_eq!(parse_links(&answer, &subject(), &components).len(), 1);
         }
         let per_run = started.elapsed() / 200;
@@ -743,6 +925,8 @@ mod tests {
             created_at: "2026-01-01T00:00:00Z".into(),
             confirmed_at: None,
             invalidated_at: (!live).then(|| "2026-01-02T00:00:00Z".into()),
+            confirmed_by: None,
+            invalidated_by: None,
         }
     }
 
@@ -751,6 +935,14 @@ mod tests {
         assert!(needs_links(&[], "d"));
         assert!(!needs_links(&[edge("crates/core/src/lib.rs", true)], "d"));
         assert!(!needs_links(&[edge("", true)], "d"), "a human tie");
+        let cited = format!(
+            "{}\"iroh\" (crates/net/Cargo.toml)",
+            crate::graph::DEPENDENCY_REASON
+        );
+        assert!(
+            !needs_links(&[edge(&cited, true)], "d"),
+            "a cited dependency is a structural tie"
+        );
         assert!(needs_links(&[edge("crates/core/src/lib.rs", false)], "d"));
         let mention = crate::graph::mention_reason("o core");
         assert!(needs_links(&[edge(&mention, true)], "d"));

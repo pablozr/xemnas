@@ -27,10 +27,13 @@ use crate::profile::{choose_extractor, AiSettings, ExtractorChoice, ProfileStore
 
 /// Job kind that writes the search terms of a project's decisions.
 pub const SEARCH_TERMS_JOB_KIND: &str = crate::jobs::JobKind::DeriveSearchTerms.as_str();
+/// Queued term jobs that run together as one: they are the same work.
+pub const MAX_COALESCED_JOBS: usize = 100;
 /// Terms kept per decision, at most.
 pub const MAX_TERMS: usize = 8;
-/// Decisions sent in one call.
-pub const BATCH: usize = 12;
+/// Decisions sent in one call: the same batch size as the other job kinds.
+/// This kind was already batched: its job is per project, not per decision.
+pub const BATCH: usize = crate::batching::BATCH_SIZE;
 /// Longest term accepted, in characters.
 const MAX_TERM_CHARS: usize = 40;
 /// Most words in one term.
@@ -251,6 +254,25 @@ where
             settings,
             factory,
         }
+    }
+
+    /// Runs [`SearchTermFinder::run`] once for each distinct project of
+    /// `project_ids`, one result per entry: the queued jobs of a project (one
+    /// per adoption) are the same work, so they share one run.
+    pub fn run_projects(&self, project_ids: &[&str]) -> Vec<Result<usize, SearchTermError>> {
+        let mut done: Vec<(&str, Result<usize, SearchTermError>)> = Vec::new();
+        project_ids
+            .iter()
+            .map(|project| {
+                if let Some((_, result)) = done.iter().find(|(known, _)| known == project) {
+                    // The run already took every decision it could.
+                    return result.clone().map(|_| 0);
+                }
+                let result = self.run(project);
+                done.push((project, result.clone()));
+                result
+            })
+            .collect()
     }
 
     /// Writes terms for up to [`BATCH`] decisions of the project and queues

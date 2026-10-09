@@ -143,6 +143,41 @@ impl EdgeOrigin {
     }
 }
 
+/// Who confirmed or invalidated an edge. An edge a person confirmed is never
+/// touched by a derivation; the others are the machine's guesses and can be
+/// revised when the evidence changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum EdgeActor {
+    /// A person, in the app or through a use case they triggered.
+    Person,
+    /// The automatic review's free rules.
+    Rules,
+    /// The automatic review's AI judge.
+    Ai,
+    /// The map itself: a rule that follows the tie of its source decision.
+    Inherited,
+}
+
+impl EdgeActor {
+    /// Every actor, in a stable order.
+    pub const ALL: [Self; 4] = [Self::Person, Self::Rules, Self::Ai, Self::Inherited];
+
+    /// Persisted literal.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Person => "person",
+            Self::Rules => "rules",
+            Self::Ai => "ai",
+            Self::Inherited => "inherited",
+        }
+    }
+
+    /// Parses a persisted literal.
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|actor| actor.as_str() == value)
+    }
+}
+
 /// Why an entity, pattern or edge is not acceptable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntityError {

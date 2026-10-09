@@ -36,6 +36,12 @@ pub const GLOBAL_SCOPE: &str = "*";
 /// project with many cannot crowd out what the task touches.
 pub const MAX_GLOBAL_RULES: usize = 3;
 
+/// Most rules tied to a touched component (not matched by the task, not
+/// global) that ride along in one pack. A component with more tied rules than
+/// this carries rules of many topics: only those sharing enough concepts with
+/// the task enter, best first; a small component keeps all of its rules.
+pub const MAX_TIED_RULES: usize = 3;
+
 /// Ranked candidates fetched per source before selection.
 pub const MAX_RANKED: usize = 50;
 
@@ -321,9 +327,14 @@ where
             .ok_or(ContextError::ProjectNotFound)?;
 
         let relations = self.store.project_relations(&request.project_id)?;
-        let (by_file_decisions, by_file_claims) = KnowledgeGraph::new(self.store.clone())
-            .context_for_files(&request.project_id, &files, Some(as_of.as_str()))
+        // One load of the project's graph serves the whole pack: files, scope
+        // and claims.
+        let graph = KnowledgeGraph::new(self.store.clone())
+            .pack_graph(&request.project_id, &task, &files, as_of.as_str())
             .map_err(graph_error)?;
+        let by_file_decisions = graph.decisions;
+        let scopes = graph.scopes;
+        let claims = graph.all_claims;
         // Plurals and English/Portuguese pairs meet (`crate::terms`), so a
         // task in one language finds what was decided in the other.
         let task_words = TaskTerms::new(&meaningful_words(&task));
@@ -363,22 +374,10 @@ where
         let by_file_decisions = focus_on_task(by_file_decisions, &task_words, |id| {
             decision_texts.get(id).cloned().unwrap_or_default()
         });
-        let claim_texts: BTreeMap<String, String> = self
-            .store
-            .project_claims(&request.project_id)?
-            .into_iter()
-            .map(|claim| (claim.claim_id, claim.statement))
-            .collect();
-        let by_file_claims = focus_on_task(by_file_claims, &task_words, |id| {
-            claim_texts.get(id).cloned().unwrap_or_default()
-        });
         let linked_decisions: BTreeSet<String> = by_file_decisions.iter().cloned().collect();
-        let linked_claims: BTreeSet<String> = by_file_claims.iter().cloned().collect();
         let ranked_decisions = first_unique(by_file_decisions, lexical_decisions);
-        let ranked_claims = first_unique(by_file_claims, lexical_claims);
 
         let mut selection = Selection::new(budget);
-        let claims = self.store.project_claims(&request.project_id)?;
         let valid: BTreeMap<&str, &ClaimRecord> = claims
             .iter()
             .filter(|claim| claim.is_valid_at(&as_of))
@@ -388,9 +387,8 @@ where
             let words = meaningful_words(text);
             (task_words.covered_by(&words), main_words.covered_by(&words))
         };
-        let claim_coverage: BTreeMap<&str, (usize, usize)> = ranked_claims
+        let claim_coverage: BTreeMap<&str, (usize, usize)> = lexical_claims
             .iter()
-            .filter(|id| !linked_claims.contains(*id))
             .filter_map(|id| {
                 let claim = valid.get(id.as_str())?;
                 Some((id.as_str(), coverage(&claim.statement)))
@@ -462,14 +460,12 @@ where
                 && covered >= floor
                 && (!has_subordinate || in_main >= main_needed)
         };
-        let matched_claims: BTreeSet<&str> = ranked_claims
+        let matched_claims: BTreeSet<&str> = lexical_claims
             .iter()
             .map(String::as_str)
             .filter(|id| {
                 valid.contains_key(id)
-                    && (self.exploratory
-                        || linked_claims.contains(*id)
-                        || claim_coverage.get(id).is_some_and(|c| lexical_ok(*c)))
+                    && (self.exploratory || claim_coverage.get(id).is_some_and(|c| lexical_ok(*c)))
             })
             .collect();
 
@@ -491,40 +487,45 @@ where
 
         let mut pack_claims = Vec::new();
         // A rule that is neither matched nor explicitly global enters only
-        // when the graph ties it to a component the task touches (files,
-        // mention or a decision of the pack). One with no tie has no scope
-        // informed, so it does not ride along.
-        let decision_ids: Vec<String> = decisions
-            .iter()
-            .map(|item| item.decision_id.clone())
-            .collect();
-        let scopes = KnowledgeGraph::new(self.store.clone())
-            .claims_by_scope(
-                &request.project_id,
-                &task,
-                &files,
-                &decision_ids,
-                as_of.as_str(),
-            )
-            .map_err(graph_error)?;
+        // when the graph ties it to a component the task itself touches
+        // (files or mention; a decision in the pack does not touch it, or one
+        // decision would drag in every rule of its component). One with no
+        // tie has no scope informed, so it does not ride along.
         let mut tied = Vec::new();
         let mut global = Vec::new();
         for claim in valid.values().filter(|claim| {
             !matched_claims.contains(claim.claim_id.as_str())
                 && matches!(claim.kind, ClaimKind::Constraint | ClaimKind::Convention)
         }) {
-            let is_tied = scopes.in_scope.contains(&claim.claim_id)
-                || scopes.out_of_scope.contains(&claim.claim_id);
-            if is_global(claim, is_tied) {
+            if is_global(claim) {
                 global.push(*claim);
             } else if scopes.in_scope.contains(&claim.claim_id) {
                 tied.push(*claim);
             }
         }
+        // Tied rules of a big component are ranked by the concepts they share
+        // with the task (an in-memory pass over the claims already loaded,
+        // each statement tokenized once), then by the main clause, newest and
+        // id. The count of concepts must reach `needed`: the component's own
+        // name, which touched it, is not topical evidence.
+        if tied.len() > MAX_TIED_RULES {
+            let mut scored: Vec<((usize, usize), &ClaimRecord)> = tied
+                .into_iter()
+                .map(|claim| (coverage(&claim.statement), claim))
+                .filter(|((covered, _), _)| *covered >= needed)
+                .collect();
+            scored.sort_by(|(a, left), (b, right)| {
+                b.cmp(a)
+                    .then_with(|| right.created_at.cmp(&left.created_at))
+                    .then_with(|| left.claim_id.cmp(&right.claim_id))
+            });
+            scored.truncate(MAX_TIED_RULES);
+            tied = scored.into_iter().map(|(_, claim)| claim).collect();
+        }
         // The most recently confirmed global rules first; the id breaks ties.
         global.sort_by(|a, b| (&b.created_at, &b.claim_id).cmp(&(&a.created_at, &a.claim_id)));
         global.truncate(MAX_GLOBAL_RULES);
-        let ordered = ranked_claims
+        let ordered = lexical_claims
             .iter()
             .filter(|id| matched_claims.contains(id.as_str()))
             .filter_map(|id| valid.get(id.as_str()).copied())
@@ -815,27 +816,18 @@ fn decision_cost(decision: &PackDecision) -> usize {
 }
 
 /// Whether a rule applies to the whole project, so it may ride along on a
-/// task that does not touch it. Only the explicit marker is a decision of
-/// the person or the AI; the second case is the rule for data from before
-/// the marker existed: a convention with no scope at all (no component tie,
-/// no inherited scope, no scope qualifier) is read as project-wide, while
-/// a constraint with no scope is not, since a constraint applies to
-/// something and it was never said to what.
-fn is_global(claim: &ClaimRecord, tied: bool) -> bool {
+/// task that does not touch it. Only the explicit marker counts (a `"*"`
+/// `Scope` qualifier or `inherited_scope` entry): the extractor labels many
+/// component-specific rules as conventions, so a convention with no scope is
+/// treated like a constraint with no scope and enters only when matched or
+/// tied by the graph to a touched component.
+fn is_global(claim: &ClaimRecord) -> bool {
     let scope: Vec<String> = serde_json::from_str(&claim.inherited_scope).unwrap_or_default();
     let qualifiers = crate::qualifiers::decode(&claim.qualifiers).unwrap_or_default();
-    let scope_qualifiers = || {
-        qualifiers
-            .iter()
-            .filter(|item| item.kind == crate::qualifiers::QualifierKind::Scope)
-    };
-    let marked = scope.iter().any(|value| value.trim() == GLOBAL_SCOPE)
-        || scope_qualifiers().any(|item| item.text.trim() == GLOBAL_SCOPE);
-    marked
-        || (claim.kind == ClaimKind::Convention
-            && !tied
-            && scope.is_empty()
-            && scope_qualifiers().next().is_none())
+    scope.iter().any(|value| value.trim() == GLOBAL_SCOPE)
+        || qualifiers.iter().any(|item| {
+            item.kind == crate::qualifiers::QualifierKind::Scope && item.text.trim() == GLOBAL_SCOPE
+        })
 }
 
 fn pack_claim(claim: &ClaimRecord, matched: bool) -> Result<PackClaim, ContextError> {

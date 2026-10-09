@@ -1,6 +1,6 @@
 # ADR-0005: Grafo de entidades do projeto
 
-- **Status:** Vigente. Estendida pelo [ADR-0014](0014-regras-com-escopo-por-componente.md) (escopo de regra). (registro original: aceito)
+- **Status:** Vigente. Estendida pelo [ADR-0014](0014-regras-com-escopo-por-componente.md) (escopo de regra) e pelo [ADR-0016](0016-vinculos-por-estrutura-e-mencao-afirmativa.md) (vínculos por estrutura; um índice limitado de arquivos relaxa a alternativa de não ler a árvore). (registro original: aceito)
 - **Data:** 2026-09-30
 - **Contexto:** a busca de contexto é lexical (FTS5, AD-14). Quando o pedido ao agente não cita as palavras certas ("corrige esse bug"), o contexto certo não vem, e não há como perguntar "o que vale para este arquivo?" ou "o que depende do SQLite?". O plano `docs/roadmap/fase-4/00-plano-grafo-de-entidades.md` propunha ligar decisões e claims às coisas concretas do projeto. O usuário decidiu implementar o plano completo agora, antes do uso diário, em vez de esperar os sinais de uso real que o plano pedia.
 - **Decisão:** um grafo tipado, temporal e confirmado por humano, guardado no SQLite do app, sem banco de grafo e sem extração por IA.

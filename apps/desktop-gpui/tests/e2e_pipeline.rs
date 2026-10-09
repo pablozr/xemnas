@@ -66,9 +66,13 @@ fn settings(profile: &Path) -> Settings {
 }
 
 /// The handlers of `apps/desktop-gpui/src/main.rs`, with failures recorded.
-fn provider_jobs(store: &SqliteStore, profile: &Path, failures: &Failures) -> Jobs<SqliteStore> {
+fn provider_jobs(
+    store: &SqliteStore,
+    profile: &Path,
+    failures: &Failures,
+    limiter: &application::limiter::ProviderLimiter,
+) -> Jobs<SqliteStore> {
     let mut jobs = Jobs::new(store.clone());
-    let limiter = application::limiter::ProviderLimiter::new(1);
     let chatgpt = Arc::new(ai_provider::ChatGptSession::default());
     let factory =
         || ai_provider::ProviderFactory::new(chatgpt.clone()).with_limiter(limiter.clone());
@@ -108,26 +112,33 @@ fn provider_jobs(store: &SqliteStore, profile: &Path, failures: &Failures) -> Jo
     jobs.register(application::jobs::ANALYZE_CAPTURE_KIND, analyze.clone());
     jobs.register(application::jobs::ANALYZE_DOCUMENT_KIND, analyze);
 
+    // Like the app, the four suggestion kinds batch their queued jobs.
     let relations = application::relation_suggestions::RelationFinder::new(
         store.clone(),
         settings(profile),
         factory(),
     );
     let failed = failures.clone();
-    jobs.register(
+    jobs.register_batch(
         application::relation_suggestions::RELATION_JOB_KIND,
-        Arc::new(
-            move |record: &JobRecord| match relations.run(&record.payload) {
-                Ok(_) => Ok(()),
-                Err(application::relation_suggestions::RelationFindError::Deferred(
-                    retry_after,
-                )) => Err(JobFailure::Deferred { retry_after }),
-                Err(error) => {
-                    note(&failed, "suggest_relations", error.to_string());
-                    Ok(())
-                }
-            },
-        ),
+        application::batching::BATCH_SIZE,
+        Arc::new(move |records: &[JobRecord]| {
+            let ids: Vec<&str> = records.iter().map(|job| job.payload.as_str()).collect();
+            relations
+                .run_many(&ids)
+                .into_iter()
+                .map(|result| match result {
+                    Ok(_) => Ok(()),
+                    Err(application::relation_suggestions::RelationFindError::Deferred(
+                        retry_after,
+                    )) => Err(JobFailure::Deferred { retry_after }),
+                    Err(error) => {
+                        note(&failed, "suggest_relations", error.to_string());
+                        Ok(())
+                    }
+                })
+                .collect()
+        }),
     );
 
     let claims = application::claim_suggestions::ClaimFinder::new(
@@ -136,23 +147,29 @@ fn provider_jobs(store: &SqliteStore, profile: &Path, failures: &Failures) -> Jo
         factory(),
     );
     let failed = failures.clone();
-    jobs.register(
+    jobs.register_batch(
         application::claim_suggestions::CLAIM_JOB_KIND,
-        Arc::new(
-            move |record: &JobRecord| match claims.run(&record.payload) {
-                Ok(_) => Ok(()),
-                Err(application::claim_suggestions::ClaimSuggestionError::Deferred(
-                    retry_after,
-                )) => Err(JobFailure::Deferred { retry_after }),
-                Err(error) => {
-                    failed
-                        .lock()
-                        .expect("failures")
-                        .push(format!("derive_claims: {error}"));
-                    Ok(())
-                }
-            },
-        ),
+        application::batching::BATCH_SIZE,
+        Arc::new(move |records: &[JobRecord]| {
+            let ids: Vec<&str> = records.iter().map(|job| job.payload.as_str()).collect();
+            claims
+                .run_many(&ids)
+                .into_iter()
+                .map(|result| match result {
+                    Ok(_) => Ok(()),
+                    Err(application::claim_suggestions::ClaimSuggestionError::Deferred(
+                        retry_after,
+                    )) => Err(JobFailure::Deferred { retry_after }),
+                    Err(error) => {
+                        failed
+                            .lock()
+                            .expect("failures")
+                            .push(format!("derive_claims: {error}"));
+                        Ok(())
+                    }
+                })
+                .collect()
+        }),
     );
 
     let terms = application::search_terms::SearchTermFinder::new(
@@ -161,40 +178,56 @@ fn provider_jobs(store: &SqliteStore, profile: &Path, failures: &Failures) -> Jo
         factory(),
     );
     let failed = failures.clone();
-    jobs.register(
+    jobs.register_batch(
         application::search_terms::SEARCH_TERMS_JOB_KIND,
-        Arc::new(move |record: &JobRecord| match terms.run(&record.payload) {
-            Ok(_) => Ok(()),
-            Err(application::search_terms::SearchTermError::Deferred(retry_after)) => {
-                Err(JobFailure::Deferred { retry_after })
-            }
-            Err(error) => {
-                failed
-                    .lock()
-                    .expect("failures")
-                    .push(format!("derive_search_terms: {error}"));
-                Ok(())
-            }
+        application::search_terms::MAX_COALESCED_JOBS,
+        Arc::new(move |records: &[JobRecord]| {
+            let projects: Vec<&str> = records.iter().map(|job| job.payload.as_str()).collect();
+            terms
+                .run_projects(&projects)
+                .into_iter()
+                .map(|result| match result {
+                    Ok(_) => Ok(()),
+                    Err(application::search_terms::SearchTermError::Deferred(retry_after)) => {
+                        Err(JobFailure::Deferred { retry_after })
+                    }
+                    Err(error) => {
+                        failed
+                            .lock()
+                            .expect("failures")
+                            .push(format!("derive_search_terms: {error}"));
+                        Ok(())
+                    }
+                })
+                .collect()
         }),
     );
 
     let links =
         application::link_suggestions::LinkFinder::new(store.clone(), settings(profile), factory());
     let failed = failures.clone();
-    jobs.register(
+    jobs.register_batch(
         application::link_suggestions::LINK_JOB_KIND,
-        Arc::new(move |record: &JobRecord| match links.run(&record.payload) {
-            Ok(_) => Ok(()),
-            Err(application::link_suggestions::LinkFindError::Deferred(retry_after)) => {
-                Err(JobFailure::Deferred { retry_after })
-            }
-            Err(error) => {
-                failed
-                    .lock()
-                    .expect("failures")
-                    .push(format!("suggest_links: {error}"));
-                Ok(())
-            }
+        application::batching::BATCH_SIZE,
+        Arc::new(move |records: &[JobRecord]| {
+            let ids: Vec<&str> = records.iter().map(|job| job.payload.as_str()).collect();
+            links
+                .run_many(&ids)
+                .into_iter()
+                .map(|result| match result {
+                    Ok(_) => Ok(()),
+                    Err(application::link_suggestions::LinkFindError::Deferred(retry_after)) => {
+                        Err(JobFailure::Deferred { retry_after })
+                    }
+                    Err(error) => {
+                        failed
+                            .lock()
+                            .expect("failures")
+                            .push(format!("suggest_links: {error}"));
+                        Ok(())
+                    }
+                })
+                .collect()
         }),
     );
     jobs
@@ -215,12 +248,26 @@ fn observation_jobs(store: &SqliteStore) -> Jobs<SqliteStore> {
 }
 
 /// Runs jobs until none is left, waiting for deferred ones to come due.
-fn drain(report: &mut Report, label: &str, jobs: &Jobs<SqliteStore>, failures: &Failures) {
+fn drain(
+    report: &mut Report,
+    label: &str,
+    jobs: &Jobs<SqliteStore>,
+    failures: &Failures,
+    limiter: &application::limiter::ProviderLimiter,
+) {
     let started = Instant::now();
+    let calls_before = limiter.calls();
     let mut ran: Vec<(String, String)> = Vec::new();
     loop {
-        while let Some(outcome) = jobs.run_next().expect("run job") {
-            ran.push((outcome.kind, outcome.state.as_str().to_string()));
+        // A batch settles several jobs at once; each one counts as a job run.
+        loop {
+            let group = jobs.run_next_group().expect("run job");
+            if group.is_empty() {
+                break;
+            }
+            for outcome in group {
+                ran.push((outcome.kind, outcome.state.as_str().to_string()));
+            }
         }
         let waiting = jobs
             .list()
@@ -237,8 +284,9 @@ fn drain(report: &mut Report, label: &str, jobs: &Jobs<SqliteStore>, failures: &
         *summary.entry(format!("{kind}:{state}")).or_default() += 1;
     }
     report.line(format!(
-        "[{label}] {} job run(s) in {:.1}s: {summary:?}",
+        "[{label}] {} job run(s), {} provider call(s) in {:.1}s: {summary:?}",
         ran.len(),
+        limiter.calls() - calls_before,
         started.elapsed().as_secs_f64()
     ));
     for failure in failures.lock().expect("failures").drain(..) {
@@ -440,18 +488,21 @@ fn run_the_pipeline_over_a_real_project() {
 
     let store = SqliteStore::open(&paths.database).expect("open the store");
     let failures: Failures = Arc::default();
-    let jobs = provider_jobs(&store, &paths.ai_profile, &failures);
+    // One provider call is one permit of this limiter; every call of the run
+    // goes through it, so the report can say what the pipeline cost.
+    let limiter = application::limiter::ProviderLimiter::new(1);
+    let jobs = provider_jobs(&store, &paths.ai_profile, &failures, &limiter);
     let local = observation_jobs(&store);
 
     // Register.
-    let project = application::projects::Projects::new(store.clone())
+    let project = application::graph::prepared_projects(store.clone())
         .register(&project_dir)
         .expect("register the project");
     let project_id = project.id().as_str().to_string();
     report.line(format!("project {project_id} at {project_dir}"));
 
     // Index and propose documents.
-    let documents = application::documents::Documents::new(store.clone());
+    let documents = application::graph::prepared_documents(store.clone());
     let started = Instant::now();
     let index = documents.index(&project_id).expect("index");
     let queued = documents.propose(&project_id, 40).expect("propose");
@@ -462,7 +513,7 @@ fn run_the_pipeline_over_a_real_project() {
         index.truncated,
         started.elapsed().as_secs_f64()
     ));
-    drain(&mut report, "analyze documents", &jobs, &failures);
+    drain(&mut report, "analyze documents", &jobs, &failures, &limiter);
 
     // Observations, like the reconciler.
     store
@@ -472,7 +523,13 @@ fn run_the_pipeline_over_a_real_project() {
             requested_at: chrono::Utc::now().to_rfc3339(),
         })
         .expect("request refresh");
-    drain(&mut report, "refresh observations", &local, &failures);
+    drain(
+        &mut report,
+        "refresh observations",
+        &local,
+        &failures,
+        &limiter,
+    );
 
     // The single import of the failing document.
     if let Ok(file) = std::env::var("XEMNAS_E2E_IMPORT") {
@@ -487,7 +544,13 @@ fn run_the_pipeline_over_a_real_project() {
             )),
             Err(error) => report.line(format!("[import] failed: {error:?}")),
         }
-        drain(&mut report, "analyze imported document", &jobs, &failures);
+        drain(
+            &mut report,
+            "analyze imported document",
+            &jobs,
+            &failures,
+            &limiter,
+        );
     }
 
     // Overview, which may queue more documents.
@@ -495,7 +558,7 @@ fn run_the_pipeline_over_a_real_project() {
     let overview = application::overview::ProjectOverviews::new(
         store.clone(),
         settings(&paths.ai_profile),
-        ai_provider::ProviderFactory::new(chatgpt.clone()),
+        ai_provider::ProviderFactory::new(chatgpt.clone()).with_limiter(limiter.clone()),
     );
     let started = Instant::now();
     match application::overview::OverviewApi::generate(&overview, &project_id) {
@@ -508,7 +571,7 @@ fn run_the_pipeline_over_a_real_project() {
         )),
         Err(error) => report.line(format!("[overview] failed: {error:?}")),
     }
-    drain(&mut report, "after overview", &jobs, &failures);
+    drain(&mut report, "after overview", &jobs, &failures, &limiter);
 
     // Automatic review until stable; accepting queues follow-up jobs.
     let adoption: Arc<dyn application::adoption::AdoptionApi> =
@@ -517,7 +580,7 @@ fn run_the_pipeline_over_a_real_project() {
         store.clone(),
         adoption,
         settings(&paths.ai_profile),
-        ai_provider::ProviderFactory::new(chatgpt),
+        ai_provider::ProviderFactory::new(chatgpt).with_limiter(limiter.clone()),
     );
     approvals.set_mode(Mode::Automatic).expect("automatic mode");
     for pass in 1..=8 {
@@ -532,8 +595,14 @@ fn run_the_pipeline_over_a_real_project() {
                     run.asked,
                     started.elapsed().as_secs_f64()
                 ));
-                drain(&mut report, "follow-up jobs", &jobs, &failures);
-                drain(&mut report, "follow-up observations", &local, &failures);
+                drain(&mut report, "follow-up jobs", &jobs, &failures, &limiter);
+                drain(
+                    &mut report,
+                    "follow-up observations",
+                    &local,
+                    &failures,
+                    &limiter,
+                );
                 if !run.changed() {
                     break;
                 }
@@ -545,6 +614,10 @@ fn run_the_pipeline_over_a_real_project() {
         }
     }
 
+    report.line(format!(
+        "provider calls in the whole run: {} (overview and automatic review included)",
+        limiter.calls()
+    ));
     snapshot(&mut report, &paths.database, &project_id);
 
     // Context packs.
@@ -607,4 +680,42 @@ fn run_the_pipeline_over_a_real_project() {
         }
     }
     report.line(format!("report: {}", out.join("report.txt").display()));
+}
+
+/// The runner composes registration like the app: the map is prepared, so an
+/// npm workspace's packages exist as components right after `register`.
+#[test]
+fn registering_through_the_runner_composition_prepares_the_map() {
+    let root = std::env::temp_dir().join(format!("xemnas-e2e-compose-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let project_dir = root.join("project");
+    for (dir, name) in [("core", "@demo/core"), ("plugin", "@demo/plugin")] {
+        let package = project_dir.join("packages").join(dir);
+        std::fs::create_dir_all(&package).expect("package dir");
+        std::fs::write(
+            package.join("package.json"),
+            format!("{{\"name\":\"{name}\"}}"),
+        )
+        .expect("package manifest");
+    }
+    std::fs::write(
+        project_dir.join("package.json"),
+        "{\"name\":\"demo\",\"workspaces\":[\"packages/*\"]}",
+    )
+    .expect("root manifest");
+
+    let store = SqliteStore::open(root.join("app.db")).expect("open the store");
+    let project = application::graph::prepared_projects(store.clone())
+        .register(&project_dir)
+        .expect("register");
+    let names: Vec<String> = application::graph::KnowledgeGraph::new(store)
+        .entities(project.id().as_str())
+        .expect("entities")
+        .into_iter()
+        .map(|entity| entity.name)
+        .collect();
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert!(names.contains(&"@demo/core".to_string()), "{names:?}");
+    assert!(names.contains(&"@demo/plugin".to_string()), "{names:?}");
 }

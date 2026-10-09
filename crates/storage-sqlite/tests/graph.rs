@@ -165,7 +165,7 @@ fn a_decision_from_a_document_is_tied_to_what_its_text_names_not_to_docs() {
         &test.store,
         "p1",
         "adr",
-        "Como o core grava os eventos vindos da api sem perder nenhum no SQLite?",
+        "Como o core grava os eventos vindos da api no SQLite, sem perder nenhum?",
         &["docs/adr/0003-outbox.md"],
         "",
     );
@@ -715,9 +715,16 @@ fn an_empty_map_assembles_itself_from_the_declared_workspace() {
         .expect("project");
 
     let graph = KnowledgeGraph::new(test.store.clone());
-    assert_eq!(graph.assemble("ws").expect("assemble"), 2);
+    // Two members and the files at the root of the workspace.
+    assert_eq!(graph.assemble("ws").expect("assemble"), 3);
     assert_eq!(graph.assemble("ws").expect("again"), 0, "only an empty map");
     let entities = graph.entities("ws").expect("entities");
+    let root_files = entities
+        .iter()
+        .find(|entity| entity.name == "workspace")
+        .expect("workspace root");
+    assert_eq!(root_files.patterns, vec!["*"]);
+    assert!(root_files.aliases.contains(&"workspace root".to_string()));
     let core = entities
         .iter()
         .find(|entity| entity.name == "core")
@@ -865,4 +872,573 @@ fn recent_files_come_from_decisions_without_repeats() {
     assert!(files.contains(&"crates/storage-sqlite/src/store.rs".to_string()));
     assert_eq!(graph.recent_files("p1", 1).expect("one").len(), 1);
     assert!(graph.recent_files("p2", 6).expect("none").is_empty());
+}
+
+/// Raw rows of `entity_edges`: `(origin, reason, confirmed_by, invalidated_by)`.
+fn edge_labels(
+    test: &support::TestStore,
+    edge_id: &str,
+) -> (String, String, Option<String>, Option<String>) {
+    rusqlite::Connection::open(test.root.join("app.db"))
+        .expect("raw")
+        .query_row(
+            "SELECT origin, reason, confirmed_by, invalidated_by FROM entity_edges \
+             WHERE edge_id = ?1",
+            [edge_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("edge")
+}
+
+#[test]
+fn the_migration_tells_who_confirmed_and_who_invalidated_each_edge() {
+    let test = support::open("graph-actors-migration", &["p1"]);
+    let path = test.root.join("app.db");
+    {
+        // Rebuild the schema as it was before the actors (version 46).
+        let raw = rusqlite::Connection::open(&path).expect("raw");
+        raw.execute_batch(
+            "ALTER TABLE entity_edges DROP COLUMN confirmed_by; \
+             ALTER TABLE entity_edges DROP COLUMN invalidated_by; \
+             DELETE FROM schema_migrations WHERE version = 47;",
+        )
+        .expect("downgrade");
+        for entity in ["e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8"] {
+            raw.execute(
+                "INSERT INTO entities (entity_id, project_id, kind, name, key, created_at) \
+                 VALUES (?1, 'p1', 'component', ?1, ?1, '2026-01-01T00:00:00Z')",
+                [entity],
+            )
+            .expect("entity");
+        }
+        // edge, entity, kind, source kind, source, origin, reason, created, confirmed, invalidated
+        let edges = [
+            (
+                "x1",
+                "e1",
+                "affects",
+                "decision",
+                "d1",
+                "human",
+                "",
+                "2026-02-01T10:00:00Z",
+                Some("2026-02-01T10:00:00Z"),
+                None,
+            ),
+            (
+                "x2",
+                "e2",
+                "affects",
+                "decision",
+                "d1",
+                "derived",
+                "citado no texto: \"a\"",
+                "2026-02-01T10:00:00Z",
+                None,
+                Some("2026-02-01T11:00:00Z"),
+            ),
+            (
+                "x3",
+                "e3",
+                "applies_to",
+                "claim",
+                "c1",
+                "human",
+                "",
+                "2026-02-01T10:00:00Z",
+                Some("2026-02-01T10:00:00Z"),
+                None,
+            ),
+            (
+                "x4",
+                "e4",
+                "affects",
+                "decision",
+                "d2",
+                "human",
+                "",
+                "2026-02-02T10:02:00Z",
+                Some("2026-02-02T10:02:00Z"),
+                None,
+            ),
+            (
+                "x5",
+                "e5",
+                "affects",
+                "decision",
+                "d2",
+                "human",
+                "",
+                "2026-02-02T16:00:00Z",
+                Some("2026-02-02T16:00:00Z"),
+                None,
+            ),
+            (
+                "x6",
+                "e6",
+                "applies_to",
+                "claim",
+                "c2",
+                "derived",
+                "herdado da decisão de origem",
+                "2026-02-03T10:00:00Z",
+                Some("2026-02-03T10:00:00Z"),
+                None,
+            ),
+            (
+                "x7",
+                "e7",
+                "affects",
+                "decision",
+                "d3",
+                "human",
+                "",
+                "2026-02-04T10:00:00Z",
+                Some("2026-02-04T10:00:00Z"),
+                None,
+            ),
+            (
+                "x8",
+                "e8",
+                "affects",
+                "decision",
+                "d3",
+                "derived",
+                "crates/a/src/lib.rs",
+                "2026-02-04T10:00:00Z",
+                None,
+                Some("2026-02-04T12:00:00Z"),
+            ),
+        ];
+        for edge in edges {
+            raw.execute(
+                "INSERT INTO entity_edges (edge_id, project_id, kind, source_kind, source_id, \
+                 entity_id, origin, reason, created_at, confirmed_at, invalidated_at) \
+                 VALUES (?1, 'p1', ?3, ?4, ?5, ?2, ?6, ?7, ?8, ?9, ?10)",
+                rusqlite::params![
+                    edge.0, edge.1, edge.2, edge.3, edge.4, edge.5, edge.6, edge.7, edge.8, edge.9
+                ],
+            )
+            .expect("edge");
+        }
+        // The review's ledger: it accepted the link x1 (AI), discarded x2 (rules),
+        // adopted the rule c1 (rules) and the candidate that made d2 (AI).
+        let ledger = [
+            ("link", "x1", "accepted", "ai", None, "2026-02-01T10:00:00Z"),
+            (
+                "link",
+                "x2",
+                "discarded",
+                "rules",
+                None,
+                "2026-02-01T11:00:00Z",
+            ),
+            (
+                "claim",
+                "s1",
+                "accepted",
+                "rules",
+                Some("c1"),
+                "2026-02-01T10:00:00Z",
+            ),
+            (
+                "candidate",
+                "k2",
+                "accepted",
+                "ai",
+                Some("d2"),
+                "2026-02-02T10:00:00Z",
+            ),
+        ];
+        for (kind, item, verdict, by, result, at) in ledger {
+            raw.execute(
+                "INSERT INTO auto_reviews (item_kind, item_id, project_id, verdict, decided_by, \
+                 reason, title, result_id, created_at) VALUES (?1, ?2, 'p1', ?3, ?4, 'r', 't', ?5, ?6)",
+                rusqlite::params![kind, item, verdict, by, result, at],
+            )
+            .expect("ledger");
+        }
+    }
+
+    // Opening the store migrates it.
+    let upgraded = storage_sqlite::SqliteStore::open(&path).expect("migrate");
+    drop(upgraded);
+
+    let label = |id: &str| edge_labels(&test, id);
+    // (a) the ledger names the actor of a settled link.
+    assert_eq!(
+        label("x1"),
+        ("human".into(), "".into(), Some("ai".into()), None)
+    );
+    assert_eq!(
+        label("x2"),
+        (
+            "derived".into(),
+            "citado no texto: \"a\"".into(),
+            None,
+            Some("rules".into())
+        )
+    );
+    // (b) the rule the review adopted inherited its tie.
+    assert_eq!(
+        label("x3"),
+        (
+            "derived".into(),
+            "herdado da decisão de origem".into(),
+            Some("inherited".into()),
+            None
+        )
+    );
+    // (c) a tie made within five minutes of the review's adoption was the review's;
+    // one made hours later was a person's.
+    assert_eq!(
+        label("x4"),
+        ("derived".into(), "".into(), Some("ai".into()), None)
+    );
+    assert_eq!(
+        label("x5"),
+        ("human".into(), "".into(), Some("person".into()), None)
+    );
+    // (d) an inherited tie with no ledger entry.
+    assert_eq!(
+        label("x6"),
+        (
+            "derived".into(),
+            "herdado da decisão de origem".into(),
+            Some("inherited".into()),
+            None
+        )
+    );
+    // (e) the rest was done by hand.
+    assert_eq!(
+        label("x7"),
+        ("human".into(), "".into(), Some("person".into()), None)
+    );
+    assert_eq!(
+        label("x8"),
+        (
+            "derived".into(),
+            "crates/a/src/lib.rs".into(),
+            None,
+            Some("person".into())
+        )
+    );
+}
+
+#[test]
+fn a_link_discarded_by_the_machine_comes_back_on_a_structural_reason_and_one_a_person_removed_does_not(
+) {
+    use application::graph::EntityEdit;
+    use domain::entities::EdgeActor;
+    for (by, returns) in [
+        (EdgeActor::Ai, true),
+        (EdgeActor::Rules, true),
+        (EdgeActor::Person, false),
+    ] {
+        let test = support::open("graph-relink", &["p1"]);
+        let graph = KnowledgeGraph::new(test.store.clone());
+        let core = component(&graph, "core", "libs/core/**");
+        let decision = support::decision_with_diff(
+            &test.store,
+            "p1",
+            "relink",
+            "Como o core valida a entrada?",
+            &["crates/core/src/lib.rs"],
+            "",
+        );
+        // The name in the question is a mention; no pattern covers the file yet.
+        graph.refresh_suggestions("p1").expect("mention");
+        let pending = graph.suggestions("p1").expect("suggestions");
+        assert_eq!(pending.len(), 1);
+        assert!(mention_quote(&pending[0].reason).is_some());
+        graph
+            .invalidate_as(&pending[0].edge_id, by)
+            .expect("discard");
+
+        // The component now covers the file: a structural reason.
+        graph
+            .update_entity(
+                &core,
+                EntityEdit {
+                    name: "core".into(),
+                    description: String::new(),
+                    patterns: vec!["crates/core/**".into()],
+                    aliases: Vec::new(),
+                },
+            )
+            .expect("update");
+        let report = graph.refresh_suggestions("p1").expect("structural");
+        assert_eq!(report.new_edges, usize::from(returns), "{by:?}");
+        let live: Vec<_> = graph
+            .suggestions("p1")
+            .expect("suggestions")
+            .into_iter()
+            .filter(|suggestion| suggestion.source.node.id == decision)
+            .collect();
+        assert_eq!(live.len(), usize::from(returns), "{by:?}");
+        if returns {
+            assert_eq!(live[0].reason, "crates/core/src/lib.rs");
+        }
+        // Another refresh changes nothing: a returned link is not discarded again.
+        assert_eq!(graph.refresh_suggestions("p1").expect("again").new_edges, 0);
+    }
+}
+
+fn raw_edge(
+    id: &str,
+    kind: EdgeKind,
+    source: (NodeKind, &str),
+    entity: &str,
+    reason: &str,
+    confirmed_by: Option<domain::entities::EdgeActor>,
+) -> application::graph::EdgeRecord {
+    application::graph::EdgeRecord {
+        edge_id: id.into(),
+        project_id: "p1".into(),
+        kind,
+        source_kind: source.0,
+        source_id: source.1.into(),
+        entity_id: entity.into(),
+        origin: domain::entities::EdgeOrigin::Derived,
+        reason: reason.into(),
+        created_at: "2026-01-03T00:00:00Z".into(),
+        confirmed_at: confirmed_by.map(|_| "2026-01-03T00:00:00Z".into()),
+        invalidated_at: None,
+        confirmed_by,
+        invalidated_by: None,
+    }
+}
+
+#[test]
+fn a_refresh_drops_the_machines_links_that_the_rules_no_longer_support_and_spares_a_persons() {
+    use application::graph::{ai_link_reason, mention_reason, GraphStore};
+    use domain::entities::EdgeActor;
+    let test = support::open("graph-revalidate", &["p1"]);
+    let graph = KnowledgeGraph::new(test.store.clone());
+    let core = component(&graph, "core", "crates/core/**");
+    let negated = |key: &str| {
+        support::decision(
+            &test.store,
+            "p1",
+            key,
+            "O servico fica independente de core.",
+            "Sem acoplar",
+        )
+    };
+    let [d1, d2, d3, d4] = ["d1", "d2", "d3", "d4"].map(negated);
+    let fine = support::decision(
+        &test.store,
+        "p1",
+        "d5",
+        "Como o core valida?",
+        "Pelo schema",
+    );
+    let quote = mention_reason("O servico fica independente de core.");
+    let store = &test.store;
+    for edge in [
+        raw_edge(
+            "pending",
+            EdgeKind::Affects,
+            (NodeKind::Decision, &d1),
+            &core,
+            &quote,
+            None,
+        ),
+        raw_edge(
+            "by-rules",
+            EdgeKind::Affects,
+            (NodeKind::Decision, &d2),
+            &core,
+            &quote,
+            Some(EdgeActor::Rules),
+        ),
+        raw_edge(
+            "by-person",
+            EdgeKind::Affects,
+            (NodeKind::Decision, &d3),
+            &core,
+            &quote,
+            Some(EdgeActor::Person),
+        ),
+        raw_edge(
+            "by-ai-guess",
+            EdgeKind::Affects,
+            (NodeKind::Decision, &d4),
+            &core,
+            &ai_link_reason("O servico fica independente de core.", "Rege o core."),
+            None,
+        ),
+        raw_edge(
+            "affirmative",
+            EdgeKind::Affects,
+            (NodeKind::Decision, &fine),
+            &core,
+            &mention_reason("Como o core valida?"),
+            None,
+        ),
+    ] {
+        store.insert_edge(&edge).expect("edge");
+    }
+    // A rule that inherited a tie its decision does not hold, and one a person applied.
+    let orphan = support::decision(store, "p1", "d6", "Como gravar?", "Com cuidado");
+    let derived_claim = |statement: &str| {
+        application::claims::Claims::new(store.clone())
+            .create(application::claims::NewClaim {
+                source_version: None,
+                qualifiers: Vec::new(),
+                project_id: "p1".into(),
+                kind: domain::claims::ClaimKind::Constraint,
+                statement: statement.into(),
+                valid_from: Some("2020-01-01".into()),
+                valid_until: None,
+                source_decision_id: Some(orphan.clone()),
+            })
+            .expect("claim")
+            .claim_id
+    };
+    let orphan_claim = derived_claim("Regra herdada");
+    let person_claim = derived_claim("Regra aplicada por uma pessoa");
+    store
+        .insert_edge(&raw_edge(
+            "inherited",
+            EdgeKind::AppliesTo,
+            (NodeKind::Claim, &orphan_claim),
+            &core,
+            "herdado da decisão de origem",
+            Some(EdgeActor::Inherited),
+        ))
+        .expect("inherited");
+    store
+        .insert_edge(&raw_edge(
+            "applied",
+            EdgeKind::AppliesTo,
+            (NodeKind::Claim, &person_claim),
+            &core,
+            "",
+            Some(EdgeActor::Person),
+        ))
+        .expect("applied");
+
+    let report = graph.refresh_suggestions("p1").expect("refresh");
+    assert_eq!(report.revalidated, 3);
+    let state = |id: &str| {
+        let edge = store.get_edge(id).expect("get").expect("edge");
+        (edge.invalidated_at.is_some(), edge.invalidated_by)
+    };
+    assert_eq!(state("pending"), (true, Some(EdgeActor::Rules)));
+    assert_eq!(state("by-rules"), (true, Some(EdgeActor::Rules)));
+    assert_eq!(state("by-person"), (false, None), "a person's word stays");
+    assert_eq!(
+        state("by-ai-guess"),
+        (false, None),
+        "the AI's own quote is not re-judged"
+    );
+    assert_eq!(state("affirmative"), (false, None));
+    assert_eq!(state("inherited"), (true, Some(EdgeActor::Inherited)));
+    assert_eq!(state("applied"), (false, None));
+    // Idempotent: nothing more to drop, and nothing comes back.
+    let again = graph.refresh_suggestions("p1").expect("again");
+    assert_eq!(again.revalidated, 0);
+    assert_eq!(state("pending"), (true, Some(EdgeActor::Rules)));
+}
+
+#[test]
+fn a_component_whose_folder_is_gone_is_reported_with_where_its_files_belong() {
+    use application::projects::{ProjectRecord, ProjectRepository};
+    let test = support::open("graph-phantom", &[]);
+    let repo = test.root.join("repo");
+    std::fs::create_dir_all(repo.join("crates/sc-session/examples")).expect("dirs");
+    std::fs::write(
+        repo.join("crates/sc-session/examples/jam.rs"),
+        "fn main() {}",
+    )
+    .expect("file");
+    std::fs::write(
+        repo.join("crates/sc-session/Cargo.toml"),
+        "[package]\nname = \"sc-session\"\n",
+    )
+    .expect("manifest");
+    std::fs::write(
+        repo.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"crates/*\"]\n",
+    )
+    .expect("root");
+    test.store
+        .insert(&ProjectRecord::new(
+            "ws".into(),
+            repo.to_string_lossy().replace('\\', "/"),
+            "2026-01-01T00:00:00Z".into(),
+        ))
+        .expect("project");
+    let graph = KnowledgeGraph::new(test.store.clone());
+    graph.assemble("ws").expect("assemble");
+    // The ghost somebody created from a proposal: `examples/**` exists nowhere.
+    let ghost = graph
+        .create_entity(NewEntity {
+            project_id: "ws".into(),
+            kind: Some(EntityKind::Component),
+            name: "examples".into(),
+            patterns: vec!["examples/**".into()],
+            ..NewEntity::default()
+        })
+        .expect("ghost")
+        .entity_id;
+    let location = repo.to_string_lossy().replace('\\', "/");
+    let decision = support::decision_at(
+        &test.store,
+        "ws",
+        &location,
+        "jam",
+        "Como o exemplo toca?",
+        &["examples/jam.rs"],
+        "",
+    );
+    use application::graph::GraphStore;
+    test.store
+        .insert_edge(&raw_edge_in(
+            "ws",
+            "ghost-edge",
+            &decision,
+            &ghost,
+            "examples/jam.rs",
+        ))
+        .expect("edge");
+
+    let report = graph.refresh_suggestions("ws").expect("refresh");
+    assert_eq!(
+        report.stale_components.len(),
+        1,
+        "{:?}",
+        report.stale_components
+    );
+    let stale = &report.stale_components[0];
+    assert_eq!(stale.name, "examples");
+    assert_eq!(stale.patterns, vec!["examples/**"]);
+    assert_eq!(stale.owner.as_deref(), Some("sc-session"));
+    // Nothing was retired by itself.
+    assert!(graph
+        .entities("ws")
+        .expect("entities")
+        .iter()
+        .all(|entity| entity.retired_at.is_none()));
+}
+
+fn raw_edge_in(
+    project: &str,
+    id: &str,
+    decision: &str,
+    entity: &str,
+    reason: &str,
+) -> application::graph::EdgeRecord {
+    application::graph::EdgeRecord {
+        project_id: project.into(),
+        ..raw_edge(
+            id,
+            EdgeKind::Affects,
+            (NodeKind::Decision, decision),
+            entity,
+            reason,
+            Some(domain::entities::EdgeActor::Person),
+        )
+    }
 }

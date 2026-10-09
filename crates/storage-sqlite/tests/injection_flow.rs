@@ -52,7 +52,11 @@ fn seed(test: &support::TestStore) {
     Claims::new(test.store.clone())
         .create(NewClaim {
             source_version: None,
-            qualifiers: Vec::new(),
+            qualifiers: vec![application::qualifiers::KnowledgeQualifier {
+                kind: application::qualifiers::QualifierKind::Scope,
+                text: application::context::GLOBAL_SCOPE.into(),
+                artifact_id: None,
+            }],
             project_id: "p1".to_string(),
             kind: ClaimKind::Convention,
             statement: "Mensagens de erro em português".to_string(),

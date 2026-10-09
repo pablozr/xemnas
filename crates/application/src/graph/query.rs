@@ -310,6 +310,24 @@ pub(crate) fn decision_in_force(
         })
 }
 
+/// The graph's share of one Context Pack.
+pub(crate) struct PackGraph {
+    pub decisions: Vec<String>,
+    pub scopes: super::scope::ClaimScopes,
+    pub all_claims: Vec<ClaimRecord>,
+}
+
+fn files_context(snapshot: &Snapshot, files: &[String]) -> (Vec<String>, Vec<String>) {
+    let components = components_for(snapshot, files);
+    let (decisions, claims) = tied_to_all(snapshot, &components);
+    let decisions = snapshot
+        .summaries(&decisions, NodeKind::Decision)
+        .into_iter()
+        .map(|summary| summary.node.id)
+        .collect();
+    (decisions, claims)
+}
+
 /// Everything the queries read, loaded once per call.
 struct Snapshot {
     at: Timestamp,
@@ -969,14 +987,48 @@ where
             return Ok((Vec::new(), Vec::new()));
         }
         let snapshot = self.snapshot(project_id, as_of)?;
-        let components = components_for(&snapshot, &files);
-        let (decisions, claims) = tied_to_all(&snapshot, &components);
-        let decisions = snapshot
-            .summaries(&decisions, NodeKind::Decision)
-            .into_iter()
-            .map(|summary| summary.node.id)
+        Ok(files_context(&snapshot, &files))
+    }
+
+    /// What `build_pack` reads from the graph, from one load of the project:
+    /// decisions tied to the files, the claims by scope of the task, and
+    /// every claim of the project (so the pack does not load them
+    /// again).
+    pub(crate) fn pack_graph(
+        &self,
+        project_id: &str,
+        task: &str,
+        files: &[String],
+        as_of: &str,
+    ) -> Result<PackGraph, GraphError> {
+        let snapshot = self.snapshot(project_id, Some(as_of))?;
+        let project =
+            ProjectRepository::get(&self.store, project_id)?.ok_or(GraphError::ProjectNotFound)?;
+        let keys = super::discover::project_keys(std::path::Path::new(&project.location));
+        let normalized: Vec<String> = files
+            .iter()
+            .map(|file| normalize_path(file))
+            .filter(|file| !file.is_empty())
             .collect();
-        Ok((decisions, claims))
+        // The claims tied to the files come through `scopes`, ranked.
+        let decisions = if normalized.is_empty() {
+            Vec::new()
+        } else {
+            files_context(&snapshot, &normalized).0
+        };
+        let scopes = super::scope::scopes_in(
+            &snapshot.at,
+            &snapshot.edges,
+            snapshot.entities.values(),
+            task,
+            files,
+            &keys,
+        );
+        Ok(PackGraph {
+            decisions,
+            scopes,
+            all_claims: snapshot.claims.into_values().collect(),
+        })
     }
 
     /// Decisions in force that depend, transitively, on a decision or on the
@@ -1271,6 +1323,8 @@ mod tests {
             created_at: "2026-01-02T00:00:00Z".into(),
             confirmed_at: Some("2026-01-02T00:00:00Z".into()),
             invalidated_at: None,
+            confirmed_by: None,
+            invalidated_by: None,
         }
     }
 
@@ -1284,6 +1338,7 @@ mod tests {
             confirmed_at: confirmed_at.into(),
             files: vec![],
             diffs: vec![],
+            from_document: false,
         }
     }
 

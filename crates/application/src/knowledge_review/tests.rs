@@ -158,6 +158,8 @@ fn part_of_expansion_is_two_live_hops_independent_of_edge_order() {
             created_at: NOW.into(),
             confirmed_at: Some(NOW.into()),
             invalidated_at: None,
+            confirmed_by: None,
+            invalidated_by: None,
         });
     }
     // FTS fake returns no IDs from this snapshot, isolating entity selection.
@@ -629,6 +631,8 @@ fn pending_graph_claim_source_and_confirmed_scope_candidates() {
             created_at: NOW.into(),
             confirmed_at: confirmed.then(|| NOW.into()),
             invalidated_at: None,
+            confirmed_by: None,
+            invalidated_by: None,
         });
     }
     let r = inspect_snapshot(&s, NOW.into()).unwrap();

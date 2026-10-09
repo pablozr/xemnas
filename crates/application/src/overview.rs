@@ -465,6 +465,7 @@ pub struct ProjectOverviews<S, P, K, F> {
     store: S,
     settings: AiSettings<P, K>,
     factory: F,
+    documents: Option<Documents<S>>,
 }
 
 impl<S, P, K, F> ProjectOverviews<S, P, K, F>
@@ -489,7 +490,22 @@ where
             store,
             settings,
             factory,
+            documents: None,
         }
+    }
+
+    /// Uses `documents` (for instance one that prepares the map) when the
+    /// overview re-reads and queues the project's documentation.
+    #[must_use]
+    pub fn with_documents(mut self, documents: Documents<S>) -> Self {
+        self.documents = Some(documents);
+        self
+    }
+
+    fn documents(&self) -> Documents<S> {
+        self.documents
+            .clone()
+            .unwrap_or_else(|| Documents::new(self.store.clone()))
     }
 
     /// The stored overview and how many decisions were confirmed since.
@@ -532,9 +548,7 @@ where
             .ok_or(OverviewError::ProjectNotFound)?;
         // Documentation is read again so the overview sees the current files;
         // an unreadable folder only leaves the previous index in place.
-        if let Err(DocumentError::Storage(detail)) =
-            Documents::new(self.store.clone()).index(project_id)
-        {
+        if let Err(DocumentError::Storage(detail)) = self.documents().index(project_id) {
             return Err(OverviewError::Storage(detail));
         }
         let input = self.input(project_id, &project.location)?;
@@ -577,7 +591,8 @@ where
         self.store.save_overview(&overview)?;
         // With the provider on, new or changed documents go to the same
         // analysis as conversations: their decisions reach Revisão.
-        let queued_documents = Documents::new(self.store.clone())
+        let queued_documents = self
+            .documents()
             .propose(project_id, PROPOSE_PER_RUN)
             .map_err(|error| match error {
                 DocumentError::Storage(detail) => OverviewError::Storage(detail),

@@ -6,30 +6,45 @@
 //! Derived edges start as suggestions and only count once confirmed.
 
 mod ai_link;
+mod cache;
 mod derive;
 mod discover;
 mod mention;
 mod query;
+mod repo_files;
+mod revalidate;
 mod scope;
+mod symbols;
 
 pub use ai_link::{ai_link_quote, ai_link_reason, ai_link_why, AI_LINK_REASON};
 pub use derive::{
-    added_dependencies, map_preparer, ComponentProposal, MapPreparer, SuggestionReport,
-    TechnologyProposal,
+    added_dependencies, map_preparer, prepared_documents, prepared_projects, ComponentProposal,
+    MapPreparer, SuggestionReport, TechnologyProposal, DEPENDENCY_REASON, DEPENDENCY_SHARED_MARK,
+    SYMBOL_REASON,
 };
-pub use discover::{declared_components, DeclaredComponent, WorkspaceKind};
+pub(crate) use discover::project_keys;
+pub use discover::{
+    declared_components, infrastructure_components, project_names, DeclaredComponent, InfraKind,
+    WorkspaceKind,
+};
 pub use domain::entities::EntityKind;
+pub(crate) use mention::Folded;
 pub use mention::{mention_quote, mention_reason, MENTION_REASON};
 pub use query::{
     DecisionParts, EntityDetail, FileLens, GraphEdge, GraphNode, MapEntity, Neighborhood, NodeRef,
     NodeSummary, PartCount, ProjectGraph, ProjectMap, Suggestion, TimelineEvent, TimelineKind,
     DEFAULT_NEIGHBORHOOD_LIMIT, MAX_NEIGHBORHOOD_DEPTH,
 };
+pub(crate) use repo_files::{counted_files, repo_files};
+#[doc(hidden)]
+pub use repo_files::{index_repository, scan_symbols};
+pub use revalidate::StaleComponent;
 pub use scope::ClaimScopes;
+pub(crate) use scope::INHERITED_REASON;
 
 use domain::entities::{
-    check_part_of, entity_description, entity_key, entity_name, path_pattern, EdgeKind, EdgeOrigin,
-    EntityError, NodeKind,
+    check_part_of, entity_description, entity_key, entity_name, path_pattern, EdgeActor, EdgeKind,
+    EdgeOrigin, EntityError, NodeKind,
 };
 use domain::time::Timestamp;
 
@@ -198,6 +213,10 @@ pub struct EdgeRecord {
     pub confirmed_at: Option<String>,
     /// RFC 3339 invalidation time, when invalidated.
     pub invalidated_at: Option<String>,
+    /// Who confirmed it; `None` while it is a suggestion.
+    pub confirmed_by: Option<EdgeActor>,
+    /// Who invalidated it; `None` while it is not invalidated.
+    pub invalidated_by: Option<EdgeActor>,
 }
 
 impl EdgeRecord {
@@ -242,6 +261,10 @@ pub struct DecisionNode {
     pub files: Vec<String>,
     /// Diff hunks of the decision's evidence, for dependency detection.
     pub diffs: Vec<String>,
+    /// Taken from a document (an ADR, a spec): its evidence has a document
+    /// artifact and no diff hunk. The files of such a decision are the paths
+    /// the whole document cites, not the ones it changed.
+    pub from_document: bool,
 }
 
 /// A rule adopted from a candidate, with the files its evidence touched.
@@ -251,6 +274,8 @@ pub struct RuleSource {
     pub claim_id: String,
     /// Files of the candidate's evidence (`diff_summary.files`).
     pub files: Vec<String>,
+    /// Taken from a document, like [`DecisionNode::from_document`].
+    pub from_document: bool,
 }
 
 /// Persistence port of the graph.
@@ -281,10 +306,10 @@ pub trait GraphStore {
     fn insert_edge(&self, record: &EdgeRecord) -> Result<(), GraphError>;
 
     /// Confirms a pending edge; `false` when it is no longer pending.
-    fn confirm_edge(&self, edge_id: &str, at: &str) -> Result<bool, GraphError>;
+    fn confirm_edge(&self, edge_id: &str, at: &str, by: EdgeActor) -> Result<bool, GraphError>;
 
     /// Invalidates a live edge; `false` when it was already invalidated.
-    fn invalidate_edge(&self, edge_id: &str, at: &str) -> Result<bool, GraphError>;
+    fn invalidate_edge(&self, edge_id: &str, at: &str, by: EdgeActor) -> Result<bool, GraphError>;
 
     /// Every decision of the project that was ever confirmed, with the files
     /// and diff hunks of its capture.
@@ -437,7 +462,8 @@ where
             let touches = edge.entity_id == entity_id
                 || (edge.source_kind == NodeKind::Entity && edge.source_id == entity_id);
             if touches && edge.is_live() {
-                self.store.invalidate_edge(&edge.edge_id, &now)?;
+                self.store
+                    .invalidate_edge(&edge.edge_id, &now, EdgeActor::Person)?;
             }
         }
         Ok(EntityRecord {
@@ -453,6 +479,23 @@ where
     /// `invalid_source` for a source outside the project, the domain's edge
     /// rules, `duplicate_edge`, or `not_found` for an unknown entity.
     pub fn link(&self, request: LinkRequest) -> Result<EdgeRecord, GraphError> {
+        self.link_as(request, EdgeOrigin::Human, "", EdgeActor::Person)
+    }
+
+    /// Records a confirmed edge made by `by`: a person's is `Human` with no
+    /// reason; one the automatic review or an inheritance made is `Derived`
+    /// and carries the `reason` it was derived from.
+    ///
+    /// # Errors
+    ///
+    /// As [`KnowledgeGraph::link`].
+    pub fn link_as(
+        &self,
+        request: LinkRequest,
+        origin: EdgeOrigin,
+        reason: &str,
+        by: EdgeActor,
+    ) -> Result<EdgeRecord, GraphError> {
         let entity = self.live_entity(&request.entity_id)?;
         request.kind.check(request.source_kind, entity.kind)?;
         self.check_source(&entity.project_id, request.source_kind, &request.source_id)?;
@@ -471,7 +514,7 @@ where
         {
             if pending.is_pending() {
                 // Linking what was already suggested confirms the suggestion.
-                return self.confirm(&pending.edge_id);
+                return self.confirm_as(&pending.edge_id, by);
             }
             return Err(GraphError::DuplicateEdge);
         }
@@ -483,11 +526,13 @@ where
             source_kind: request.source_kind,
             source_id: request.source_id,
             entity_id: request.entity_id,
-            origin: EdgeOrigin::Human,
-            reason: String::new(),
+            origin,
+            reason: reason.to_string(),
             created_at: now.clone(),
             confirmed_at: Some(now),
             invalidated_at: None,
+            confirmed_by: Some(by),
+            invalidated_by: None,
         };
         self.store.insert_edge(&record)?;
         self.propagate_to_claims(&record)?;
@@ -500,13 +545,23 @@ where
     ///
     /// `not_found`, or `conflict` when it is no longer a suggestion.
     pub fn confirm(&self, edge_id: &str) -> Result<EdgeRecord, GraphError> {
+        self.confirm_as(edge_id, EdgeActor::Person)
+    }
+
+    /// Confirms a suggested edge on behalf of `by`.
+    ///
+    /// # Errors
+    ///
+    /// `not_found`, or `conflict` when it is no longer a suggestion.
+    pub fn confirm_as(&self, edge_id: &str, by: EdgeActor) -> Result<EdgeRecord, GraphError> {
         let edge = self.edge(edge_id)?;
         let now = now_rfc3339();
-        if !self.store.confirm_edge(edge_id, &now)? {
+        if !self.store.confirm_edge(edge_id, &now, by)? {
             return Err(GraphError::Conflict);
         }
         let confirmed = EdgeRecord {
             confirmed_at: Some(now),
+            confirmed_by: Some(by),
             ..edge
         };
         self.propagate_to_claims(&confirmed)?;
@@ -520,15 +575,58 @@ where
     ///
     /// `not_found`, or `conflict` when it was already invalidated.
     pub fn invalidate(&self, edge_id: &str) -> Result<EdgeRecord, GraphError> {
+        self.invalidate_as(edge_id, EdgeActor::Person)
+    }
+
+    /// Rejects or removes an edge on behalf of `by`.
+    ///
+    /// # Errors
+    ///
+    /// `not_found`, or `conflict` when it was already invalidated.
+    pub fn invalidate_as(&self, edge_id: &str, by: EdgeActor) -> Result<EdgeRecord, GraphError> {
         let edge = self.edge(edge_id)?;
         let now = now_rfc3339();
-        if !self.store.invalidate_edge(edge_id, &now)? {
+        if !self.store.invalidate_edge(edge_id, &now, by)? {
             return Err(GraphError::Conflict);
         }
+        self.cascade_to_claims(&edge, &now)?;
         Ok(EdgeRecord {
             invalidated_at: Some(now),
+            invalidated_by: Some(by),
             ..edge
         })
+    }
+
+    /// A decision's tie to a component that no longer holds takes down the
+    /// ties its rules inherited from it for that component. What a person
+    /// confirmed on a rule stays.
+    fn cascade_to_claims(&self, edge: &EdgeRecord, now: &str) -> Result<(), GraphError> {
+        if edge.source_kind != NodeKind::Decision || edge.kind != EdgeKind::Affects {
+            return Ok(());
+        }
+        let claims: Vec<String> = self
+            .store
+            .project_claims(&edge.project_id)?
+            .into_iter()
+            .filter(|claim| claim.source_decision_id.as_deref() == Some(edge.source_id.as_str()))
+            .map(|claim| claim.claim_id)
+            .collect();
+        if claims.is_empty() {
+            return Ok(());
+        }
+        for inherited in self.store.project_edges(&edge.project_id)? {
+            if inherited.kind == EdgeKind::AppliesTo
+                && inherited.source_kind == NodeKind::Claim
+                && claims.contains(&inherited.source_id)
+                && inherited.entity_id == edge.entity_id
+                && inherited.is_live()
+                && inherited.confirmed_by == Some(EdgeActor::Inherited)
+            {
+                self.store
+                    .invalidate_edge(&inherited.edge_id, now, EdgeActor::Inherited)?;
+            }
+        }
+        Ok(())
     }
 
     fn edge(&self, edge_id: &str) -> Result<EdgeRecord, GraphError> {

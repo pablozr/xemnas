@@ -49,13 +49,67 @@ atrase a análise da sessão que o desenvolvedor acabou de encerrar.
 - Contagens por fila (na fila, executando, falhou) vêm de uma consulta
   agrupada (`Jobs::lane_summaries`), nunca de carregar as linhas.
 
+### Prioridade dentro da fila
+
+`JobKind::priority` ordena os tipos de uma fila (menor primeiro) e `claim_next`
+recebe os tipos já nessa ordem (`ORDER BY` pela posição do tipo, depois o mais
+antigo): o que o caminho quente do agente precisa vem antes do que só refina.
+
+| Prioridade | Tipos |
+| --- | --- |
+| 0 | `analyze_capture`, `analyze_document`, `context_routing` |
+| 1 | `suggest_links` (a decisão chega ao componente que ela rege), `refresh_observations` |
+| 2 | `suggest_relations` |
+| 3 | `derive_claims` |
+| 4 | `derive_search_terms` |
+
+A análise das decisões roda em filas próprias (`now`, `documents`), então nunca
+espera por sugestões. Dentro de `documents`, a ordem de enfileirar é a de
+`Documents::propose`: ADRs e especificações, depois README e guias/tarefas
+(`DocumentKind`, `documents_are_queued_for_analysis_adrs_and_specs_before_guides`).
+A fila `suggestions` tem um worker: uma sugestão em curso termina antes de o
+próximo vínculo começar, mas nenhum lote de relações, regras ou termos passa à
+frente de um vínculo à espera.
+
+### Lotes de IA
+
+Cada decisão adotada enfileira um job por tipo (relações, regras, vínculos) e um
+por projeto (termos). Um job por decisão custava uma chamada ao provedor cada:
+37 decisões, cerca de 250 chamadas e 52 minutos num projeto real. Agora os jobs
+do mesmo tipo se juntam na hora de rodar:
+
+- `Jobs::register_batch(kind, max, handler)`: quando um job do tipo é
+  reivindicado, `JobRepository::claim_more` reivindica, atomicamente, até
+  `max - 1` jobs mais antigos do mesmo tipo, e o handler recebe todos de uma vez
+  (`&[JobRecord]` → um resultado por job). Cada job termina como `completed`,
+  `failed` ou volta à fila (`Deferred`/429, todos do lote com o mesmo prazo)
+  sozinho. Um lote é sempre do mesmo tipo e o handler agrupa por projeto.
+- `application::batching::BATCH_SIZE = 10` assuntos por chamada. O prompt vira uma
+  lista numerada (`## Decision 1`, `## New decision 1 D:xxxx`) e a resposta traz uma
+  entrada por número (`{"decisions":[{"id":"1", ...}]}`, `batching::answers`). As regras
+  por assunto do prompt são as mesmas; cada entrada é validada sozinha, com a mesma
+  checagem de antes (citação literal contra o texto *daquela* decisão, ids, ciclos,
+  duplicatas). Uma entrada ilegível ou ausente perde só o seu assunto.
+- Os quatro tipos continuam separados (cada um com seu portão de qualidade):
+  `suggest_links` (`LinkFinder::run_many`, componentes listados uma vez para todos),
+  `suggest_relations` (`RelationFinder::run_many`, candidatos de cada decisão sob ela),
+  `derive_claims` (`ClaimFinder::run_many`) e `derive_search_terms`
+  (`SearchTermFinder::run_projects`, que já pedia até `BATCH` decisões por chamada; os
+  jobs enfileirados do mesmo projeto, um por adoção, agora rodam como um só).
+- Chamadas para N decisões: ⌈N / 10⌉ por tipo, em vez de N (4N → 4·⌈N / 10⌉, no máximo: só
+  decisões sem vínculo pedem `suggest_links`; para as 37 do projeto medido, até 16 em vez de
+  até 148 nos quatro tipos, fora as análises, que continuam uma por documento). Portão:
+  `storage-sqlite/tests/batched_jobs.rs`, em `python tools/core-quality.py`.
+- O runner (`apps/desktop-gpui/tests/e2e_pipeline.rs`) conta as chamadas pelo
+  `ProviderLimiter::calls` (cada licença é uma chamada) e as imprime por passo e no total.
+
 ### Limite de chamadas ao provedor
 
 - Um `ProviderLimiter` (`application::limiter`) é compartilhado por todas as
   filas: no máximo N chamadas ao provedor de IA ao mesmo tempo (padrão 2).
   Chamadas de um worker da fila `now` passam à frente das que esperam nas
-  outras filas. Só os handlers de jobs usam o limitador
-  (`ProviderFactory::with_limiter`); Visão geral, revisão e aprovação
+  outras filas; `ProviderLimiter::calls` conta as chamadas feitas, para o runner.
+  Só os handlers de jobs usam o limitador (`ProviderFactory::with_limiter`); Visão geral, revisão e aprovação
   automática, disparadas pela pessoa, não esperam por ele.
 - HTTP 429 vira `ExtractError::RateLimited` com o `Retry-After` (em segundos,
   até 15 min), sem nova tentativa dentro da chamada. O limitador pausa todo

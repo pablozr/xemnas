@@ -194,100 +194,160 @@ fn main() {
     // Sessions and documentation share the handler but not the lane.
     jobs.register(application::jobs::ANALYZE_CAPTURE_KIND, analyze.clone());
     jobs.register(application::jobs::ANALYZE_DOCUMENT_KIND, analyze);
+    // The four suggestion kinds batch: when a job runs, the oldest queued
+    // jobs of its kind join it and one provider call answers up to
+    // `BATCH_SIZE` subjects (docs/arquitetura/desempenho-e-escala.md).
     // After an adoption, earlier decisions related to the new one are judged
     // by the configured provider and stored as suggestions.
-    jobs.register(
+    jobs.register_batch(
         application::relation_suggestions::RELATION_JOB_KIND,
+        application::batching::BATCH_SIZE,
         std::sync::Arc::new({
             let finder = application::relation_suggestions::RelationFinder::new(
                 store.clone(),
                 settings.clone(),
                 ai_provider::ProviderFactory::new(chatgpt.clone()).with_limiter(limiter.clone()),
             );
-            move |record: &application::jobs::JobRecord| match finder.run(&record.payload) {
-                Ok(stored) => {
-                    tracing::info!(stored, operation = "suggest_relations", "relations judged");
-                    Ok(())
-                }
-                Err(application::relation_suggestions::RelationFindError::Deferred(
-                    retry_after,
-                )) => Err(application::jobs::JobFailure::Deferred { retry_after }),
-                Err(error) => {
-                    tracing::warn!(error = %error, operation = "suggest_relations", "failed");
-                    Ok(())
-                }
+            move |records: &[application::jobs::JobRecord]| {
+                let ids: Vec<&str> = records.iter().map(|job| job.payload.as_str()).collect();
+                finder
+                    .run_many(&ids)
+                    .into_iter()
+                    .map(|result| match result {
+                        Ok(stored) => {
+                            tracing::info!(
+                                stored,
+                                operation = "suggest_relations",
+                                "relations judged"
+                            );
+                            Ok(())
+                        }
+                        Err(application::relation_suggestions::RelationFindError::Deferred(
+                            retry_after,
+                        )) => Err(application::jobs::JobFailure::Deferred { retry_after }),
+                        Err(error) => {
+                            tracing::warn!(
+                                error = %error,
+                                operation = "suggest_relations",
+                                "failed"
+                            );
+                            Ok(())
+                        }
+                    })
+                    .collect()
             }
         }),
     );
     // The context an adopted decision states becomes suggested rules.
-    jobs.register(
+    jobs.register_batch(
         application::claim_suggestions::CLAIM_JOB_KIND,
+        application::batching::BATCH_SIZE,
         std::sync::Arc::new({
             let finder = application::claim_suggestions::ClaimFinder::new(
                 store.clone(),
                 settings.clone(),
                 ai_provider::ProviderFactory::new(chatgpt.clone()).with_limiter(limiter.clone()),
             );
-            move |record: &application::jobs::JobRecord| match finder.run(&record.payload) {
-                Ok(stored) => {
-                    tracing::info!(stored, operation = "derive_claims", "context derived");
-                    Ok(())
-                }
-                Err(application::claim_suggestions::ClaimSuggestionError::Deferred(
-                    retry_after,
-                )) => Err(application::jobs::JobFailure::Deferred { retry_after }),
-                Err(error) => {
-                    tracing::warn!(error = %error, operation = "derive_claims", "failed");
-                    Ok(())
-                }
+            move |records: &[application::jobs::JobRecord]| {
+                let ids: Vec<&str> = records.iter().map(|job| job.payload.as_str()).collect();
+                finder
+                    .run_many(&ids)
+                    .into_iter()
+                    .map(|result| match result {
+                        Ok(stored) => {
+                            tracing::info!(stored, operation = "derive_claims", "context derived");
+                            Ok(())
+                        }
+                        Err(application::claim_suggestions::ClaimSuggestionError::Deferred(
+                            retry_after,
+                        )) => Err(application::jobs::JobFailure::Deferred { retry_after }),
+                        Err(error) => {
+                            tracing::warn!(
+                                error = %error,
+                                operation = "derive_claims",
+                                "failed"
+                            );
+                            Ok(())
+                        }
+                    })
+                    .collect()
             }
         }),
     );
-    // Adopted decisions get the search terms their own text lacks.
-    jobs.register(
+    // Adopted decisions get the search terms their own text lacks. The job is
+    // per project: the queued ones of a project run as one.
+    jobs.register_batch(
         application::search_terms::SEARCH_TERMS_JOB_KIND,
+        application::search_terms::MAX_COALESCED_JOBS,
         std::sync::Arc::new({
             let finder = application::search_terms::SearchTermFinder::new(
                 store.clone(),
                 settings.clone(),
                 ai_provider::ProviderFactory::new(chatgpt.clone()).with_limiter(limiter.clone()),
             );
-            move |record: &application::jobs::JobRecord| match finder.run(&record.payload) {
-                Ok(written) => {
-                    tracing::info!(written, operation = "derive_search_terms", "terms written");
-                    Ok(())
-                }
-                Err(application::search_terms::SearchTermError::Deferred(retry_after)) => {
-                    Err(application::jobs::JobFailure::Deferred { retry_after })
-                }
-                Err(error) => {
-                    tracing::warn!(error = %error, operation = "derive_search_terms", "failed");
-                    Ok(())
-                }
+            move |records: &[application::jobs::JobRecord]| {
+                let projects: Vec<&str> = records.iter().map(|job| job.payload.as_str()).collect();
+                finder
+                    .run_projects(&projects)
+                    .into_iter()
+                    .map(|result| match result {
+                        Ok(written) => {
+                            tracing::info!(
+                                written,
+                                operation = "derive_search_terms",
+                                "terms written"
+                            );
+                            Ok(())
+                        }
+                        Err(application::search_terms::SearchTermError::Deferred(retry_after)) => {
+                            Err(application::jobs::JobFailure::Deferred { retry_after })
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                error = %error,
+                                operation = "derive_search_terms",
+                                "failed"
+                            );
+                            Ok(())
+                        }
+                    })
+                    .collect()
             }
         }),
     );
     // A decision no file tied to the map asks which components it governs.
-    jobs.register(
+    jobs.register_batch(
         application::link_suggestions::LINK_JOB_KIND,
+        application::batching::BATCH_SIZE,
         std::sync::Arc::new({
             let finder = application::link_suggestions::LinkFinder::new(
                 store.clone(),
                 settings.clone(),
                 ai_provider::ProviderFactory::new(chatgpt.clone()).with_limiter(limiter.clone()),
             );
-            move |record: &application::jobs::JobRecord| match finder.run(&record.payload) {
-                Ok(stored) => {
-                    tracing::info!(stored, operation = "suggest_links", "links proposed");
-                    Ok(())
-                }
-                Err(application::link_suggestions::LinkFindError::Deferred(retry_after)) => {
-                    Err(application::jobs::JobFailure::Deferred { retry_after })
-                }
-                Err(error) => {
-                    tracing::warn!(error = %error, operation = "suggest_links", "failed");
-                    Ok(())
-                }
+            move |records: &[application::jobs::JobRecord]| {
+                let ids: Vec<&str> = records.iter().map(|job| job.payload.as_str()).collect();
+                finder
+                    .run_many(&ids)
+                    .into_iter()
+                    .map(|result| match result {
+                        Ok(stored) => {
+                            tracing::info!(stored, operation = "suggest_links", "links proposed");
+                            Ok(())
+                        }
+                        Err(application::link_suggestions::LinkFindError::Deferred(
+                            retry_after,
+                        )) => Err(application::jobs::JobFailure::Deferred { retry_after }),
+                        Err(error) => {
+                            tracing::warn!(
+                                error = %error,
+                                operation = "suggest_links",
+                                "failed"
+                            );
+                            Ok(())
+                        }
+                    })
+                    .collect()
             }
         }),
     );
@@ -668,11 +728,15 @@ where
     K: application::profile::SecretStore + Send + Sync + 'static,
 {
     Box::new(move |store| {
-        Arc::new(application::overview::ProjectOverviews::new(
-            store,
-            settings,
-            ai_provider::ProviderFactory::new(chatgpt),
-        ))
+        let documents = application::graph::prepared_documents(store.clone());
+        Arc::new(
+            application::overview::ProjectOverviews::new(
+                store,
+                settings,
+                ai_provider::ProviderFactory::new(chatgpt),
+            )
+            .with_documents(documents),
+        )
     })
 }
 
@@ -834,8 +898,7 @@ fn run_shell_mode(
             store.as_ref().ok().map(|store| approvals(store.clone()));
         let (projects, inbox, decisions, context, map, overview) = match store {
             Ok(store) => (
-                Ok(application::projects::Projects::new(store.clone())
-                    .with_map_preparer(application::graph::map_preparer(store.clone()))),
+                Ok(application::graph::prepared_projects(store.clone())),
                 Some(application::inbox::Inbox::new(store.clone())),
                 Some((
                     application::decisions::Decisions::new(store.clone()),
@@ -850,8 +913,7 @@ fn run_shell_mode(
                     settings: application::context_settings::ContextSettings::new(store.clone()),
                     packs: application::context::ContextPacks::new(store.clone())
                         .with_routing(routing.clone()),
-                    documents: application::documents::Documents::new(store.clone())
-                        .with_map_preparer(application::graph::map_preparer(store.clone())),
+                    documents: application::graph::prepared_documents(store.clone()),
                     deliveries: application::injection::Deliveries::new(store.clone()),
                     derived: application::claim_suggestions::ClaimSuggestions::new(store.clone()),
                 }),

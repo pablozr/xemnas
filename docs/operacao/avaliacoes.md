@@ -1,6 +1,6 @@
 # Avaliações do núcleo: o que mostraram
 
-Resumo de seis avaliações feitas em 03–04/10/2026, com agentes de modelo e
+Resumo de sete avaliações feitas em 03–07/10/2026, com agentes de modelo e
 dados sintéticos ou descartáveis. Os relatórios completos, logs, runner e
 capturas foram removidos; ficam no histórico do Git (commits anteriores a esta
 página). Todas medem **recuperação e contratos técnicos**; nenhuma mede
@@ -124,6 +124,34 @@ vigente, justificativa inventada) reprova a fidelidade da tarefa.
   potencial de repetição, não ganho de produtividade.
 - **Limites:** sem validação GUI da apresentação de grupos; classificação de
   natureza não testada com provider real consentido.
+
+## 7. Vínculos a componentes (dois projetos reais, 07/10)
+
+- **Pergunta:** os vínculos decisão/claim → componente do mapa estão certos?
+- **Método:** avaliação manual, por um agente, de 155 vínculos de dois projetos reais, contra o
+  texto da decisão e o código. Sem conteúdo dos projetos aqui, só os nomes das causas.
+- **Resultado:** 91 certos, 12 duvidosos, 52 errados. Oito causas (ADR-0016): menção sem
+  polaridade; componente com o nome do projeto; caminho citado por documento tomado como
+  arquivo da decisão e proposto como componente sem existir; juiz de IA com critério de
+  repetição; regras que herdavam vínculos pendentes e eram rotuladas `human`; nenhum sinal
+  estrutural; raiz e CI sem componente; aresta invalidada que nunca volta. Nos 57 veredictos
+  da IA sobre vínculos de um dos projetos, 11 foram descartes e 9 diziam "repete".
+- **Decisões (37 itens):** 35 certos, 2 parciais, 0 errados; cobertura em torno de um terço
+  das decisões possíveis; 7 de 18 ADRs com zero candidatos.
+- **Claims (71):** 52 certas, 19 parciais, 0 erradas; 7 pares duplicados; escopo perdido em 7.
+- **Mudou no produto:** menção afirmativa, nome do projeto restrito, índice limitado de
+  arquivos, dono por manifest, símbolos, raiz e CI como componentes, atores nas arestas,
+  religar, herança só do confirmado, juiz de vínculos à parte, revalidação e fantasmas.
+- **Depois (corpus sintético `link_structure_corpus`, 51 decisões):** precisão 0,487 → 1,000,
+  cobertura 0,613 → 1,000, vínculos a parte negada 11 → 0, ao homônimo 4 → 0, fantasmas 3 → 0.
+- **Depois (cópia dos dados reais, `dogfood_links`, só contagens):** a migração reetiquetou
+  134 arestas que apareciam como humanas; num projeto de 32 decisões o refresh invalidou 22
+  vínculos de menção negada ou homônima, acrescentou 7 estruturais, evitou 2 chamadas de IA e
+  apontou `examples` como componente fantasma com dono `sc-session`; no outro, 1 revalidada e 1
+  fantasma (`runner`).
+- **Limites:** o corpus é sintético e rotulado por quem escreveu as regras; as contagens reais
+  dependem do estado dos dados naquele dia; nenhuma chamada ao provedor de IA foi feita para
+  medir o juiz (respostas roteirizadas).
 
 ## Ainda sem prova
 

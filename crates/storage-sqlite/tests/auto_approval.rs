@@ -75,6 +75,8 @@ struct Judge {
     answer: Arc<Mutex<Result<String, String>>>,
     calls: Arc<AtomicUsize>,
     asked: Arc<Mutex<Vec<String>>>,
+    /// The system prompt of each call.
+    prompts: Arc<Mutex<Vec<String>>>,
 }
 
 impl Judge {
@@ -83,6 +85,7 @@ impl Judge {
             answer: Arc::new(Mutex::new(Ok(answer.to_owned()))),
             calls: Arc::new(AtomicUsize::new(0)),
             asked: Arc::new(Mutex::new(Vec::new())),
+            prompts: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -106,13 +109,14 @@ impl CandidateExtractor for Judge {
 impl StructuredModel for Judge {
     fn complete(
         &self,
-        _: &str,
+        system: &str,
         user: &str,
         schema_name: &str,
         _: &JsonValue,
     ) -> Result<String, ExtractError> {
         assert_eq!(schema_name, "approval_verdicts");
         self.calls.fetch_add(1, Ordering::SeqCst);
+        self.prompts.lock().expect("lock").push(system.to_owned());
         self.asked.lock().expect("lock").push(user.to_owned());
         self.answer
             .lock()
@@ -550,7 +554,7 @@ fn a_link_found_by_mention_is_asked_with_its_quote_and_a_file_link_is_accepted()
     );
     let asked = judge.asked.lock().expect("lock")[0].clone();
     assert!(
-        asked.contains("Citação:") && asked.contains("o core grava"),
+        asked.contains("Evidência (menção no texto):") && asked.contains("o core grava"),
         "{asked}"
     );
     assert!(
@@ -615,6 +619,8 @@ fn a_link_the_ai_proposed_is_judged_with_its_quote_and_reason() {
             created_at: NOW.into(),
             confirmed_at: None,
             invalidated_at: None,
+            confirmed_by: None,
+            invalidated_by: None,
         })
         .expect("proposed by the AI");
 
@@ -632,7 +638,7 @@ fn a_link_the_ai_proposed_is_judged_with_its_quote_and_reason() {
     assert_eq!((report.accepted, report.left), (1, 0));
     let asked = judge.asked.lock().expect("lock")[0].clone();
     assert!(
-        asked.contains("Citação proposta pela IA: resultado de um turno")
+        asked.contains("Evidência (proposta pela IA): resultado de um turno")
             && asked.contains("Motivo da IA: A decisão rege o desfecho do motor."),
         "{asked}"
     );
@@ -877,6 +883,8 @@ fn a_doubted_ai_link_is_discarded_and_a_doubted_mention_still_waits() {
             created_at: NOW.into(),
             confirmed_at: None,
             invalidated_at: None,
+            confirmed_by: None,
+            invalidated_by: None,
         })
         .expect("proposed by the AI");
 
@@ -917,6 +925,171 @@ fn a_doubted_ai_link_is_discarded_and_a_doubted_mention_still_waits() {
         .find(|edge| edge.edge_id == "ai-edge")
         .expect("edge");
     assert!(edge.invalidated_at.is_some(), "the discard dropped it");
+}
+
+/// A project with the component `core` (described, with a path) and a decision
+/// that names it in its question: a mention link waits for the judge.
+fn mention_link_fixture(test: &support::TestStore) -> String {
+    use application::graph::{KnowledgeGraph, NewEntity};
+    use domain::entities::EntityKind;
+    let graph = KnowledgeGraph::new(test.store.clone());
+    let core = graph
+        .create_entity(NewEntity {
+            project_id: PROJECT.into(),
+            kind: Some(EntityKind::Component),
+            name: "core".into(),
+            description: "Valida e grava as capturas.".into(),
+            patterns: vec!["crates/core/**".into()],
+            ..NewEntity::default()
+        })
+        .expect("component")
+        .entity_id;
+    support::decision_with_diff(
+        &test.store,
+        PROJECT,
+        "mention",
+        "Como o core grava os eventos sem perder nenhum?",
+        &["docs/adr/0003-outbox.md"],
+        "",
+    );
+    graph.refresh_suggestions(PROJECT).expect("refresh");
+    core
+}
+
+#[test]
+fn links_are_asked_apart_with_their_own_prompt_and_the_whole_evidence() {
+    use application::auto_approval::{LINK_REVIEW_PROMPT, REVIEW_PROMPT};
+    let test = support::open("review-link-batch", &[PROJECT]);
+    mention_link_fixture(&test);
+    test.store
+        .insert_candidates(&[old("amb", 0.60, "qual formato exportar relatorios")])
+        .expect("candidate");
+    let judge = Judge::answering(
+        r#"{"verdicts":[{"id":"I1","verdict":"human","reason":"não decide","conflicts_with":null}]}"#,
+    );
+    let review = review_with(&test.store, consented(), &judge);
+    review.set_mode(Mode::Automatic).expect("on");
+    let report = review
+        .run_at(PROJECT, "2099-01-01T00:00:00Z")
+        .expect("pass");
+    assert_eq!(
+        judge.calls.load(Ordering::SeqCst),
+        2,
+        "two kinds, two calls"
+    );
+    assert_eq!(report.left, 2);
+    let prompts = judge.prompts.lock().expect("lock").clone();
+    assert_eq!(prompts[0], REVIEW_PROMPT);
+    assert_eq!(prompts[1], LINK_REVIEW_PROMPT);
+    let asked = judge.asked.lock().expect("lock").clone();
+    assert!(asked[0].contains("qual formato exportar") && !asked[0].contains("[vínculo"));
+    let links = &asked[1];
+    assert!(links.contains("[vínculo affects]"), "{links}");
+    assert!(links.contains("Escolha: escolha de mention"), "{links}");
+    assert!(
+        links.contains("Componente: Valida e grava as capturas."),
+        "{links}"
+    );
+    assert!(links.contains("Caminhos: crates/core/**"), "{links}");
+    assert!(links.contains("Evidência (menção no texto)"), "{links}");
+    assert!(
+        !links.contains("qual formato"),
+        "no candidate in the link batch"
+    );
+    assert!(LINK_REVIEW_PROMPT.contains("never discard a link for repeating"));
+    assert!(LINK_REVIEW_PROMPT.contains("where the decision or rule applies or is implemented"));
+}
+
+#[test]
+fn without_links_there_is_no_link_call_and_with_only_links_there_is_one() {
+    let test = support::open("review-link-only", &[PROJECT]);
+    mention_link_fixture(&test);
+    let judge = Judge::answering(
+        r#"{"verdicts":[{"id":"I1","verdict":"human","reason":"não decide","conflicts_with":null}]}"#,
+    );
+    let review = review_with(&test.store, consented(), &judge);
+    review.set_mode(Mode::Automatic).expect("on");
+    review
+        .run_at(PROJECT, "2099-01-01T00:00:00Z")
+        .expect("pass");
+    assert_eq!(judge.calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn structural_links_are_settled_by_the_rules_without_the_ai() {
+    use application::graph::{EdgeRecord, GraphStore, DEPENDENCY_REASON, SYMBOL_REASON};
+    use domain::entities::{EdgeActor, EdgeKind, EdgeOrigin, NodeKind};
+    let test = support::open("review-structural", &[PROJECT]);
+    let core = mention_link_fixture(&test);
+    let plain = |key: &str, question: &str, id: &str, reason: String| {
+        let decision = support::decision_with_diff(
+            &test.store,
+            PROJECT,
+            key,
+            question,
+            &["docs/adr/0009-input.md"],
+            "",
+        );
+        test.store
+            .insert_edge(&EdgeRecord {
+                edge_id: id.into(),
+                project_id: PROJECT.into(),
+                kind: EdgeKind::Affects,
+                source_kind: NodeKind::Decision,
+                source_id: decision,
+                entity_id: core.clone(),
+                origin: EdgeOrigin::Derived,
+                reason,
+                created_at: NOW.into(),
+                confirmed_at: None,
+                invalidated_at: None,
+                confirmed_by: None,
+                invalidated_by: None,
+            })
+            .expect("structural edge");
+    };
+    // The mention link waits; the two structural ones are plain.
+    plain(
+        "structural-a",
+        "Como validar a entrada?",
+        "dep-edge",
+        format!("{DEPENDENCY_REASON}\"quinn\" (crates/core/Cargo.toml)"),
+    );
+    plain(
+        "structural-b",
+        "Como versionar o formato?",
+        "sym-edge",
+        format!("{SYMBOL_REASON}`FLUSH_INTERVAL` (crates/core/src/flush.rs)"),
+    );
+    let judge = Judge::answering(
+        r#"{"verdicts":[{"id":"I1","verdict":"human","reason":"não decide","conflicts_with":null}]}"#,
+    );
+    let review = review_with(&test.store, consented(), &judge);
+    review.set_mode(Mode::Automatic).expect("on");
+    review
+        .run_at(PROJECT, "2099-01-01T00:00:00Z")
+        .expect("pass");
+    let edges = test.store.project_edges(PROJECT).expect("edges");
+    let confirmed: Vec<_> = edges
+        .iter()
+        .filter(|edge| {
+            edge.reason.starts_with(DEPENDENCY_REASON) || edge.reason.starts_with(SYMBOL_REASON)
+        })
+        .filter(|edge| edge.confirmed_at.is_some())
+        .collect();
+    assert_eq!(
+        confirmed.len(),
+        2,
+        "the rules accepted both structural links"
+    );
+    assert!(confirmed
+        .iter()
+        .all(|edge| edge.confirmed_by == Some(EdgeActor::Rules)));
+    // Only the mention link went to the judge.
+    let asked = judge.asked.lock().expect("lock").clone();
+    assert_eq!(asked.len(), 1);
+    assert!(asked[0].contains("Evidência (menção no texto)"));
+    assert!(!asked[0].contains("dependência citada"));
 }
 
 mod resolution {

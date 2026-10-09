@@ -265,3 +265,42 @@ fn an_adopted_rule_applies_to_the_components_it_touched() {
         .expect("storage");
     assert_eq!(detail.claims.len(), 1, "the rule holds on storage now");
 }
+
+#[test]
+fn what_the_review_adopts_is_derived_and_names_its_actor_and_a_person_adopts_as_human() {
+    use domain::entities::EdgeActor;
+    for (by, origin, actor, reason_kept) in [
+        (EdgeActor::Rules, "derived", "rules", true),
+        (EdgeActor::Ai, "derived", "ai", true),
+        (EdgeActor::Person, "human", "person", false),
+    ] {
+        let test = support::open("adoption-actor", &["p1"]);
+        entities(&test.store);
+        candidate(&test.store, "decision");
+        let adoption = Adoption::new(test.store.clone());
+        let preview = adoption.preview("cand-adopt").expect("preview");
+        let outcome = adoption
+            .adopt_as("cand-adopt", None, &preview.links, &[], by)
+            .expect("adopt");
+        assert_eq!(outcome.linked, 3);
+        let raw = rusqlite::Connection::open(test.root.join("app.db")).expect("raw");
+        let mut statement = raw
+            .prepare(
+                "SELECT origin, reason, confirmed_by FROM entity_edges \
+                 WHERE confirmed_at IS NOT NULL AND source_id = ?1 ORDER BY reason",
+            )
+            .expect("statement");
+        let rows: Vec<(String, String, String)> = statement
+            .query_map([outcome.id.as_str()], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .expect("rows")
+            .collect::<Result<_, _>>()
+            .expect("collect");
+        assert_eq!(rows.len(), 3, "{by:?}");
+        for (row_origin, reason, row_actor) in rows {
+            assert_eq!((row_origin.as_str(), row_actor.as_str()), (origin, actor));
+            assert_eq!(!reason.is_empty(), reason_kept, "{reason}");
+        }
+    }
+}

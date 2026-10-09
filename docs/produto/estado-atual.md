@@ -22,7 +22,10 @@ de manifests (`Cargo.toml`, `package.json`) viram observações descritivas loca
 entram na fila de revisão. Documentação do projeto (README, ADRs, `docs/`) é indexada e pode
 gerar candidatos. O mapa do projeto existe desde a primeira análise: ao registrar o projeto
 e ao indexar ou importar documentos, os componentes declarados nos manifests são criados e as
-sugestões derivadas (o que a tela Mapa já fazia ao abrir). Uma análise de documento que falhou
+sugestões derivadas (o que a tela Mapa já fazia ao abrir). As sugestões de IA depois de uma adoção
+(vínculos com o mapa, relações, regras e termos de busca) rodam em lotes de até 10 decisões por
+chamada ao provedor, e os vínculos vão antes do resto; um projeto de dezenas de decisões custa
+algumas chamadas por tipo em vez de uma por decisão. Uma análise de documento que falhou
 volta para a fila na próxima importação do arquivo, ou quando o app propõe documentos de novo
 (até 3 execuções no total por versão), e "Reprocessar" vale sempre. O motivo de uma falha
 (só a mensagem do erro, limpa e com até 200 caracteres) fica guardado e aparece em
@@ -52,17 +55,21 @@ entre decisões sem alterar nada.
 **Regras com escopo.** Uma regra (restrição ou convenção) entra no contexto de uma tarefa só se
 a toca: o texto casa com a tarefa, ela está ligada a um componente que a tarefa toca
 (`crates/application/src/graph/scope.rs`) ou foi marcada como **global**. Escopo vazio quer dizer
-"não informado", não "vale para tudo": uma regra sem nenhuma dessas três coisas não entra. As
+"não informado", não "vale para tudo": uma regra sem nenhuma dessas três coisas não entra. Um
+componente com muitas regras ligadas (mais de 3) contribui no máximo com 3, as que mais falam do
+tema da tarefa; tocar o componente só pelo nome ou pelo arquivo, sem tema em comum, não traz
+nenhuma. Uma decisão do pacote ligada a um componente não o toca. As
 globais são no máximo 3 por pacote, as confirmadas mais recentemente primeiro, e as decisões
-ocupam o orçamento antes das regras. A marca global é o valor reservado `*`, como texto de um
-qualificador de escopo ou entrada do escopo herdado (sem migração); para dados anteriores à marca,
-uma convenção sem escopo algum (sem vínculo, escopo herdado ou qualificador de escopo) conta
-como global e uma restrição sem escopo não. A IA propõe os componentes de uma regra sem ligação
+ocupam o orçamento antes das regras. Só a marca explícita torna uma regra global: o valor reservado `*`, como texto de um
+qualificador de escopo ou entrada do escopo herdado (sem migração). Uma convenção sem escopo
+se comporta como uma restrição sem escopo: entra só se casar com a tarefa ou se o grafo a ligar
+a um componente tocado (o extrator rotula como convenção muitas regras específicas de um
+componente, e elas não podem ir em toda tarefa). A IA propõe os componentes de uma regra sem ligação
 (e sem decisão de origem ligada) para a revisão confirmar.
 
 **Grafo e mapa.** Componentes e tecnologias do projeto, com os arquivos que cada um cobre e as
 decisões e regras ligadas a eles. Os componentes vêm do workspace declarado e dos arquivos que
-as decisões tocaram. Vínculos propostos esperam sua confirmação. A tela Mapa tem lista, grafo,
+as decisões tocaram, mais a raiz do workspace e a CI. Os vínculos nascem de menções afirmativas (o que o texto só cita para excluir, o nome do próprio projeto em prosa e o nome dentro de outro caminho não ligam) e de sinais conferidos no repositório: o arquivo citado que existe, o componente que declara a dependência citada, o que define o símbolo citado entre crases. Cada vínculo registra quem o confirmou (pessoa, regras, IA ou herança) e os que a máquina fez e o texto não sustenta mais são desfeitos sozinhos a cada atualização; o que uma pessoa confirmou nunca. O que depende só de uma menção fraca espera sua confirmação ou o juiz da revisão automática, que julga os vínculos à parte, com a pergunta "este componente é onde a regra vale?". Um componente cuja pasta sumiu é apontado para você aposentar. A tela Mapa tem lista, grafo,
 lente de arquivo e linha do tempo. A tela Visão mostra um resumo e os fluxos principais
 escritos pela IA, cada frase com suas fontes. Há também uma página HTML exportável.
 

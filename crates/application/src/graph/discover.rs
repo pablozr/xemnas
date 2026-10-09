@@ -6,7 +6,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::sync::{Arc, OnceLock};
 
+use super::cache::FolderCache;
 use super::{EntityEdit, GraphError, GraphStore, KnowledgeGraph, NewEntity, MAX_ENTITY_LIST};
 use crate::claims::ClaimStore;
 use crate::projects::ProjectRepository;
@@ -38,6 +40,16 @@ impl WorkspaceKind {
     }
 }
 
+/// What a component that is not a workspace member stands for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InfraKind {
+    /// The files at the root of a workspace: its manifest, toolchain and
+    /// shared configuration.
+    Root,
+    /// A continuous integration system and its pipelines.
+    Ci,
+}
+
 /// One member the project declares.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeclaredComponent {
@@ -49,6 +61,27 @@ pub struct DeclaredComponent {
     pub description: String,
     /// The manifest that declares it.
     pub source: WorkspaceKind,
+    /// Set for the root files and the CI of the project, which are structure
+    /// too but no workspace member.
+    pub infra: Option<InfraKind>,
+    /// Patterns after `pattern` (only for an infrastructure component).
+    pub more_patterns: Vec<String>,
+    /// Aliases written out (only for an infrastructure component).
+    pub aliases: Vec<String>,
+    /// Names of the dependencies its manifest declares (all tables, `target.*`
+    /// ones included; the real package name of a renamed dependency).
+    pub dependencies: Vec<String>,
+}
+
+impl DeclaredComponent {
+    /// The manifest file of the member, relative to the project.
+    pub fn manifest(&self) -> String {
+        let dir = self.pattern.trim_end_matches("/**");
+        match self.source {
+            WorkspaceKind::Cargo => format!("{dir}/Cargo.toml"),
+            WorkspaceKind::Npm | WorkspaceKind::Pnpm => format!("{dir}/package.json"),
+        }
+    }
 }
 
 /// Every member the manifests at `root` declare, Cargo first, by path.
@@ -72,6 +105,10 @@ pub fn declared_components(root: &Path) -> Vec<DeclaredComponent> {
                     pattern: format!("{dir}/**"),
                     description: toml_package_field(&manifest, "description").unwrap_or_default(),
                     source: WorkspaceKind::Cargo,
+                    infra: None,
+                    more_patterns: Vec::new(),
+                    aliases: Vec::new(),
+                    dependencies: cargo_dependencies(&manifest),
                 });
             }
         }
@@ -112,10 +149,211 @@ pub fn declared_components(root: &Path) -> Vec<DeclaredComponent> {
                 pattern: format!("{dir}/**"),
                 description: field("description").unwrap_or_default(),
                 source,
+                infra: None,
+                more_patterns: Vec::new(),
+                aliases: Vec::new(),
+                dependencies: npm_dependencies(&value),
             });
         }
     }
     found
+}
+
+/// CI systems: where their pipelines live, how people call them, and whether
+/// the path is a folder (`dir/**`) or a file.
+const CI_SYSTEMS: &[(&str, &str, bool)] = &[
+    (".github/workflows", "GitHub Actions", true),
+    (".gitlab-ci.yml", "GitLab CI", false),
+    (".circleci", "CircleCI", true),
+    ("azure-pipelines.yml", "Azure Pipelines", false),
+    ("Jenkinsfile", "Jenkins", false),
+    (".buildkite", "Buildkite", true),
+];
+
+/// The structure of the project that no workspace member covers: the files
+/// at the root of a workspace (its manifest, toolchain, shared configuration)
+/// and the continuous integration pipelines. The root only exists when the
+/// project declares `members`; the folder of a pipeline must exist.
+pub fn infrastructure_components(
+    root: &Path,
+    members: &[DeclaredComponent],
+) -> Vec<DeclaredComponent> {
+    let infra = |name: &str,
+                 kind: InfraKind,
+                 patterns: Vec<String>,
+                 description: String,
+                 aliases: Vec<&str>| {
+        let mut patterns = patterns.into_iter();
+        DeclaredComponent {
+            name: name.to_string(),
+            pattern: patterns.next().unwrap_or_default(),
+            description,
+            source: members
+                .first()
+                .map_or(WorkspaceKind::Cargo, |first| first.source),
+            infra: Some(kind),
+            more_patterns: patterns.collect(),
+            aliases: aliases.into_iter().map(str::to_string).collect(),
+            dependencies: Vec::new(),
+        }
+    };
+    let mut found = Vec::new();
+    if !members.is_empty() {
+        let taken = members
+            .iter()
+            .any(|member| entity_key(&member.name) == entity_key("workspace"));
+        let mut patterns = vec!["*".to_string()];
+        if root.join(".cargo").is_dir() {
+            patterns.push(".cargo/**".to_string());
+        }
+        found.push(infra(
+            if taken { "workspace-root" } else { "workspace" },
+            InfraKind::Root,
+            patterns,
+            "Arquivos da raiz: manifesto do workspace, toolchain e configuração comum".into(),
+            vec!["workspace root", "raiz do workspace"],
+        ));
+    }
+    let systems: Vec<&(&str, &str, bool)> = CI_SYSTEMS
+        .iter()
+        .filter(|(path, _, folder)| {
+            let found = root.join(path);
+            if *folder {
+                found.is_dir()
+            } else {
+                found.is_file()
+            }
+        })
+        .collect();
+    for (path, provider, folder) in &systems {
+        let pattern = if *folder {
+            format!("{path}/**")
+        } else {
+            (*path).to_string()
+        };
+        let name = if systems.len() == 1 {
+            "CI".to_string()
+        } else {
+            format!("CI {provider}")
+        };
+        found.push(infra(
+            &name,
+            InfraKind::Ci,
+            vec![pattern.clone()],
+            format!("Integração contínua e publicação ({pattern})"),
+            vec![provider],
+        ));
+    }
+    found
+}
+
+/// Tables of a Cargo manifest that list dependencies.
+const CARGO_DEPENDENCY_TABLES: &[&str] =
+    &["dependencies", "dev-dependencies", "build-dependencies"];
+
+/// Dependency names of a Cargo manifest: the three tables and the same three
+/// under each `target.<cfg>`. A renamed dependency (`package = "x"`) counts as
+/// `x`, the name people write.
+fn cargo_dependencies(text: &str) -> Vec<String> {
+    let Ok(manifest) = text.parse::<toml::Table>() else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = Vec::new();
+    let mut collect = |section: Option<&toml::Value>| {
+        let Some(table) = section.and_then(toml::Value::as_table) else {
+            return;
+        };
+        for (key, value) in table {
+            let real = value
+                .as_table()
+                .and_then(|entry| entry.get("package"))
+                .and_then(toml::Value::as_str)
+                .unwrap_or(key);
+            if !names.iter().any(|known| known == real) {
+                names.push(real.to_string());
+            }
+        }
+    };
+    for kind in CARGO_DEPENDENCY_TABLES {
+        collect(manifest.get(*kind));
+    }
+    if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
+        for target in targets.values() {
+            for kind in CARGO_DEPENDENCY_TABLES {
+                collect(target.get(*kind));
+            }
+        }
+    }
+    names
+}
+
+/// Dependency names of a `package.json`.
+fn npm_dependencies(manifest: &serde_json::Value) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for kind in [
+        "dependencies",
+        "devDependencies",
+        "peerDependencies",
+        "optionalDependencies",
+    ] {
+        let Some(table) = manifest.get(kind).and_then(serde_json::Value::as_object) else {
+            continue;
+        };
+        for key in table.keys() {
+            if !names.contains(key) {
+                names.push(key.clone());
+            }
+        }
+    }
+    names
+}
+
+/// The names the project itself answers to: its folder, the `[package].name`
+/// of the root `Cargo.toml` and the `name` of the root `package.json` (with
+/// its last segment, `@acme/shop` -> `shop`). A part named like one of them
+/// cannot be told from the product by its name alone. Names under 3
+/// characters are left out; they never match anyway.
+pub fn project_names(root: &Path) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    let mut push = |name: String| {
+        let name = name.trim().to_string();
+        let known = names
+            .iter()
+            .any(|other| other.to_lowercase() == name.to_lowercase());
+        if entity_key(&name).chars().count() >= 3 && !known {
+            names.push(name);
+        }
+    };
+    if let Some(folder) = root.file_name() {
+        push(folder.to_string_lossy().to_string());
+    }
+    if let Ok(text) = std::fs::read_to_string(root.join("Cargo.toml")) {
+        if let Some(name) = toml_package_field(&text, "name") {
+            push(name);
+        }
+    }
+    if let Ok(text) = std::fs::read_to_string(root.join("package.json")) {
+        let name = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|value| value.get("name")?.as_str().map(str::to_string));
+        if let Some(name) = name {
+            push(name.rsplit('/').next().unwrap_or("").to_string());
+            push(name);
+        }
+    }
+    names
+}
+
+/// The keys of [`project_names`], kept for a few minutes so a context pack or
+/// a refresh does not read the manifests again.
+pub(crate) fn project_keys(root: &Path) -> Arc<BTreeSet<String>> {
+    static KEYS: OnceLock<FolderCache<BTreeSet<String>>> = OnceLock::new();
+    KEYS.get_or_init(FolderCache::new).get_or_make(root, || {
+        project_names(root)
+            .iter()
+            .map(|name| entity_key(name))
+            .collect()
+    })
 }
 
 /// How people write the package in prose: the last segment of its name
@@ -125,6 +363,9 @@ pub fn declared_components(root: &Path) -> Vec<DeclaredComponent> {
 /// matcher apply later; terms that can never match (under 3 characters) are
 /// not worth storing.
 fn alias_candidates(component: &DeclaredComponent) -> Vec<String> {
+    if component.infra.is_some() {
+        return component.aliases.clone();
+    }
     let last = component.name.rsplit('/').next().unwrap_or("");
     let folder = component
         .pattern
@@ -133,6 +374,10 @@ fn alias_candidates(component: &DeclaredComponent) -> Vec<String> {
         .next()
         .unwrap_or("");
     let mut found: Vec<String> = Vec::new();
+    // Rust code spells a crate `sc_core`, its package `sc-core`.
+    let underscored = (component.source == WorkspaceKind::Cargo)
+        .then(|| component.name.replace('-', "_"))
+        .filter(|form| *form != component.name);
     for term in [last, folder] {
         for form in [term.to_string(), term.replace(['-', '_'], " ")] {
             let usable = !form.starts_with('@') && entity_key(&form).chars().count() >= 3;
@@ -140,6 +385,14 @@ fn alias_candidates(component: &DeclaredComponent) -> Vec<String> {
             if usable && !known(&component.name) && !found.iter().any(|other| known(other)) {
                 found.push(form);
             }
+        }
+    }
+    if let Some(form) = underscored {
+        if !found
+            .iter()
+            .any(|other| other.to_lowercase() == form.to_lowercase())
+        {
+            found.push(form);
         }
     }
     found
@@ -333,9 +586,12 @@ where
             return Ok(0);
         }
         let mut created = 0;
-        let declared = declared_components(Path::new(&project.location));
+        let root = Path::new(&project.location);
+        let mut declared = declared_components(root);
+        let infrastructure = infrastructure_components(root, &declared);
+        declared.extend(infrastructure);
         let aliases = package_aliases(&declared, &vec![BTreeSet::new(); declared.len()]);
-        for (declared, aliases) in declared.into_iter().zip(aliases) {
+        for (declared, aliases) in declared.iter().cloned().zip(aliases) {
             let description: String = declared
                 .description
                 .chars()
@@ -346,7 +602,9 @@ where
                 kind: Some(EntityKind::Component),
                 name: declared.name,
                 description,
-                patterns: vec![declared.pattern],
+                patterns: std::iter::once(declared.pattern)
+                    .chain(declared.more_patterns)
+                    .collect(),
                 aliases,
             }) {
                 Ok(_) => created += 1,
@@ -368,13 +626,23 @@ where
     pub fn merge_package_aliases(&self, project_id: &str) -> Result<usize, GraphError> {
         let project =
             ProjectRepository::get(&self.store, project_id)?.ok_or(GraphError::ProjectNotFound)?;
+        let declared = declared_components(Path::new(&project.location));
+        self.merge_aliases(project_id, &declared)
+    }
+
+    /// [`Self::merge_package_aliases`] over members already read, so a refresh
+    /// reads the manifests once.
+    pub(super) fn merge_aliases(
+        &self,
+        project_id: &str,
+        declared: &[DeclaredComponent],
+    ) -> Result<usize, GraphError> {
         let live: Vec<_> = self
             .store
             .project_entities(project_id)?
             .into_iter()
             .filter(|entity| entity.retired_at.is_none())
             .collect();
-        let declared = declared_components(Path::new(&project.location));
         let matched: Vec<Option<&_>> = declared
             .iter()
             .map(|component| {
@@ -394,7 +662,7 @@ where
             })
             .collect();
         let mut updated = 0;
-        for (entity, aliases) in matched.into_iter().zip(package_aliases(&declared, &taken)) {
+        for (entity, aliases) in matched.into_iter().zip(package_aliases(declared, &taken)) {
             let Some(entity) = entity else {
                 continue;
             };
@@ -444,6 +712,53 @@ mod tests {
             cargo_members("[workspace]\nmembers = [\"a\", 'b']\n"),
             vec!["a", "b"]
         );
+    }
+
+    #[test]
+    fn the_project_answers_to_its_folder_and_its_root_manifests() {
+        let base = std::env::temp_dir().join(format!("xemnas-names-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let make = |folder: &str, files: &[(&str, &str)]| {
+            let root = base.join(folder);
+            std::fs::create_dir_all(&root).unwrap();
+            for (name, text) in files {
+                std::fs::write(root.join(name), text).unwrap();
+            }
+            root
+        };
+        // A Cargo workspace root has no package: only the folder.
+        let workspace = make(
+            "acme",
+            &[("Cargo.toml", "[workspace]\nmembers = [\"apps/acme\"]\n")],
+        );
+        assert_eq!(project_names(&workspace), vec!["acme"]);
+        // A package at the root adds its name.
+        let package = make(
+            "checkout",
+            &[("Cargo.toml", "[package]\nname = \"shop-cli\"\n")],
+        );
+        assert_eq!(project_names(&package), vec!["checkout", "shop-cli"]);
+        // A scoped npm name adds the whole name and its last segment.
+        let npm = make(
+            "mono",
+            &[(
+                "package.json",
+                "{\"name\": \"@acme/shop\", \"private\": true}",
+            )],
+        );
+        assert_eq!(project_names(&npm), vec!["mono", "shop", "@acme/shop"]);
+        // A name that repeats the folder, or is under 3 characters, is not kept.
+        let pnpm = make(
+            "ui",
+            &[
+                ("package.json", "{\"name\": \"ui\"}"),
+                ("pnpm-workspace.yaml", "packages:\n  - 'packages/*'\n"),
+            ],
+        );
+        assert!(project_names(&pnpm).is_empty());
+        let keys = project_keys(&npm);
+        assert!(keys.contains("mono") && keys.contains("shop") && keys.contains("acmeshop"));
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -520,6 +835,10 @@ mod tests {
             pattern: format!("{dir}/**"),
             description: String::new(),
             source: WorkspaceKind::Npm,
+            infra: None,
+            more_patterns: Vec::new(),
+            aliases: Vec::new(),
+            dependencies: Vec::new(),
         }
     }
 
@@ -535,6 +854,119 @@ mod tests {
         let crate_ = declared("storage_sqlite", "crates/storage_sqlite");
         assert_eq!(alias_candidates(&crate_), vec!["storage sqlite"]);
         assert!(alias_candidates(&declared("ui", "apps/ui")).is_empty());
+    }
+
+    #[test]
+    fn a_cargo_package_is_also_written_with_underscores() {
+        let mut core = declared("sc-core", "crates/sc-core");
+        core.source = WorkspaceKind::Cargo;
+        assert_eq!(alias_candidates(&core), vec!["sc core", "sc_core"]);
+        // An npm package has no such spelling.
+        let web = declared("sc-core", "crates/sc-core");
+        assert_eq!(alias_candidates(&web), vec!["sc core"]);
+    }
+
+    #[test]
+    fn manifests_list_their_dependencies() {
+        let cargo = "[package]\nname = \"x\"\n\n[dependencies]\nquinn = \"0.11\"\n\
+                     serde = { version = \"1\", features = [\"derive\"] }\n\
+                     tls = { package = \"rustls\", version = \"0.23\" }\n\n\
+                     [dev-dependencies]\ntokio = \"1\"\n\n[build-dependencies]\ncc = \"1\"\n\n\
+                     [target.'cfg(windows)'.dependencies]\nwindows-sys = \"0.59\"\n\n\
+                     [dependencies.iroh]\nversion = \"0.9\"\n";
+        let mut found = cargo_dependencies(cargo);
+        found.sort();
+        assert_eq!(
+            found,
+            vec![
+                "cc",
+                "iroh",
+                "quinn",
+                "rustls",
+                "serde",
+                "tokio",
+                "windows-sys"
+            ]
+        );
+        let npm: serde_json::Value = serde_json::from_str(
+            "{\"dependencies\": {\"fastify\": \"^5\"}, \"devDependencies\": {\"vitest\": \"1\"}, \
+             \"peerDependencies\": {\"react\": \"18\"}, \
+             \"optionalDependencies\": {\"fsevents\": \"2\"}, \
+             \"scripts\": {\"build\": \"tsc\"}}",
+        )
+        .unwrap();
+        let mut found = npm_dependencies(&npm);
+        found.sort();
+        assert_eq!(found, vec!["fastify", "fsevents", "react", "vitest"]);
+    }
+
+    fn tree(name: &str, files: &[&str]) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("xemnas-infra-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for file in files {
+            let path = root.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "x").unwrap();
+        }
+        root
+    }
+
+    #[test]
+    fn a_workspace_has_a_root_component_and_one_per_ci_system() {
+        let root = tree(
+            "both",
+            &[
+                ".github/workflows/ci.yml",
+                ".cargo/config.toml",
+                "Jenkinsfile",
+            ],
+        );
+        let members = vec![declared("core", "crates/core")];
+        let found = infrastructure_components(&root, &members);
+        let names: Vec<(&str, &str, InfraKind)> = found
+            .iter()
+            .map(|component| {
+                (
+                    component.name.as_str(),
+                    component.pattern.as_str(),
+                    component.infra.unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                ("workspace", "*", InfraKind::Root),
+                ("CI GitHub Actions", ".github/workflows/**", InfraKind::Ci),
+                ("CI Jenkins", "Jenkinsfile", InfraKind::Ci),
+            ]
+        );
+        assert_eq!(found[0].more_patterns, vec![".cargo/**"]);
+        assert_eq!(
+            found[0].aliases,
+            vec!["workspace root", "raiz do workspace"]
+        );
+        assert_eq!(found[1].aliases, vec!["GitHub Actions"]);
+        assert!(found[1].description.contains(".github/workflows/**"));
+        // One system is just "CI"; a member called workspace takes the name.
+        let single = tree("single", &[".gitlab-ci.yml"]);
+        let taken = vec![declared("workspace", "crates/workspace")];
+        let found = infrastructure_components(&single, &taken);
+        let names: Vec<&str> = found
+            .iter()
+            .map(|component| component.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["workspace-root", "CI"]);
+        assert_eq!(found[1].pattern, ".gitlab-ci.yml");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&single);
+    }
+
+    #[test]
+    fn a_project_without_members_has_no_root_component() {
+        let root = tree("single-package", &["src/main.rs"]);
+        assert!(infrastructure_components(&root, &[]).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

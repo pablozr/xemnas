@@ -12,6 +12,11 @@ Em ordem de prioridade:
    - [22](tickets/22-instalacao-e-integracoes-com-um-clique.md) — instalação e integrações com um clique (depois do dogfood).
    - [23](tickets/23-identidade-das-migracoes.md) — identidade das migrações.
    - [25](tickets/25-memoria-ciente-de-branch.md) — memória ciente de branch (experimento, depois do dogfood).
+   - [26](tickets/26-fluxos-didaticos-na-visao.md) — fluxos didáticos com C4 na Visão (depois do dogfood).
+   - [27](tickets/27-visao-geral-fresca-e-coerente.md) — visão geral fresca e coerente com o código.
+   - [28](tickets/28-documentos-por-inteiro.md) — documentos por inteiro (teto de propostas, seções de refinamento).
+   - [29](tickets/29-observacoes-de-manifest-sem-churn.md) — observações de manifest sem churn e com a raiz.
+   - [30](tickets/30-grafo-verificacao-e-descricoes-vivas.md) — grafo: verificação e descrições vivas.
 3. **Resto da fase 4** — [24](tickets/24-grafo-injecao-por-arquivo-e-conflitos.md): injeção por arquivo, conflitos e padrões de caminho obsoletos.
 
 ## Entregue
@@ -40,6 +45,7 @@ Em ordem de prioridade:
 | Fase 3 — Context Pack manual | Relações e substituição de decisões, claims temporais e Context Pack exportável com preview (`735b493`; [ADR-0003](../arquitetura/adr/0003-fase-3-contexto-recuperavel.md)). |
 | Fase 3 — Injeção de contexto | Bloco compacto no pedido do agente, com orçamento, sem repetição na sessão, auditoria e modo sombra; modo por projeto na aba Contexto (`40ead8a`) e métricas no Diagnóstico (`03e47b3`). |
 | Fase 4 — Grafo de entidades (parcial) | Componentes, tecnologias e arestas confirmadas; mapa, vizinhança, linha do tempo, lente de arquivo e impacto no backend, telas do grafo e `file_context` no MCP (`313ea94`, `bd45109`; [ADR-0005](../arquitetura/adr/0005-grafo-de-entidades.md)). O resto está no ticket 24. |
+| Vínculos por estrutura e menção afirmativa | Menção que ignora o que o texto só cita para excluir, nome do projeto e nome dentro de outro caminho; índice limitado de arquivos (o caminho citado precisa existir); dono por manifest e por símbolo; raiz e CI como componentes; quem confirmou cada vínculo (migração 0047); religar, herança só do confirmado, juiz de vínculos à parte, revalidação e fantasmas ([ADR-0016](../arquitetura/adr/0016-vinculos-por-estrutura-e-mencao-afirmativa.md); commits `af6d807`..`1fb0115` da branch `fix/vinculos-por-estrutura`). |
 | Fase 5 — MCP de leitura | Binário `xemnas-mcp` (stdio) com `get_decision`, `search_context` e `file_context`, mais os hooks do Claude Code. Falta confirmar a configuração no OpenCode real. |
 
 ## Como usar esta pasta
