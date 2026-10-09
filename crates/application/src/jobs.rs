@@ -305,11 +305,13 @@ pub enum JobKind {
     DeriveSearchTerms,
     /// Map components a decision applies to, proposed by the AI.
     SuggestLinks,
+    /// The automatic judge, over everything that waits for a person.
+    AutoReview,
 }
 
 impl JobKind {
     /// Every product kind.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::AnalyzeCapture,
         Self::AnalyzeDocument,
         Self::SuggestRelations,
@@ -318,6 +320,7 @@ impl JobKind {
         Self::ContextRouting,
         Self::DeriveSearchTerms,
         Self::SuggestLinks,
+        Self::AutoReview,
     ];
 
     /// Literal persisted in the `kind` column.
@@ -331,6 +334,7 @@ impl JobKind {
             Self::ContextRouting => crate::context_routing::CONTEXT_ROUTING_KIND,
             Self::DeriveSearchTerms => "derive_search_terms",
             Self::SuggestLinks => "suggest_links",
+            Self::AutoReview => "auto_review",
         }
     }
 
@@ -350,6 +354,9 @@ impl JobKind {
             Self::SuggestRelations => 2,
             Self::DeriveClaims => 3,
             Self::DeriveSearchTerms => 4,
+            // After the links, relations, rules and terms emptied: one pass
+            // then judges all of them.
+            Self::AutoReview => 5,
         }
     }
 
@@ -365,7 +372,9 @@ impl JobKind {
             | Self::DeriveClaims
             | Self::ContextRouting
             | Self::DeriveSearchTerms
-            | Self::SuggestLinks => Lane::Suggestions,
+            | Self::SuggestLinks
+            // One worker in the lane: two judges never run together.
+            | Self::AutoReview => Lane::Suggestions,
         }
     }
 }

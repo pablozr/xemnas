@@ -36,6 +36,7 @@
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
+use std::time::Duration;
 
 use domain::entities::EdgeActor;
 use domain::relations::RelationKind;
@@ -44,6 +45,7 @@ use serde_json::json;
 
 use crate::adoption::AdoptionApi;
 use crate::analysis::ExtractorFactory;
+use crate::claim_suggestions::CLAIM_JOB_KIND;
 use crate::claim_suggestions::{ClaimSuggestionStore, ClaimSuggestions};
 use crate::claims::ClaimStore;
 use crate::clock::{add_hours, add_seconds, now_rfc3339};
@@ -57,12 +59,23 @@ use crate::graph::{
 use crate::inbox::{
     CandidateStatus, Cursor, Inbox, InboxQuery, InboxStore, StoredCandidate, MAX_PAGE_LIMIT,
 };
+use crate::jobs::{
+    JobFailure, JobKind, JobRecord, JobRepository, JobState, ANALYZE_CAPTURE_KIND,
+    ANALYZE_DOCUMENT_KIND,
+};
+use crate::link_suggestions::LINK_JOB_KIND;
 use crate::output_language::{fixed, header, LanguageSource, OutputLanguage};
 use crate::overview::StructuredModel;
 use crate::profile::{choose_extractor, AiSettings, ExtractorChoice, ProfileStore, SecretStore};
 use crate::projects::ProjectRepository;
-use crate::relation_suggestions::{RelationSuggestionStore, RelationSuggestions};
+use crate::relation_suggestions::{
+    RelationSuggestionStore, RelationSuggestions, RELATION_JOB_KIND,
+};
 use crate::relations::RelationStore;
+
+/// Held by a pass of the review: the screen and the background job never
+/// judge at the same time.
+static PASS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Items sent to the AI in one call: each is a short text, so a call carries
 /// a backlog's worth without growing much.
@@ -296,6 +309,19 @@ pub struct RunReport {
     pub left: usize,
     /// Whether the AI was asked.
     pub asked: bool,
+    /// Candidates among the accepted: each one's adoption may have created
+    /// ties to the map that the pass has not seen.
+    pub adopted: usize,
+}
+
+impl std::ops::AddAssign for RunReport {
+    fn add_assign(&mut self, other: Self) {
+        self.accepted += other.accepted;
+        self.discarded += other.discarded;
+        self.left += other.left;
+        self.asked |= other.asked;
+        self.adopted += other.adopted;
+    }
 }
 
 impl RunReport {
@@ -384,6 +410,8 @@ pub trait ApprovalsApi: Send + Sync {
     fn set_mode(&self, mode: Mode) -> Result<(), ReviewError>;
     /// One pass for a project.
     fn run(&self, project_id: &str) -> Result<RunReport, ReviewError>;
+    /// One pass for every project, as the background job runs it.
+    fn run_all(&self) -> Result<RunReport, ReviewError>;
     /// What the review decided in a project.
     fn ledger(&self, project_id: &str) -> Result<Vec<Entry>, ReviewError>;
     /// Puts a discarded candidate back in the queue.
@@ -1287,7 +1315,12 @@ where
             conflicts_with: conflicts_with.filter(|_| verdict == Verdict::NeedsHuman),
         })?;
         match verdict {
-            Verdict::Accepted => report.accepted += 1,
+            Verdict::Accepted => {
+                report.accepted += 1;
+                if item.kind == ItemKind::Candidate {
+                    report.adopted += 1;
+                }
+            }
             Verdict::Discarded => report.discarded += 1,
             Verdict::NeedsHuman => report.left += 1,
         }
@@ -1320,14 +1353,53 @@ where
         Ok(now >= ready_at.as_str())
     }
 
-    /// One pass at the given moment (RFC 3339), so tests do not wait.
+    /// One pass at the given moment (RFC 3339), so tests do not wait. One
+    /// pass runs at a time in the process (the screen and the background job
+    /// share it), so the second finds everything already reviewed. A pass that
+    /// accepted a candidate is followed by one over the ties its adoption
+    /// created, which the first had not seen.
     pub fn run_at(&self, project_id: &str, now: &str) -> Result<RunReport, ReviewError> {
+        if self.store.approval_mode()? != Mode::Automatic {
+            return Ok(RunReport::default());
+        }
+        let _one_at_a_time = PASS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut report = self.pass(project_id, now, false)?;
+        if report.adopted > 0 {
+            report += self.pass(project_id, now, true)?;
+        }
+        Ok(report)
+    }
+
+    /// One pass over every project, at the given moment: what the background
+    /// job runs. A provider failure stops it and is returned.
+    pub fn run_all_at(&self, now: &str) -> Result<RunReport, ReviewError> {
         let mut report = RunReport::default();
         if self.store.approval_mode()? != Mode::Automatic {
             return Ok(report);
         }
+        let projects = ProjectRepository::list(&self.store)
+            .map_err(|error| ReviewError::Storage(error.to_string()))?;
+        for project in projects {
+            report += self.run_at(&project.id, now)?;
+        }
+        Ok(report)
+    }
+
+    /// One pass; `links_only` leaves out everything but the ties to the map.
+    fn pass(
+        &self,
+        project_id: &str,
+        now: &str,
+        links_only: bool,
+    ) -> Result<RunReport, ReviewError> {
+        let mut report = RunReport::default();
         let language = (self.language)();
-        let items = self.gather(project_id)?;
+        let mut items = self.gather(project_id)?;
+        if links_only {
+            items.retain(|item| item.kind == ItemKind::Link);
+        }
 
         // The plain cases, settled by the rules for free.
         for item in &items {
@@ -1666,6 +1738,10 @@ where
         self.run_at(project_id, &now_rfc3339())
     }
 
+    fn run_all(&self) -> Result<RunReport, ReviewError> {
+        self.run_all_at(&now_rfc3339())
+    }
+
     fn ledger(&self, project_id: &str) -> Result<Vec<Entry>, ReviewError> {
         self.store.review_ledger(project_id, 60)
     }
@@ -1696,6 +1772,74 @@ where
             resolution,
         )
     }
+}
+
+/// The kind of the background job that runs the judge over every project.
+pub const REVIEW_JOB_KIND: &str = JobKind::AutoReview.as_str();
+
+/// Jobs whose completion can leave items waiting for a person.
+const FEEDING_KINDS: [&str; 5] = [
+    ANALYZE_CAPTURE_KIND,
+    ANALYZE_DOCUMENT_KIND,
+    LINK_JOB_KIND,
+    RELATION_JOB_KIND,
+    CLAIM_JOB_KIND,
+];
+
+/// Queues the judge after a job that may have created items: nothing when the
+/// job did not complete or is not one of those, when the mode is manual, or
+/// when a judge is already waiting (it covers everything in one pass). Errors
+/// are swallowed: the screen's pass and the next trigger cover a missed one.
+pub fn queue_review_after<S: JobRepository + ApprovalStore>(
+    store: &S,
+    kind: &str,
+    state: JobState,
+) {
+    if state != JobState::Completed || !FEEDING_KINDS.contains(&kind) {
+        return;
+    }
+    if !matches!(store.approval_mode(), Ok(Mode::Automatic)) {
+        return;
+    }
+    let waiting = JobRepository::counts(store).map_or(true, |counts| {
+        counts.iter().any(|(each, state, count)| {
+            each == REVIEW_JOB_KIND && *state == JobState::Queued && *count > 0
+        })
+    });
+    if waiting {
+        return;
+    }
+    let now = now_rfc3339();
+    let _ = JobRepository::insert(
+        store,
+        &JobRecord {
+            id: uuid::Uuid::now_v7().to_string(),
+            kind: REVIEW_JOB_KIND.to_string(),
+            payload: String::new(),
+            state: JobState::Queued,
+            idempotent: true,
+            attempts: 0,
+            last_error: None,
+            created_at: now.clone(),
+            updated_at: now,
+        },
+    );
+}
+
+/// What the job queue runs for the judge job.
+pub type ReviewHandler = Arc<dyn Fn(&JobRecord) -> Result<(), JobFailure> + Send + Sync>;
+
+/// The handler of the judge job: one pass over every project. A provider
+/// failure sends the job back to the queue after the pause that follows a
+/// failed call; any other error is left for the next trigger, so the
+/// interface never shows a failed job for it.
+pub fn review_job(api: Arc<dyn ApprovalsApi>) -> ReviewHandler {
+    Arc::new(move |_| match api.run_all() {
+        Err(ReviewError::Provider(_)) => Err(JobFailure::Deferred {
+            retry_after: Some(Duration::from_secs(FAILURE_PAUSE_MINUTES as u64 * 60)),
+        }),
+        _ => Ok(()),
+    })
 }
 
 #[cfg(test)]

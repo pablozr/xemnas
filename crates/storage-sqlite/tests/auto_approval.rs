@@ -10,13 +10,15 @@ use std::sync::{Arc, Mutex};
 use application::adoption::{Adoption, AdoptionApi};
 use application::analysis::ExtractorFactory;
 use application::auto_approval::{
-    Approvals, ApprovalsApi, By, ItemKind, Mode, ReviewError, Verdict, BATCH,
+    queue_review_after, review_job, Approvals, ApprovalsApi, By, ItemKind, Mode, ReviewError,
+    Verdict, BATCH, REVIEW_JOB_KIND,
 };
 use application::extract::{
     CandidateExtractor, CandidateProposal, DecisionCandidateRecord, DecisionEvidence, ExtractError,
     ExtractionStore, RelevanceSignal,
 };
 use application::inbox::{CandidateStatus, InboxStore};
+use application::jobs::{JobState, Jobs, Lane, ANALYZE_CAPTURE_KIND};
 use application::overview::{JsonValue, StructuredModel};
 use application::profile::{
     build_preview, grant_consent, offline_default_profile, AiProfile, AiSettings, ProfileError,
@@ -1564,3 +1566,117 @@ fn the_local_duplicate_rule_never_discards_a_different_rule_and_finds_the_plain_
 
 /// Recall measured on [`RULE_PAIRS`]; raise it when the rule improves.
 const RECALL_FLOOR: f64 = 0.3;
+
+/// The judge as the composition root wires it: a job that runs the judge over
+/// every project, queued when another job completes.
+fn judge_jobs(test: &support::TestStore, judge: &Judge) -> Jobs<SqliteStore> {
+    let review = review_with(&test.store, consented(), judge);
+    review.set_mode(Mode::Automatic).expect("on");
+    let mut jobs = Jobs::new(test.store.clone());
+    jobs.register(REVIEW_JOB_KIND, review_job(Arc::new(review)));
+    jobs
+}
+
+fn queued_reviews(store: &SqliteStore) -> usize {
+    application::jobs::JobRepository::counts(store)
+        .expect("counts")
+        .iter()
+        .filter(|(kind, state, _)| kind == REVIEW_JOB_KIND && *state == JobState::Queued)
+        .map(|(_, _, count)| count)
+        .sum()
+}
+
+#[test]
+fn a_new_candidate_is_judged_without_the_screen_in_automatic_mode() {
+    let test = support::open("review-job", &[PROJECT]);
+    let judge = Judge::answering(r#"{"verdicts":[{"id":"I1","verdict":"accept","reason":"ok"}]}"#);
+    let mut jobs = judge_jobs(&test, &judge);
+    // The analysis that creates the item; the worker would tell the observer
+    // it completed, and `run_next_in` does not, so the trigger runs by hand.
+    let store = test.store.clone();
+    jobs.register(
+        ANALYZE_CAPTURE_KIND,
+        Arc::new(move |_| {
+            store
+                .insert_candidates(&[old("amb", 0.60, "qual formato exportar relatorios")])
+                .expect("candidate");
+            Ok(())
+        }),
+    );
+    jobs.enqueue(ANALYZE_CAPTURE_KIND, "", true).expect("queue");
+    let analysis = jobs
+        .run_next_in(Lane::Now)
+        .expect("run")
+        .expect("analysis ran");
+    assert_eq!(analysis.state, JobState::Completed);
+    queue_review_after(&test.store, &analysis.kind, analysis.state);
+    queue_review_after(&test.store, &analysis.kind, analysis.state);
+    assert_eq!(queued_reviews(&test.store), 1, "a second trigger adds none");
+
+    let judging = jobs
+        .run_next_in(Lane::Suggestions)
+        .expect("run")
+        .expect("judge ran");
+    assert_eq!(
+        (judging.kind.as_str(), judging.state),
+        (REVIEW_JOB_KIND, JobState::Completed)
+    );
+    assert_eq!(status_of(&test.store, "amb"), CandidateStatus::Accepted);
+    assert_eq!(judge.calls.load(Ordering::SeqCst), 1);
+
+    queue_review_after(&test.store, &analysis.kind, analysis.state);
+    jobs.run_next_in(Lane::Suggestions).expect("run");
+    assert_eq!(
+        judge.calls.load(Ordering::SeqCst),
+        1,
+        "everything was reviewed: a second judge asks nothing"
+    );
+}
+
+#[test]
+fn in_manual_mode_no_review_job_is_queued() {
+    let test = support::open("review-job-manual", &[PROJECT]);
+    let judge = Judge::answering("{}");
+    let review = review_with(&test.store, consented(), &judge);
+    test.store
+        .insert_candidates(&[old("amb", 0.60, "qual formato exportar relatorios")])
+        .expect("pending");
+    assert!(!review.status().expect("status").automatic);
+    queue_review_after(&test.store, ANALYZE_CAPTURE_KIND, JobState::Completed);
+    assert_eq!(queued_reviews(&test.store), 0);
+    assert_eq!(judge.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(status_of(&test.store, "amb"), CandidateStatus::Pending);
+    // Neither a failed job nor one that cannot create items queues a judge.
+    review.set_mode(Mode::Automatic).expect("on");
+    queue_review_after(&test.store, ANALYZE_CAPTURE_KIND, JobState::Failed);
+    queue_review_after(&test.store, "derive_search_terms", JobState::Completed);
+    assert_eq!(queued_reviews(&test.store), 0);
+}
+
+#[test]
+fn a_pass_with_nothing_new_asks_nothing_and_is_cheap() {
+    let projects = ["p1", "p2", "p3"];
+    let test = support::open("review-idle", &projects);
+    let judge = Judge::answering(r#"{"verdicts":[{"id":"I1","verdict":"human","reason":"ok"}]}"#);
+    let review = review_with(&test.store, consented(), &judge);
+    review.set_mode(Mode::Automatic).expect("on");
+    test.store
+        .insert_candidates(&[old("amb", 0.60, "qual formato exportar relatorios")])
+        .expect("pending");
+    let first = review.run_all_at(NOW).expect("first");
+    assert!(first.asked);
+    let calls = judge.calls.load(Ordering::SeqCst);
+
+    // The best of a few: a pass of another test in this binary may hold the
+    // process-wide lock for a moment, and that wait is not the idle cost.
+    let mut elapsed = std::time::Duration::MAX;
+    for _ in 0..5 {
+        let started = std::time::Instant::now();
+        let idle = review.run_all_at(NOW).expect("idle");
+        elapsed = elapsed.min(started.elapsed());
+        assert!(!idle.asked && !idle.changed());
+    }
+    println!("latency auto_review_idle_ms={}", elapsed.as_millis());
+    assert_eq!(judge.calls.load(Ordering::SeqCst), calls);
+    assert!(elapsed.as_millis() < 200, "{elapsed:?}");
+}

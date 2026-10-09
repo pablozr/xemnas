@@ -46,3 +46,32 @@ espanhol e português por lote.
   respondeu…", os `Triage::Accept("…")`) ficam para o ticket 21.
 
 **Não verificável aqui:** o idioma real das respostas só aparece numa nova rodada no `cloudrs`.
+
+## Juiz disparado pelo núcleo
+
+**Antes.** `Approvals::run` só era chamado por `inbox.rs` (ao trocar de modo e a cada página
+da Revisão): com a tela fechada nada era julgado.
+
+**Decisão.**
+
+- `JobKind::AutoReview` (`auto_review`) na fila `suggestions` (1 worker: nunca dois juízes
+  juntos), prioridade 5, a mais baixa: roda depois que vínculos, relações, regras e termos
+  esvaziaram e cobre tudo numa passada.
+- `queue_review_after` é chamada pelo observer de jobs em `main.rs` (uma linha) quando termina,
+  com sucesso, `analyze_capture`, `analyze_document`, `suggest_links`, `suggest_relations` ou
+  `derive_claims`. Não enfileira em modo manual nem se já há um `auto_review` na fila
+  (`JobRepository::counts`, consulta agrupada). Os quatro produtores não mudaram.
+- O job percorre todos os projetos (`Approvals::run_all_at`), porque o observer não sabe qual.
+  Com o já revisado excluído, uma passada sem nada novo custa algumas leituras e nenhuma
+  chamada: `latency auto_review_idle_ms` fica em 6 a 17 ms com 3 projetos.
+- Um `static PASS: Mutex` faz a tela e o job julgarem um de cada vez; a segunda passada acha
+  tudo em `reviewed()` e não chama a IA de novo. O `review_pass` da tela fica, redundante e seguro.
+- Quando a passada aceita candidatas, a adoção cria vínculos novos que ela não viu: roda uma
+  segunda passada (no máximo), **só sobre os vínculos**, para não drenar o resto da fila fora da
+  cadência.
+- Falha do provedor devolve o job à fila em 20 min (`JobFailure::Deferred`, até 8 vezes); outro
+  erro termina o job sem `Failed`, e o próximo gatilho tenta de novo.
+
+**Lacunas e pedidos ao front.** O refresh disparado pela tela do Mapa não aciona o job (a
+Revisão cobre quando é aberta). Pedir ao front: simplificar `review_pass` em `inbox.rs` e dar
+nome i18n ao tipo `auto_review` em `diagnostics.rs` (hoje cai em "auto review").

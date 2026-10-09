@@ -353,7 +353,22 @@ fn main() {
             }
         }),
     );
-    jobs.observe_with(|event| match event {
+    // The automatic judge runs here, not on a screen: it is queued when a job
+    // that may create items completes (nothing in manual mode) and covers all
+    // projects in one pass.
+    let reviewer = application::auto_approval::Approvals::new(
+        store.clone(),
+        Arc::new(application::adoption::Adoption::new(store.clone())),
+        settings.clone(),
+        ai_provider::ProviderFactory::new(chatgpt.clone()).with_limiter(limiter.clone()),
+    )
+    .with_language(interface_language());
+    jobs.register(
+        application::auto_approval::REVIEW_JOB_KIND,
+        application::auto_approval::review_job(Arc::new(reviewer)),
+    );
+    let observed = store.clone();
+    jobs.observe_with(move |event| match event {
         application::jobs::JobEvent::Finished(outcome) => {
             tracing::info!(
                 job_id = %outcome.job_id,
@@ -362,6 +377,7 @@ fn main() {
                 attempts = outcome.attempts,
                 "job finished"
             );
+            application::auto_approval::queue_review_after(&observed, &outcome.kind, outcome.state);
         }
         application::jobs::JobEvent::StorageError(detail) => {
             tracing::error!(
