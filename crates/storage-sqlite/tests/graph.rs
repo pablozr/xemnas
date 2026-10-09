@@ -1548,7 +1548,8 @@ fn the_migration_clears_the_old_portuguese_text_of_root_and_ci_and_spares_writte
         ];
         for (entity, pattern, description) in entities {
             raw.execute(
-                "INSERT INTO entities (entity_id, project_id, kind, name, key, description,                  created_at) VALUES (?1, 'p1', 'component', ?1, ?1, ?2, '2026-01-01T00:00:00Z')",
+                "INSERT INTO entities (entity_id, project_id, kind, name, key, description, \
+                 created_at) VALUES (?1, 'p1', 'component', ?1, ?1, ?2, '2026-01-01T00:00:00Z')",
                 rusqlite::params![entity, description],
             )
             .expect("entity");
