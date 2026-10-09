@@ -29,7 +29,9 @@ pub use discover::{
 };
 pub use domain::entities::EntityKind;
 pub(crate) use mention::Folded;
-pub use mention::{mention_quote, mention_reason, MENTION_REASON};
+pub use mention::{
+    doubt_of, mention_quote, mention_reason, with_doubt, without_doubt, DOUBT_MARK, MENTION_REASON,
+};
 pub use query::{
     DecisionParts, EntityDetail, FileLens, GraphEdge, GraphNode, MapEntity, Neighborhood, NodeRef,
     NodeSummary, PartCount, ProjectGraph, ProjectMap, Suggestion, TimelineEvent, TimelineKind,

@@ -1442,3 +1442,87 @@ fn raw_edge_in(
         )
     }
 }
+
+#[test]
+fn a_rule_accepted_dependency_in_doubt_goes_back_to_the_judge() {
+    use application::auto_approval::{triage_link, Triage};
+    use application::graph::{doubt_of, GraphStore, DEPENDENCY_REASON};
+    use application::projects::{ProjectRecord, ProjectRepository};
+    use domain::entities::EdgeActor;
+
+    let test = support::open("graph-doubt", &[]);
+    let repo = test.root.join("repo");
+    std::fs::create_dir_all(repo.join("crates/store")).expect("dirs");
+    std::fs::write(
+        repo.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"crates/*\"]\n",
+    )
+    .expect("root");
+    std::fs::write(
+        repo.join("crates/store/Cargo.toml"),
+        "[package]\nname = \"store\"\n\n[dependencies]\nrusqlite = \"0.40\"\n",
+    )
+    .expect("manifest");
+    let location = repo.to_string_lossy().replace('\\', "/");
+    test.store
+        .insert(&ProjectRecord::new(
+            "ws".into(),
+            location.clone(),
+            "2026-01-01T00:00:00Z".into(),
+        ))
+        .expect("project");
+    let graph = KnowledgeGraph::new(test.store.clone());
+    graph.assemble("ws").expect("assemble");
+    let store_entity = graph
+        .entities("ws")
+        .expect("entities")
+        .into_iter()
+        .find(|entity| entity.name == "store")
+        .expect("store")
+        .entity_id;
+    let decision = support::decision_at(
+        &test.store,
+        "ws",
+        &location,
+        "d1",
+        "Keep the domain types plain, with no rusqlite handles.",
+        &[],
+        "",
+    );
+    // What an earlier version accepted by the rules, with no alarm.
+    let old_reason = format!("{DEPENDENCY_REASON}\"rusqlite\" (crates/store/Cargo.toml)");
+    test.store
+        .insert_edge(&application::graph::EdgeRecord {
+            project_id: "ws".into(),
+            ..raw_edge(
+                "accepted",
+                EdgeKind::Affects,
+                (NodeKind::Decision, &decision),
+                &store_entity,
+                &old_reason,
+                Some(EdgeActor::Rules),
+            )
+        })
+        .expect("edge");
+
+    let report = graph.refresh_suggestions("ws").expect("refresh");
+    assert_eq!(report.revalidated, 1);
+    let old = test.store.get_edge("accepted").expect("get").expect("edge");
+    assert_eq!(old.invalidated_by, Some(EdgeActor::Rules));
+    let live: Vec<_> = test
+        .store
+        .project_edges("ws")
+        .expect("edges")
+        .into_iter()
+        .filter(|edge| edge.is_live() && edge.source_id == decision)
+        .collect();
+    assert_eq!(live.len(), 1, "{live:?}");
+    assert!(live[0].confirmed_at.is_none(), "back to pending");
+    assert!(live[0].reason.starts_with(&old_reason));
+    assert!(doubt_of(&live[0].reason).is_some_and(|alarm| alarm.contains("no rusqlite")));
+    assert_eq!(triage_link(&live[0].reason), Triage::Ask);
+
+    // Idempotent: the pending link in doubt is not revisited nor repeated.
+    let again = graph.refresh_suggestions("ws").expect("again");
+    assert_eq!((again.revalidated, again.new_edges), (0, 0));
+}

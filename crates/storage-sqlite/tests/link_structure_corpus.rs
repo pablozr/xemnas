@@ -45,18 +45,24 @@ use storage_sqlite::SqliteStore;
 /// 2026-10-09, baseline with the multilingual polarity cases (the `cloud`
 /// project and a34): precision 0.857 (36/42), recall 1.000 (36/36), the rules
 /// accept 2 wrong links (`no rusqlite handles`, `no usa rusqlite`), 4 negated
-/// links, 23 links go to the judge. The floors sit there until the lexicon
-/// stops deciding the polarity.
-const PRECISION_FLOOR: f64 = 0.85;
-const RECALL_FLOOR: f64 = 0.95;
+/// links, 23 links go to the judge.
+/// 2026-10-09, a polarity word of any language raises doubt instead of
+/// deciding (scopes of 3, 4 and 5 words gave the same result; 3 kept): the
+/// links asserted are precision 1.000 (32/32), recall 0.889 (32/36); the 10
+/// links in doubt (4 right: Portuguese "no X", Spanish "sin gpui en X"; 6
+/// wrong) go to the judge, and with it the recall is 1.000 (36/36); no wrong
+/// link is accepted by the rules and 26 go to the judge (23 before). Asserted
+/// recall is lower on purpose: "gravar no sc-core" is asked, not decided.
+const PRECISION_FLOOR: f64 = 0.95;
+const RECALL_FLOOR: f64 = 0.88;
 const RECALL_WITH_JUDGE_FLOOR: f64 = 0.95;
 /// Ceilings of the cost: links the rules accept that are wrong, and links that
 /// go to the judge or to the person.
-const RULE_ACCEPTED_WRONG_CEILING: usize = 2;
-const TO_JUDGE_CEILING: usize = 23;
-const DOUBTFUL_CEILING: usize = 0;
+const RULE_ACCEPTED_WRONG_CEILING: usize = 0;
+const TO_JUDGE_CEILING: usize = 26;
+const DOUBTFUL_CEILING: usize = 10;
 /// Ceilings: the count of wrong links of each kind.
-const NEGATED_CEILING: usize = 4;
+const NEGATED_CEILING: usize = 0;
 const HOMONYM_CEILING: usize = 0;
 const GHOST_CEILING: usize = 0;
 
@@ -845,8 +851,8 @@ fn at_most(count: usize, ceiling: usize) -> bool {
 }
 
 /// Whether the reason of a link carries a polarity alarm.
-fn doubtful(_reason: &str) -> bool {
-    false
+fn doubtful(reason: &str) -> bool {
+    application::graph::doubt_of(reason).is_some()
 }
 
 #[derive(Default)]

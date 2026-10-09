@@ -20,7 +20,10 @@ use domain::entities::{
 use domain::time::Timestamp;
 
 use super::ai_link::ai_link_quote;
-use super::mention::{dependency_term, entity_terms, mention_quote, mention_reason, Folded, Term};
+use super::mention::{
+    code_words_of, dependency_term, entity_terms, mention_quote, mention_reason, with_doubt,
+    CodeWord, Folded, Mention, Term,
+};
 use super::repo_files::{counted_files, repo_files, RepoFiles};
 use super::{DecisionNode, EdgeRecord, EntityRecord, GraphError, GraphStore, KnowledgeGraph};
 use crate::claims::ClaimStore;
@@ -145,7 +148,7 @@ impl<S> KnowledgeGraph<S> {
 
 /// What a decision cites between backticks and what it is looked up in.
 pub(super) struct Cited<'a> {
-    pub(super) words: &'a [String],
+    pub(super) words: &'a [CodeWord],
     pub(super) components: &'a [&'a EntityRecord],
     pub(super) reserved: &'a BTreeSet<String>,
     pub(super) repo: &'a RepoFiles,
@@ -676,7 +679,7 @@ where
             }
             report.new_edges +=
                 self.suggest_dependencies(&mut edges, project_id, decision, &texts, &owned, &now)?;
-            let words: Vec<String> = texts.iter().flat_map(Folded::code_words).collect();
+            let words = code_words_of(&texts);
             if !words.is_empty() {
                 let repo = Arc::clone(listing.get_or_insert_with(|| repo_files(root)));
                 if let Some(repo) = repo.as_ref().as_ref().filter(|repo| !repo.partial()) {
@@ -893,21 +896,24 @@ where
         let source = (NodeKind::Decision, decision.decision_id.as_str());
         let mut written = 0;
         for dependency in owned {
-            if !texts
-                .iter()
-                .any(|text| text.mention(&dependency.term).is_some())
-            {
+            let Some(mention) = best_mention(texts, &dependency.term) else {
                 continue;
-            }
+            };
             let shared = if dependency.owners.len() > 1 {
                 DEPENDENCY_SHARED_MARK
             } else {
                 ""
             };
             for (entity_id, manifest) in &dependency.owners {
-                let reason = format!(
-                    "{DEPENDENCY_REASON}\"{}\" ({manifest}{shared})",
-                    dependency.name
+                let reason = with_doubt(
+                    &format!(
+                        "{DEPENDENCY_REASON}\"{}\" ({manifest}{shared})",
+                        dependency.name
+                    ),
+                    mention
+                        .doubt
+                        .as_deref()
+                        .map(|trigger| (trigger, mention.quote.as_str())),
                 );
                 written += self.suggest(
                     edges,
@@ -936,9 +942,14 @@ where
     ) -> Result<usize, GraphError> {
         let source = (NodeKind::Decision, decision.decision_id.as_str());
         let mut written = 0;
-        for word in cited.words {
+        for (word, doubt) in cited.words {
             if let Some((entity_id, file)) = symbol_owner(cited, word) {
-                let reason = format!("{SYMBOL_REASON}`{word}` ({file})");
+                let reason = with_doubt(
+                    &format!("{SYMBOL_REASON}`{word}` ({file})"),
+                    doubt
+                        .as_ref()
+                        .map(|(trigger, quote)| (trigger.as_str(), quote.as_str())),
+                );
                 written += self.suggest(
                     edges,
                     project_id,
@@ -974,17 +985,21 @@ where
             if edge_exists(edges, *kind, source, &entity.entity_id) {
                 continue;
             }
-            let quote = terms
-                .iter()
-                .find_map(|term| texts.iter().find_map(|text| text.mention(term)));
-            if let Some(quote) = quote {
+            let found = terms.iter().find_map(|term| best_mention(texts, term));
+            if let Some(found) = found {
                 written += self.suggest(
                     edges,
                     project_id,
                     *kind,
                     source,
                     &entity.entity_id,
-                    &mention_reason(&quote),
+                    &with_doubt(
+                        &mention_reason(&found.quote),
+                        found
+                            .doubt
+                            .as_deref()
+                            .map(|trigger| (trigger, found.quote.as_str())),
+                    ),
                     now,
                 )?;
             }
@@ -1065,6 +1080,19 @@ fn blocked(
             );
             !(structural && revisable && edge.reason != reason)
         })
+}
+
+/// The best mention of `term` in the texts of a decision: a clean one in any
+/// text before one in doubt.
+pub(super) fn best_mention(texts: &[Folded], term: &Term) -> Option<Mention> {
+    let mut doubtful = None;
+    for found in texts.iter().filter_map(|text| text.mention(term)) {
+        if found.doubt.is_none() {
+            return Some(found);
+        }
+        doubtful.get_or_insert(found);
+    }
+    doubtful
 }
 
 /// The text of a decision, ready to be searched: question, choice, rationale,

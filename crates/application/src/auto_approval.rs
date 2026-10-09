@@ -51,7 +51,8 @@ use crate::conflicts::{ConflictView, Conflicts, Resolution};
 use crate::decisions::{DecisionQuery, DecisionStatus, DecisionStore, StoredDecision};
 use crate::extract::{CandidateKind, MIN_SIGNIFICANCE};
 use crate::graph::{
-    ai_link_quote, ai_link_why, mention_quote, EntityRecord, GraphStore, KnowledgeGraph, Suggestion,
+    ai_link_quote, ai_link_why, doubt_of, mention_quote, without_doubt, EntityRecord, GraphStore,
+    KnowledgeGraph, Suggestion,
 };
 use crate::inbox::{
     CandidateStatus, Cursor, Inbox, InboxQuery, InboxStore, StoredCandidate, MAX_PAGE_LIMIT,
@@ -541,9 +542,14 @@ pub fn triage_relation(kind: RelationKind) -> Triage {
 /// What the rules say about a suggested tie to the map: one derived from a
 /// touched file or an added dependency is plain; one found by a mention in
 /// the decision's text may be a passing remark, and one proposed by the AI
-/// from that text is its own guess: the AI judges the quote of both.
+/// from that text is its own guess: the AI judges the quote of both. One whose
+/// polarity is in doubt (a word that may negate it sits near the evidence, in
+/// any language) is never accepted by the rules either.
 pub fn triage_link(reason: &str) -> Triage {
-    if mention_quote(reason).is_some() || ai_link_quote(reason).is_some() {
+    if mention_quote(reason).is_some()
+        || ai_link_quote(reason).is_some()
+        || doubt_of(reason).is_some()
+    {
         Triage::Ask
     } else if reason.starts_with(crate::graph::DEPENDENCY_REASON) {
         // The text cites a dependency; one component declaring it is the place.
@@ -579,18 +585,25 @@ fn link_text(suggestion: &Suggestion, component: Option<&EntityRecord>) -> Strin
     {
         format!(
             "Evidência (dependência citada): {}",
-            clip(&suggestion.reason, 160)
+            clip(without_doubt(&suggestion.reason), 160)
         )
     } else if suggestion.reason.starts_with(crate::graph::SYMBOL_REASON) {
         format!(
             "Evidência (símbolo citado): {}",
-            clip(&suggestion.reason, 160)
+            clip(without_doubt(&suggestion.reason), 160)
         )
     } else {
         format!(
             "Evidência (arquivo tocado): {}",
             clip(&suggestion.reason, 160)
         )
+    };
+    let evidence = match doubt_of(&suggestion.reason) {
+        Some(doubt) => format!(
+            "{evidence} | Alerta de polaridade: {}",
+            clip(doubt, SENT_CHARS)
+        ),
+        None => evidence,
     };
     let choice = if suggestion.source.detail.is_empty() {
         String::new()
@@ -685,6 +698,10 @@ when the component is only named in passing, is named to be excluded or compared
 is the product as a whole rather than a part of it. A test or tooling component is the place \
 only when the rule is checked there. Answer human only when the evidence does not decide; when \
 in doubt between accept and discard, answer human.\n\
+An item may carry a polarity alert: a negation-like word, in any language, sits near the \
+evidence. It may be a false alarm (Portuguese \"no\" means \"in the\"); read the choice and \
+discard the link when the component or dependency is named to be excluded, avoided or \
+replaced.\n\
 Give in reason one short sentence in the language of the item. The ids (I1, I2) are only for \
 matching the answer to the items: never write an id in the reason. Reply with one JSON object \
 only, matching exactly: {\"verdicts\":[{\"id\":string,\"verdict\":\"accept|discard|human\",\
@@ -1785,6 +1802,67 @@ mod tests {
             crate::graph::DEPENDENCY_SHARED_MARK
         );
         assert_eq!(triage_link(&shared), Triage::Ask);
+    }
+
+    #[test]
+    fn a_dependency_or_symbol_in_doubt_is_asked_whatever_it_cites() {
+        let doubt = Some(("no", "with no rusqlite handles"));
+        let dependency = crate::graph::with_doubt(
+            &format!(
+                "{}\"rusqlite\" (crates/core/Cargo.toml)",
+                crate::graph::DEPENDENCY_REASON
+            ),
+            doubt,
+        );
+        assert_eq!(triage_link(&dependency), Triage::Ask);
+        let symbol = crate::graph::with_doubt(
+            &format!(
+                "{}`FLUSH_INTERVAL` (crates/store/src/flush.rs)",
+                crate::graph::SYMBOL_REASON
+            ),
+            doubt,
+        );
+        assert_eq!(triage_link(&symbol), Triage::Ask);
+    }
+
+    #[test]
+    fn the_judge_is_told_the_polarity_alert_apart_from_the_evidence() {
+        let reason = crate::graph::with_doubt(
+            &format!(
+                "{}\"gpui\" (apps/cloud/Cargo.toml)",
+                crate::graph::DEPENDENCY_REASON
+            ),
+            Some(("no", "and no GPUI types")),
+        );
+        let summary = |kind, label: &str, detail: &str| crate::graph::NodeSummary {
+            node: crate::graph::NodeRef {
+                kind,
+                id: label.into(),
+            },
+            label: label.into(),
+            detail: detail.into(),
+            at: String::new(),
+        };
+        let suggestion = Suggestion {
+            edge_id: "e".into(),
+            kind: domain::entities::EdgeKind::Affects,
+            source: summary(
+                domain::entities::NodeKind::Decision,
+                "Persistência",
+                "Manter tipos simples",
+            ),
+            entity: summary(domain::entities::NodeKind::Entity, "cloud", "component"),
+            reason,
+            created_at: String::new(),
+        };
+        let text = link_text(&suggestion, None);
+        assert!(
+            text.contains("Alerta de polaridade: \"no\" em \"and no GPUI types\""),
+            "{text}"
+        );
+        assert!(text.contains("Evidência (dependência citada): dependência citada: \"gpui\""));
+        assert!(!text.contains(char::from(10)), "{text}");
+        assert!(LINK_REVIEW_PROMPT.contains("polarity alert"));
     }
 
     #[test]

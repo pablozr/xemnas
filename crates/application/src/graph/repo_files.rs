@@ -332,8 +332,8 @@ pub(crate) fn counted_files(
     let mut counted: Vec<String> = Vec::new();
     for file in cited.iter().filter(|file| !is_documentation_path(file)) {
         if from_document {
-            let cites = path_term(file)
-                .is_some_and(|term| texts.iter().any(|text| text.mention(&term).is_some()));
+            let cites =
+                path_term(file).is_some_and(|term| texts.iter().any(|text| text.affirms(&term)));
             if !cites {
                 continue;
             }

@@ -27,7 +27,7 @@ use crate::claims::{ClaimRecord, ClaimStore};
 use crate::clock::now_rfc3339;
 use crate::decisions::{DecisionStatus, DecisionStore, StoredDecision};
 use crate::graph::{
-    ai_link_quote, ai_link_reason, mention_quote, EdgeRecord, EntityRecord, GraphStore,
+    ai_link_quote, ai_link_reason, doubt_of, mention_quote, EdgeRecord, EntityRecord, GraphStore,
 };
 use crate::jobs::{JobRecord, JobRepository, JobState};
 use crate::overview::StructuredModel;
@@ -348,17 +348,23 @@ fn validated(
     kept
 }
 
+/// Whether a live link with this reason is a tie of its own: not a mention and
+/// not one whose polarity is in doubt.
+fn is_tie(reason: &str) -> bool {
+    mention_quote(reason).is_none() && doubt_of(reason).is_none()
+}
+
 /// Whether the decision still needs the AI's help to reach the map: it has
 /// no live tie from a file, a dependency or a person, and the AI was not
-/// asked before. Mention and AI suggestions are weak and do not count as
-/// ties.
+/// asked before. Mention and AI suggestions, and any link whose polarity is in
+/// doubt, are weak and do not count as ties.
 pub fn needs_links(edges: &[EdgeRecord], decision_id: &str) -> bool {
     !edges
         .iter()
         .filter(|edge| edge.source_kind == NodeKind::Decision && edge.source_id == decision_id)
         .any(|edge| {
             let asked = ai_link_quote(&edge.reason).is_some();
-            let tie = edge.is_live() && mention_quote(&edge.reason).is_none();
+            let tie = edge.is_live() && is_tie(&edge.reason);
             asked || tie
         })
 }
@@ -377,8 +383,7 @@ pub fn claim_needs_links(edges: &[EdgeRecord], claim: &ClaimRecord, at: &Timesta
         edge.kind == EdgeKind::AppliesTo
             && edge.source_kind == NodeKind::Claim
             && edge.source_id == claim.claim_id
-            && (ai_link_quote(&edge.reason).is_some()
-                || (edge.is_live() && mention_quote(&edge.reason).is_none()))
+            && (ai_link_quote(&edge.reason).is_some() || (edge.is_live() && is_tie(&edge.reason)))
     });
     if own {
         return false;
@@ -946,6 +951,11 @@ mod tests {
         assert!(needs_links(&[edge("crates/core/src/lib.rs", false)], "d"));
         let mention = crate::graph::mention_reason("o core");
         assert!(needs_links(&[edge(&mention, true)], "d"));
+        let in_doubt = crate::graph::with_doubt(&cited, Some(("no", "com no iroh")));
+        assert!(
+            needs_links(&[edge(&in_doubt, true)], "d"),
+            "a link whose polarity is in doubt is no tie"
+        );
         let asked = ai_link_reason("o core grava", "r");
         assert!(!needs_links(&[edge(&asked, false)], "d"));
         assert!(needs_links(

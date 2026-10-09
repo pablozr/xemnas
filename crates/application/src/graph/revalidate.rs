@@ -14,8 +14,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use domain::entities::{pattern_matches, EdgeActor, EdgeKind, EntityKind, NodeKind};
 
-use super::derive::decision_texts;
-use super::mention::{mention_quote, Folded, Term};
+use super::derive::{best_mention, decision_texts, DEPENDENCY_REASON, SYMBOL_REASON};
+use super::mention::{code_words_of, dependency_term, doubt_of, mention_quote, Folded, Term};
 use super::repo_files::{RepoFiles, Resolved};
 use super::{DecisionNode, EdgeRecord, EntityRecord, GraphError, GraphStore, KnowledgeGraph};
 use crate::claims::{ClaimRecord, ClaimStore};
@@ -47,7 +47,14 @@ where
     ///
     /// * A link made from a mention (suggested, or confirmed by the rules or
     ///   the AI judge) whose decision no longer mentions the part
-    ///   affirmatively is invalidated as `Rules`.
+    ///   affirmatively is invalidated as `Rules`. A mention in doubt still
+    ///   supports it: the word that may negate it is the judge's to read.
+    /// * A link made from a cited dependency or symbol, suggested or confirmed
+    ///   by the rules, is invalidated as `Rules` when the decision no longer
+    ///   cites it, or cites it only near a word that may negate it and the
+    ///   reason has no alarm: the derivation then writes it again as a
+    ///   pending link carrying the alarm, which goes to the judge. What the
+    ///   judge or a person confirmed is not touched.
     /// * A tie a rule inherited from its decision, when the decision has no
     ///   confirmed live tie to that component any more, as `Inherited`.
     pub(super) fn revalidate(
@@ -78,24 +85,38 @@ where
             if !guess(edge)
                 || edge.source_kind != NodeKind::Decision
                 || !matches!(edge.kind, EdgeKind::Affects | EdgeKind::Uses)
-                || mention_quote(&edge.reason).is_none()
             {
                 continue;
             }
-            let (Some(decision), Some((_, _, terms))) = (
-                by_decision.get(edge.source_id.as_str()),
-                named
-                    .iter()
-                    .find(|(entity, _, _)| entity.entity_id == edge.entity_id),
-            ) else {
+            let mention = mention_quote(&edge.reason).is_some();
+            let structural = edge.reason.starts_with(DEPENDENCY_REASON)
+                || edge.reason.starts_with(SYMBOL_REASON);
+            // A dependency or a symbol is only revisited while the rules own
+            // it: a person's or the judge's word on it stays.
+            let rules_own =
+                edge.confirmed_at.is_none() || edge.confirmed_by == Some(EdgeActor::Rules);
+            if !(mention || (structural && rules_own)) {
+                continue;
+            }
+            let Some(decision) = by_decision.get(edge.source_id.as_str()) else {
                 continue;
             };
             let folded = texts
                 .entry(decision.decision_id.as_str())
                 .or_insert_with(|| decision_texts(decision));
-            let supported = terms
-                .iter()
-                .any(|term| folded.iter().any(|text| text.mention(term).is_some()));
+            let supported = if mention {
+                let Some((_, _, terms)) = named
+                    .iter()
+                    .find(|(entity, _, _)| entity.entity_id == edge.entity_id)
+                else {
+                    continue;
+                };
+                terms
+                    .iter()
+                    .any(|term| folded.iter().any(|text| text.mention(term).is_some()))
+            } else {
+                structural_support(&edge.reason, folded)
+            };
             if !supported {
                 stale.push(edge.edge_id.clone());
             }
@@ -138,6 +159,39 @@ where
             *edges = self.store.project_edges(project_id)?;
         }
         Ok(invalidated)
+    }
+}
+
+/// Whether the text of a decision still supports the dependency or the symbol
+/// a reason cites, with no doubt about its polarity (or with the doubt the
+/// reason already carries, which the judge or a person decides).
+fn structural_support(reason: &str, texts: &[Folded]) -> bool {
+    let doubt = if let Some(rest) = reason.strip_prefix(DEPENDENCY_REASON) {
+        let Some(term) = rest
+            .strip_prefix('"')
+            .and_then(|rest| rest.split('"').next())
+            .and_then(dependency_term)
+        else {
+            return true;
+        };
+        best_mention(texts, &term).map(|found| found.doubt)
+    } else {
+        let Some(word) = reason
+            .strip_prefix(SYMBOL_REASON)
+            .and_then(|rest| rest.strip_prefix('`'))
+            .and_then(|rest| rest.split('`').next())
+        else {
+            return true;
+        };
+        code_words_of(texts)
+            .into_iter()
+            .find(|(known, _)| known == word)
+            .map(|(_, doubt)| doubt.map(|(trigger, _)| trigger))
+    };
+    match doubt {
+        None => false,
+        Some(None) => true,
+        Some(Some(_)) => doubt_of(reason).is_some(),
     }
 }
 

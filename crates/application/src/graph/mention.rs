@@ -33,6 +33,30 @@
 //! scope that ends at clause punctuation, a terminating word, a connector
 //! followed by a new clause or [`MAX_SCOPE_WORDS`] words. No AI, and a single
 //! pass over the text.
+//!
+//! # Polarity in any language
+//!
+//! The lexicon only decides what is unambiguous in English and Portuguese.
+//! Any other trigger, in any language, raises doubt instead ([`DOUBT_BEFORE`],
+//! [`DOUBT_AFTER`]): the plain `no` is "not" in Spanish and English and "in
+//! the" in Portuguese, so the text cannot tell. The hit comes back with the
+//! trigger as a [`Mention::doubt`], the reason of the link carries the alarm
+//! ([`with_doubt`]), the rules never accept it, and the judge (or the person)
+//! reads the quote. A doubt reaches [`DOUBT_SCOPE_WORDS`] words, fewer than a
+//! sure negation: it must catch `no usa rusqlite` without catching the rest
+//! of the sentence.
+//!
+//! # Polarity in any language
+//!
+//! The lexicon only decides what is unambiguous in English and Portuguese.
+//! Any other trigger, in any language, raises doubt instead ([`DOUBT_BEFORE`],
+//! [`DOUBT_AFTER`]): the plain `no` is "not" in Spanish and English and "in
+//! the" in Portuguese, so the text cannot tell. The hit comes back with the
+//! trigger as a [`Mention::doubt`], the reason of the link carries the alarm
+//! ([`with_doubt`]), the rules never accept it, and the judge (or the person)
+//! reads the quote. A doubt reaches [`DOUBT_SCOPE_WORDS`] words, fewer than a
+//! sure negation: it must catch `no usa rusqlite` without catching the rest
+//! of the sentence.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
@@ -53,9 +77,13 @@ const MIN_PLAIN: usize = 4;
 const MIN_MARKED: usize = 3;
 /// Words a negation reaches, at most.
 const MAX_SCOPE_WORDS: usize = 8;
+/// Words a doubt reaches, at most. Measured on the link corpora (3, 4 and 5):
+/// the smallest scope that keeps every wrong dependency out of the rules'
+/// hands and the recall with the judge at its floor.
+const DOUBT_SCOPE_WORDS: usize = 3;
 
-/// Phrases that negate what follows them. English and Portuguese; the plain
-/// English `no` is left out because it is the Portuguese "in the" (`no core`).
+/// Phrases that surely negate what follows them: English and Portuguese, where
+/// no word is also ordinary prose. Only these decide on their own.
 const NEGATION_BEFORE: &[&str] = &[
     "not",
     "never",
@@ -72,9 +100,7 @@ const NEGATION_BEFORE: &[&str] = &[
     "except for",
     "excluding",
     "other than",
-    "apart from",
     "unlike",
-    "outside",
     "avoid",
     "avoids",
     "avoiding",
@@ -99,7 +125,6 @@ const NEGATION_BEFORE: &[&str] = &[
     "independente de",
     "independentemente de",
     "exceto",
-    "salvo",
     "fora de",
     "evitar",
     "evita",
@@ -110,7 +135,99 @@ const NEGATION_BEFORE: &[&str] = &[
     "não mais",
 ];
 
-/// Phrases that negate what precedes them.
+/// Phrases that may negate what follows them, in any language, or may be
+/// ordinary prose in another (`no` is "in the" in Portuguese). They never
+/// decide: they raise doubt.
+const DOUBT_BEFORE: &[&str] = &[
+    // English.
+    "no",
+    "none",
+    "non",
+    "lacks",
+    "lacking",
+    "absent",
+    "barring",
+    "save for",
+    "outside",
+    "apart from",
+    // Portuguese.
+    "salvo",
+    "jamais",
+    "tampouco",
+    "menos",
+    "afora",
+    // Spanish.
+    "sin",
+    "ni",
+    "nunca",
+    "jamás",
+    "en vez de",
+    "en lugar de",
+    "excepto",
+    "ningún",
+    "ninguna",
+    "ninguno",
+    "tampoco",
+    "evitar",
+    "independiente de",
+    "fuera de",
+    // French.
+    "ne",
+    "pas",
+    "sans",
+    "jamais",
+    "aucun",
+    "aucune",
+    "au lieu de",
+    "plutôt que",
+    "sauf",
+    "excepté",
+    "hors de",
+    "éviter",
+    // German.
+    "nicht",
+    "kein",
+    "keine",
+    "keinen",
+    "keinem",
+    "keiner",
+    "ohne",
+    "nie",
+    "niemals",
+    "weder",
+    "statt",
+    "anstatt",
+    "anstelle",
+    "außer",
+    "unabhängig von",
+    "vermeiden",
+    // Italian.
+    "senza",
+    "né",
+    "mai",
+    "nessun",
+    "nessuno",
+    "nessuna",
+    "invece di",
+    "anziché",
+    "tranne",
+    "eccetto",
+    "evitare",
+    "indipendente da",
+];
+
+/// Phrases that may negate what precedes them, in any language.
+const DOUBT_AFTER: &[&str] = &[
+    "was dropped",
+    "deprecated",
+    "fue descartado",
+    "fue rechazado",
+    "wurde verworfen",
+    "è stato scartato",
+    "a été abandonné",
+];
+
+/// Phrases that surely negate what precedes them.
 const NEGATION_AFTER: &[&str] = &[
     "foi descartado",
     "foi rejeitado",
@@ -130,13 +247,23 @@ const PSEUDO_TRIGGERS: &[&str] = &[
     "não apenas",
     "no doubt",
     "sem dúvida",
+    "no solo",
+    "no sólo",
+    "sin duda",
+    "sans doute",
+    "non seulement",
+    "nicht nur",
+    "non solo",
+    "senza dubbio",
+    "ohne zweifel",
+    "no matter",
 ];
 
 /// Words that end the scope of a negation.
 const TERMINATORS: &[&str] = &[
     "but", "however", "while", "whereas", "although", "though", "yet", "so", "because", "since",
     "which", "that", "where", "when", "mas", "porém", "enquanto", "embora", "porque", "pois",
-    "que", "onde", "quando",
+    "que", "onde", "quando", "pero", "sino", "mais", "aber", "sondern", "ma", "però",
 ];
 
 /// Words that join the items of a list.
@@ -154,10 +281,35 @@ pub fn mention_reason(quote: &str) -> String {
     format!("{MENTION_REASON}\"{quote}\"")
 }
 
+/// Marks a reason whose evidence sits near a word that may negate it; the
+/// trigger and the quote follow. The rules never accept a link that has it.
+pub const DOUBT_MARK: &str = "\npolaridade duvidosa: ";
+
+/// `reason` with the polarity alarm appended when there is one: the trigger
+/// and the quote the doubt rests on.
+pub fn with_doubt(reason: &str, doubt: Option<(&str, &str)>) -> String {
+    match doubt {
+        Some((trigger, quote)) => format!("{reason}{DOUBT_MARK}\"{trigger}\" em \"{quote}\""),
+        None => reason.to_string(),
+    }
+}
+
+/// The alarm of a reason (the trigger and the quote), `None` when it has none.
+pub fn doubt_of(reason: &str) -> Option<&str> {
+    reason.split_once(DOUBT_MARK).map(|(_, alarm)| alarm)
+}
+
+/// The reason without its polarity alarm.
+pub fn without_doubt(reason: &str) -> &str {
+    reason
+        .split_once(DOUBT_MARK)
+        .map_or(reason, |(head, _)| head)
+}
+
 /// The quote of a suggestion derived from a mention, `None` for any other
 /// reason (a file or a dependency).
 pub fn mention_quote(reason: &str) -> Option<&str> {
-    let rest = reason.strip_prefix(MENTION_REASON)?;
+    let rest = without_doubt(reason.strip_prefix(MENTION_REASON)?);
     Some(
         rest.strip_prefix('"')
             .and_then(|quote| quote.strip_suffix('"'))
@@ -260,6 +412,14 @@ pub(crate) fn path_term(path: &str) -> Option<Term> {
     })
 }
 
+/// A hit of a term in the text: the quote around it and, when a word that may
+/// negate it sits nearby, that word as it was written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Mention {
+    pub quote: String,
+    pub doubt: Option<String>,
+}
+
 /// A text ready to be searched: the original characters and their folded
 /// form, one to one, with the spans of code and the words a negation reaches.
 pub(crate) struct Folded {
@@ -267,8 +427,34 @@ pub(crate) struct Folded {
     folded: Vec<char>,
     /// Between a pair of backticks.
     code: Vec<bool>,
-    /// Inside the scope of a negation; empty when the text has none.
+    /// Inside the scope of a sure negation; empty when the text has none.
     negated: Vec<bool>,
+    /// Inside the scope of a doubtful trigger: 0, or 1 + the index in
+    /// `triggers`; empty when the text has none.
+    doubt: Vec<u16>,
+    /// The doubtful triggers, as written.
+    triggers: Vec<String>,
+}
+
+/// A name written between backticks and, when it sits near a doubtful trigger,
+/// the trigger and the quote.
+pub(crate) type CodeWord = (String, Option<(String, String)>);
+
+/// The code words of several texts, each name once: a clean occurrence wins
+/// over one in doubt.
+pub(crate) fn code_words_of(texts: &[Folded]) -> Vec<CodeWord> {
+    let mut words: Vec<CodeWord> = Vec::new();
+    for (word, doubt) in texts.iter().flat_map(Folded::code_words) {
+        match words.iter_mut().find(|(known, _)| *known == word) {
+            Some(known) => {
+                if doubt.is_none() {
+                    known.1 = None;
+                }
+            }
+            None => words.push((word, doubt)),
+        }
+    }
+    words
 }
 
 impl Folded {
@@ -276,18 +462,31 @@ impl Folded {
         let original: Vec<char> = text.chars().collect();
         let folded: Vec<char> = original.iter().copied().map(fold).collect();
         let code = code_spans(&original);
-        let negated = negation_mask(&folded, &code);
+        let polarity = polarity(&original, &folded, &code);
         Self {
             original,
             folded,
             code,
-            negated,
+            negated: polarity.negated,
+            doubt: polarity.doubt,
+            triggers: polarity.triggers,
         }
     }
 
+    fn is_negated(&self, at: usize) -> bool {
+        self.negated.get(at).copied().unwrap_or(false)
+    }
+
+    /// The trigger whose doubt reaches the character at `at`.
+    fn doubt_at(&self, at: usize) -> Option<&str> {
+        let index = usize::from(self.doubt.get(at).copied()?);
+        self.triggers.get(index.checked_sub(1)?).map(String::as_str)
+    }
+
     /// The words written between backticks (names with `.` kept, so
-    /// `state.rs` stays whole), outside every negation.
-    pub(crate) fn code_words(&self) -> Vec<String> {
+    /// `state.rs` stays whole), outside every sure negation. A word near a
+    /// doubtful trigger comes with the trigger and the quote.
+    pub(crate) fn code_words(&self) -> Vec<CodeWord> {
         let mut words = Vec::new();
         let mut at = 0;
         while at < self.original.len() {
@@ -306,35 +505,61 @@ impl Folded {
                 at += 1;
                 continue;
             }
-            if !self.negated.get(start).copied().unwrap_or(false) {
+            if !self.is_negated(start) {
                 let word: String = self.original[start..at].iter().collect();
                 let word = word.trim_matches('.');
                 if !word.is_empty() {
-                    words.push(word.to_string());
+                    let doubt = self
+                        .doubt_at(start)
+                        .map(|trigger| (trigger.to_string(), self.quote(start, at - start)));
+                    words.push((word.to_string(), doubt));
                 }
             }
         }
         words
     }
 
-    /// The quote around the first affirmative mention of `term`, when the text
-    /// has one the rule accepts.
-    pub(crate) fn mention(&self, term: &Term) -> Option<String> {
-        self.find(term, true)
-            .map(|start| self.quote(start, term.chars.len()))
+    /// The first mention of `term` the rule accepts: a clean one when the text
+    /// has it, else the first one in doubt. A hit inside a sure negation
+    /// never comes back.
+    pub(crate) fn mention(&self, term: &Term) -> Option<Mention> {
+        let size = term.chars.len();
+        let mut doubtful: Option<(usize, &str)> = None;
+        for start in self.hits(term).filter(|&start| !self.is_negated(start)) {
+            match self.doubt_at(start) {
+                None => {
+                    return Some(Mention {
+                        quote: self.quote(start, size),
+                        doubt: None,
+                    })
+                }
+                Some(trigger) => {
+                    doubtful.get_or_insert((start, trigger));
+                }
+            }
+        }
+        doubtful.map(|(start, trigger)| Mention {
+            quote: self.quote(start, size),
+            doubt: Some(trigger.to_string()),
+        })
     }
 
-    /// The first hit the rule accepts; one inside a negation is skipped when
-    /// `affirmative`.
-    fn find(&self, term: &Term, affirmative: bool) -> Option<usize> {
+    /// Whether the text mentions `term` with no doubt about its polarity.
+    pub(crate) fn affirms(&self, term: &Term) -> bool {
+        self.hits(term)
+            .any(|start| !self.is_negated(start) && self.doubt_at(start).is_none())
+    }
+
+    /// Where the term sits in the text under the matching rule, negated or not.
+    fn hits<'a>(&'a self, term: &'a Term) -> impl Iterator<Item = usize> + 'a {
         let size = term.chars.len();
-        if size == 0 || size > self.folded.len() {
-            return None;
-        }
-        (0..=self.folded.len() - size).find(|&start| {
-            self.folded[start..start + size] == term.chars[..]
-                && self.accepts(start, term)
-                && !(affirmative && self.negated.get(start).copied().unwrap_or(false))
+        let starts = if size == 0 || size > self.folded.len() {
+            0..0
+        } else {
+            0..self.folded.len() - size + 1
+        };
+        starts.filter(move |&start| {
+            self.folded[start..start + size] == term.chars[..] && self.accepts(start, term)
         })
     }
 
@@ -579,6 +804,8 @@ impl Phrases {
 struct Lexicon {
     before: Phrases,
     after: Phrases,
+    doubt_before: Phrases,
+    doubt_after: Phrases,
     pseudo: Phrases,
     terminators: HashSet<String>,
     connectors: HashSet<String>,
@@ -592,6 +819,8 @@ fn lexicon() -> &'static Lexicon {
         Lexicon {
             before: Phrases::new(NEGATION_BEFORE),
             after: Phrases::new(NEGATION_AFTER),
+            doubt_before: Phrases::new(DOUBT_BEFORE),
+            doubt_after: Phrases::new(DOUBT_AFTER),
             pseudo: Phrases::new(PSEUDO_TRIGGERS),
             terminators: set(TERMINATORS),
             connectors: set(CONNECTORS),
@@ -610,8 +839,54 @@ fn fold_word(word: &str) -> String {
         .collect()
 }
 
-/// Which characters a negation reaches; empty when no trigger is present.
-fn negation_mask(folded: &[char], code: &[bool]) -> Vec<bool> {
+/// What the triggers of a text do to its characters; a mask is empty while no
+/// trigger of its kind is present.
+#[derive(Default)]
+struct Polarity {
+    negated: Vec<bool>,
+    doubt: Vec<u16>,
+    triggers: Vec<String>,
+}
+
+impl Polarity {
+    fn negate(&mut self, token: &Token, size: usize) {
+        if self.negated.is_empty() {
+            self.negated = vec![false; size];
+        }
+        for flag in &mut self.negated[token.start..token.end] {
+            *flag = true;
+        }
+    }
+
+    /// Records `trigger` and marks the tokens it reaches; the first doubt to
+    /// reach a character keeps it. A trigger that reaches nothing is not
+    /// recorded.
+    fn raise(&mut self, reached: &[usize], tokens: &[Token], size: usize, trigger: String) {
+        // A decision never has more than `u16::MAX` triggers.
+        let Some(index) = u16::try_from(self.triggers.len() + 1)
+            .ok()
+            .filter(|_| !reached.is_empty())
+        else {
+            return;
+        };
+        self.triggers.push(trigger);
+        if self.doubt.is_empty() {
+            self.doubt = vec![0; size];
+        }
+        for &at in reached {
+            let token = &tokens[at];
+            for mark in &mut self.doubt[token.start..token.end] {
+                if *mark == 0 {
+                    *mark = index;
+                }
+            }
+        }
+    }
+}
+
+/// Which characters a sure negation reaches and which a doubtful trigger
+/// reaches, with the triggers as written.
+fn polarity(original: &[char], folded: &[char], code: &[bool]) -> Polarity {
     let tokens = tokenize(folded);
     let words: Vec<String> = tokens
         .iter()
@@ -621,15 +896,7 @@ fn negation_mask(folded: &[char], code: &[bool]) -> Vec<bool> {
         })
         .collect();
     let lexicon = lexicon();
-    let mut mask: Vec<bool> = Vec::new();
-    let mut mark = |token: &Token| {
-        if mask.is_empty() {
-            mask = vec![false; folded.len()];
-        }
-        for flag in &mut mask[token.start..token.end] {
-            *flag = true;
-        }
-    };
+    let mut polarity = Polarity::default();
     // Whether the word at `at` goes on with a list: an article (only after a
     // connector), code, a name-shaped word or another trigger.
     let continues = |at: usize, after_comma: bool| {
@@ -642,7 +909,68 @@ fn negation_mask(folded: &[char], code: &[bool]) -> Vec<bool> {
             || word.contains(['-', '_', '/', '.', ':', '@'])
             || word.chars().any(|character| character.is_ascii_digit())
             || lexicon.before.longest(&tokens, &words, at) > 0
+            || lexicon.doubt_before.longest(&tokens, &words, at) > 0
     };
+    // The words a trigger reaches going forward from `from`, to the end of the
+    // clause or the list.
+    let forward = |from: usize, limit: usize| {
+        let mut reached = Vec::new();
+        let mut next = from;
+        while let Some(token) = tokens.get(next) {
+            match token.piece {
+                Piece::Stop => break,
+                Piece::Comma => {
+                    if !continues(next + 1, true) {
+                        break;
+                    }
+                }
+                Piece::Word => {
+                    let word = &words[next];
+                    if lexicon.terminators.contains(word) {
+                        break;
+                    }
+                    if lexicon.connectors.contains(word) {
+                        if !continues(next + 1, false) {
+                            break;
+                        }
+                    } else {
+                        if reached.len() >= limit {
+                            break;
+                        }
+                        reached.push(next);
+                    }
+                }
+            }
+            next += 1;
+        }
+        reached
+    };
+    // The words a trigger reaches going back from `from`, to the start of the
+    // clause.
+    let backward = |from: usize, limit: usize| {
+        let mut reached = Vec::new();
+        let mut previous = from;
+        while previous > 0 {
+            previous -= 1;
+            match tokens[previous].piece {
+                Piece::Stop => break,
+                Piece::Comma => {}
+                Piece::Word => {
+                    if lexicon.terminators.contains(&words[previous]) || reached.len() >= limit {
+                        break;
+                    }
+                    reached.push(previous);
+                }
+            }
+        }
+        reached
+    };
+    let written = |from: usize, count: usize| -> String {
+        original[tokens[from].start..tokens[from + count - 1].end]
+            .iter()
+            .collect()
+    };
+    let size = folded.len();
     let mut at = 0;
     while at < tokens.len() {
         if tokens[at].piece != Piece::Word {
@@ -654,67 +982,34 @@ fn negation_mask(folded: &[char], code: &[bool]) -> Vec<bool> {
             at += pseudo;
             continue;
         }
-        let before = lexicon.before.longest(&tokens, &words, at);
-        let after = lexicon.after.longest(&tokens, &words, at);
-        if before > 0 {
-            // Forward, to the end of the clause or the list.
-            let mut reached = 0;
-            let mut next = at + before;
-            while let Some(token) = tokens.get(next) {
-                match token.piece {
-                    Piece::Stop => break,
-                    Piece::Comma => {
-                        if !continues(next + 1, true) {
-                            break;
-                        }
-                    }
-                    Piece::Word => {
-                        let word = &words[next];
-                        if lexicon.terminators.contains(word) {
-                            break;
-                        }
-                        if lexicon.connectors.contains(word) {
-                            if !continues(next + 1, false) {
-                                break;
-                            }
-                        } else {
-                            reached += 1;
-                            if reached > MAX_SCOPE_WORDS {
-                                break;
-                            }
-                            mark(token);
-                        }
-                    }
-                }
-                next += 1;
+        let sure_before = lexicon.before.longest(&tokens, &words, at);
+        let sure_after = lexicon.after.longest(&tokens, &words, at);
+        let doubt_before = lexicon.doubt_before.longest(&tokens, &words, at);
+        let doubt_after = lexicon.doubt_after.longest(&tokens, &words, at);
+        // The longest phrase wins: `no longer` is sure, `no` alone is not.
+        if sure_before > 0 && sure_before >= doubt_before {
+            for index in forward(at + sure_before, MAX_SCOPE_WORDS) {
+                polarity.negate(&tokens[index], size);
             }
+        } else if doubt_before > 0 {
+            let reached = forward(at + doubt_before, DOUBT_SCOPE_WORDS);
+            polarity.raise(&reached, &tokens, size, written(at, doubt_before));
         }
-        if after > 0 {
-            // Backward, to the start of the clause.
-            let mut reached = 0;
-            let mut previous = at;
-            while previous > 0 {
-                previous -= 1;
-                let token = &tokens[previous];
-                match token.piece {
-                    Piece::Stop => break,
-                    Piece::Comma => {}
-                    Piece::Word => {
-                        if lexicon.terminators.contains(&words[previous]) {
-                            break;
-                        }
-                        reached += 1;
-                        if reached > MAX_SCOPE_WORDS {
-                            break;
-                        }
-                        mark(token);
-                    }
-                }
+        if sure_after > 0 && sure_after >= doubt_after {
+            for index in backward(at, MAX_SCOPE_WORDS) {
+                polarity.negate(&tokens[index], size);
             }
+        } else if doubt_after > 0 {
+            let reached = backward(at, DOUBT_SCOPE_WORDS);
+            polarity.raise(&reached, &tokens, size, written(at, doubt_after));
         }
-        at += before.max(after).max(1);
+        at += sure_before
+            .max(sure_after)
+            .max(doubt_before)
+            .max(doubt_after)
+            .max(1);
     }
-    mask
+    polarity
 }
 
 #[cfg(test)]
@@ -738,12 +1033,23 @@ mod tests {
         }
     }
 
-    /// The quote of the first term of `entity` that `text` mentions.
+    /// The quote of the first term of `entity` that `text` mentions, clean or
+    /// in doubt.
     fn hit(text: &str, entity: &EntityRecord) -> Option<String> {
         let folded = Folded::new(text);
         entity_terms(entity, &BTreeSet::new())
             .iter()
             .find_map(|term| folded.mention(term))
+            .map(|found| found.quote)
+    }
+
+    /// The trigger of the doubt around the first mention, when it has one.
+    fn doubt(text: &str, entity: &EntityRecord) -> Option<String> {
+        let folded = Folded::new(text);
+        entity_terms(entity, &BTreeSet::new())
+            .iter()
+            .find_map(|term| folded.mention(term))
+            .and_then(|found| found.doubt)
     }
 
     #[test]
@@ -790,17 +1096,20 @@ mod tests {
         assert!(hit("a ui mostra", &ui).is_none());
     }
 
-    /// Whether the text mentions `entity` affirmatively.
+    /// Whether the text mentions `entity` affirmatively, with no doubt.
     fn affirmative(text: &str, entity: &EntityRecord) -> bool {
-        hit(text, entity).is_some()
+        let folded = Folded::new(text);
+        entity_terms(entity, &BTreeSet::new())
+            .iter()
+            .any(|term| folded.affirms(term))
     }
 
     /// Whether the text names the entity and every hit is negated.
     fn negated_only(text: &str, entity: &EntityRecord) -> bool {
         let folded = Folded::new(text);
         let terms = entity_terms(entity, &BTreeSet::new());
-        terms.iter().any(|term| folded.find(term, false).is_some())
-            && terms.iter().all(|term| folded.find(term, true).is_none())
+        terms.iter().any(|term| folded.hits(term).next().is_some())
+            && terms.iter().all(|term| folded.mention(term).is_none())
     }
 
     #[test]
@@ -929,18 +1238,62 @@ mod tests {
         ));
         // Said the other way round, it is a mention.
         assert!(affirmative(
-            "Gravar no sqlite, sem perder nenhum evento.",
+            "Gravar via sqlite, sem perder nenhum evento.",
             &sqlite
         ));
     }
 
     #[test]
-    fn in_portuguese_no_is_not_a_negation() {
+    fn a_word_that_may_negate_raises_doubt_in_any_language_and_never_decides() {
         let core = entity("core", &[], &[]);
-        assert!(affirmative(
-            "O plugin grava no core antes de responder.",
-            &core
-        ));
+        // Portuguese "no" is "in the": a mention with a doubt, never dropped.
+        let text = "O plugin grava no core antes de responder.";
+        assert!(!affirmative(text, &core));
+        assert_eq!(doubt(text, &core).as_deref(), Some("no"));
+        assert!(hit(text, &core).is_some());
+        for (text, trigger) in [
+            ("El servicio no usa core.", "no"),
+            ("Dies hängt nicht vom core ab.", "nicht"),
+            ("Si scrive senza core.", "senza"),
+            ("Sans le core, tout marche.", "Sans"),
+            ("The settings, no core involved.", "no"),
+            ("Core was dropped last week.", "was dropped"),
+        ] {
+            assert_eq!(doubt(text, &core).as_deref(), Some(trigger), "{text}");
+            assert!(!affirmative(text, &core), "{text}");
+        }
+        // A clean mention elsewhere in the text wins over one in doubt.
+        let text = "Sans cache, le core écrit. Le core valide le schéma.";
+        assert!(affirmative(text, &core));
+        assert_eq!(doubt(text, &core), None);
+        // Past the scope of the doubt it is clean again.
+        assert!(affirmative("Sin uno dos tres cuatro core.", &core));
+        // The unambiguous English and Portuguese triggers still decide.
+        let net = entity("net-core", &[], &[]);
+        assert!(negated_only("Persistir sem net-core.", &net));
+        assert!(negated_only("The service is no longer net-core.", &net));
+    }
+
+    #[test]
+    fn a_longer_sure_phrase_beats_a_doubtful_word() {
+        // `no longer` negates; the plain `no` before a name only doubts.
+        let net = entity("net-core", &[], &[]);
+        assert!(negated_only("It is no longer net-core.", &net));
+        assert_eq!(
+            doubt("There is no net-core here.", &net).as_deref(),
+            Some("no")
+        );
+    }
+
+    #[test]
+    fn the_reason_carries_the_alarm_and_reads_back() {
+        let plain = mention_reason("o core grava");
+        assert_eq!(doubt_of(&plain), None);
+        assert_eq!(with_doubt(&plain, None), plain);
+        let alarmed = with_doubt(&plain, Some(("no", "o core grava")));
+        assert_eq!(doubt_of(&alarmed), Some("\"no\" em \"o core grava\""));
+        assert_eq!(without_doubt(&alarmed), plain);
+        assert_eq!(mention_quote(&alarmed), Some("o core grava"));
     }
 
     #[test]
@@ -960,7 +1313,13 @@ mod tests {
 
     #[test]
     fn code_words_are_the_affirmative_names_between_backticks() {
-        let words = |text: &str| Folded::new(text).code_words();
+        let words = |text: &str| -> Vec<String> {
+            Folded::new(text)
+                .code_words()
+                .into_iter()
+                .map(|(word, _)| word)
+                .collect()
+        };
         assert_eq!(
             words("Raise `FLUSH_INTERVAL` and read `state.rs` or `A::b()`."),
             vec!["FLUSH_INTERVAL", "state.rs", "A", "b"]
@@ -971,6 +1330,11 @@ mod tests {
             vec!["NEW_ONE"]
         );
         assert!(words("No code here.").is_empty());
+        // Near a doubtful trigger the word comes with it and the quote.
+        let doubtful = Folded::new("Sin tocar `FLUSH_INTERVAL` aqui.").code_words();
+        assert_eq!(doubtful.len(), 1);
+        assert_eq!(doubtful[0].0, "FLUSH_INTERVAL");
+        assert_eq!(doubtful[0].1.as_ref().map(|(t, _)| t.as_str()), Some("Sin"));
     }
 
     #[test]
@@ -1219,48 +1583,70 @@ mod tests {
     /// sense, which no lexical rule can tell apart.
     ///
     /// 2026-10-09: the corpus gained five sentences with polarity words of
-    /// Spanish, French, German and Italian (and Portuguese "no"). The lexicon
-    /// only knows English and Portuguese, so four of them link a part that is
-    /// named to be left out: precision 0.889 (48/54), recall 1.000. The floor
-    /// sits there until a polarity word of any language raises doubt instead
-    /// of being ignored.
-    const MENTION_PRECISION_FLOOR: f64 = 0.88;
-    const MENTION_RECALL_FLOOR: f64 = 1.0;
+    /// Spanish, French, German and Italian (and Portuguese "no"). With the
+    /// lexicon deciding, four of them linked a part named to be left out:
+    /// precision 0.889 (48/54), recall 1.000. With a trigger of any language
+    /// raising doubt instead, a doubtful hit is not asserted: precision 0.958
+    /// (46/48), recall 0.958, and 1.000 counting the 6 doubtful hits the judge
+    /// reads (2 right: "no core", "no testkit"; 4 wrong).
+    const MENTION_PRECISION_FLOOR: f64 = 0.95;
+    const MENTION_RECALL_FLOOR: f64 = 0.95;
+    const MENTION_RECALL_WITH_JUDGE_FLOOR: f64 = 1.0;
+    const MENTION_DOUBTFUL_CEILING: usize = 6;
 
     #[test]
     fn mention_quality_gate() {
         // Each corpus is its own project: the same word may name a part in one.
+        // A part named with no doubt is asserted; one near a word that may
+        // negate it goes to the judge, and counts apart.
         let (mut tp, mut found, mut expected) = (0usize, 0usize, 0usize);
+        let (mut doubtful, mut doubtful_right) = (0usize, 0usize);
         for (map, texts) in [corpus(), package_corpus()] {
             for (text, truth) in &texts {
                 let folded = Folded::new(text);
-                let hits: Vec<&str> = map
-                    .iter()
-                    .filter(|(_, entity)| {
-                        entity_terms(entity, &BTreeSet::new())
-                            .iter()
-                            .any(|term| folded.mention(term).is_some())
-                    })
-                    .map(|(label, _)| *label)
-                    .collect();
+                let mut hits: Vec<&str> = Vec::new();
+                let mut in_doubt: Vec<&str> = Vec::new();
+                for (label, entity) in &map {
+                    let terms = entity_terms(entity, &BTreeSet::new());
+                    if terms.iter().any(|term| folded.affirms(term)) {
+                        hits.push(label);
+                    } else if terms.iter().any(|term| folded.mention(term).is_some()) {
+                        in_doubt.push(label);
+                    }
+                }
                 if hits.len() != truth.len() || !hits.iter().all(|hit| truth.contains(hit)) {
-                    println!("mention differs: {text} -> {hits:?}, expected {truth:?}");
+                    println!(
+                        "mention differs: {text} -> {hits:?} (doubt {in_doubt:?}), expected {truth:?}"
+                    );
                 }
                 tp += hits.iter().filter(|hit| truth.contains(hit)).count();
                 found += hits.len();
                 expected += truth.len();
+                doubtful += in_doubt.len();
+                doubtful_right += in_doubt.iter().filter(|hit| truth.contains(hit)).count();
             }
         }
         let precision = tp as f64 / found.max(1) as f64;
         let recall = tp as f64 / expected.max(1) as f64;
+        let recall_with_judge = (tp + doubtful_right) as f64 / expected.max(1) as f64;
         println!(
-            "mention precision={precision:.3} ({tp}/{found}) recall={recall:.3} ({tp}/{expected})"
+            "mention precision={precision:.3} ({tp}/{found}) recall={recall:.3} ({tp}/{expected}) \
+             recall_with_judge={recall_with_judge:.3} doubtful={doubtful} \
+             doubtful_right={doubtful_right}"
         );
         assert!(
             precision >= MENTION_PRECISION_FLOOR,
             "mention precision {precision:.3}"
         );
         assert!(recall >= MENTION_RECALL_FLOOR, "mention recall {recall:.3}");
+        assert!(
+            recall_with_judge >= MENTION_RECALL_WITH_JUDGE_FLOOR,
+            "mention recall with the judge {recall_with_judge:.3}"
+        );
+        assert!(
+            doubtful <= MENTION_DOUBTFUL_CEILING,
+            "mention doubtful {doubtful}"
+        );
     }
 
     #[test]
