@@ -1169,7 +1169,7 @@ mod tests {
         // description of the full 100. The description is what lets the model
         // tell that "the updater" is the part that does "tray icon and
         // updates"; the prefix is the same bytes for every capture, so the
-        // provider's cache pays it once. Measured: 7,560 bytes; raise the ceiling only with a number.
+        // provider's cache pays it once. Measured: 7,560 bytes; raise the ceiling with a number.
         let bytes = prefix(&one).len();
         println!("gate extracted links: prompt_bytes_60_components={bytes}");
         assert!(bytes <= 8_192, "{bytes} bytes");

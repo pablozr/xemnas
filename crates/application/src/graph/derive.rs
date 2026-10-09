@@ -20,8 +20,8 @@ use domain::time::Timestamp;
 
 use super::ai_link::ai_link_quote;
 use super::mention::{
-    code_words_of, dependency_term, entity_terms, mention_quote, mention_reason, with_doubt,
-    without_doubt, CodeWord, Folded, Mention, Term,
+    code_words_of, dependency_term, doubt_of, entity_terms, mention_quote, mention_reason,
+    with_doubt, without_doubt, CodeWord, Folded, Mention, Term,
 };
 use super::repo_files::{counted_files, repo_files, RepoFiles};
 use super::{DecisionNode, EdgeRecord, EntityRecord, GraphError, GraphStore, KnowledgeGraph};
@@ -716,8 +716,10 @@ where
                     }
                 }
             }
-            report.new_edges +=
-                self.suggest_dependencies(&mut edges, project_id, decision, &texts, &owned, &now)?;
+            // A dependency one component declares: that component is the place.
+            report.new_edges += self.suggest_dependencies(
+                &mut edges, project_id, decision, &texts, &owned, false, &now,
+            )?;
             let words = code_words_of(&texts);
             if !words.is_empty() {
                 let repo = Arc::clone(listing.get_or_insert_with(|| repo_files(root)));
@@ -735,6 +737,12 @@ where
             }
             report.new_edges +=
                 self.suggest_mentions(&mut edges, project_id, decision, &texts, &named, &now)?;
+            // A dependency two components declare says nothing about which one
+            // the decision governs: it comes last, when the other evidence has
+            // already named the owner it is about.
+            report.new_edges += self.suggest_dependencies(
+                &mut edges, project_id, decision, &texts, &owned, true, &now,
+            )?;
         }
 
         // Decisions no file tied to the map ask the AI which components they
@@ -924,8 +932,12 @@ where
     }
 
     /// Ties the decision to the component that declares a dependency its text
-    /// cites (not to exclude it). With a second declaring component the
-    /// reason says so.
+    /// cites (not to exclude it). `shared` picks the dependencies two or more
+    /// components declare, whose reason says so; those tie to every owner
+    /// unless exactly one of them is already tied to the decision by other
+    /// evidence (a file, a symbol, a mention, the AI): then the decision is
+    /// about that owner and the shared dependency adds nothing.
+    #[allow(clippy::too_many_arguments)]
     fn suggest_dependencies(
         &self,
         edges: &mut Vec<EdgeRecord>,
@@ -933,15 +945,31 @@ where
         decision: &DecisionNode,
         texts: &[Folded],
         owned: &[OwnedDependency],
+        shared_pass: bool,
         now: &str,
     ) -> Result<usize, GraphError> {
         let source = (NodeKind::Decision, decision.decision_id.as_str());
         let mut written = 0;
+        let mut cited: Option<BTreeSet<String>> = None;
         for dependency in owned {
+            let shared = dependency.owners.len() > 1;
+            if shared != shared_pass {
+                continue;
+            }
             let Some(mention) = best_mention(texts, &dependency.term) else {
                 continue;
             };
-            let shared = dependency.owners.len() > 1;
+            if shared {
+                let cited = cited.get_or_insert_with(|| cited_owners(edges, source));
+                let cited_here = dependency
+                    .owners
+                    .iter()
+                    .filter(|(entity_id, _)| cited.contains(entity_id))
+                    .count();
+                if cited_here == 1 {
+                    continue;
+                }
+            }
             for (entity_id, manifest) in &dependency.owners {
                 let reason = with_doubt(
                     &dependency_reason(&dependency.name, manifest, shared),
@@ -1077,6 +1105,22 @@ where
         edges.push(record);
         Ok(1)
     }
+}
+
+/// The components the decision is already tied to by evidence other than a
+/// dependency or an alarm, whatever the state of the row: the ones its text
+/// names, whose files it touched or whose symbols it cites.
+fn cited_owners(edges: &[EdgeRecord], source: (NodeKind, &str)) -> BTreeSet<String> {
+    edges
+        .iter()
+        .filter(|edge| {
+            edge.kind == EdgeKind::Affects
+                && (edge.source_kind, edge.source_id.as_str()) == source
+                && cited_dependency(&edge.reason).is_none()
+                && doubt_of(&edge.reason).is_none()
+        })
+        .map(|edge| edge.entity_id.clone())
+        .collect()
 }
 
 /// Whether the rules invalidated `edge` before the decision's text last

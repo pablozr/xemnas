@@ -53,13 +53,20 @@ use storage_sqlite::SqliteStore;
 /// wrong) go to the judge, and with it the recall is 1.000 (36/36); no wrong
 /// link is accepted by the rules and 26 go to the judge (23 before). Asserted
 /// recall is lower on purpose: "gravar no sc-core" is asked, not decided.
+/// 2026-10-09, a dependency two components declare ties to its owners only
+/// when the decision names none of them by other evidence (cases p09 and p10,
+/// the "icons" and "title bar" decisions of the real project): before the
+/// rule they added 2 wrong links, precision 0.944 (34/36) and 29 to the judge;
+/// with it precision 1.000 (34/34), recall 0.895 (34/38), recall with the
+/// judge 1.000, 17 accepted by the rules (the title bar's file) and 27 to the
+/// judge (26 before the two cases: the icons' mention of the UI crate).
 const PRECISION_FLOOR: f64 = 0.95;
 const RECALL_FLOOR: f64 = 0.88;
 const RECALL_WITH_JUDGE_FLOOR: f64 = 0.95;
 /// Ceilings of the cost: links the rules accept that are wrong, and links that
 /// go to the judge or to the person.
 const RULE_ACCEPTED_WRONG_CEILING: usize = 0;
-const TO_JUDGE_CEILING: usize = 26;
+const TO_JUDGE_CEILING: usize = 27;
 const DOUBTFUL_CEILING: usize = 10;
 /// Ceilings: the count of wrong links of each kind.
 const NEGATED_CEILING: usize = 0;
@@ -697,6 +704,21 @@ self_update = \"0.40\"
                 Kind::Plain,
                 "Sin gpui en sc-core: el estado es datos planos.",
                 &["sc-core"],
+            ),
+            // The two decisions of the real project (`cloudrs`) that linked
+            // both owners of `gpui`: "icons" is about the UI crate it cites,
+            // "title bar" about the app whose file it touches.
+            case(
+                "p09",
+                Kind::Plain,
+                "Serve the icons from cloud-ui and draw them with gpui's svg() as tinted masks.",
+                &["cloud-ui"],
+            ),
+            code(
+                "p10",
+                "Draw the title bar with gpui hit testing in the window code.",
+                &["apps/cloud/src/main.rs"],
+                &["cloud"],
             ),
         ],
     }

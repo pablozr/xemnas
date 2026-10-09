@@ -123,3 +123,57 @@ inventa ou abrevia nomes; `unquoted` alto: ele cita a fonte ou parafraseia; `kep
 provedor o paga uma vez. Descrições menores custam menos.
 
 **Não verificável aqui:** o recall real só aparece numa nova rodada no `cloudrs`.
+
+## Dependência de dois donos
+
+**Problema.** `gpui` é declarado por `cloudrs` e por `cloudrs-ui`. Uma decisão que cita `gpui`
+ligava aos dois, e como a aresta de dependência vinha antes das de símbolo e menção, bloqueava
+a do dono que o texto de fato nomeia. Nos dados reais (4 decisões, todas com as duas arestas):
+"icons" cita `cloudrs_ui::assets::Assets` (dono certo: `cloudrs-ui`), "sign-in" cita
+`cloudrs --sign-in` (`cloudrs`), "logo" e "title bar" não citam nenhum dono.
+
+**Regra.** `suggest_dependencies` ganhou o parâmetro `shared`. A dependência de **um** dono segue
+no mesmo ponto de antes (antes de símbolos e menções; nada muda). A de **dois ou mais** donos
+roda depois de `suggest_mentions`. Para cada dependência citada, calcula os "donos citados":
+donos com qualquer linha desta decisão (qualquer estado), tipo `Affects`, cuja razão não é de
+dependência nem tem alarme de polaridade (arquivo tocado, símbolo, menção, IA ou extrator).
+
+- exatamente um dono citado: nenhuma aresta de dependência; o dono já tem o vínculo dele;
+- zero ou dois ou mais: o comportamento anterior (uma aresta por dono, com a marca de
+  compartilhada).
+
+A varredura é só das arestas da decisão, uma vez por decisão e só quando ela cita uma
+dependência compartilhada.
+
+**Juiz.** Para o vínculo de dependência compartilhada, `link_text` acrescenta `Shared dependency,
+also declared by: <donos>` (os outros pendentes da mesma decisão e dependência, lidos da lista
+que `gather` já tem; "another component" se não houver) e o `LINK_REVIEW_PROMPT` diz que os donos
+competem: aceitar no máximo um, o que a decisão rege, **exceto** quando a decisão é sobre a
+própria dependência (versão, features), e responder `human` quando o texto não diz qual. Sem a
+exceção, "fixar gpui 0.2 no workspace" perderia um dono legítimo.
+
+**Medições** (corpus, dois casos novos p09 "icons" e p10 "title bar", que reproduzem os reais):
+
+| | precisão | cobertura | com o juiz | to_judge | refresh frio / quente |
+| --- | --- | --- | --- | --- | --- |
+| antes da regra, com os dois casos | 0,944 (34/36) | 0,895 | 1,000 | 29 | n/a |
+| com a regra | 1,000 (34/34) | 0,895 (34/38) | 1,000 | 27 | 2,0 s / 0,95 s |
+| antes (HEAD anterior, 51 decisões) | 1,000 (32/32) | 0,889 | 1,000 | 26 | 2,04 s / 1,00 s |
+
+**Não coberto de propósito.** O caso "nenhum dono citado" (logo, title bar) não entra no corpus:
+na contagem, aresta compartilhada conta como afirmada, então seria um erro conhecido; o
+comportamento dele está no teste de unidade do texto do juiz. Arestas já gravadas não são
+reescritas nem invalidadas (a regra vale para refreshes novos; o juiz recebe a dica para as
+pendentes).
+
+## Riscos
+
+- O refresh disparado pela tela do Mapa não aciona o juiz em segundo plano (a Revisão cobre).
+- O descarte de "title bar → cloudrs" como "produto inteiro" vem de o prompt tratar o componente
+  homônimo como o produto e pode se repetir; a exceção da dependência depende do juiz.
+- **Pendente:** "session networking → architecture" é erro do proponente de vínculos da IA, não
+  estrutural; exigiria um caso em `link_corpus.rs` com resposta de modelo em fixture gerada por
+  modelo real (não trivial).
+- O diagnóstico do extrator não conta itens malformados que o adaptador descarta; a correção
+  ataca a causa provável, sem prova pela resposta bruta.
+- Antes de `i18n::set` na partida (milissegundos), um job veria inglês.

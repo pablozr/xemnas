@@ -606,7 +606,11 @@ fn dependency_manifest(reason: &str) -> &str {
 /// question and choice), the component (description and a few paths), and
 /// what suggested it. Everything the judge reads but the user's own text is
 /// English: the language of the answer is named on the first line instead.
-fn link_text(suggestion: &Suggestion, component: Option<&EntityRecord>) -> String {
+fn link_text(
+    suggestion: &Suggestion,
+    component: Option<&EntityRecord>,
+    co_owners: &[String],
+) -> String {
     let reason = suggestion.reason.as_str();
     let evidence = if let Some(quote) = mention_quote(reason) {
         format!(
@@ -667,13 +671,47 @@ fn link_text(suggestion: &Suggestion, component: Option<&EntityRecord>) -> Strin
         }
         part
     });
+    let shared = if reason.contains(crate::graph::DEPENDENCY_SHARED_MARK) {
+        let others = if co_owners.is_empty() {
+            "another component".to_string()
+        } else {
+            co_owners.join(", ")
+        };
+        format!(" | Shared dependency, also declared by: {others}")
+    } else {
+        String::new()
+    };
     format!(
-        "[link {}] \"{}\"{choice} -> {} \"{}\"{part} | {evidence}",
+        "[link {}] \"{}\"{choice} -> {} \"{}\"{part} | {evidence}{shared}",
         suggestion.kind.as_str(),
         clip(&suggestion.source.label, 160),
         suggestion.entity.detail,
         clip(&suggestion.entity.label, 80),
     )
+}
+
+/// The other components whose pending ties from the same decision cite the
+/// same shared dependency as `suggestion` (its co-owners), by label; empty for
+/// a tie that is not a shared dependency.
+fn co_owners(all: &[Suggestion], suggestion: &Suggestion) -> Vec<String> {
+    if !suggestion
+        .reason
+        .contains(crate::graph::DEPENDENCY_SHARED_MARK)
+    {
+        return Vec::new();
+    }
+    let dependency = crate::graph::cited_dependency(&suggestion.reason);
+    let mut labels: Vec<String> = all
+        .iter()
+        .filter(|other| {
+            other.edge_id != suggestion.edge_id
+                && other.source.node.id == suggestion.source.node.id
+                && crate::graph::cited_dependency(&other.reason) == dependency
+        })
+        .map(|other| other.entity.label.clone())
+        .collect();
+    labels.dedup();
+    labels
 }
 
 /// An item of a pass, with what the AI would be told about it.
@@ -737,6 +775,9 @@ when the component is only named in passing, is named to be excluded or compared
 is the product as a whole rather than a part of it. A test or tooling component is the place \
 only when the rule is checked there. Answer human only when the evidence does not decide; when \
 in doubt between accept and discard, answer human.\n\
+When a dependency is shared, its owners compete: accept at most one, the component whose code \
+the decision governs, unless the decision is about the dependency itself (its version or \
+features); when the text does not tell which, answer human.\n\
 An item may carry a polarity alert: a negation-like word, in any language, sits near the \
 evidence. It may be a false alarm (Portuguese \"no\" means \"in the\"); read the choice and \
 discard the link when the component or dependency is named to be excluded, avoided or \
@@ -1102,10 +1143,10 @@ where
         let graph = KnowledgeGraph::new(self.store.clone());
         let entities = GraphStore::project_entities(&self.store, project_id)
             .map_err(|error| storage(error.to_string()))?;
-        for suggestion in graph
+        let suggestions = graph
             .suggestions(project_id)
-            .map_err(|error| storage(error.to_string()))?
-        {
+            .map_err(|error| storage(error.to_string()))?;
+        for suggestion in &suggestions {
             if done.contains(&(ItemKind::Link, suggestion.edge_id.clone())) {
                 continue;
             }
@@ -1114,10 +1155,11 @@ where
                 id: suggestion.edge_id.clone(),
                 title: format!("{} → {}", suggestion.source.label, suggestion.entity.label),
                 text: link_text(
-                    &suggestion,
+                    suggestion,
                     entities
                         .iter()
                         .find(|entity| entity.entity_id == suggestion.entity.node.id),
+                    &co_owners(&suggestions, suggestion),
                 ),
                 waiting_since: suggestion.created_at.clone(),
                 triage: triage_link(&suggestion.reason),
@@ -2044,7 +2086,7 @@ mod tests {
             reason,
             created_at: String::new(),
         };
-        let text = link_text(&suggestion, None);
+        let text = link_text(&suggestion, None, &[]);
         assert!(
             text.contains("Polarity alert: \"no\" in \"and no GPUI types\""),
             "{text}"
@@ -2140,7 +2182,7 @@ mod tests {
         let items: Vec<Item> = reasons
             .into_iter()
             .map(|reason| {
-                let text = link_text(&link(reason, "Keep the store small"), Some(&component));
+                let text = link_text(&link(reason, "Keep the store small"), Some(&component), &[]);
                 plain_item(&text, vec!["Never block the UI thread".into()])
             })
             .collect();
@@ -2184,6 +2226,42 @@ mod tests {
         }
         assert!(message.contains("## Rules in force"), "{message}");
         assert!(message.contains("Similar rules in force: R1"), "{message}");
+    }
+
+    #[test]
+    fn the_judge_is_told_which_component_shares_the_dependency() {
+        let shared = |owner: &str| {
+            let mut tie = link(
+                format!(
+                    "{}\"gpui\" (apps/{owner}/Cargo.toml{})",
+                    crate::graph::DEPENDENCY_REASON,
+                    crate::graph::DEPENDENCY_SHARED_MARK
+                ),
+                "Draw the title bar with gpui hit testing",
+            );
+            tie.edge_id = format!("edge-{owner}");
+            tie.entity.label = owner.to_string();
+            tie
+        };
+        let pair = [shared("cloud"), shared("cloud-ui")];
+        assert_eq!(co_owners(&pair, &pair[0]), ["cloud-ui"]);
+        let text = link_text(&pair[0], None, &co_owners(&pair, &pair[0]));
+        assert!(text.contains("also declared by: cloud-ui"), "{text}");
+        let alone = link_text(&pair[0], None, &co_owners(&pair[..1], &pair[0]));
+        assert!(
+            alone.contains("also declared by: another component"),
+            "{alone}"
+        );
+        let single = link(
+            format!(
+                "{}\"serde\" (crates/net/Cargo.toml)",
+                crate::graph::DEPENDENCY_REASON
+            ),
+            "Keep serde",
+        );
+        assert!(co_owners(&pair, &single).is_empty());
+        assert!(!link_text(&single, None, &[]).contains("Shared dependency"));
+        assert!(LINK_REVIEW_PROMPT.contains("owners compete"));
     }
 
     #[test]
