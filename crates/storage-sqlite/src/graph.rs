@@ -216,7 +216,7 @@ impl GraphStore for SqliteStore {
             .prepare(
                 "SELECT d.decision_id, d.question, d.choice, d.confirmed_at, \
                         COALESCE(c.diff_summary, '{}'), d.capture_id, d.rationale, \
-                        d.assumptions, d.scope, d.consequences \
+                        d.assumptions, d.scope, d.consequences, d.updated_at \
                  FROM engineering_decisions d \
                  LEFT JOIN decision_candidates c ON c.id = d.candidate_id \
                  WHERE d.project_id = ?1 \
@@ -238,6 +238,7 @@ impl GraphStore for SqliteStore {
                     rationale: row.get(6)?,
                     context,
                     confirmed_at: row.get(3)?,
+                    updated_at: row.get(10)?,
                     files: summary_files(&row.get::<_, String>(4)?),
                     diffs: Vec::new(),
                     from_document: false,

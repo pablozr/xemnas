@@ -1584,3 +1584,179 @@ fn the_migration_clears_the_old_portuguese_text_of_root_and_ci_and_spares_writte
     assert_eq!(description("docs"), legacy_root);
     assert_eq!(description("mixed"), legacy_ci);
 }
+
+#[test]
+fn a_dependency_the_rules_dropped_for_doubt_comes_back_clean_when_the_text_no_longer_doubts() {
+    use application::graph::{doubt_of, GraphStore, DEPENDENCY_REASON};
+    use application::projects::{ProjectRecord, ProjectRepository};
+    use domain::entities::EdgeActor;
+
+    let test = support::open("graph-doubt-gone", &[]);
+    let repo = test.root.join("repo");
+    std::fs::create_dir_all(repo.join("crates/store")).expect("dirs");
+    std::fs::write(
+        repo.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"crates/*\"]\n",
+    )
+    .expect("root");
+    std::fs::write(
+        repo.join("crates/store/Cargo.toml"),
+        "[package]\nname = \"store\"\n\n[dependencies]\nrusqlite = \"0.40\"\n",
+    )
+    .expect("manifest");
+    let location = repo.to_string_lossy().replace('\\', "/");
+    test.store
+        .insert(&ProjectRecord::new(
+            "ws".into(),
+            location.clone(),
+            "2026-01-01T00:00:00Z".into(),
+        ))
+        .expect("project");
+    let graph = KnowledgeGraph::new(test.store.clone());
+    graph.assemble("ws").expect("assemble");
+    let store_entity = graph
+        .entities("ws")
+        .expect("entities")
+        .into_iter()
+        .find(|entity| entity.name == "store")
+        .expect("store")
+        .entity_id;
+    let decision = support::decision_at(
+        &test.store,
+        "ws",
+        &location,
+        "d1",
+        "Keep the domain types plain, with no rusqlite handles.",
+        &[],
+        "",
+    );
+    let clean = format!("{DEPENDENCY_REASON}\"rusqlite\" (crates/store/Cargo.toml)");
+    test.store
+        .insert_edge(&application::graph::EdgeRecord {
+            project_id: "ws".into(),
+            ..raw_edge(
+                "accepted",
+                EdgeKind::Affects,
+                (NodeKind::Decision, &decision),
+                &store_entity,
+                &clean,
+                Some(EdgeActor::Rules),
+            )
+        })
+        .expect("edge");
+
+    // The rules drop it for doubt and the derivation asks again, marked.
+    graph.refresh_suggestions("ws").expect("refresh");
+    let pending: Vec<_> = test
+        .store
+        .project_edges("ws")
+        .expect("edges")
+        .into_iter()
+        .filter(|edge| edge.is_pending() && edge.source_id == decision)
+        .collect();
+    assert_eq!(pending.len(), 1);
+    assert!(doubt_of(&pending[0].reason).is_some());
+    // The judge discards it.
+    graph
+        .invalidate_as(&pending[0].edge_id, EdgeActor::Ai)
+        .expect("judge");
+
+    // The text changes under the row without a revision being recorded (so
+    // nothing says it was edited): the invalidated row is not read again.
+    let connection = rusqlite::Connection::open(test.root.join("app.db")).expect("raw");
+    connection
+        .execute(
+            "UPDATE engineering_decisions SET question = ?1 WHERE decision_id = ?2",
+            rusqlite::params![
+                "Keep the domain types plain, using rusqlite handles.",
+                decision
+            ],
+        )
+        .expect("edit");
+    let untouched = graph.refresh_suggestions("ws").expect("no revision");
+    assert_eq!((untouched.revalidated, untouched.new_edges), (0, 0));
+    assert!(test
+        .store
+        .project_edges("ws")
+        .expect("edges")
+        .iter()
+        .all(|edge| !edge.is_live() || edge.source_id != decision));
+
+    // A revision is recorded after the invalidation and the doubt is gone:
+    // the clean reason, the same as the one the rules dropped, is written
+    // again.
+    connection
+        .execute(
+            "UPDATE engineering_decisions SET updated_at = '2099-01-01T00:00:00Z' WHERE decision_id = ?1",
+            [&decision],
+        )
+        .expect("revision");
+    let report = graph.refresh_suggestions("ws").expect("after the revision");
+    assert_eq!(report.new_edges, 1, "{report:?}");
+    let live: Vec<_> = test
+        .store
+        .project_edges("ws")
+        .expect("edges")
+        .into_iter()
+        .filter(|edge| edge.is_live() && edge.source_id == decision)
+        .collect();
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0].reason, clean);
+    assert!(live[0].confirmed_at.is_none());
+
+    // Stable: nothing flips back and forth.
+    let again = graph.refresh_suggestions("ws").expect("again");
+    assert_eq!((again.revalidated, again.new_edges), (0, 0));
+}
+
+#[test]
+fn a_pending_mention_in_doubt_without_the_alarm_is_written_again_with_it() {
+    use application::graph::{doubt_of, mention_reason, GraphStore};
+    use domain::entities::EdgeActor;
+
+    let test = support::open("graph-mention-doubt", &["p1"]);
+    let graph = KnowledgeGraph::new(test.store.clone());
+    let core = component(&graph, "core", "crates/core/**");
+    let text = "Gravar no core antes de responder.";
+    let mentioned = support::decision(&test.store, "p1", "d1", text, "Com cuidado");
+    let by_ai = support::decision(&test.store, "p1", "d2", text, "Com cuidado");
+    let source = |id: &str| (NodeKind::Decision, id.to_string());
+    for (id, decision, actor) in [
+        ("pending", &mentioned, None),
+        ("by-judge", &by_ai, Some(EdgeActor::Ai)),
+    ] {
+        let (kind, node) = source(decision);
+        test.store
+            .insert_edge(&raw_edge(
+                id,
+                EdgeKind::Affects,
+                (kind, &node),
+                &core,
+                &mention_reason(text),
+                actor,
+            ))
+            .expect("edge");
+    }
+
+    let report = graph.refresh_suggestions("p1").expect("refresh");
+    assert_eq!(report.revalidated, 1, "only the one the rules own");
+    let state = |id: &str| test.store.get_edge(id).expect("get").expect("edge");
+    assert_eq!(state("pending").invalidated_by, Some(EdgeActor::Rules));
+    assert_eq!(state("by-judge").invalidated_by, None, "the judge's stays");
+    let marked: Vec<_> = test
+        .store
+        .project_edges("p1")
+        .expect("edges")
+        .into_iter()
+        .filter(|edge| edge.is_pending() && edge.source_id == mentioned)
+        .collect();
+    assert_eq!(marked.len(), 1);
+    assert!(doubt_of(&marked[0].reason).is_some_and(|alarm| alarm.starts_with("\"no\"")));
+    assert_eq!(
+        application::graph::mention_quote(&marked[0].reason),
+        Some(text)
+    );
+
+    let again = graph.refresh_suggestions("p1").expect("again");
+    assert_eq!((again.revalidated, again.new_edges), (0, 0));
+}

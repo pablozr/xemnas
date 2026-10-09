@@ -47,7 +47,8 @@ where
     S: GraphStore + RelationStore + ClaimStore + ProjectRepository + JobRepository,
 {
     /// Invalidates the machine's links that the current rules no longer
-    /// support. Idempotent; returns how many edges it invalidated.
+    /// support. Idempotent; returns how many edges it invalidated and the ids of
+    /// those the rules dropped for lack of support.
     ///
     /// * A link made from a mention (suggested, or confirmed by the rules or
     ///   the AI judge) whose decision no longer mentions the part
@@ -68,7 +69,7 @@ where
         decisions: &[DecisionNode],
         named: &[(&EntityRecord, EdgeKind, Vec<Term>)],
         claims: &[ClaimRecord],
-    ) -> Result<usize, GraphError> {
+    ) -> Result<(usize, BTreeSet<String>), GraphError> {
         let guess = |edge: &EdgeRecord| {
             edge.is_live()
                 && (edge.confirmed_at.is_none()
@@ -131,10 +132,12 @@ where
                 stale.push(edge.edge_id.clone());
             }
         }
+        let mut dropped = BTreeSet::new();
         for edge_id in &stale {
             // Another edge may have taken this one down already (a cascade).
             if self.invalidate_as(edge_id, EdgeActor::Rules).is_ok() {
                 invalidated += 1;
+                dropped.insert(edge_id.clone());
             }
         }
         if !stale.is_empty() {
@@ -168,7 +171,7 @@ where
         if !orphans.is_empty() {
             *edges = self.store.project_edges(project_id)?;
         }
-        Ok(invalidated)
+        Ok((invalidated, dropped))
     }
 }
 

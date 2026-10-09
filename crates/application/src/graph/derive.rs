@@ -622,8 +622,12 @@ where
             .store
             .project_claims(project_id)
             .map_err(|error| GraphError::Storage(error.to_string()))?;
-        report.revalidated =
+        let (revalidated, dropped) =
             self.revalidate(project_id, &mut edges, &decisions, &named, &claims)?;
+        report.revalidated = revalidated;
+        // What the rules just dropped is read again below: the evidence may
+        // be the same text in doubt, which is written back with the alarm.
+        edges.retain(|edge| !dropped.contains(&edge.edge_id));
 
         let owned = Self::dependency_owners(&live, &declared);
         // Names the text may use for something else: never read as a symbol.
@@ -676,6 +680,7 @@ where
                         (NodeKind::Decision, &decision.decision_id),
                         &component.entity_id,
                         file,
+                        None,
                         &now,
                     )?;
                 }
@@ -698,6 +703,7 @@ where
                             (NodeKind::Decision, &decision.decision_id),
                             &technology.entity_id,
                             &dependency,
+                            None,
                             &now,
                         )?;
                     }
@@ -792,6 +798,7 @@ where
                         (NodeKind::Claim, &rule.claim_id),
                         &component.entity_id,
                         file,
+                        None,
                         &now,
                     )?;
                 }
@@ -947,6 +954,7 @@ where
                     source,
                     entity_id,
                     &reason,
+                    Some(&decision.updated_at),
                     now,
                 )?;
             }
@@ -982,6 +990,7 @@ where
                     source,
                     &entity_id,
                     &reason,
+                    Some(&decision.updated_at),
                     now,
                 )?;
             }
@@ -1007,12 +1016,17 @@ where
         let source = (NodeKind::Decision, decision.decision_id.as_str());
         let mut written = 0;
         for (entity, kind, terms) in named {
-            // Any row stands in the way, except one the rules themselves
-            // invalidated: its evidence may have changed.
-            if edges.iter().any(|edge| {
-                (edge.is_live() || edge.invalidated_by != Some(EdgeActor::Rules))
-                    && same_edge(edge, *kind, source, &entity.entity_id)
-            }) {
+            // Any row stands in the way, except one the rules invalidated in
+            // this refresh or before the text last changed: only then can the
+            // evidence be other than what made them drop it.
+            // (The plain existence test first: it is the hot path, run for
+            // every decision and every component.)
+            if edge_exists(edges, *kind, source, &entity.entity_id)
+                && edges.iter().any(|edge| {
+                    same_edge(edge, *kind, source, &entity.entity_id)
+                        && !reopens(edge, Some(&decision.updated_at))
+                })
+            {
                 continue;
             }
             let found = terms.iter().find_map(|term| best_mention(texts, term));
@@ -1024,6 +1038,7 @@ where
                     source,
                     &entity.entity_id,
                     &with_doubt(&mention_reason(&found.quote), found.alarm()),
+                    Some(&decision.updated_at),
                     now,
                 )?;
             }
@@ -1043,9 +1058,10 @@ where
         source: (NodeKind, &str),
         entity_id: &str,
         reason: &str,
+        edited: Option<&str>,
         now: &str,
     ) -> Result<usize, GraphError> {
-        if blocked(edges, kind, source, entity_id, reason) {
+        if blocked(edges, kind, source, entity_id, reason, edited) {
             return Ok(0);
         }
         let record = EdgeRecord::pending_derived(
@@ -1063,6 +1079,26 @@ where
     }
 }
 
+/// Whether the rules invalidated `edge` before the decision's text last
+/// changed, so the evidence may have come back. A live row, one invalidated by
+/// someone else, and one the rules dropped for a text that has not changed
+/// since never reopen: the evidence cannot differ, so there is nothing to
+/// read again. (What the rules dropped in this very refresh is taken out of
+/// the rows the derivation sees, see `refresh_suggestions`.)
+fn reopens(edge: &EdgeRecord, edited: Option<&str>) -> bool {
+    if edge.is_live() || edge.invalidated_by != Some(EdgeActor::Rules) {
+        return false;
+    }
+    let (Some(edited), Some(invalidated)) = (edited, edge.invalidated_at.as_deref()) else {
+        return false;
+    };
+    match (Timestamp::parse(edited), Timestamp::parse(invalidated)) {
+        (Some(edited), Some(invalidated)) => edited > invalidated,
+        // A time that cannot be read: read the text again, to be safe.
+        _ => true,
+    }
+}
+
 /// Whether a row already stops a derivation from writing the edge again.
 /// Any live row does (pending or confirmed). An invalidated one does too,
 /// except when the evidence is a structural one (a file, a dependency or a
@@ -1076,6 +1112,7 @@ fn blocked(
     source: (NodeKind, &str),
     entity_id: &str,
     reason: &str,
+    edited: Option<&str>,
 ) -> bool {
     let structural = mention_quote(reason).is_none() && ai_link_quote(reason).is_none();
     // What `revalidate` looks at: a dependency, a symbol or a mention. When
@@ -1094,7 +1131,7 @@ fn blocked(
             if edge.is_live() {
                 return true;
             }
-            if revalidated && edge.invalidated_by == Some(EdgeActor::Rules) {
+            if revalidated && reopens(edge, edited) {
                 return false;
             }
             let revisable = matches!(

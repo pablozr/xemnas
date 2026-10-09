@@ -287,6 +287,9 @@ pub struct DecisionNode {
     pub context: Vec<String>,
     /// RFC 3339 confirmation time.
     pub confirmed_at: String,
+    /// RFC 3339 time of the last revision of its text (the confirmation when
+    /// it was never edited).
+    pub updated_at: String,
     /// Files the decision's capture changed (`diff_summary.files`).
     pub files: Vec<String>,
     /// Diff hunks of the decision's evidence, for dependency detection.

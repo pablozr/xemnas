@@ -1336,6 +1336,7 @@ mod tests {
             rationale: String::new(),
             context: vec![],
             confirmed_at: confirmed_at.into(),
+            updated_at: confirmed_at.into(),
             files: vec![],
             diffs: vec![],
             from_document: false,

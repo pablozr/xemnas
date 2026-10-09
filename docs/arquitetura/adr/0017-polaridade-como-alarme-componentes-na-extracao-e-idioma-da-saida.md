@@ -51,8 +51,12 @@ outra, e cada língua nova pede uma lista. O que precisa mudar é quem decide.
    marca; a confirmada pelo juiz ou por herança não é tocada. A leitura de cada decisão é feita
    uma vez por refresh.
    **`blocked()` e o vai-e-volta.** Uma linha invalidada por `Rules` num motivo de dependência,
-   símbolo ou menção não bloqueia mais a derivação: se ela escreve de novo o mesmo motivo (ou um
-   com a marca), é porque a evidência voltou. Sem isso, a sequência "aceita limpa pelas regras →
+   símbolo ou menção deixa de bloquear a derivação quando o texto da decisão foi revisado depois
+   da invalidação (`DecisionNode::updated_at`, de `engineering_decisions`) ou quando foi derrubada
+   neste mesmo refresh (aí a derivação a relê e a escreve com a marca). Se o texto não mudou, a
+   evidência não pode ter voltado e a linha segue bloqueando: reler toda menção invalidada a cada
+   refresh custou +55% no refresh quente (950 → 1.470 ms). Se a derivação escreve de novo o mesmo
+   motivo (ou um com a marca), é porque a evidência voltou. Sem isso, a sequência "aceita limpa pelas regras →
    invalidada pela dúvida → escrita com a marca → descartada pelo juiz → texto editado sem a
    dúvida" deixava o motivo limpo bloqueado para sempre. Não há outro caminho de `Rules` que
    reproponha o mesmo motivo: a derivação só escreve o que o `revalidate` mantém (acerto limpo,
