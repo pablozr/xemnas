@@ -35,6 +35,7 @@ Configurações → Diagnóstico, na lista de capturas.
 - *Manual* (padrão): nada vira decisão sem você. Você confirma, ajusta, adia ou rejeita, com
   desfazer. Ao confirmar, a tela mostra os vínculos com o mapa e você escolhe quais valem.
 - *Automático*: regras locais descartam repetições (de perguntas registradas e de regras já em vigor ou do mesmo lote) e um juiz de IA decide o resto em lote.
+  O motivo do juiz, o dos vínculos e o das relações propostos pela IA saem no idioma da interface.
   Tudo aparece em "Feito sozinho", com o motivo, e o que o juiz não soube decidir volta para
   você. Ver [ADR-0012](../arquitetura/adr/0012-modo-automatico-e-autoridade.md).
   Quando o juiz acha que um candidato contradiz outro item (outro candidato do mesmo lote ou

@@ -207,7 +207,8 @@ fn main() {
                 store.clone(),
                 settings.clone(),
                 ai_provider::ProviderFactory::new(chatgpt.clone()).with_limiter(limiter.clone()),
-            );
+            )
+            .with_language(interface_language());
             move |records: &[application::jobs::JobRecord]| {
                 let ids: Vec<&str> = records.iter().map(|job| job.payload.as_str()).collect();
                 finder
@@ -324,7 +325,8 @@ fn main() {
                 store.clone(),
                 settings.clone(),
                 ai_provider::ProviderFactory::new(chatgpt.clone()).with_limiter(limiter.clone()),
-            );
+            )
+            .with_language(interface_language());
             move |records: &[application::jobs::JobRecord]| {
                 let ids: Vec<&str> = records.iter().map(|job| job.payload.as_str()).collect();
                 finder
@@ -692,13 +694,23 @@ where
     Box::new(move |store| {
         let adoption: Arc<dyn application::adoption::AdoptionApi> =
             Arc::new(application::adoption::Adoption::new(store.clone()));
-        Arc::new(application::auto_approval::Approvals::new(
-            store,
-            adoption,
-            settings,
-            ai_provider::ProviderFactory::new(chatgpt),
-        ))
+        Arc::new(
+            application::auto_approval::Approvals::new(
+                store,
+                adoption,
+                settings,
+                ai_provider::ProviderFactory::new(chatgpt),
+            )
+            .with_language(interface_language()),
+        )
     })
+}
+
+/// The language the interface shows now, read when a job asks the AI for
+/// prose, so a change of language applies to the next request.
+fn interface_language() -> application::output_language::LanguageSource {
+    use application::output_language::OutputLanguage;
+    Arc::new(|| OutputLanguage::from_tag(xemnas_desktop::i18n::current().id()))
 }
 
 fn review_api<P, K>(

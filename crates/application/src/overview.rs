@@ -23,7 +23,7 @@ use crate::extract::ExtractError;
 use crate::graph::{GraphStore, KnowledgeGraph};
 use crate::inbox::InboxStore;
 use crate::injection::short_ref;
-use crate::output_language::OutputLanguage;
+use crate::output_language::{header, OutputLanguage};
 use crate::page::{PageKnowledge, MAX_PAGE_DECISIONS};
 use crate::profile::{choose_extractor, AiSettings, ExtractorChoice, ProfileStore, SecretStore};
 use crate::projects::ProjectRepository;
@@ -583,7 +583,7 @@ where
         let answer = model
             .complete(
                 OVERVIEW_PROMPT,
-                &format!("Output language: {}\n\n{}", language.name(), input.text),
+                &format!("{}{}", header(language), input.text),
                 "project_overview",
                 &overview_schema(),
             )

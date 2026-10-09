@@ -57,6 +57,7 @@ use crate::graph::{
 use crate::inbox::{
     CandidateStatus, Cursor, Inbox, InboxQuery, InboxStore, StoredCandidate, MAX_PAGE_LIMIT,
 };
+use crate::output_language::{fixed, header, LanguageSource, OutputLanguage};
 use crate::overview::StructuredModel;
 use crate::profile::{choose_extractor, AiSettings, ExtractorChoice, ProfileStore, SecretStore};
 use crate::projects::ProjectRepository;
@@ -566,49 +567,60 @@ pub fn triage_link(reason: &str) -> Triage {
     }
 }
 
+/// The manifest a dependency reason names: what sits between the parenthesis
+/// and the first `;` or `)`.
+fn dependency_manifest(reason: &str) -> &str {
+    let inside = reason.split_once('(').map_or("", |(_, rest)| rest);
+    inside.split([';', ')']).next().unwrap_or("").trim()
+}
+
 /// What the AI is told about a suggested tie: the decision or rule (its
 /// question and choice), the component (description and a few paths), and
-/// what suggested it.
+/// what suggested it. Everything the judge reads but the user's own text is
+/// English: the language of the answer is named on the first line instead.
 fn link_text(suggestion: &Suggestion, component: Option<&EntityRecord>) -> String {
-    let evidence = if let Some(quote) = mention_quote(&suggestion.reason) {
-        format!("Evidência (menção no texto): {}", clip(quote, SENT_CHARS))
-    } else if let Some(quote) = ai_link_quote(&suggestion.reason) {
-        let why = ai_link_why(&suggestion.reason).unwrap_or_default();
+    let reason = suggestion.reason.as_str();
+    let evidence = if let Some(quote) = mention_quote(reason) {
         format!(
-            "Evidência (proposta pela IA): {} | Motivo da IA: {}",
+            "Evidence (mention in the text): {}",
+            clip(quote, SENT_CHARS)
+        )
+    } else if let Some(quote) = ai_link_quote(reason) {
+        let why = ai_link_why(reason).unwrap_or_default();
+        let why = if why == crate::graph::EXTRACTED_LINK_WHY {
+            "named by the extractor together with the decision"
+        } else {
+            why
+        };
+        format!(
+            "Evidence (proposed by the AI): {} | AI reason: {}",
             clip(quote, SENT_CHARS),
             clip(why, 160)
         )
-    } else if suggestion
-        .reason
-        .starts_with(crate::graph::DEPENDENCY_REASON)
-    {
+    } else if let Some(name) = crate::graph::cited_dependency(reason) {
         format!(
-            "Evidência (dependência citada): {}",
-            clip(without_doubt(&suggestion.reason), 160)
+            "Evidence (cited dependency): \"{}\" ({})",
+            clip(name, 80),
+            clip(dependency_manifest(without_doubt(reason)), 120)
         )
-    } else if suggestion.reason.starts_with(crate::graph::SYMBOL_REASON) {
-        format!(
-            "Evidência (símbolo citado): {}",
-            clip(without_doubt(&suggestion.reason), 160)
-        )
+    } else if let Some(rest) = without_doubt(reason).strip_prefix(crate::graph::SYMBOL_REASON) {
+        format!("Evidence (cited symbol): {}", clip(rest, 160))
     } else {
-        format!(
-            "Evidência (arquivo tocado): {}",
-            clip(&suggestion.reason, 160)
-        )
+        format!("Evidence (touched file): {}", clip(reason, 160))
     };
-    let evidence = match doubt_of(&suggestion.reason) {
-        Some(doubt) => format!(
-            "{evidence} | Alerta de polaridade: {}",
-            clip(doubt, SENT_CHARS)
+    let evidence = match (crate::graph::doubt_parts(reason), doubt_of(reason)) {
+        (Some((trigger, quote)), _) => format!(
+            "{evidence} | Polarity alert: \"{}\" in \"{}\"",
+            clip(trigger, 40),
+            clip(quote, SENT_CHARS)
         ),
-        None => evidence,
+        (None, Some(doubt)) => format!("{evidence} | Polarity alert: {}", clip(doubt, SENT_CHARS)),
+        (None, None) => evidence,
     };
     let choice = if suggestion.source.detail.is_empty() {
         String::new()
     } else {
-        format!(" | Escolha: {}", clip(&suggestion.source.detail, 200))
+        format!(" | Choice: {}", clip(&suggestion.source.detail, 200))
     };
     let part = component.map_or_else(String::new, |component| {
         let paths: Vec<&str> = component
@@ -620,15 +632,15 @@ fn link_text(suggestion: &Suggestion, component: Option<&EntityRecord>) -> Strin
         let mut part = String::new();
         let described = crate::graph::description_for_model(component);
         if !described.trim().is_empty() {
-            part.push_str(&format!(" | Componente: {}", clip(&described, 160)));
+            part.push_str(&format!(" | Component: {}", clip(&described, 160)));
         }
         if !paths.is_empty() {
-            part.push_str(&format!(" | Caminhos: {}", paths.join(", ")));
+            part.push_str(&format!(" | Paths: {}", paths.join(", ")));
         }
         part
     });
     format!(
-        "[vínculo {}] \"{}\"{choice} -> {} \"{}\"{part} | {evidence}",
+        "[link {}] \"{}\"{choice} -> {} \"{}\"{part} | {evidence}",
         suggestion.kind.as_str(),
         clip(&suggestion.source.label, 160),
         suggestion.entity.detail,
@@ -670,7 +682,8 @@ conflicts with or replaces another decision is accept only when its quote clearl
 An item may list rules in force that resemble it after the items: discard it when it \
 only restates one of them, and keep it (accept or human) when it adds a real constraint, \
 a different condition or another scope.\n\
-Give in reason one short sentence in the language of the item. The ids (I1, D2, R3) are only for \
+Give in reason one short sentence in the output language named on the first line of the \
+message. The ids (I1, D2, R3) are only for\
 the conflicts_with field: never write an id in the reason, name the other item by its title \
 instead, because the reader never sees the ids. When an item contradicts another item of the \
 list or one of the decisions in force listed after the items, put that id in conflicts_with \
@@ -700,7 +713,8 @@ An item may carry a polarity alert: a negation-like word, in any language, sits 
 evidence. It may be a false alarm (Portuguese \"no\" means \"in the\"); read the choice and \
 discard the link when the component or dependency is named to be excluded, avoided or \
 replaced.\n\
-Give in reason one short sentence in the language of the item. The ids (I1, I2) are only for \
+Give in reason one short sentence in the output language named on the first line of the \
+message. The ids (I1, I2) are only for\
 matching the answer to the items: never write an id in the reason. Reply with one JSON object \
 only, matching exactly: {\"verdicts\":[{\"id\":string,\"verdict\":\"accept|discard|human\",\
 \"reason\":string,\"conflicts_with\":null}]}, one entry per item, using its id exactly as given.",
@@ -857,6 +871,7 @@ pub struct Approvals<S, P, K, F> {
     adoption: Arc<dyn AdoptionApi>,
     settings: AiSettings<P, K>,
     factory: F,
+    language: LanguageSource,
 }
 
 impl<S, P, K, F> Approvals<S, P, K, F>
@@ -888,7 +903,14 @@ where
             adoption,
             settings,
             factory,
+            language: fixed(OutputLanguage::ENGLISH),
         }
+    }
+
+    /// Where the language of the reasons is read, once per pass.
+    pub fn with_language(mut self, source: LanguageSource) -> Self {
+        self.language = source;
+        self
     }
 
     /// Candidates of a project by status, newest first.
@@ -951,17 +973,17 @@ where
             }
             let triage = triage_candidate(&candidate, &recorded, confidence_trusted);
             let kind = if candidate.kind == CandidateKind::Rule.as_str() {
-                "regra"
+                "rule"
             } else {
-                "decisão"
+                "decision"
             };
             items.push(Item {
                 kind: ItemKind::Candidate,
                 id: candidate.id.clone(),
                 title: candidate.question.clone(),
                 text: format!(
-                    "[{kind}] Pergunta: {} | Escolha: {} | Motivo: {} | Confiança do extrator: \
-                     {:.0}% | Fontes: {}",
+                    "[{kind}] Question: {} | Choice: {} | Why: {} | Extractor confidence: \
+                     {:.0}% | Sources: {}",
                     clip(&candidate.question, 200),
                     clip(&candidate.choice, 200),
                     clip(&candidate.rationale, SENT_CHARS),
@@ -1004,7 +1026,7 @@ where
                     view.to_question
                 ),
                 text: format!(
-                    "[relação {}] \"{}\" -> \"{}\" | Citação: {} | Motivo: {}",
+                    "[relation {}] \"{}\" -> \"{}\" | Quote: {} | Reason: {}",
                     record.kind.as_str(),
                     clip(&view.from_question, 160),
                     clip(&view.to_question, 160),
@@ -1034,7 +1056,7 @@ where
                 id: record.suggestion_id.clone(),
                 title: record.statement.clone(),
                 text: format!(
-                    "[contexto {}] {} | Citação: {} | Da decisão: {}",
+                    "[context {}] {} | Quote: {} | From decision: {}",
                     record.kind.as_str(),
                     clip(&record.statement, 200),
                     clip(&record.quote, SENT_CHARS),
@@ -1304,6 +1326,7 @@ where
         if self.store.approval_mode()? != Mode::Automatic {
             return Ok(report);
         }
+        let language = (self.language)();
         let items = self.gather(project_id)?;
 
         // The plain cases, settled by the rules for free.
@@ -1340,18 +1363,28 @@ where
             let Some(model) = self.judge() else {
                 return Ok(report);
             };
-            self.ask(project_id, group, prompt, &model, now, &mut report)?;
+            self.ask(
+                project_id,
+                group,
+                prompt,
+                language,
+                &model,
+                now,
+                &mut report,
+            )?;
         }
         Ok(report)
     }
 
     /// One batched call about the oldest items of `group`, up to [`BATCH`],
     /// and the verdicts it brings.
+    #[allow(clippy::too_many_arguments)]
     fn ask(
         &self,
         project_id: &str,
         group: Vec<&Item>,
         prompt: &str,
+        language: OutputLanguage,
         model: &F::Extractor,
         now: &str,
         report: &mut RunReport,
@@ -1369,71 +1402,7 @@ where
         } else {
             Vec::new()
         };
-        let mut shown: Vec<&StoredDecision> = Vec::new();
-        let mut shown_rules: Vec<&str> = Vec::new();
-        let mut user = String::from("## Items\n");
-        for (id, item) in ids.iter().zip(&batch) {
-            user.push_str(&format!("- {id} {}", item.text));
-            let near = item
-                .near
-                .as_deref()
-                .map(|question| nearest(question, &in_force))
-                .unwrap_or_default();
-            if !near.is_empty() {
-                let named: Vec<String> = near
-                    .into_iter()
-                    .map(|decision| {
-                        let at = shown
-                            .iter()
-                            .position(|seen| seen.decision_id == decision.decision_id)
-                            .unwrap_or_else(|| {
-                                shown.push(decision);
-                                shown.len() - 1
-                            });
-                        format!("D{}", at + 1)
-                    })
-                    .collect();
-                user.push_str(&format!(" | Parecidas em vigor: {}", named.join(", ")));
-            }
-            if !item.similar_rules.is_empty() {
-                let named: Vec<String> = item
-                    .similar_rules
-                    .iter()
-                    .map(|rule| {
-                        let at = shown_rules
-                            .iter()
-                            .position(|seen| *seen == rule.as_str())
-                            .unwrap_or_else(|| {
-                                shown_rules.push(rule);
-                                shown_rules.len() - 1
-                            });
-                        format!("R{}", at + 1)
-                    })
-                    .collect();
-                user.push_str(&format!(
-                    " | Regras parecidas em vigor: {}",
-                    named.join(", ")
-                ));
-            }
-            user.push('\n');
-        }
-        if !shown_rules.is_empty() {
-            user.push_str("## Regras em vigor\n");
-            for (at, rule) in shown_rules.iter().enumerate() {
-                user.push_str(&format!("- R{} {}\n", at + 1, clip(rule, 200)));
-            }
-        }
-        if !shown.is_empty() {
-            user.push_str("## Decisões em vigor\n");
-            for (at, decision) in shown.iter().enumerate() {
-                user.push_str(&format!(
-                    "- D{} \"{}\" -> {}\n",
-                    at + 1,
-                    clip(&decision.question, 160),
-                    clip(&decision.choice, 160)
-                ));
-            }
-        }
+        let (user, shown, shown_rules) = review_message(language, &ids, &batch, &in_force);
         report.asked = true;
         let answer = match model.complete(prompt, &user, "approval_verdicts", &review_schema()) {
             Ok(answer) => {
@@ -1541,6 +1510,84 @@ where
         )
         .unwrap_or_default()
     }
+}
+
+/// The user message of one judge call: the language line, the items with
+/// their ids, then the rules and decisions in force they point at. Also the
+/// decisions and rules shown, in the order of their ids `D*` and `R*`.
+fn review_message<'a>(
+    language: OutputLanguage,
+    ids: &[String],
+    batch: &[&'a Item],
+    in_force: &'a [StoredDecision],
+) -> (String, Vec<&'a StoredDecision>, Vec<&'a str>) {
+    let mut shown: Vec<&StoredDecision> = Vec::new();
+    let mut shown_rules: Vec<&str> = Vec::new();
+    let mut user = header(language);
+    user.push_str("## Items\n");
+    for (id, item) in ids.iter().zip(batch) {
+        user.push_str(&format!("- {id} {}", item.text));
+        let near = item
+            .near
+            .as_deref()
+            .map(|question| nearest(question, in_force))
+            .unwrap_or_default();
+        if !near.is_empty() {
+            let named: Vec<String> = near
+                .into_iter()
+                .map(|decision| {
+                    let at = shown
+                        .iter()
+                        .position(|seen| seen.decision_id == decision.decision_id)
+                        .unwrap_or_else(|| {
+                            shown.push(decision);
+                            shown.len() - 1
+                        });
+                    format!("D{}", at + 1)
+                })
+                .collect();
+            user.push_str(&format!(
+                " | Similar decisions in force: {}",
+                named.join(", ")
+            ));
+        }
+        if !item.similar_rules.is_empty() {
+            let named: Vec<String> = item
+                .similar_rules
+                .iter()
+                .map(|rule| {
+                    let at = shown_rules
+                        .iter()
+                        .position(|seen| *seen == rule.as_str())
+                        .unwrap_or_else(|| {
+                            shown_rules.push(rule);
+                            shown_rules.len() - 1
+                        });
+                    format!("R{}", at + 1)
+                })
+                .collect();
+            user.push_str(&format!(" | Similar rules in force: {}", named.join(", ")));
+        }
+        user.push('\n');
+    }
+    if !shown_rules.is_empty() {
+        user.push_str("## Rules in force\n");
+        for (at, rule) in shown_rules.iter().enumerate() {
+            user.push_str(&format!("- R{} {}\n", at + 1, clip(rule, 200)));
+        }
+    }
+    if !shown.is_empty() {
+        user.push_str("## Decisions in force\n");
+        for (at, decision) in shown.iter().enumerate() {
+            user.push_str(&format!(
+                "- D{} \"{}\" -> {}\n",
+                at + 1,
+                clip(&decision.question, 160),
+                clip(&decision.choice, 160)
+            ));
+        }
+    }
+    (user, shown, shown_rules)
 }
 
 /// Decisions in force that resemble a question, the closest first, at most
@@ -1855,12 +1902,152 @@ mod tests {
         };
         let text = link_text(&suggestion, None);
         assert!(
-            text.contains("Alerta de polaridade: \"no\" em \"and no GPUI types\""),
+            text.contains("Polarity alert: \"no\" in \"and no GPUI types\""),
             "{text}"
         );
-        assert!(text.contains("Evidência (dependência citada): dependência citada: \"gpui\""));
+        assert!(
+            text.contains("Evidence (cited dependency): \"gpui\" (apps/cloud/Cargo.toml)"),
+            "{text}"
+        );
         assert!(!text.contains(char::from(10)), "{text}");
         assert!(LINK_REVIEW_PROMPT.contains("polarity alert"));
+    }
+
+    fn plain_item(text: &str, similar_rules: Vec<String>) -> Item {
+        Item {
+            kind: ItemKind::Candidate,
+            id: "c".into(),
+            title: "t".into(),
+            text: text.into(),
+            waiting_since: String::new(),
+            triage: Triage::Ask,
+            ai_link: false,
+            near: None,
+            rule: None,
+            similar_rules,
+        }
+    }
+
+    fn link(reason: String, detail: &str) -> Suggestion {
+        let summary = |kind, label: &str, detail: &str| crate::graph::NodeSummary {
+            node: crate::graph::NodeRef {
+                kind,
+                id: label.into(),
+            },
+            label: label.into(),
+            detail: detail.into(),
+            at: String::new(),
+        };
+        Suggestion {
+            edge_id: "e".into(),
+            kind: domain::entities::EdgeKind::Affects,
+            source: summary(domain::entities::NodeKind::Decision, "Storage", detail),
+            entity: summary(domain::entities::NodeKind::Entity, "core", "component"),
+            reason,
+            created_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn nothing_portuguese_reaches_the_judge() {
+        let polarity =
+            |reason: String| crate::graph::with_doubt(&reason, Some(("no", "and no sql")));
+        let dependency = |name: &str, shared: bool| {
+            let mark = if shared {
+                crate::graph::DEPENDENCY_SHARED_MARK
+            } else {
+                ""
+            };
+            format!(
+                "{}\"{name}\" (crates/core/Cargo.toml{mark})",
+                crate::graph::DEPENDENCY_REASON
+            )
+        };
+        let symbol = || {
+            format!(
+                "{}`FLUSH_INTERVAL` (crates/store/src/flush.rs)",
+                crate::graph::SYMBOL_REASON
+            )
+        };
+        let reasons = [
+            crate::graph::mention_reason("the store crate"),
+            crate::graph::ai_link_reason("keep the store small", "it limits the store"),
+            crate::graph::ai_link_reason("keep the store small", crate::graph::EXTRACTED_LINK_WHY),
+            dependency("serde", false),
+            dependency("serde", true),
+            symbol(),
+            "touched crates/store/src/flush.rs".to_owned(),
+            polarity(crate::graph::mention_reason("the store crate")),
+            polarity(dependency("serde", true)),
+            polarity(symbol()),
+        ];
+        let component = EntityRecord {
+            entity_id: "e".into(),
+            project_id: "p".into(),
+            kind: domain::entities::EntityKind::Component,
+            name: "core".into(),
+            key: "core".into(),
+            description: "Core crate".into(),
+            patterns: vec!["crates/core/**".into()],
+            aliases: Vec::new(),
+            created_at: String::new(),
+            retired_at: None,
+        };
+        let items: Vec<Item> = reasons
+            .into_iter()
+            .map(|reason| {
+                let text = link_text(&link(reason, "Keep the store small"), Some(&component));
+                plain_item(&text, vec!["Never block the UI thread".into()])
+            })
+            .collect();
+        let batch: Vec<&Item> = items.iter().collect();
+        let ids: Vec<String> = (1..=batch.len()).map(|at| format!("I{at}")).collect();
+        let (message, _, rules) =
+            review_message(OutputLanguage::from_tag("pt-BR"), &ids, &batch, &[]);
+        assert_eq!(rules, ["Never block the UI thread"]);
+        assert!(
+            message.starts_with("Output language: Brazilian Portuguese\n\n## Items\n"),
+            "{message}"
+        );
+        for word in [
+            "Pergunta",
+            "Escolha",
+            "Motivo",
+            "Evidência",
+            "Componente",
+            "Caminhos",
+            "Alerta",
+            "vínculo",
+            "relação",
+            "contexto",
+            "Citação",
+            "decisão",
+            "Confiança",
+            "Fontes",
+            "Parecid",
+            "Regras",
+            "Decisões",
+            "citad",
+            "dependência",
+            "símbolo",
+            "também",
+            "sugerido",
+            "polaridade",
+            "indicado",
+            " em \"",
+        ] {
+            assert!(!message.contains(word), "{word:?} in {message}");
+        }
+        assert!(message.contains("## Rules in force"), "{message}");
+        assert!(message.contains("Similar rules in force: R1"), "{message}");
+    }
+
+    #[test]
+    fn both_judge_prompts_name_the_language_line() {
+        for prompt in [REVIEW_PROMPT, LINK_REVIEW_PROMPT] {
+            assert!(prompt.contains("output language named on the first line"));
+            assert!(!prompt.contains("language of the item"));
+        }
     }
 
     #[test]

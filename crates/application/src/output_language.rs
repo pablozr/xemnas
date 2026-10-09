@@ -3,6 +3,22 @@
 //! files. The content of the records is never translated: only what the
 //! model writes anew, such as the overview of a project.
 
+use std::sync::Arc;
+
+/// Where a job reads the language of the interface at the moment it runs, so a
+/// change of language applies to the next request without rebuilding anything.
+pub type LanguageSource = Arc<dyn Fn() -> OutputLanguage + Send + Sync>;
+
+/// A source that always answers the same language.
+pub fn fixed(language: OutputLanguage) -> LanguageSource {
+    Arc::new(move || language)
+}
+
+/// The first line of a request, naming the language the model writes in.
+pub fn header(language: OutputLanguage) -> String {
+    format!("Output language: {}\n\n", language.name())
+}
+
 /// A language the model is asked to write in, by its English name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OutputLanguage(&'static str);
@@ -36,7 +52,14 @@ impl OutputLanguage {
 
 #[cfg(test)]
 mod tests {
-    use super::OutputLanguage;
+    use super::{fixed, header, OutputLanguage};
+
+    #[test]
+    fn the_header_names_the_language_and_a_fixed_source_repeats_it() {
+        let pt = OutputLanguage::from_tag("pt-BR");
+        assert_eq!(header(pt), "Output language: Brazilian Portuguese\n\n");
+        assert_eq!(fixed(pt)(), pt);
+    }
 
     #[test]
     fn every_interface_tag_has_a_language_and_an_unknown_one_reads_as_english() {

@@ -286,6 +286,15 @@ fn the_rules_settle_the_plain_cases_and_one_batched_call_settles_the_rest() {
     let asked = judge.asked.lock().expect("lock")[0].clone();
     assert!(asked.contains("qual formato exportar relatorios"));
     assert!(
+        asked.starts_with("Output language: English"),
+        "the language line comes first: {asked}"
+    );
+    assert!(
+        asked.contains("[decision] Question: qual formato exportar relatorios")
+            && asked.contains("Extractor confidence: 60% | Sources: 1"),
+        "{asked}"
+    );
+    assert!(
         !asked.contains("como versionar as revisoes passadas"),
         "the plain one is not sent"
     );
@@ -554,7 +563,7 @@ fn a_link_found_by_mention_is_asked_with_its_quote_and_a_file_link_is_accepted()
     );
     let asked = judge.asked.lock().expect("lock")[0].clone();
     assert!(
-        asked.contains("Evidência (menção no texto):") && asked.contains("o core grava"),
+        asked.contains("Evidence (mention in the text):") && asked.contains("o core grava"),
         "{asked}"
     );
     assert!(
@@ -638,8 +647,8 @@ fn a_link_the_ai_proposed_is_judged_with_its_quote_and_reason() {
     assert_eq!((report.accepted, report.left), (1, 0));
     let asked = judge.asked.lock().expect("lock")[0].clone();
     assert!(
-        asked.contains("Evidência (proposta pela IA): resultado de um turno")
-            && asked.contains("Motivo da IA: A decisão rege o desfecho do motor."),
+        asked.contains("Evidence (proposed by the AI): resultado de um turno")
+            && asked.contains("AI reason: A decisão rege o desfecho do motor."),
         "{asked}"
     );
     assert!(graph.suggestions(PROJECT).expect("pending").is_empty());
@@ -812,8 +821,8 @@ fn a_decision_in_force_that_resembles_the_candidate_is_named_to_the_judge() {
 
     let asked = judge.asked.lock().expect("lock")[0].clone();
     assert!(
-        asked.contains("Parecidas em vigor: D1")
-            && asked.contains("## Decisões em vigor")
+        asked.contains("Similar decisions in force: D1")
+            && asked.contains("## Decisions in force")
             && asked.contains("D1 \"faixas de probabilidade para o juiz\" -> usar três faixas"),
         "{asked}"
     );
@@ -982,16 +991,16 @@ fn links_are_asked_apart_with_their_own_prompt_and_the_whole_evidence() {
     assert_eq!(prompts[0], REVIEW_PROMPT);
     assert_eq!(prompts[1], LINK_REVIEW_PROMPT);
     let asked = judge.asked.lock().expect("lock").clone();
-    assert!(asked[0].contains("qual formato exportar") && !asked[0].contains("[vínculo"));
+    assert!(asked[0].contains("qual formato exportar") && !asked[0].contains("[link"));
     let links = &asked[1];
-    assert!(links.contains("[vínculo affects]"), "{links}");
-    assert!(links.contains("Escolha: escolha de mention"), "{links}");
+    assert!(links.contains("[link affects]"), "{links}");
+    assert!(links.contains("Choice: escolha de mention"), "{links}");
     assert!(
-        links.contains("Componente: Valida e grava as capturas."),
+        links.contains("Component: Valida e grava as capturas."),
         "{links}"
     );
-    assert!(links.contains("Caminhos: crates/core/**"), "{links}");
-    assert!(links.contains("Evidência (menção no texto)"), "{links}");
+    assert!(links.contains("Paths: crates/core/**"), "{links}");
+    assert!(links.contains("Evidence (mention in the text)"), "{links}");
     assert!(
         !links.contains("qual formato"),
         "no candidate in the link batch"
@@ -1088,7 +1097,7 @@ fn structural_links_are_settled_by_the_rules_without_the_ai() {
     // Only the mention link went to the judge.
     let asked = judge.asked.lock().expect("lock").clone();
     assert_eq!(asked.len(), 1);
-    assert!(asked[0].contains("Evidência (menção no texto)"));
+    assert!(asked[0].contains("Evidence (mention in the text)"));
     assert!(!asked[0].contains("dependência citada"));
 }
 
@@ -1446,8 +1455,10 @@ fn a_rule_that_only_resembles_one_in_force_goes_to_the_judge_with_it() {
 
     let asked = judge.asked.lock().expect("lock")[0].clone();
     assert!(
-        asked.contains("Regras parecidas em vigor: R1")
-            && asked.contains("## Regras em vigor\n- R1 Cache entries expire after ten minutes"),
+        asked.contains(
+            "[rule] Question: regra hours | Choice: Cache entries expire after ten hours"
+        ) && asked.contains("Similar rules in force: R1")
+            && asked.contains("## Rules in force\n- R1 Cache entries expire after ten minutes"),
         "{asked}"
     );
     assert_eq!(status_of(&test.store, "hours"), CandidateStatus::Pending);

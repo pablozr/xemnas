@@ -3,6 +3,7 @@
 **Status:** Vigente. Aceito em 09/10/2026. Emenda o item 1 do
 [ADR-0016](0016-vinculos-por-estrutura-e-mencao-afirmativa.md) (menção afirmativa) e o
 [ADR-0007](0007-visao-do-projeto-gerada-pela-ia.md) (idioma da Visão).
+Emendado pelo [ADR-0018](0018-idioma-nos-jobs-juiz-no-nucleo-mapa-descrito-e-dono-compartilhado.md) (itens 5 e 7).
 
 ## Contexto
 

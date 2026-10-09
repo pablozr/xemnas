@@ -29,16 +29,16 @@ idioma:
 - [ ] Motivo de `InvalidRelation` ao relacionar decisões
   (`screens/decisions.rs`).
 
-- [ ] Motivos do juiz da revisão automática, do proponente de vínculos e do de relações:
-  seguem "no idioma do item" (o ADR-0017 só passou o idioma à Visão, por
-  `application::output_language::OutputLanguage`; o mesmo tipo é o ponto de extensão).
+- [x] Motivos do juiz da revisão automática, do proponente de vínculos e do de relações:
+  agora no idioma da interface, por `LanguageSource` (ADR-0018, tarefa 1). O que o juiz lê é
+  inglês; as razões gravadas e as strings de produto do ledger seguem abaixo.
 - [ ] Razões de vínculo gravadas em português: `citado no texto`, `dependência citada`,
   `símbolo citado`, `sugerido pela IA`, `indicado pelo extrator junto com a decisão`
   (`EXTRACTED_LINK_WHY`) e a marca `polaridade duvidosa` (`DOUBT_MARK`); a tela do Mapa e o
   juiz as leem como prefixo. O "em" de `with_doubt` (`"<gatilho>" em "<citação>"`) é
   português dentro da marca; `doubt_parts` o separa para a tela, que mostra a linha traduzida.
-- [ ] O rótulo "Alerta de polaridade" que o juiz recebe em `link_text`
-  (`auto_approval.rs`), em português.
+- [x] O rótulo "Alerta de polaridade" que o juiz recebe em `link_text`
+  (`auto_approval.rs`): agora "Polarity alert", em inglês (ADR-0018, tarefa 1).
 - [ ] A Visão guardada não registra o idioma em que foi escrita: trocar o idioma da interface
   não a regera, e a página não sabe dizer em que idioma ela está.
 
