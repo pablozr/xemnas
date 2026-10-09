@@ -618,11 +618,9 @@ fn link_text(suggestion: &Suggestion, component: Option<&EntityRecord>) -> Strin
             .map(String::as_str)
             .collect();
         let mut part = String::new();
-        if !component.description.trim().is_empty() {
-            part.push_str(&format!(
-                " | Componente: {}",
-                clip(&component.description, 160)
-            ));
+        let described = crate::graph::description_for_model(component);
+        if !described.trim().is_empty() {
+            part.push_str(&format!(" | Componente: {}", clip(&described, 160)));
         }
         if !paths.is_empty() {
             part.push_str(&format!(" | Caminhos: {}", paths.join(", ")));

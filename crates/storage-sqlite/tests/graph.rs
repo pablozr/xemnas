@@ -1526,3 +1526,76 @@ fn a_rule_accepted_dependency_in_doubt_goes_back_to_the_judge() {
     let again = graph.refresh_suggestions("ws").expect("again");
     assert_eq!((again.revalidated, again.new_edges), (0, 0));
 }
+
+#[test]
+fn a_refresh_clears_the_old_portuguese_text_of_root_and_ci_once_and_spares_written_ones() {
+    use application::projects::{ProjectRecord, ProjectRepository};
+
+    let test = support::open("graph-legacy-descriptions", &[]);
+    let repo = test.root.join("repo");
+    std::fs::create_dir_all(repo.join("crates/core")).expect("dirs");
+    std::fs::create_dir_all(repo.join(".github/workflows")).expect("workflows");
+    std::fs::write(
+        repo.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"crates/*\"]\n",
+    )
+    .expect("root");
+    std::fs::write(
+        repo.join("crates/core/Cargo.toml"),
+        "[package]\nname = \"core\"\n",
+    )
+    .expect("core");
+    std::fs::write(repo.join(".github/workflows/ci.yml"), "name: ci\n").expect("ci");
+    std::fs::write(repo.join("Jenkinsfile"), "pipeline {}\n").expect("jenkins");
+    test.store
+        .insert(&ProjectRecord::new(
+            "ws".into(),
+            repo.to_string_lossy().replace('\\', "/"),
+            "2026-01-01T00:00:00Z".into(),
+        ))
+        .expect("project");
+    let graph = KnowledgeGraph::new(test.store.clone());
+    let legacy_root = "Arquivos da raiz: manifesto do workspace, toolchain e configuração comum";
+    let make = |name: &str, pattern: &str, description: &str| {
+        graph
+            .create_entity(NewEntity {
+                project_id: "ws".into(),
+                kind: Some(EntityKind::Component),
+                name: name.into(),
+                patterns: vec![pattern.into()],
+                description: description.into(),
+                ..NewEntity::default()
+            })
+            .expect("component")
+            .entity_id
+    };
+    let root = make("workspace", "*", legacy_root);
+    let ci = make(
+        "CI GitHub Actions",
+        ".github/workflows/**",
+        "Integração contínua e publicação (.github/workflows/**)",
+    );
+    let written = make("Jenkins", "Jenkinsfile", "O nosso Jenkins de releases.");
+    // The same old text on a component that is neither root nor CI stays.
+    let docs = make("docs", "docs/**", legacy_root);
+
+    graph.refresh_suggestions("ws").expect("refresh");
+    let description = |id: &str| {
+        graph
+            .entities("ws")
+            .expect("entities")
+            .into_iter()
+            .find(|entity| entity.entity_id == id)
+            .expect("entity")
+            .description
+    };
+    assert_eq!(description(&root), "");
+    assert_eq!(description(&ci), "");
+    assert_eq!(description(&written), "O nosso Jenkins de releases.");
+    assert_eq!(description(&docs), legacy_root);
+
+    // Once: nothing is rewritten the next time.
+    graph.refresh_suggestions("ws").expect("again");
+    assert_eq!(description(&root), "");
+    assert_eq!(description(&written), "O nosso Jenkins de releases.");
+}

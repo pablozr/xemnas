@@ -46,6 +46,9 @@ pub struct ComponentProposal {
     pub description: String,
     /// The manifest that declares it, when it is a workspace member.
     pub declared: Option<super::WorkspaceKind>,
+    /// Root files or CI, which carry no stored description: the interface
+    /// writes it.
+    pub infra: Option<super::InfraKind>,
 }
 
 /// A technology the captured work added as a dependency, not yet created.
@@ -547,6 +550,7 @@ where
             super::infrastructure_components(std::path::Path::new(&project.location), &declared);
         declared.extend(infrastructure);
         self.merge_aliases(project_id, &declared)?;
+        self.clear_legacy_descriptions(project_id)?;
         let declared_all = declared.clone();
         let now = now_rfc3339();
         let at = Timestamp::parse(&now).ok_or(GraphError::Storage("relógio inválido".into()))?;
@@ -798,6 +802,7 @@ where
                         decisions: ids.len(),
                         description: String::new(),
                         declared: None,
+                        infra: None,
                     }
                 })
             })
@@ -820,6 +825,7 @@ where
                 // Root files and CI are not a workspace member: no manifest
                 // declares them.
                 declared: member.infra.is_none().then_some(member.source),
+                infra: member.infra,
             })
             .collect();
         report.components.retain(|inferred| {

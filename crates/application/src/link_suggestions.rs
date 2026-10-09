@@ -234,9 +234,9 @@ pub fn link_request(
         if !patterns.is_empty() {
             user.push_str(&format!(" | paths: {}", patterns.join(", ")));
         }
-        if !component.description.trim().is_empty() {
-            let description =
-                crate::external::limited_text(&component.description, MAX_DESCRIPTION_CHARS);
+        let described = crate::graph::description_for_model(component);
+        if !described.trim().is_empty() {
+            let description = crate::external::limited_text(&described, MAX_DESCRIPTION_CHARS);
             user.push_str(&format!(
                 " | {}",
                 description.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -793,6 +793,23 @@ mod tests {
             created_at: "2026-01-01T00:00:00Z".into(),
             retired_at: None,
         }
+    }
+
+    #[test]
+    fn the_root_and_ci_reach_the_model_described_in_english() {
+        let mut root = component("e-root", "workspace");
+        root.patterns = vec!["*".into()];
+        let mut ci = component("e-ci", "CI");
+        ci.patterns = vec![".github/workflows/**".into()];
+        let request = link_request(&[&subject()], &[&root, &ci], &BTreeSet::new());
+        assert!(
+            request.contains("Root files: workspace manifest, toolchain and shared configuration"),
+            "{request}"
+        );
+        assert!(
+            request.contains("Continuous integration and release (.github/workflows/**)"),
+            "{request}"
+        );
     }
 
     fn subject() -> LinkSubject {

@@ -783,13 +783,13 @@ where
                             .join(", ")
                     )
                 },
-                if entity.description.is_empty() {
-                    String::new()
-                } else {
-                    format!(
-                        " — {}",
-                        crate::external::protected_text(&entity.description)
-                    )
+                {
+                    let described = crate::graph::description_for_model(entity);
+                    if described.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" — {}", crate::external::protected_text(&described))
+                    }
                 },
                 if refs.is_empty() {
                     "no records yet".to_string()

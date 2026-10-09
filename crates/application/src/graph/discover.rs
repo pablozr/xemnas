@@ -9,7 +9,9 @@ use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
 use super::cache::FolderCache;
-use super::{EntityEdit, GraphError, GraphStore, KnowledgeGraph, NewEntity, MAX_ENTITY_LIST};
+use super::{
+    EntityEdit, EntityRecord, GraphError, GraphStore, KnowledgeGraph, NewEntity, MAX_ENTITY_LIST,
+};
 use crate::claims::ClaimStore;
 use crate::projects::ProjectRepository;
 use crate::relations::RelationStore;
@@ -170,6 +172,67 @@ const CI_SYSTEMS: &[(&str, &str, bool)] = &[
     (".buildkite", "Buildkite", true),
 ];
 
+/// The path pattern of a CI system: `dir/**` for a folder, the file itself.
+fn ci_pattern(path: &str, folder: bool) -> String {
+    if folder {
+        format!("{path}/**")
+    } else {
+        path.to_string()
+    }
+}
+
+/// What a component created by discovery as the workspace root or as CI
+/// stands for, told by its patterns: `*` is the root, the pattern of a CI
+/// system is CI. Those components carry no stored description: the interface
+/// writes it in its language and the model reads it in English
+/// ([`description_for_model`]).
+pub fn infra_kind(entity: &EntityRecord) -> Option<InfraKind> {
+    if entity.kind != EntityKind::Component {
+        return None;
+    }
+    if entity.patterns.iter().any(|pattern| pattern == "*") {
+        return Some(InfraKind::Root);
+    }
+    ci_pattern_of(entity).map(|_| InfraKind::Ci)
+}
+
+/// The pattern of `entity` that belongs to a CI system.
+fn ci_pattern_of(entity: &EntityRecord) -> Option<&str> {
+    entity.patterns.iter().map(String::as_str).find(|pattern| {
+        CI_SYSTEMS
+            .iter()
+            .any(|(path, _, folder)| *pattern == ci_pattern(path, *folder))
+    })
+}
+
+/// What the model is told about a component: its description, or for the
+/// workspace root and CI (which have none stored) a fixed English text.
+pub fn description_for_model(entity: &EntityRecord) -> std::borrow::Cow<'_, str> {
+    use std::borrow::Cow;
+    if !entity.description.trim().is_empty() {
+        return Cow::Borrowed(entity.description.as_str());
+    }
+    match infra_kind(entity) {
+        Some(InfraKind::Root) => {
+            Cow::Borrowed("Root files: workspace manifest, toolchain and shared configuration")
+        }
+        Some(InfraKind::Ci) => Cow::Owned(format!(
+            "Continuous integration and release ({})",
+            ci_pattern_of(entity).unwrap_or_default()
+        )),
+        None => Cow::Borrowed(""),
+    }
+}
+
+/// The description the first versions stored on the workspace root.
+const LEGACY_ROOT_DESCRIPTION: &str =
+    "Arquivos da raiz: manifesto do workspace, toolchain e configuração comum";
+
+/// The description the first versions stored on a CI component.
+fn legacy_ci_description(pattern: &str) -> String {
+    format!("Integração contínua e publicação ({pattern})")
+}
+
 /// The structure of the project that no workspace member covers: the files
 /// at the root of a workspace (its manifest, toolchain, shared configuration)
 /// and the continuous integration pipelines. The root only exists when the
@@ -210,7 +273,7 @@ pub fn infrastructure_components(
             if taken { "workspace-root" } else { "workspace" },
             InfraKind::Root,
             patterns,
-            "Arquivos da raiz: manifesto do workspace, toolchain e configuração comum".into(),
+            String::new(),
             vec!["workspace root", "raiz do workspace"],
         ));
     }
@@ -226,11 +289,7 @@ pub fn infrastructure_components(
         })
         .collect();
     for (path, provider, folder) in &systems {
-        let pattern = if *folder {
-            format!("{path}/**")
-        } else {
-            (*path).to_string()
-        };
+        let pattern = ci_pattern(path, *folder);
         let name = if systems.len() == 1 {
             "CI".to_string()
         } else {
@@ -240,7 +299,7 @@ pub fn infrastructure_components(
             &name,
             InfraKind::Ci,
             vec![pattern.clone()],
-            format!("Integração contínua e publicação ({pattern})"),
+            String::new(),
             vec![provider],
         ));
     }
@@ -691,6 +750,46 @@ where
     }
 }
 
+impl<S> KnowledgeGraph<S>
+where
+    S: GraphStore + ClaimStore + RelationStore + ProjectRepository,
+{
+    /// Clears, once, the description the first versions stored on the root and
+    /// CI components: only when it is exactly the old Portuguese literal, so
+    /// a description someone wrote is never touched. Idempotent.
+    pub(super) fn clear_legacy_descriptions(&self, project_id: &str) -> Result<usize, GraphError> {
+        let mut cleared = 0;
+        for entity in self.store.project_entities(project_id)? {
+            if entity.retired_at.is_some() {
+                continue;
+            }
+            let legacy = match infra_kind(&entity) {
+                Some(InfraKind::Root) => entity.description == LEGACY_ROOT_DESCRIPTION,
+                Some(InfraKind::Ci) => entity
+                    .patterns
+                    .iter()
+                    .any(|pattern| entity.description == legacy_ci_description(pattern)),
+                None => false,
+            };
+            if !legacy {
+                continue;
+            }
+            let edit = EntityEdit {
+                name: entity.name.clone(),
+                description: String::new(),
+                patterns: entity.patterns.clone(),
+                aliases: entity.aliases.clone(),
+            };
+            match self.update_entity(&entity.entity_id, edit) {
+                Ok(_) => cleared += 1,
+                Err(GraphError::Invalid(_) | GraphError::Conflict) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(cleared)
+    }
+}
+
 fn merged_has(aliases: &[String], alias: &str) -> bool {
     aliases
         .iter()
@@ -947,7 +1046,10 @@ mod tests {
             vec!["workspace root", "raiz do workspace"]
         );
         assert_eq!(found[1].aliases, vec!["GitHub Actions"]);
-        assert!(found[1].description.contains(".github/workflows/**"));
+        // They carry no stored description: the interface writes it.
+        assert!(found
+            .iter()
+            .all(|component| component.description.is_empty()));
         // One system is just "CI"; a member called workspace takes the name.
         let single = tree("single", &[".gitlab-ci.yml"]);
         let taken = vec![declared("workspace", "crates/workspace")];
@@ -960,6 +1062,45 @@ mod tests {
         assert_eq!(found[1].pattern, ".gitlab-ci.yml");
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&single);
+    }
+
+    fn stored(name: &str, patterns: &[&str], description: &str) -> EntityRecord {
+        EntityRecord {
+            entity_id: name.into(),
+            project_id: "p".into(),
+            kind: EntityKind::Component,
+            name: name.into(),
+            key: entity_key(name),
+            description: description.into(),
+            patterns: patterns.iter().map(|pattern| (*pattern).into()).collect(),
+            aliases: Vec::new(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            retired_at: None,
+        }
+    }
+
+    #[test]
+    fn the_kind_and_the_text_for_the_model_come_from_the_patterns() {
+        let root = stored("workspace", &["*", ".cargo/**"], "");
+        let ci = stored("CI", &[".github/workflows/**"], "");
+        let jenkins = stored("CI Jenkins", &["Jenkinsfile"], "");
+        let plain = stored("core", &["crates/core/**"], "");
+        assert_eq!(infra_kind(&root), Some(InfraKind::Root));
+        assert_eq!(infra_kind(&ci), Some(InfraKind::Ci));
+        assert_eq!(infra_kind(&jenkins), Some(InfraKind::Ci));
+        assert_eq!(infra_kind(&plain), None);
+        assert_eq!(
+            description_for_model(&root),
+            "Root files: workspace manifest, toolchain and shared configuration"
+        );
+        assert_eq!(
+            description_for_model(&ci),
+            "Continuous integration and release (.github/workflows/**)"
+        );
+        assert_eq!(description_for_model(&plain), "");
+        // What someone wrote wins over the fixed text.
+        let written = stored("workspace", &["*"], "Manifestos e toolchain.");
+        assert_eq!(description_for_model(&written), "Manifestos e toolchain.");
     }
 
     #[test]
