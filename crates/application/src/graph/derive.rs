@@ -10,7 +10,7 @@
 //! [`super::repo_files`]), so a path an ADR cites relative to a crate, or one
 //! that does not exist, never becomes a component.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use domain::entities::{
@@ -99,6 +99,11 @@ pub fn cited_dependency(reason: &str) -> Option<&str> {
         .strip_prefix('"')?
         .split('"')
         .next()
+}
+
+/// Whether a reason cites a dependency that a second component declares too.
+pub fn shared_dependency(reason: &str) -> bool {
+    cited_dependency(reason).is_some() && reason.contains(DEPENDENCY_SHARED_MARK)
 }
 
 /// The reason of a link derived from the symbol or file name `word`, defined
@@ -622,14 +627,17 @@ where
             .store
             .project_claims(project_id)
             .map_err(|error| GraphError::Storage(error.to_string()))?;
+        let owned = Self::dependency_owners(&live, &declared);
         let (revalidated, dropped) =
-            self.revalidate(project_id, &mut edges, &decisions, &named, &claims)?;
+            self.revalidate(project_id, &mut edges, &decisions, &named, &owned, &claims)?;
         report.revalidated = revalidated;
         // What the rules just dropped is read again below: the evidence may
         // be the same text in doubt, which is written back with the alarm.
         edges.retain(|edge| !dropped.contains(&edge.edge_id));
 
-        let owned = Self::dependency_owners(&live, &declared);
+        // Where each decision's live ties sit, read once: the shared pass asks
+        // for them per decision.
+        let ties = DecisionTies::of(&edges);
         // Names the text may use for something else: never read as a symbol.
         let reserved: BTreeSet<String> = live
             .iter()
@@ -637,6 +645,7 @@ where
             .chain(owned.iter().map(|dependency| entity_key(&dependency.name)))
             .collect();
         for decision in &decisions {
+            let first_new = edges.len();
             let texts = decision_texts(decision);
             let has_files = decision
                 .files
@@ -717,8 +726,8 @@ where
                 }
             }
             // A dependency one component declares: that component is the place.
-            report.new_edges += self.suggest_dependencies(
-                &mut edges, project_id, decision, &texts, &owned, false, &now,
+            report.new_edges += self.suggest_owned_dependencies(
+                &mut edges, project_id, decision, &texts, &owned, &now,
             )?;
             let words = code_words_of(&texts);
             if !words.is_empty() {
@@ -740,8 +749,9 @@ where
             // A dependency two components declare says nothing about which one
             // the decision governs: it comes last, when the other evidence has
             // already named the owner it is about.
-            report.new_edges += self.suggest_dependencies(
-                &mut edges, project_id, decision, &texts, &owned, true, &now,
+            let cited = ties.cited(&edges, &decision.decision_id, first_new);
+            report.new_edges += self.suggest_shared_dependencies(
+                &mut edges, project_id, decision, &texts, &owned, &cited, &now,
             )?;
         }
 
@@ -932,60 +942,92 @@ where
     }
 
     /// Ties the decision to the component that declares a dependency its text
-    /// cites (not to exclude it). `shared` picks the dependencies two or more
-    /// components declare, whose reason says so; those tie to every owner
-    /// unless exactly one of them is already tied to the decision by other
-    /// evidence (a file, a symbol, a mention, the AI): then the decision is
-    /// about that owner and the shared dependency adds nothing.
-    #[allow(clippy::too_many_arguments)]
-    fn suggest_dependencies(
+    /// cites (not to exclude it), for the dependencies only one component
+    /// declares.
+    fn suggest_owned_dependencies(
         &self,
         edges: &mut Vec<EdgeRecord>,
         project_id: &str,
         decision: &DecisionNode,
         texts: &[Folded],
         owned: &[OwnedDependency],
-        shared_pass: bool,
+        now: &str,
+    ) -> Result<usize, GraphError> {
+        let mut written = 0;
+        for dependency in owned
+            .iter()
+            .filter(|dependency| dependency.owners.len() == 1)
+        {
+            if let Some(mention) = best_mention(texts, &dependency.term) {
+                written +=
+                    self.tie_owners(edges, project_id, decision, dependency, &mention, now)?;
+            }
+        }
+        Ok(written)
+    }
+
+    /// Ties the decision to the owners of a dependency two or more components
+    /// declare, whose reason says so. It has to run after `suggest_mentions`
+    /// (and the file and symbol evidence): `cited` is what the other evidence
+    /// already tied the decision to. When any owner is there the decision is
+    /// about that owner and the others are no evidence at all, so nothing is
+    /// written; with none cited it ties to every owner and the judge, told who
+    /// competes, picks.
+    #[allow(clippy::too_many_arguments)]
+    fn suggest_shared_dependencies(
+        &self,
+        edges: &mut Vec<EdgeRecord>,
+        project_id: &str,
+        decision: &DecisionNode,
+        texts: &[Folded],
+        owned: &[OwnedDependency],
+        cited: &BTreeSet<String>,
+        now: &str,
+    ) -> Result<usize, GraphError> {
+        let mut written = 0;
+        for dependency in owned
+            .iter()
+            .filter(|dependency| dependency.owners.len() > 1)
+        {
+            if cites_an_owner(&dependency.owners, cited) {
+                continue;
+            }
+            if let Some(mention) = best_mention(texts, &dependency.term) {
+                written +=
+                    self.tie_owners(edges, project_id, decision, dependency, &mention, now)?;
+            }
+        }
+        Ok(written)
+    }
+
+    /// Writes the dependency's link to each of its owners.
+    fn tie_owners(
+        &self,
+        edges: &mut Vec<EdgeRecord>,
+        project_id: &str,
+        decision: &DecisionNode,
+        dependency: &OwnedDependency,
+        mention: &Mention,
         now: &str,
     ) -> Result<usize, GraphError> {
         let source = (NodeKind::Decision, decision.decision_id.as_str());
+        let shared = dependency.owners.len() > 1;
         let mut written = 0;
-        let mut cited: Option<BTreeSet<String>> = None;
-        for dependency in owned {
-            let shared = dependency.owners.len() > 1;
-            if shared != shared_pass {
-                continue;
-            }
-            let Some(mention) = best_mention(texts, &dependency.term) else {
-                continue;
-            };
-            if shared {
-                let cited = cited.get_or_insert_with(|| cited_owners(edges, source));
-                let cited_here = dependency
-                    .owners
-                    .iter()
-                    .filter(|(entity_id, _)| cited.contains(entity_id))
-                    .count();
-                if cited_here == 1 {
-                    continue;
-                }
-            }
-            for (entity_id, manifest) in &dependency.owners {
-                let reason = with_doubt(
-                    &dependency_reason(&dependency.name, manifest, shared),
-                    mention.alarm(),
-                );
-                written += self.suggest(
-                    edges,
-                    project_id,
-                    EdgeKind::Affects,
-                    source,
-                    entity_id,
-                    &reason,
-                    Some(&decision.updated_at),
-                    now,
-                )?;
-            }
+        for (entity_id, manifest) in &dependency.owners {
+            let reason = with_doubt(
+                &dependency_reason(&dependency.name, manifest, shared),
+                mention.alarm(),
+            );
+            written += self.suggest(
+                edges,
+                project_id,
+                EdgeKind::Affects,
+                source,
+                entity_id,
+                &reason,
+                Some(&decision.updated_at),
+                now,
+            )?;
         }
         Ok(written)
     }
@@ -1107,20 +1149,65 @@ where
     }
 }
 
-/// The components the decision is already tied to by evidence other than a
-/// dependency or an alarm, whatever the state of the row: the ones its text
-/// names, whose files it touched or whose symbols it cites.
-fn cited_owners(edges: &[EdgeRecord], source: (NodeKind, &str)) -> BTreeSet<String> {
-    edges
+/// Where the live `affects` edges of each decision sit in the project's edge
+/// list, so the components a decision is tied to are found without reading
+/// every edge of the project for each decision.
+pub(super) struct DecisionTies(HashMap<String, Vec<usize>>);
+
+impl DecisionTies {
+    pub(super) fn of(edges: &[EdgeRecord]) -> Self {
+        let mut by_decision: HashMap<String, Vec<usize>> = HashMap::new();
+        for (index, edge) in edges.iter().enumerate() {
+            if edge.kind == EdgeKind::Affects
+                && edge.source_kind == NodeKind::Decision
+                && edge.is_live()
+            {
+                by_decision
+                    .entry(edge.source_id.clone())
+                    .or_default()
+                    .push(index);
+            }
+        }
+        Self(by_decision)
+    }
+
+    /// The components the decision is already tied to by evidence other than a
+    /// dependency or an alarm: the ones its text names, whose files it touched
+    /// or whose symbols it cites, and the AI's. Only live rows count: a
+    /// mention a person rejected, or the rules dropped, cites nothing. The
+    /// rows from `first_new` on were written after the index was built.
+    pub(super) fn cited(
+        &self,
+        edges: &[EdgeRecord],
+        decision_id: &str,
+        first_new: usize,
+    ) -> BTreeSet<String> {
+        let known = self.0.get(decision_id).map_or(&[][..], Vec::as_slice);
+        known
+            .iter()
+            .map(|&index| &edges[index])
+            .chain(
+                edges[first_new..]
+                    .iter()
+                    .filter(|edge| edge.source_id == decision_id),
+            )
+            .filter(|edge| {
+                edge.kind == EdgeKind::Affects
+                    && edge.source_kind == NodeKind::Decision
+                    && edge.is_live()
+                    && cited_dependency(&edge.reason).is_none()
+                    && doubt_of(&edge.reason).is_none()
+            })
+            .map(|edge| edge.entity_id.clone())
+            .collect()
+    }
+}
+
+/// Whether any owner of a dependency is among the components already cited.
+pub(super) fn cites_an_owner(owners: &[(String, String)], cited: &BTreeSet<String>) -> bool {
+    owners
         .iter()
-        .filter(|edge| {
-            edge.kind == EdgeKind::Affects
-                && (edge.source_kind, edge.source_id.as_str()) == source
-                && cited_dependency(&edge.reason).is_none()
-                && doubt_of(&edge.reason).is_none()
-        })
-        .map(|edge| edge.entity_id.clone())
-        .collect()
+        .any(|(entity_id, _)| cited.contains(entity_id))
 }
 
 /// Whether the rules invalidated `edge` before the decision's text last
@@ -1232,7 +1319,63 @@ pub(crate) fn edge_exists(
 
 #[cfg(test)]
 mod tests {
-    use super::added_dependencies;
+    use super::{added_dependencies, cites_an_owner, DecisionTies};
+    use crate::graph::EdgeRecord;
+    use domain::entities::{EdgeActor, EdgeKind, NodeKind};
+    use std::collections::BTreeSet;
+
+    fn tie(decision: &str, entity: &str, reason: &str) -> EdgeRecord {
+        EdgeRecord::pending_derived(
+            "p",
+            EdgeKind::Affects,
+            (NodeKind::Decision, decision),
+            entity,
+            reason.to_string(),
+            "2026-01-01T00:00:00Z",
+        )
+    }
+
+    #[test]
+    fn cited_owners_are_live_ties_other_than_dependencies() {
+        let mut rejected = tie("d1", "ui", "mention: \"gpui\"");
+        rejected.invalidated_at = Some("2026-01-02T00:00:00Z".into());
+        rejected.invalidated_by = Some(EdgeActor::Person);
+        let edges = vec![
+            tie("d1", "app", "símbolo citado: `main` (src/main.rs)"),
+            rejected,
+            tie("d1", "core", "dependência citada: \"serde\" (Cargo.toml)"),
+            tie("d2", "other", "símbolo citado: `x` (x.rs)"),
+        ];
+        let ties = DecisionTies::of(&edges);
+        let cited = ties.cited(&edges, "d1", edges.len());
+        assert_eq!(cited, BTreeSet::from(["app".to_string()]));
+    }
+
+    #[test]
+    fn cited_owners_include_what_was_written_after_the_index() {
+        let mut edges = vec![tie("d1", "app", "símbolo citado: `main` (src/main.rs)")];
+        let ties = DecisionTies::of(&edges);
+        let first_new = edges.len();
+        edges.push(tie("d1", "ui", "símbolo citado: `view` (ui/view.rs)"));
+        edges.push(tie("d2", "other", "símbolo citado: `x` (x.rs)"));
+        let cited = ties.cited(&edges, "d1", first_new);
+        assert_eq!(cited.len(), 2);
+        assert!(cited.contains("app") && cited.contains("ui"));
+    }
+
+    #[test]
+    fn one_cited_owner_is_enough_to_skip_a_shared_dependency() {
+        let owners = vec![
+            ("a".to_string(), "a/Cargo.toml".to_string()),
+            ("b".to_string(), "b/Cargo.toml".to_string()),
+            ("c".to_string(), "c/Cargo.toml".to_string()),
+        ];
+        assert!(!cites_an_owner(&owners, &BTreeSet::new()));
+        assert!(cites_an_owner(&owners, &BTreeSet::from(["a".to_string()])));
+        let two = BTreeSet::from(["a".to_string(), "b".to_string()]);
+        assert!(cites_an_owner(&owners, &two));
+        assert!(!cites_an_owner(&owners, &BTreeSet::from(["d".to_string()])));
+    }
 
     #[test]
     fn reads_added_dependencies_from_manifest_hunks() {

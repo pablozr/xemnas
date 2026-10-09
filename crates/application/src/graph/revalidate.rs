@@ -15,7 +15,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use domain::entities::{pattern_matches, EdgeActor, EdgeKind, EntityKind, NodeKind};
 
 use super::derive::{
-    best_mention, cited_dependency, cited_symbol, decision_texts, DEPENDENCY_REASON, SYMBOL_REASON,
+    best_mention, cited_dependency, cited_symbol, cites_an_owner, decision_texts,
+    shared_dependency, DecisionTies, OwnedDependency, DEPENDENCY_REASON, SYMBOL_REASON,
 };
 use super::mention::{
     code_words_of, dependency_term, doubt_of, mention_quote, CodeWord, Folded, Term,
@@ -60,6 +61,10 @@ where
     ///   reason has no alarm: the derivation then writes it again as a
     ///   pending link carrying the alarm, which goes to the judge. What the
     ///   judge or a person confirmed is not touched.
+    /// * A link made from a dependency two components declare is invalidated
+    ///   as `Rules` once the decision is tied to one of the owners by other
+    ///   evidence: that owner is what the decision is about, and the order in
+    ///   which the evidence arrived must not matter.
     /// * A tie a rule inherited from its decision, when the decision has no
     ///   confirmed live tie to that component any more, as `Inherited`.
     pub(super) fn revalidate(
@@ -68,6 +73,7 @@ where
         edges: &mut Vec<EdgeRecord>,
         decisions: &[DecisionNode],
         named: &[(&EntityRecord, EdgeKind, Vec<Term>)],
+        owned: &[OwnedDependency],
         claims: &[ClaimRecord],
     ) -> Result<(usize, BTreeSet<String>), GraphError> {
         let guess = |edge: &EdgeRecord| {
@@ -87,6 +93,8 @@ where
             .map(|(entity, _, terms)| (entity.entity_id.as_str(), terms))
             .collect();
         let mut readings: BTreeMap<&str, Reading> = BTreeMap::new();
+        let ties = DecisionTies::of(edges);
+        let mut cited: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
         let mut invalidated = 0;
 
         let mut stale: Vec<String> = Vec::new();
@@ -118,6 +126,15 @@ where
                     continue;
                 };
                 mention_support(terms, &reading.texts)
+            } else if shared_dependency(&edge.reason)
+                && owners_of(owned, &edge.reason).is_some_and(|owners| {
+                    let cited = cited
+                        .entry(decision.decision_id.as_str())
+                        .or_insert_with(|| ties.cited(edges, &decision.decision_id, edges.len()));
+                    cites_an_owner(owners, cited)
+                })
+            {
+                Support::Gone
             } else {
                 structural_support(&edge.reason, reading)
             };
@@ -183,6 +200,15 @@ enum Support {
     Clean,
     /// The text names it near a word that may negate it.
     Doubtful,
+}
+
+/// The owners of the dependency a reason cites, when it is still owned.
+fn owners_of<'a>(owned: &'a [OwnedDependency], reason: &str) -> Option<&'a [(String, String)]> {
+    let name = cited_dependency(reason)?;
+    owned
+        .iter()
+        .find(|dependency| dependency.name == name)
+        .map(|dependency| dependency.owners.as_slice())
 }
 
 /// A decision's text, ready to be read, and its code words once asked for.

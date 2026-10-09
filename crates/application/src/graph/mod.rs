@@ -20,8 +20,8 @@ pub use ai_link::{ai_link_quote, ai_link_reason, ai_link_why, AI_LINK_REASON, EX
 pub(crate) use derive::edge_exists;
 pub use derive::{
     added_dependencies, cited_dependency, map_preparer, prepared_documents, prepared_projects,
-    ComponentProposal, MapPreparer, SuggestionReport, TechnologyProposal, DEPENDENCY_REASON,
-    DEPENDENCY_SHARED_MARK, SYMBOL_REASON,
+    shared_dependency, ComponentProposal, MapPreparer, SuggestionReport, TechnologyProposal,
+    DEPENDENCY_REASON, DEPENDENCY_SHARED_MARK, SYMBOL_REASON,
 };
 pub(crate) use discover::project_keys;
 pub use discover::{

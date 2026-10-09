@@ -30,7 +30,7 @@ use application::graph::{GraphStore, KnowledgeGraph};
 use application::inbox::{CandidateEdits, Inbox};
 use application::jobs::{JobRecord, JobState, ANALYZE_CAPTURE_KIND};
 use application::projects::{ProjectRecord, ProjectRepository};
-use domain::entities::{EdgeKind, NodeKind};
+use domain::entities::{EdgeActor, EdgeKind, NodeKind};
 use storage_sqlite::SqliteStore;
 
 /// Floors measured on the corpus; raise them when the rule improves. History
@@ -1062,6 +1062,161 @@ fn link_structure_quality_gate() {
         "ghost_proposals {}",
         tally.ghost_proposals
     );
+}
+
+/// The `cloud` project, registered and assembled, with one decision.
+struct SharedGpui {
+    graph: KnowledgeGraph<SqliteStore>,
+    test: support::TestStore,
+    project: String,
+    decision: String,
+    base: PathBuf,
+}
+
+fn shared_gpui(tag: &str, text: &'static str) -> SharedGpui {
+    let base = scratch(tag);
+    let test = support::open(tag, &[]);
+    let fixture = cloud();
+    let project = "p-shared".to_string();
+    let root = base.join(fixture.folder);
+    write_tree(&root, fixture.files);
+    register(&test.store, &project, &root);
+    let case = case("s01", Kind::Plain, text, &[]);
+    let decision = confirm_decision(&test.store, &project, &root.to_string_lossy(), &case);
+    let graph = KnowledgeGraph::new(test.store.clone());
+    graph.assemble(&project).expect("assemble");
+    SharedGpui {
+        graph,
+        test,
+        project,
+        decision,
+        base,
+    }
+}
+
+impl SharedGpui {
+    fn entity(&self, name: &str) -> String {
+        self.test
+            .store
+            .project_entities(&self.project)
+            .expect("entities")
+            .into_iter()
+            .find(|entity| entity.name == name)
+            .unwrap_or_else(|| panic!("entity {name}"))
+            .entity_id
+    }
+
+    /// The rows of the decision toward a component, oldest first.
+    fn rows(&self, name: &str) -> Vec<application::graph::EdgeRecord> {
+        let entity = self.entity(name);
+        self.test
+            .store
+            .project_edges(&self.project)
+            .expect("edges")
+            .into_iter()
+            .filter(|edge| {
+                edge.source_id == self.decision
+                    && edge.entity_id == entity
+                    && edge.kind == EdgeKind::Affects
+            })
+            .collect()
+    }
+
+    fn refresh(&self) {
+        self.graph
+            .refresh_suggestions(&self.project)
+            .expect("refresh");
+    }
+}
+
+impl Drop for SharedGpui {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.base);
+    }
+}
+
+/// A mention the person rejected cites nothing: the dependency still ties the
+/// owner that has no row of its own.
+#[test]
+fn a_rejected_mention_does_not_silence_the_shared_dependency() {
+    let shared = shared_gpui(
+        "shared-rejected",
+        "Serve the icons from cloud-ui and draw them with gpui's svg() as tinted masks.",
+    );
+    shared.refresh();
+    let mention = shared.rows("cloud-ui");
+    assert_eq!(mention.len(), 1, "the mention of cloud-ui");
+    assert!(
+        mention[0].reason.contains("cloud-ui"),
+        "{}",
+        mention[0].reason
+    );
+    assert!(
+        shared.rows("cloud").is_empty(),
+        "the cited owner is the only tie"
+    );
+
+    shared
+        .graph
+        .invalidate(&mention[0].edge_id)
+        .expect("reject");
+    shared.refresh();
+    let app = shared.rows("cloud");
+    assert_eq!(app.len(), 1, "the dependency ties the other owner");
+    assert!(app[0].is_live());
+    assert!(application::graph::shared_dependency(&app[0].reason));
+}
+
+/// The order the evidence arrives in does not matter: with no owner cited a
+/// shared dependency ties both; once the AI ties one of them, the dependency
+/// edge of the other is dropped by the rules and nothing is written twice.
+#[test]
+fn the_shared_dependency_converges_when_an_owner_is_cited_later() {
+    let shared = shared_gpui(
+        "shared-converge",
+        "Draw the title bar with gpui hit testing in the window code.",
+    );
+    shared.refresh();
+    let app = shared.rows("cloud");
+    let ui = shared.rows("cloud-ui");
+    assert_eq!((app.len(), ui.len()), (1, 1), "both owners are tied");
+    assert!(app[0].confirmed_at.is_none() && ui[0].confirmed_at.is_none());
+
+    // The AI ties the app: its row replaces the dependency row of that owner.
+    shared
+        .graph
+        .invalidate_as(&app[0].edge_id, EdgeActor::Rules)
+        .expect("drop the app's dependency row");
+    let asked = application::graph::EdgeRecord::pending_derived(
+        &shared.project,
+        EdgeKind::Affects,
+        (NodeKind::Decision, &shared.decision),
+        &shared.entity("cloud"),
+        application::graph::ai_link_reason("title bar in the window code", "the window"),
+        "2030-01-01T00:00:00Z",
+    );
+    shared.test.store.insert_edge(&asked).expect("AI link");
+
+    shared.refresh();
+    let ui = shared.rows("cloud-ui");
+    assert_eq!(ui.len(), 1);
+    assert!(
+        !ui[0].is_live(),
+        "the other owner's dependency row is dropped"
+    );
+    assert_eq!(ui[0].invalidated_by, Some(EdgeActor::Rules));
+    let app = shared.rows("cloud");
+    let live: Vec<_> = app.iter().filter(|edge| edge.is_live()).collect();
+    assert_eq!(live.len(), 1, "the cited owner is not tied twice");
+    assert!(application::graph::ai_link_quote(&live[0].reason).is_some());
+
+    shared.refresh();
+    assert_eq!(
+        shared.rows("cloud-ui").len(),
+        1,
+        "a second refresh changes nothing"
+    );
+    assert_eq!(shared.rows("cloud").len(), 2);
 }
 
 /// A decision of the scale project.

@@ -132,18 +132,29 @@ a do dono que o texto de fato nomeia. Nos dados reais (4 decisões, todas com as
 "icons" cita `cloudrs_ui::assets::Assets` (dono certo: `cloudrs-ui`), "sign-in" cita
 `cloudrs --sign-in` (`cloudrs`), "logo" e "title bar" não citam nenhum dono.
 
-**Regra.** `suggest_dependencies` ganhou o parâmetro `shared`. A dependência de **um** dono segue
-no mesmo ponto de antes (antes de símbolos e menções; nada muda). A de **dois ou mais** donos
-roda depois de `suggest_mentions`. Para cada dependência citada, calcula os "donos citados":
-donos com qualquer linha desta decisão (qualquer estado), tipo `Affects`, cuja razão não é de
-dependência nem tem alarme de polaridade (arquivo tocado, símbolo, menção, IA ou extrator).
+**Regra.** Duas funções: `suggest_owned_dependencies` (dependência de **um** dono) segue no mesmo
+ponto de antes, antes de símbolos e menções; `suggest_shared_dependencies` (**dois ou mais**
+donos) roda depois de `suggest_mentions` e recebe os "donos citados" da decisão: donos com uma
+linha **viva** (pendente ou confirmada; a menção rejeitada pela pessoa ou derrubada pelas regras
+não conta), tipo `Affects`, cuja razão não é de dependência nem tem alarme de polaridade
+(arquivo tocado, símbolo, menção, IA ou extrator).
 
-- exatamente um dono citado: nenhuma aresta de dependência; o dono já tem o vínculo dele;
-- zero ou dois ou mais: o comportamento anterior (uma aresta por dono, com a marca de
-  compartilhada).
+- algum dono citado: nenhuma aresta de dependência compartilhada para a decisão (os citados já
+  têm o vínculo deles; os outros donos não são evidência), qualquer que seja o número de donos;
+- nenhum dono citado: uma aresta por dono, com a marca de compartilhada.
 
-A varredura é só das arestas da decisão, uma vez por decisão e só quando ela cita uma
-dependência compartilhada.
+Os donos citados vêm de um índice por decisão (`DecisionTies`), montado uma vez por refresh, mais
+as linhas que a própria decisão escreveu desde o início do laço: o custo deixou de ser
+decisões x arestas do projeto.
+
+**Convergência.** O resultado não depende da ordem em que a evidência chega. `revalidate`
+invalida como `Rules` a aresta de dependência compartilhada, pendente ou confirmada pelas regras,
+cuja decisão passou a ter algum dono citado por outra evidência (mesma função de donos citados
+do derive). Não reabre sozinha: `blocked`/`reopens` só reabrem se a decisão mudou depois.
+Na prática o índice único de arestas vivas (uma por tipo, origem e componente) já impede a
+evidência nova de coexistir com a aresta de dependência do mesmo dono; a regra cobre o outro dono.
+`MAX_OWNERS` é 2, então "três donos, dois citados" só existe no teste de unidade de
+`cites_an_owner`.
 
 **Juiz.** Para o vínculo de dependência compartilhada, `link_text` acrescenta `Shared dependency,
 also declared by: <donos>` (os outros pendentes da mesma decisão e dependência, lidos da lista
@@ -162,9 +173,9 @@ exceção, "fixar gpui 0.2 no workspace" perderia um dono legítimo.
 
 **Não coberto de propósito.** O caso "nenhum dono citado" (logo, title bar) não entra no corpus:
 na contagem, aresta compartilhada conta como afirmada, então seria um erro conhecido; o
-comportamento dele está no teste de unidade do texto do juiz. Arestas já gravadas não são
-reescritas nem invalidadas (a regra vale para refreshes novos; o juiz recebe a dica para as
-pendentes).
+comportamento dele está no teste de unidade do texto do juiz. Arestas já gravadas e citadas por
+outra evidência passam pela convergência acima; as demais não são reescritas.
+
 
 ## Riscos
 
