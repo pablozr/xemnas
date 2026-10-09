@@ -825,21 +825,45 @@ enum StreamResult {
     Incomplete,
 }
 
+/// Longest single line of the stream: `response.completed` repeats the whole
+/// text escaped as JSON, with the instructions and metadata around it.
+const MAX_STREAM_LINE_BYTES: usize = 4 * MAX_RESPONSE_BYTES;
+
+/// Most bytes read from one stream. Each delta event carries about 200 bytes of
+/// protocol for a few characters of text, so a text at its cap takes about
+/// 25 MiB; the limit on the text is [`MAX_RESPONSE_BYTES`], this one only
+/// bounds time and bandwidth (lines are not kept).
+const MAX_STREAM_BYTES: usize = 64 * MAX_RESPONSE_BYTES;
+
+fn over_the_limit() -> ExtractError {
+    ExtractError::Extractor("a resposta do provedor excedeu o limite".to_string())
+}
+
 /// Reads a Responses API event stream and returns the final output text.
-/// Only `response.completed` counts as success (plan usage guide).
+/// Only `response.completed` counts as success (plan usage guide). The cap of
+/// [`MAX_RESPONSE_BYTES`] is on the text kept, not on the SSE around it.
 fn read_stream(reader: impl Read) -> Result<StreamResult, ExtractError> {
+    let unreadable = || ExtractError::Extractor("falha ao ler a resposta do provedor".to_string());
     let mut deltas = String::new();
-    let mut read = 0usize;
-    for line in BufReader::new(reader).lines() {
-        let line = line.map_err(|_| {
-            ExtractError::Extractor("falha ao ler a resposta do provedor".to_string())
-        })?;
-        read += line.len();
-        if read > MAX_RESPONSE_BYTES {
-            return Err(ExtractError::Extractor(
-                "a resposta do provedor excedeu o limite".to_string(),
-            ));
+    let mut total = 0usize;
+    let mut reader = BufReader::new(reader);
+    let mut buffer = Vec::new();
+    loop {
+        buffer.clear();
+        let read = (&mut reader)
+            .take(MAX_STREAM_LINE_BYTES as u64 + 1)
+            .read_until(b'\n', &mut buffer)
+            .map_err(|_| unreadable())?;
+        if read == 0 {
+            break;
         }
+        total += read;
+        if total > MAX_STREAM_BYTES || buffer.len() > MAX_STREAM_LINE_BYTES {
+            return Err(over_the_limit());
+        }
+        let line = std::str::from_utf8(&buffer)
+            .map_err(|_| unreadable())?
+            .trim_end_matches(['\r', '\n']);
         let Some(data) = line.strip_prefix("data:") else {
             continue;
         };
@@ -850,10 +874,16 @@ fn read_stream(reader: impl Read) -> Result<StreamResult, ExtractError> {
             Some("response.output_text.delta") => {
                 if let Some(delta) = event.get("delta").and_then(|delta| delta.as_str()) {
                     deltas.push_str(delta);
+                    if deltas.len() > MAX_RESPONSE_BYTES {
+                        return Err(over_the_limit());
+                    }
                 }
             }
             Some("response.completed") => {
                 let text = completed_text(&event).unwrap_or(deltas);
+                if text.len() > MAX_RESPONSE_BYTES {
+                    return Err(over_the_limit());
+                }
                 return Ok(StreamResult::Completed(text));
             }
             Some("response.failed") => {
@@ -1199,5 +1229,44 @@ mod tests {
             read_stream(cut.as_bytes()).expect("read"),
             StreamResult::Incomplete
         );
+    }
+
+    fn delta_line(sequence: usize, text: &str) -> String {
+        format!(
+            "data: {{\"type\":\"response.output_text.delta\",\"sequence_number\":{sequence},\
+            \"item_id\":\"msg_{}\",\"output_index\":0,\"content_index\":0,\
+            \"delta\":\"{text}\",\"logprobs\":[]}}\n\n",
+            "x".repeat(60)
+        )
+    }
+
+    const COMPLETED_WITHOUT_TEXT: &str =
+        "data: {\"type\":\"response.completed\",\"response\":{\"output\":[]}}\n";
+
+    #[test]
+    fn many_tiny_deltas_over_the_raw_cap_still_complete() {
+        let mut stream: String = (0..5_000).map(|n| delta_line(n, "a")).collect();
+        stream.push_str(COMPLETED_WITHOUT_TEXT);
+        assert!(stream.len() > MAX_RESPONSE_BYTES);
+        assert_eq!(
+            read_stream(stream.as_bytes()).expect("read"),
+            StreamResult::Completed("a".repeat(5_000))
+        );
+    }
+
+    #[test]
+    fn text_over_the_cap_fails() {
+        let chunk = "a".repeat(1_024);
+        let mut stream: String = (0..=MAX_RESPONSE_BYTES / 1_024)
+            .map(|n| delta_line(n, &chunk))
+            .collect();
+        stream.push_str(COMPLETED_WITHOUT_TEXT);
+        assert!(read_stream(stream.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn a_single_line_over_the_line_cap_fails() {
+        let line = format!("data: {}\n", "a".repeat(MAX_STREAM_LINE_BYTES + 10));
+        assert!(read_stream(line.as_bytes()).is_err());
     }
 }
