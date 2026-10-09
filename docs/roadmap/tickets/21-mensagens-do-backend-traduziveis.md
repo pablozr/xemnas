@@ -35,7 +35,12 @@ idioma:
 - [ ] Razões de vínculo gravadas em português: `citado no texto`, `dependência citada`,
   `símbolo citado`, `sugerido pela IA`, `indicado pelo extrator junto com a decisão`
   (`EXTRACTED_LINK_WHY`) e a marca `polaridade duvidosa` (`DOUBT_MARK`); a tela do Mapa e o
-  juiz as leem como prefixo.
+  juiz as leem como prefixo. O "em" de `with_doubt` (`"<gatilho>" em "<citação>"`) é
+  português dentro da marca; `doubt_parts` o separa para a tela, que mostra a linha traduzida.
+- [ ] O rótulo "Alerta de polaridade" que o juiz recebe em `link_text`
+  (`auto_approval.rs`), em português.
+- [ ] A Visão guardada não registra o idioma em que foi escrita: trocar o idioma da interface
+  não a regera, e a página não sabe dizer em que idioma ela está.
 
 **Aceite:** cada caso vira um enum (ou código estável) no contrato do
 `application`; a tela traduz por `crate::i18n`; nenhuma frase em português

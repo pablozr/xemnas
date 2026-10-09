@@ -46,7 +46,19 @@ outra, e cada língua nova pede uma lista. O que precisa mudar é quem decide.
 4. **`revalidate` passa a rever dependência e símbolo** pendentes ou confirmados pelas regras
    (nunca pela IA, pessoa ou herança). Só duvidoso e a razão sem marca: invalida como `Rules`, e
    `blocked()` deixa a derivação reescrever a aresta com a marca, que vai ao juiz. Ausente ou
-   negado: invalida. Menção continua sustentada por acerto limpo ou duvidoso.
+   negado: invalida. A menção segue a mesma regra: sem acerto, invalida; só em dúvida e sem a
+   marca, e pendente ou aceita pelas regras, é invalidada como `Rules` e escrita de novo com a
+   marca; a confirmada pelo juiz ou por herança não é tocada. A leitura de cada decisão é feita
+   uma vez por refresh.
+   **`blocked()` e o vai-e-volta.** Uma linha invalidada por `Rules` num motivo de dependência,
+   símbolo ou menção não bloqueia mais a derivação: se ela escreve de novo o mesmo motivo (ou um
+   com a marca), é porque a evidência voltou. Sem isso, a sequência "aceita limpa pelas regras →
+   invalidada pela dúvida → escrita com a marca → descartada pelo juiz → texto editado sem a
+   dúvida" deixava o motivo limpo bloqueado para sempre. Não há outro caminho de `Rules` que
+   reproponha o mesmo motivo: a derivação só escreve o que o `revalidate` mantém (acerto limpo,
+   ou em dúvida com a marca). Fica de fora, de propósito, o arquivo ou a dependência nua que
+   uma adoção com `by = Rules` recusou: esses motivos não levam prefixo, ninguém os revalida, e
+   a recusa continua valendo.
 5. **O extrator diz onde a decisão vale.** Recebe só os nomes dos componentes vivos (até 60, em
    ordem de chave), no início do conteúdo (prefixo estável para o cache do provedor), e responde
    `components:[{name, quote}]` com no máximo 3. O nome é conferido por `entity_key` contra o
@@ -60,6 +72,10 @@ outra, e cada língua nova pede uma lista. O que precisa mudar é quem decide.
    texto final (edições incluídas). `needs_links` conta a aresta como "já perguntado", então o
    job de `suggest_links` que `queue_untied` tenha enfileirado vira no-op: zero chamadas. O
    `revalidate` não a toca (é "o proposto pela IA"), e quem confirma é o juiz ou a pessoa.
+   **Troca consciente de custo por cobertura:** basta um vínculo do extrator para a decisão
+   contar como "perguntada", então o proponente não roda mesmo que o extrator tenha citado só
+   parte dos componentes a que ela se aplica; os que faltarem só aparecem por menção, arquivo ou
+   dependência.
 7. **O idioma da saída vem de quem chama.** `OutputLanguage` (`application::output_language`)
    entra em `OverviewApi::generate`; o app manda a tag de `i18n::current()` e o backend a põe na
    primeira linha da mensagem ("Output language: Brazilian Portuguese"). O conteúdo das decisões
@@ -69,7 +85,17 @@ outra, e cada língua nova pede uma lista. O que precisa mudar é quem decide.
 8. **Raiz e CI não guardam descrição.** Ficam vazias no banco; `graph::infra_kind` deduz o tipo
    pelos padrões (`*` é raiz; padrão de `CI_SYSTEMS` é CI), a interface mostra o texto pelo i18n e
    ao modelo vai um texto fixo em inglês (`graph::description_for_model`). Bancos existentes são
-   limpos uma vez no refresh, só quando a descrição é exatamente o literal antigo.
+   limpos uma vez pela migração 0049 (só para frente, no fim da lista), só quando a descrição é
+   exatamente o literal antigo da raiz ou da CI (`Integração contínua e publicação (<padrão>)`)
+   num componente cujos padrões dizem que é a raiz (`*`) ou um sistema de CI; nada escrito à
+   mão é tocado. O tipo e o padrão vêm de `graph::infra_kind` (`Infra { kind, pattern }`), o
+   mesmo para o texto do modelo e para a interface.
+9. **A interface mostra o alarme à parte.** A frase do vínculo sugerido no Mapa não traz mais a
+   razão crua: a marca sai da frase (`without_doubt`) e o cartão ganha uma linha traduzida com o
+   gatilho e a citação (`doubt_parts`). A Revisão não precisa disso: o preview de adoção só lista
+   arquivos e dependências nus, sem marca.
+10. **O extrator lê itens de `components` um a um.** Um item com campo a mais, grande demais ou
+    de forma errada é descartado; o resto da resposta vale.
 
 ## Consequências
 
