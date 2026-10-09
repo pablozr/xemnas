@@ -145,6 +145,29 @@ fn cas_batch(
 }
 
 impl InboxStore for SqliteStore {
+    fn candidate_components(
+        &self,
+        candidate_id: &str,
+    ) -> Result<Vec<application::extract::CandidateComponent>, InboxError> {
+        let connection = self.lock();
+        let mut statement = connection
+            .prepare(
+                "SELECT entity_id, quote FROM candidate_components \
+                 WHERE candidate_id = ?1 ORDER BY rowid",
+            )
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map([candidate_id], |row| {
+                Ok(application::extract::CandidateComponent {
+                    entity_id: row.get(0)?,
+                    quote: row.get(1)?,
+                })
+            })
+            .map_err(storage_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage_error)?;
+        Ok(rows)
+    }
     fn eligible_in_review(
         &self,
         project_id: &str,

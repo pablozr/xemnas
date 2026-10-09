@@ -273,6 +273,20 @@ fn normalized(text: &str) -> String {
         .join(" ")
 }
 
+/// Whether `quote` (at least [`MIN_QUOTE_CHARS`] characters of words) is
+/// verbatim in one of the already `normalized` texts.
+fn quote_matches(texts: &[String], quote: &str) -> bool {
+    let needle = normalized(quote);
+    needle.chars().count() >= MIN_QUOTE_CHARS && texts.iter().any(|text| text.contains(&needle))
+}
+
+/// Whether `quote` is copied from one of the `texts`, case, accents and
+/// punctuation aside, and long enough to say something.
+pub(crate) fn quote_in(texts: &[&str], quote: &str) -> bool {
+    let texts: Vec<String> = texts.iter().map(|text| normalized(text)).collect();
+    quote_matches(&texts, quote)
+}
+
 /// Links from one decision's answer `{"links":[...]}` that name a sent
 /// component and quote the decision verbatim (case and accents aside), once
 /// per component, at most [`MAX_LINKS`]. Anything else is dropped; an
@@ -331,10 +345,7 @@ fn validated(
             continue;
         };
         let quote = raw.quote.trim();
-        let needle = normalized(quote);
-        if needle.chars().count() < MIN_QUOTE_CHARS
-            || !texts.iter().any(|text| text.contains(&needle))
-        {
+        if !quote_matches(&texts, quote) {
             continue;
         }
         if seen.insert(component.entity_id.clone()) {

@@ -93,6 +93,37 @@ pub struct CandidateProposal {
     pub significance: f64,
     /// Significance criteria the extractor ticked ([`SIGNIFICANCE_CRITERIA`]).
     pub criteria: Vec<String>,
+    /// Map components the extractor says it applies to, each with a quote
+    /// from its own text. Empty when the project has no map or it is unsure.
+    pub components: Vec<ProposedComponent>,
+}
+
+/// A component of the project map as the extractor named it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProposedComponent {
+    /// The component's name, as it was listed to the extractor.
+    pub name: String,
+    /// A quote copied from the question, choice or rationale.
+    pub quote: String,
+}
+
+/// A live component of the project map, listed to the extractor by name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MapComponent {
+    /// The entity id.
+    pub entity_id: String,
+    /// The name the extractor writes back.
+    pub name: String,
+}
+
+/// A component a candidate applies to, checked against the map and against
+/// the candidate's own text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CandidateComponent {
+    /// The entity id.
+    pub entity_id: String,
+    /// The quote that shows the candidate says so.
+    pub quote: String,
 }
 
 /// What a proposal is.
@@ -155,6 +186,9 @@ pub struct ExtractionBackground {
     pub confirmed: Vec<String>,
     /// Candidates the user rejected recently, as `question → choice`.
     pub rejected: Vec<String>,
+    /// The live components of the project map, so the extractor can say which
+    /// ones a candidate applies to (see [`resolve_components`]).
+    pub components: Vec<MapComponent>,
 }
 
 /// A row to persist in `decision_candidates`.
@@ -326,6 +360,15 @@ pub trait ExtractionStore {
     ) -> Result<(), ExtractError> {
         Ok(())
     }
+    /// Persists the components a candidate applies to, found by its
+    /// `dedup_hash`. Stores without the table ignore them.
+    fn record_components(
+        &self,
+        _dedup_hash: &str,
+        _components: &[CandidateComponent],
+    ) -> Result<(), ExtractError> {
+        Ok(())
+    }
     /// Loads the evidence for a capture, or `None` when it no longer exists.
     fn load_evidence(&self, capture_id: &str) -> Result<Option<DecisionEvidence>, ExtractError>;
 
@@ -463,6 +506,15 @@ where
         .iter()
         .map(|(p, signals)| (dedup_hash(capture_id, p, signals), p.nature))
         .collect();
+    let components: Vec<_> = validated
+        .iter()
+        .map(|(p, signals)| {
+            (
+                dedup_hash(capture_id, p, signals),
+                resolve_components(p, &background.components),
+            )
+        })
+        .collect();
     let records: Vec<DecisionCandidateRecord> = validated
         .into_iter()
         .map(|(proposal, canonical)| {
@@ -501,6 +553,11 @@ where
     for (hash, nature) in natures {
         store.record_nature(&hash, nature)?;
     }
+    for (hash, resolved) in components {
+        if !resolved.is_empty() {
+            store.record_components(&hash, &resolved)?;
+        }
+    }
     let report = ExtractionReport {
         candidates: records.len(),
         inserted,
@@ -519,6 +576,50 @@ where
         None,
     )?;
     Ok(report)
+}
+
+/// Components a candidate can apply to at most.
+pub const MAX_CANDIDATE_COMPONENTS: usize = 3;
+
+/// The components the extractor named for `proposal` that the map has and that
+/// the proposal's own text backs: the name matches a listed component (case,
+/// accents and punctuation aside), the quote is copied from the question,
+/// choice or rationale, and each component counts once. A name the map does
+/// not list, a paraphrase and a quote too short to say anything are dropped.
+pub(crate) fn resolve_components(
+    proposal: &CandidateProposal,
+    map: &[MapComponent],
+) -> Vec<CandidateComponent> {
+    let texts = [
+        proposal.question.as_str(),
+        proposal.choice.as_str(),
+        proposal.rationale.as_str(),
+    ];
+    let mut resolved: Vec<CandidateComponent> = Vec::new();
+    for named in &proposal.components {
+        if resolved.len() >= MAX_CANDIDATE_COMPONENTS {
+            break;
+        }
+        let key = domain::entities::entity_key(&named.name);
+        let Some(component) = map
+            .iter()
+            .find(|component| domain::entities::entity_key(&component.name) == key)
+        else {
+            continue;
+        };
+        if resolved
+            .iter()
+            .any(|known| known.entity_id == component.entity_id)
+            || !crate::link_suggestions::quote_in(&texts, &named.quote)
+        {
+            continue;
+        }
+        resolved.push(CandidateComponent {
+            entity_id: component.entity_id.clone(),
+            quote: named.quote.trim().to_string(),
+        });
+    }
+    resolved
 }
 
 /// Replaces what the extractor cannot know better than the app: the diff
@@ -631,8 +732,9 @@ fn dedup_hash(
 #[cfg(test)]
 mod tests {
     use super::{
-        filter_relevant, reconcile_with_evidence, truncate_content, CandidateKind,
-        CandidateProposal, DecisionEvidence, EvidenceArtifact, RelevanceSignal,
+        filter_relevant, reconcile_with_evidence, resolve_components, truncate_content,
+        CandidateKind, CandidateProposal, DecisionEvidence, EvidenceArtifact, MapComponent,
+        ProposedComponent, RelevanceSignal,
     };
 
     fn proposal(refs: &[&str]) -> CandidateProposal {
@@ -650,6 +752,7 @@ mod tests {
             kind: CandidateKind::Decision,
             significance: 0.8,
             criteria: Vec::new(),
+            components: Vec::new(),
         }
     }
 
@@ -835,5 +938,64 @@ Applies to the Claude Code adapter only.",
             "diff --git a/src/lib.rs b/src/lib.rs\n+ let formatted = value;\n",
         )]));
         assert!(signals.is_empty());
+    }
+
+    fn map() -> Vec<MapComponent> {
+        ["Storage SQLite", "Núcleo", "outbox", "ui"]
+            .iter()
+            .enumerate()
+            .map(|(n, name)| MapComponent {
+                entity_id: format!("e{n}"),
+                name: (*name).into(),
+            })
+            .collect()
+    }
+
+    fn named(name: &str, quote: &str) -> ProposedComponent {
+        ProposedComponent {
+            name: name.into(),
+            quote: quote.into(),
+        }
+    }
+
+    fn resolved(components: Vec<ProposedComponent>) -> Vec<String> {
+        let mut candidate = proposal(&[]);
+        candidate.question = "Onde o núcleo grava as capturas?".into();
+        candidate.choice = "Gravar cada captura na outbox antes de responder.".into();
+        candidate.rationale = "Evita perder eventos se o processo cair.".into();
+        candidate.components = components;
+        resolve_components(&candidate, &map())
+            .into_iter()
+            .map(|component| component.entity_id)
+            .collect()
+    }
+
+    #[test]
+    fn a_component_counts_when_the_map_lists_it_and_the_text_backs_the_quote() {
+        // Case does not matter for the name; case and accents do not matter for
+        // the quote.
+        assert_eq!(
+            resolved(vec![
+                named("NÚCLEO", "O NUCLEO grava as capturas"),
+                named("OUTBOX", "gravar cada captura na outbox"),
+            ]),
+            vec!["e1", "e2"]
+        );
+        // A name the map does not list.
+        assert!(resolved(vec![named("billing", "Gravar cada captura na outbox")]).is_empty());
+        // A paraphrase, and a quote too short to say anything.
+        assert!(resolved(vec![named("outbox", "gravar capturas numa fila")]).is_empty());
+        assert!(resolved(vec![named("outbox", "outbox")]).is_empty());
+        // Once per component, at most three.
+        assert_eq!(
+            resolved(vec![
+                named("outbox", "Gravar cada captura na outbox"),
+                named("Outbox", "antes de responder"),
+            ]),
+            vec!["e2"]
+        );
+        let many = ["Storage SQLite", "Núcleo", "outbox", "ui"]
+            .map(|name| named(name, "Evita perder eventos se o processo cair"));
+        assert_eq!(resolved(many.to_vec()).len(), 3);
     }
 }

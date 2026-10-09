@@ -250,6 +250,23 @@ impl ExtractionStore for SqliteStore {
             .map_err(storage_error)?;
         Ok(())
     }
+    fn record_components(
+        &self,
+        dedup_hash: &str,
+        components: &[application::extract::CandidateComponent],
+    ) -> Result<(), ExtractError> {
+        let connection = self.lock();
+        for component in components {
+            connection
+                .execute(
+                    "INSERT OR IGNORE INTO candidate_components(candidate_id, entity_id, quote)
+                     SELECT id, ?2, ?3 FROM decision_candidates WHERE dedup_hash = ?1",
+                    params![dedup_hash, component.entity_id, component.quote],
+                )
+                .map_err(storage_error)?;
+        }
+        Ok(())
+    }
     fn background(
         &self,
         project_id: &str,
@@ -259,6 +276,16 @@ impl ExtractionStore for SqliteStore {
         let (tied_decisions, tied_claims) = KnowledgeGraph::new(self.clone())
             .context_for_files(project_id, files, None)
             .unwrap_or_default();
+        let entities = KnowledgeGraph::new(self.clone())
+            .entities(project_id)
+            .unwrap_or_default();
+        let components = application::link_suggestions::candidate_components(&entities)
+            .into_iter()
+            .map(|entity| application::extract::MapComponent {
+                entity_id: entity.entity_id.clone(),
+                name: entity.name.clone(),
+            })
+            .collect();
         let connection = self.lock();
         let mut known: Vec<String> = Vec::new();
         let mut decision = connection
@@ -345,6 +372,7 @@ impl ExtractionStore for SqliteStore {
             known,
             confirmed,
             rejected,
+            components,
         })
     }
 

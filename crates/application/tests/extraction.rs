@@ -427,6 +427,7 @@ fn valid_proposal(input: &DecisionEvidence, signals: &[RelevanceSignal]) -> Cand
         kind: CandidateKind::Decision,
         significance: 0.8,
         criteria: Vec::new(),
+        components: Vec::new(),
     }
 }
 

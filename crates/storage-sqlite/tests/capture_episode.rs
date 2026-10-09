@@ -121,6 +121,7 @@ fn upgrade_33_to_34_preserves_legacy_artifacts_without_reconstructing_identity()
         "DROP TABLE capture_episode_sources;
         DROP TABLE decision_search_terms;
         DROP TABLE agent_queries;
+        DROP TABLE candidate_components;
         ALTER TABLE project_documents DROP COLUMN source;
         ALTER TABLE auto_reviews DROP COLUMN conflicts_kind;
         ALTER TABLE auto_reviews DROP COLUMN conflicts_id;

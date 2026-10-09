@@ -104,6 +104,7 @@ fn edited_background_and_document_json_are_protected_in_loopback_payload() {
         known: vec!["API_KEY = synthetic-private-value".into()],
         confirmed: vec!["sk-synthetic123456".into()],
         rejected: vec![r#"["API_KEY = synthetic-private-value"]"#.into()],
+        components: Vec::new(),
     };
     extractor.extract_with(&input, &[], &background).unwrap();
     let payload = server.last_request.lock().unwrap();

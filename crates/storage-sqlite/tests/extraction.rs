@@ -372,3 +372,123 @@ fn migration_0005_applies_on_fresh_and_upgraded_databases() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn the_components_of_a_candidate_are_kept_once_and_go_with_it() {
+    use application::extract::CandidateComponent;
+    use application::inbox::InboxStore;
+
+    let root = temporary_directory("components");
+    let database = root.join("app.db");
+    let store = SqliteStore::open(&database).expect("open store");
+    seed_capture(
+        &store,
+        "capture-1",
+        vec![artifact(
+            "capture-1",
+            "a1",
+            "user_text",
+            "content".into(),
+            1,
+        )],
+    );
+    store
+        .insert_candidates(&[candidate("candidate-1", "capture-1", "dedup-1")])
+        .expect("insert");
+    let components = [
+        CandidateComponent {
+            entity_id: "e1".into(),
+            quote: "grava na outbox".into(),
+        },
+        CandidateComponent {
+            entity_id: "e2".into(),
+            quote: "valida o schema".into(),
+        },
+    ];
+    store
+        .record_components("dedup-1", &components)
+        .expect("record");
+    // Recording again, or for a hash no candidate has, changes nothing.
+    store
+        .record_components("dedup-1", &components)
+        .expect("again");
+    store
+        .record_components("unknown", &components)
+        .expect("none");
+    assert_eq!(
+        store.candidate_components("candidate-1").expect("read"),
+        components.to_vec()
+    );
+    assert!(store
+        .candidate_components("candidate-2")
+        .expect("other")
+        .is_empty());
+
+    let connection = Connection::open(&database).expect("open raw connection");
+    connection
+        .execute_batch("PRAGMA foreign_keys = ON")
+        .expect("foreign keys");
+    assert_eq!(row_count(&connection, "candidate_components"), 2);
+    connection
+        .execute(
+            "DELETE FROM decision_candidates WHERE id = 'candidate-1'",
+            [],
+        )
+        .expect("delete candidate");
+    assert_eq!(row_count(&connection, "candidate_components"), 0);
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn the_background_lists_the_live_components_of_the_map_by_name() {
+    use application::graph::{KnowledgeGraph, NewEntity};
+    use domain::entities::EntityKind;
+
+    let root = temporary_directory("background");
+    let store = SqliteStore::open(root.join("app.db")).expect("open store");
+    seed_capture(
+        &store,
+        "capture-1",
+        vec![artifact(
+            "capture-1",
+            "a1",
+            "user_text",
+            "content".into(),
+            1,
+        )],
+    );
+    let graph = KnowledgeGraph::new(store.clone());
+    let make = |name: &str, kind: EntityKind| {
+        graph
+            .create_entity(NewEntity {
+                project_id: "project-1".into(),
+                kind: Some(kind),
+                name: name.into(),
+                patterns: if kind == EntityKind::Component {
+                    vec![format!("crates/{name}/**")]
+                } else {
+                    Vec::new()
+                },
+                ..NewEntity::default()
+            })
+            .expect("entity")
+            .entity_id
+    };
+    let outbox = make("outbox", EntityKind::Component);
+    make("core", EntityKind::Component);
+    make("rusqlite", EntityKind::Technology);
+    let retired = make("legacy", EntityKind::Component);
+    graph.retire_entity(&retired).expect("retire");
+
+    let background = store.background("project-1", &[]).expect("background");
+    let names: Vec<&str> = background
+        .components
+        .iter()
+        .map(|component| component.name.as_str())
+        .collect();
+    assert_eq!(names, ["core", "outbox"], "live components, by name");
+    assert_eq!(background.components[1].entity_id, outbox);
+
+    let _ = std::fs::remove_dir_all(&root);
+}

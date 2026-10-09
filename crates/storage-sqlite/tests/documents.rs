@@ -112,6 +112,7 @@ impl CandidateExtractor for Scripted {
             kind: CandidateKind::Decision,
             significance: 0.8,
             criteria: vec!["data_or_contract".into()],
+            components: Vec::new(),
         }])
     }
 }

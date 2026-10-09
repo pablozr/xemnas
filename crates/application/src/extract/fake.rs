@@ -55,6 +55,7 @@ impl CandidateExtractor for FakeCandidateExtractor {
             kind: CandidateKind::Decision,
             significance: 0.8,
             criteria: Vec::new(),
+            components: Vec::new(),
         }])
     }
 }
