@@ -26,7 +26,7 @@ pub use derive::{
 pub(crate) use discover::project_keys;
 pub use discover::{
     declared_components, description_for_model, infra_kind, infrastructure_components,
-    project_names, DeclaredComponent, Infra, InfraKind, WorkspaceKind,
+    project_names, short_description_for_model, DeclaredComponent, Infra, InfraKind, WorkspaceKind,
 };
 pub use domain::entities::EntityKind;
 pub(crate) use mention::Folded;

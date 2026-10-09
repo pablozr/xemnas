@@ -124,6 +124,7 @@ fn assessment(capture_id: &str) -> AssessmentRecord {
         inserted: 1,
         error_code: None,
         error_detail: None,
+        components: None,
     }
 }
 
@@ -140,7 +141,7 @@ fn migration_0006_applies_on_fresh_and_upgraded_databases() {
         assert!(index_exists(&connection, "idx_assessments_started_at"));
         connection
             .execute_batch(
-                "DROP TABLE assessments; DELETE FROM schema_migrations WHERE version IN (6, 26, 46);",
+                "DROP TABLE assessments; DELETE FROM schema_migrations WHERE version IN (6, 26, 46, 50);",
             )
             .expect("simulate version 5");
     }

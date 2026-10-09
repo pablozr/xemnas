@@ -54,6 +54,16 @@ pub struct ComponentTally {
     pub unquoted: usize,
 }
 
+impl std::ops::AddAssign for ComponentTally {
+    fn add_assign(&mut self, other: Self) {
+        self.listed += other.listed;
+        self.proposed += other.proposed;
+        self.kept += other.kept;
+        self.unknown += other.unknown;
+        self.unquoted += other.unquoted;
+    }
+}
+
 /// One provenance row written to `assessments` (MVP-SPEC §12 line 645).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssessmentRecord {
@@ -98,6 +108,9 @@ pub struct AssessmentRecord {
     /// Sanitized, bounded text of the error that failed the run; see
     /// [`failure_detail`].
     pub error_detail: Option<String>,
+    /// What became of the components the extractor named, when the run got far
+    /// enough to resolve them.
+    pub components: Option<ComponentTally>,
 }
 
 /// Longest failure detail kept, in characters.
@@ -125,15 +138,6 @@ pub trait AssessmentStore {
     }
     /// Inserts one assessment row.
     fn record_assessment(&self, row: &AssessmentRecord) -> Result<(), ExtractError>;
-    /// Adds the component counts of a run to the row `assessment_id` just
-    /// inserted. The default keeps nothing.
-    fn record_component_tally(
-        &self,
-        _assessment_id: &str,
-        _tally: &ComponentTally,
-    ) -> Result<(), ExtractError> {
-        Ok(())
-    }
 }
 
 /// Provenance context for one extraction run.
@@ -143,9 +147,6 @@ pub struct RunContext {
     pub attempt: Option<i64>,
     /// Classified durable/detail counts for the terminal insert.
     pub classification: Option<(usize, usize)>,
-    /// What became of the components the extractor named, for the terminal
-    /// insert.
-    pub components: Option<ComponentTally>,
     /// AI Execution Profile identifier.
     pub profile_id: String,
     /// Adapter literal: `fake` or `openai-compatible`.
@@ -167,7 +168,6 @@ impl RunContext {
         Self {
             attempt: None,
             classification: None,
-            components: None,
             profile_id: profile.id.clone(),
             adapter: profile_adapter(profile).to_string(),
             model: if external {
@@ -191,7 +191,6 @@ impl RunContext {
         Self {
             attempt: None,
             classification: None,
-            components: None,
             profile_id: "unavailable".to_string(),
             adapter: "unknown".to_string(),
             model: None,
@@ -274,6 +273,7 @@ where
         0,
         Some(ERROR_CODE_CONSENT),
         None,
+        None,
     )
 }
 
@@ -348,6 +348,7 @@ where
         0,
         Some(error.code()),
         None,
+        None,
     )?;
     Ok(JobFailure::Failed)
 }
@@ -370,6 +371,7 @@ pub(super) fn record_assessment<S: AssessmentStore>(
     inserted: i64,
     error_code: Option<&str>,
     error_detail: Option<String>,
+    components: Option<ComponentTally>,
 ) -> Result<(), ExtractError> {
     let row = AssessmentRecord {
         attempt: context.attempt,
@@ -402,10 +404,7 @@ pub(super) fn record_assessment<S: AssessmentStore>(
         inserted,
         error_code: error_code.map(str::to_string),
         error_detail,
+        components,
     };
-    store.record_assessment(&row)?;
-    match context.components {
-        Some(tally) => store.record_component_tally(&row.id, &tally),
-        None => Ok(()),
-    }
+    store.record_assessment(&row)
 }

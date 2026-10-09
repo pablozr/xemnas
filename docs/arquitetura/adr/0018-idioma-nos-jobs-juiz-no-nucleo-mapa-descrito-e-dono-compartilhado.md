@@ -82,7 +82,6 @@ da Revisão): com a tela fechada nada era julgado.
   dela e o job volta à fila para esse momento. Outro erro (armazenamento, por exemplo) termina
   o job como `Failed`, para aparecer no diagnóstico (antes virava `Ok`).
 
-
 **Lacunas e pedidos ao front.** O refresh disparado pela tela do Mapa não aciona o job (a
 Revisão cobre quando é aberta). Pedir ao front: simplificar `review_pass` em `inbox.rs` e dar
 nome i18n ao tipo `auto_review` em `diagnostics.rs` (hoje cai em "auto review").
@@ -104,8 +103,10 @@ guardada de propósito:
 
 **Decisão.** Atacar as três e medir, em vez de provar uma:
 
-- a lista do extrator traz `- nome: descrição` (descrição de `description_for_model`, cortada em
-  100 caracteres, uma linha; 60 cortaria justamente "updates" em `sc-platform`);
+- a lista do extrator traz `- nome: descrição` (`short_description_for_model`, o mesmo helper do
+  pedido de vínculos: descrição de `description_for_model` cortada em 100 caracteres, uma
+  linha; 60 cortaria justamente "updates" em `sc-platform`). A descrição que só repete o nome é
+  omitida e fica `- nome`;
 - o prompt passa a dizer que a parte pode ser nomeada **ou só descrita pelo que faz**, que a
   citação sai do texto que o modelo escreveu para o item e não da fonte, e que palavra comum aos
   dois não conta; mantém "at most 3";
@@ -116,7 +117,9 @@ guardada de propósito:
   `components_proposed`, `components_kept`, `components_unknown` (nome fora do mapa) e
   `components_unquoted` (nome do mapa, citação que o texto não sustenta). Repetição e o que passa
   de 3 entram só em `proposed`. Itens malformados que o adaptador descarta em `read_components`
-  não são contados (limitação). Linhas antigas ficam `NULL`.
+  não são contados (limitação). Linhas antigas ficam `NULL`. As cinco colunas vão no mesmo
+  `INSERT` da análise (`AssessmentRecord::components`), sem `UPDATE` depois; as análises que
+  falham antes de resolver os componentes deixam `NULL`.
 
 **Como ler o diagnóstico** depois da próxima rodada:
 
@@ -186,7 +189,6 @@ exceção, "fixar gpui 0.2 no workspace" perderia um dono legítimo.
 na contagem, aresta compartilhada conta como afirmada, então seria um erro conhecido; o
 comportamento dele está no teste de unidade do texto do juiz. Arestas já gravadas e citadas por
 outra evidência passam pela convergência acima; as demais não são reescritas.
-
 
 ## Riscos
 

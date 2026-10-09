@@ -113,6 +113,7 @@ fn verify_historical_22(concurrent: bool) {
         reason: "candidates".into(),
         durable_count: 1,
         detail_count: 0,
+        components: None,
     };
     store
         .record_assessment(&record)

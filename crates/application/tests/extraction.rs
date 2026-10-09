@@ -702,7 +702,6 @@ fn detailed_context() -> RunContext {
     RunContext {
         attempt: None,
         classification: None,
-        components: None,
         profile_id: "profile-7".to_string(),
         adapter: "openai-compatible".to_string(),
         model: Some("gpt-test".to_string()),

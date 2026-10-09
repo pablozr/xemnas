@@ -114,9 +114,8 @@ pub struct MapComponent {
     pub entity_id: String,
     /// The name the extractor writes back.
     pub name: String,
-    /// The entity's key (`entity_key(name)`), what a written name is compared by.
-    pub key: String,
-    /// The keys of the name and of its aliases: a written name matches any.
+    /// The keys of the name and of its aliases (`entity_key`): a written name
+    /// matches any.
     pub keys: Vec<String>,
     /// What the component does, short, for the extractor to recognize it by
     /// something other than its name. Empty when the map has none.
@@ -438,6 +437,7 @@ where
             0,
             None,
             None,
+            None,
         )?;
         return Ok(ExtractionReport::default());
     }
@@ -457,7 +457,6 @@ where
                 .map(|entity| MapComponent {
                     entity_id: entity.entity_id.clone(),
                     name: entity.name.clone(),
-                    key: entity.key.clone(),
                     keys: entity.keys().collect(),
                     description: short_description(entity),
                 })
@@ -480,6 +479,7 @@ where
                 0,
                 Some(error.code()),
                 Some(failure_detail(&error)),
+                None,
             )?;
             return Err(error);
         }
@@ -530,6 +530,7 @@ where
                 0,
                 Some(error.code()),
                 Some(failure_detail(&error)),
+                None,
             )?;
             return Err(error);
         }
@@ -548,10 +549,7 @@ where
         .iter()
         .map(|(p, signals)| {
             let (resolved, each) = resolve_components(p, &background.components);
-            tally.proposed += each.proposed;
-            tally.kept += each.kept;
-            tally.unknown += each.unknown;
-            tally.unquoted += each.unquoted;
+            tally += each;
             (dedup_hash(capture_id, p, signals), resolved)
         })
         .collect();
@@ -603,9 +601,6 @@ where
         inserted,
         signals,
     };
-    let mut counted_context = context.clone();
-    counted_context.components = Some(tally);
-    let context = &counted_context;
     record_assessment(
         store,
         context,
@@ -617,6 +612,7 @@ where
         report.inserted as i64,
         None,
         None,
+        Some(tally),
     )?;
     Ok(report)
 }
@@ -628,11 +624,7 @@ const MAP_DESCRIPTION_CHARS: usize = 100;
 /// The description of a component as the extractor sees it: the one the model
 /// reads elsewhere, cut short, on one line.
 fn short_description(entity: &crate::graph::EntityRecord) -> String {
-    let described = crate::graph::description_for_model(entity);
-    crate::external::limited_text(&described, MAP_DESCRIPTION_CHARS)
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
+    crate::graph::short_description_for_model(entity, MAP_DESCRIPTION_CHARS)
 }
 
 /// Components a candidate can apply to at most.
@@ -645,13 +637,15 @@ pub const MAX_CANDIDATE_COMPONENTS: usize = 3;
 fn find_component<'m>(map: &'m [MapComponent], name: &str) -> Option<&'m MapComponent> {
     let by_key = |key: &str| {
         map.iter()
-            .find(|component| component.key == key || component.keys.iter().any(|each| each == key))
+            .find(|component| component.keys.iter().any(|each| each == key))
     };
     by_key(&domain::entities::entity_key(name)).or_else(|| {
         let head = name.split("::").next()?.split('/').next()?;
-        (head.len() < name.len())
-            .then(|| by_key(&domain::entities::entity_key(head)))
-            .flatten()
+        if head.len() < name.len() {
+            by_key(&domain::entities::entity_key(head))
+        } else {
+            None
+        }
     })
 }
 
@@ -660,7 +654,8 @@ fn find_component<'m>(map: &'m [MapComponent], name: &str) -> Option<&'m MapComp
 /// of its aliases (see [`find_component`]), the quote is copied from the
 /// question, choice or rationale, and each component counts once. A name the
 /// map does not list, a paraphrase and a quote too short to say anything are
-/// dropped. The tally says how many fell where; `listed` is left for the caller.
+/// dropped. The tally says how many fell where; its `listed` stays 0, because
+/// the size of the map is not known per proposal: the caller sets it once.
 pub(crate) fn resolve_components(
     proposal: &CandidateProposal,
     map: &[MapComponent],
@@ -1027,7 +1022,7 @@ Applies to the Claude Code adapter only.",
             .map(|(n, name)| MapComponent {
                 entity_id: format!("e{n}"),
                 name: (*name).into(),
-                key: domain::entities::entity_key(name),
+                keys: vec![domain::entities::entity_key(name)],
                 ..MapComponent::default()
             })
             .collect()
@@ -1092,20 +1087,25 @@ Applies to the Claude Code adapter only.",
 
     #[test]
     fn an_alias_and_a_path_suffix_name_the_component_and_the_tally_says_where_names_fell() {
-        let mut platform = MapComponent {
+        let platform = MapComponent {
             entity_id: "e-platform".into(),
             name: "sc-platform".into(),
-            key: domain::entities::entity_key("sc-platform"),
+            keys: vec![
+                domain::entities::entity_key("sc-platform"),
+                domain::entities::entity_key("Tray"),
+            ],
             ..MapComponent::default()
         };
-        platform.keys = vec![platform.key.clone(), domain::entities::entity_key("Tray")];
         let map = [platform];
         let quote = "Gravar cada captura na outbox";
-        for name in ["sc-platform", "SC_Platform", "`sc-platform`", "Tray"] {
-            let (ids, _) = resolved_in(&map, vec![named(name, quote)]);
-            assert_eq!(ids, ["e-platform"], "{name}");
-        }
-        for name in ["sc-platform::update", "sc-platform/src/tray.rs"] {
+        for name in [
+            "sc-platform",
+            "SC_Platform",
+            "`sc-platform`",
+            "Tray",
+            "sc-platform::update",
+            "sc-platform/src/tray.rs",
+        ] {
             let (ids, _) = resolved_in(&map, vec![named(name, quote)]);
             assert_eq!(ids, ["e-platform"], "{name}");
         }

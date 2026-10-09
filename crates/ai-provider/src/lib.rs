@@ -730,12 +730,13 @@ pub(crate) fn build_user_content(
     if !background.components.is_empty() {
         text.push_str("## Project map components (write a name exactly as listed)\n");
         for component in &background.components {
-            let name = application::external::limited_text(&component.name, 80);
-            if component.description.is_empty() {
-                text.push_str(&format!("- {name}\n"));
-            } else {
-                text.push_str(&format!("- {name}: {}\n", component.description));
+            text.push_str("- ");
+            text.push_str(&application::external::limited_text(&component.name, 80));
+            if !component.description.is_empty() {
+                text.push_str(": ");
+                text.push_str(&component.description);
             }
+            text.push('\n');
         }
         text.push('\n');
     }
@@ -1131,7 +1132,6 @@ mod tests {
                 .map(|n| application::extract::MapComponent {
                     entity_id: format!("e{n}"),
                     name: format!("component-{n:06}-xxx"),
-                    key: format!("component{n:06}xxx"),
                     keys: vec![format!("component{n:06}xxx")],
                     // The longest description the app lists (100 characters).
                     description: format!("{n:06} ").repeat(16)[..100].to_string(),
@@ -1182,14 +1182,13 @@ mod tests {
             application::extract::MapComponent {
                 entity_id: "e1".into(),
                 name: "sc-platform".into(),
-                key: "scplatform".into(),
                 keys: vec!["scplatform".into()],
                 description: "OS integration: window chrome, tray icon and updates".into(),
             },
             application::extract::MapComponent {
                 entity_id: "e2".into(),
                 name: "CI".into(),
-                key: "ci".into(),
+                keys: vec!["ci".into()],
                 ..Default::default()
             },
         ];

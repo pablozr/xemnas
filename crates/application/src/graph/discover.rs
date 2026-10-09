@@ -240,6 +240,22 @@ pub fn description_for_model(entity: &EntityRecord) -> std::borrow::Cow<'_, str>
     }
 }
 
+/// What the model is told about a component, cut to `max_chars` and set on one
+/// line; empty when the component has none, or when what it has only repeats
+/// its name (the name is listed already).
+pub fn short_description_for_model(entity: &EntityRecord, max_chars: usize) -> String {
+    let described = description_for_model(entity);
+    let line = crate::external::limited_text(&described, max_chars)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if entity_key(&line) == entity_key(&entity.name) {
+        String::new()
+    } else {
+        line
+    }
+}
+
 /// The structure of the project that no workspace member covers: the files
 /// at the root of a workspace (its manifest, toolchain, shared configuration)
 /// and the continuous integration pipelines. The root only exists when the
@@ -766,6 +782,36 @@ fn merged_has(aliases: &[String], alias: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn described(name: &str, description: &str) -> EntityRecord {
+        EntityRecord {
+            entity_id: "e".into(),
+            project_id: "p".into(),
+            kind: EntityKind::Component,
+            name: name.into(),
+            key: entity_key(name),
+            description: description.into(),
+            patterns: vec![format!("crates/{name}/**")],
+            aliases: Vec::new(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            retired_at: None,
+        }
+    }
+
+    #[test]
+    fn a_short_description_is_one_line_cut_and_never_just_the_name() {
+        let core = described("sc-core", "Domain rules\nand the\tstate machine, in detail");
+        assert_eq!(
+            short_description_for_model(&core, 20),
+            "Domain rules and the"
+        );
+        assert_eq!(short_description_for_model(&described("core", ""), 100), "");
+        assert_eq!(
+            short_description_for_model(&described("sc-core", "SC Core"), 100),
+            "",
+            "it only repeats the name"
+        );
+    }
 
     #[test]
     fn reads_cargo_members_across_lines() {

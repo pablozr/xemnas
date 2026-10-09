@@ -237,14 +237,12 @@ pub fn link_request(
         if !patterns.is_empty() {
             user.push_str(&format!(" | paths: {}", patterns.join(", ")));
         }
-        let described = crate::graph::description_for_model(component);
-        if !described.trim().is_empty() {
-            let description = crate::external::limited_text(&described, MAX_DESCRIPTION_CHARS);
-            user.push_str(&format!(
-                " | {}",
-                description.split_whitespace().collect::<Vec<_>>().join(" ")
-            ));
+        let description =
+            crate::graph::short_description_for_model(component, MAX_DESCRIPTION_CHARS);
+        if !description.is_empty() {
+            user.push_str(&format!(" | {description}"));
         }
+
         user.push('\n');
     }
     user
@@ -798,6 +796,11 @@ mod tests {
         }
     }
 
+    /// The request for the sample decision, in English.
+    fn english_request(components: &[&EntityRecord], keys: &BTreeSet<String>) -> String {
+        link_request(OutputLanguage::ENGLISH, &[&subject()], components, keys)
+    }
+
     #[test]
     fn the_request_names_the_output_language_first() {
         let request = link_request(
@@ -820,12 +823,7 @@ mod tests {
         root.patterns = vec!["*".into()];
         let mut ci = component("e-ci", "CI");
         ci.patterns = vec![".github/workflows/**".into()];
-        let request = link_request(
-            OutputLanguage::ENGLISH,
-            &[&subject()],
-            &[&root, &ci],
-            &BTreeSet::new(),
-        );
+        let request = english_request(&[&root, &ci], &BTreeSet::new());
         assert!(
             request.contains("Root files: workspace manifest, toolchain and shared configuration"),
             "{request}"
@@ -915,12 +913,7 @@ mod tests {
         let mut core = component("e-core-secret-id", "core");
         core.aliases = vec!["núcleo".into()];
         core.description = "Regras\ndo núcleo".into();
-        let request = link_request(
-            OutputLanguage::ENGLISH,
-            &[&subject()],
-            &[&core],
-            &BTreeSet::new(),
-        );
+        let request = english_request(&[&core], &BTreeSet::new());
         assert!(request.contains("## Decision 1\nQuestion: Como o veredito"));
         assert!(request.contains("Scope: Política de desfecho V0.1"));
         assert!(request.contains(
@@ -934,12 +927,7 @@ mod tests {
         let app = component("e-app", "acme");
         let other = component("e-other", "store");
         let keys = BTreeSet::from(["acme".to_string()]);
-        let request = link_request(
-            OutputLanguage::ENGLISH,
-            &[&subject()],
-            &[&app, &other],
-            &keys,
-        );
+        let request = english_request(&[&app, &other], &keys);
         assert!(request.contains("- c1 | acme | same name as the project"));
         assert!(request.contains("- c2 | store | paths:"));
         assert!(!request.contains("store | same name"));
@@ -971,12 +959,7 @@ mod tests {
         .to_string();
         let started = std::time::Instant::now();
         for _ in 0..200 {
-            let _ = link_request(
-                OutputLanguage::ENGLISH,
-                &[&subject()],
-                &components,
-                &BTreeSet::new(),
-            );
+            let _ = english_request(&components, &BTreeSet::new());
             assert_eq!(parse_links(&answer, &subject(), &components).len(), 1);
         }
         let per_run = started.elapsed() / 200;
