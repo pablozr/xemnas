@@ -101,9 +101,20 @@ pub fn cited_dependency(reason: &str) -> Option<&str> {
         .next()
 }
 
+/// The manifest a dependency reason names, without the mark of a shared one;
+/// `None` for any other reason.
+pub fn cited_dependency_manifest(reason: &str) -> Option<&str> {
+    let rest = without_doubt(reason)
+        .strip_prefix(DEPENDENCY_REASON)?
+        .strip_prefix('"')?;
+    let inside = rest.split_once("\" (")?.1;
+    let inside = inside.split(DEPENDENCY_SHARED_MARK).next()?;
+    Some(inside.split(')').next()?.trim())
+}
+
 /// Whether a reason cites a dependency that a second component declares too.
 pub fn shared_dependency(reason: &str) -> bool {
-    cited_dependency(reason).is_some() && reason.contains(DEPENDENCY_SHARED_MARK)
+    cited_dependency(reason).is_some() && without_doubt(reason).contains(DEPENDENCY_SHARED_MARK)
 }
 
 /// The reason of a link derived from the symbol or file name `word`, defined
@@ -1333,6 +1344,33 @@ mod tests {
             reason.to_string(),
             "2026-01-01T00:00:00Z",
         )
+    }
+
+    #[test]
+    fn a_dependency_reason_is_read_back_whole() {
+        use crate::graph::{cited_dependency_manifest, dependency_reason, shared_dependency};
+        let single = dependency_reason("serde", "crates/net/Cargo.toml", false);
+        assert_eq!(
+            cited_dependency_manifest(&single),
+            Some("crates/net/Cargo.toml")
+        );
+        assert!(!shared_dependency(&single));
+        let shared = dependency_reason("serde", "apps/cloud/Cargo.toml", true);
+        assert_eq!(
+            cited_dependency_manifest(&shared),
+            Some("apps/cloud/Cargo.toml")
+        );
+        assert!(shared_dependency(&shared));
+        let alarmed = crate::graph::with_doubt(&shared, Some(("no", "and no serde")));
+        assert_eq!(
+            cited_dependency_manifest(&alarmed),
+            Some("apps/cloud/Cargo.toml")
+        );
+        assert!(shared_dependency(&alarmed));
+        assert_eq!(
+            cited_dependency_manifest("símbolo citado: `x` (x.rs)"),
+            None
+        );
     }
 
     #[test]

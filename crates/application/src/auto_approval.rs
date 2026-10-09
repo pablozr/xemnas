@@ -580,7 +580,7 @@ pub fn triage_link(reason: &str) -> Triage {
         Triage::Ask
     } else if reason.starts_with(crate::graph::DEPENDENCY_REASON) {
         // The text cites a dependency; one component declaring it is the place.
-        if reason.contains(crate::graph::DEPENDENCY_SHARED_MARK) {
+        if crate::graph::shared_dependency(reason) {
             Triage::Ask
         } else {
             Triage::Accept("dependência citada que só este componente declara")
@@ -591,13 +591,6 @@ pub fn triage_link(reason: &str) -> Triage {
     } else {
         Triage::Accept("derivado de arquivo ou dependência que a decisão tocou")
     }
-}
-
-/// The manifest a dependency reason names: what sits between the parenthesis
-/// and the first `;` or `)`.
-fn dependency_manifest(reason: &str) -> &str {
-    let inside = reason.split_once('(').map_or("", |(_, rest)| rest);
-    inside.split([';', ')']).next().unwrap_or("").trim()
 }
 
 /// What the AI is told about a suggested tie: the decision or rule (its
@@ -631,7 +624,10 @@ fn link_text(
         format!(
             "Evidence (cited dependency): \"{}\" ({})",
             clip(name, 80),
-            clip(dependency_manifest(without_doubt(reason)), 120)
+            clip(
+                crate::graph::cited_dependency_manifest(reason).unwrap_or_default(),
+                120
+            )
         )
     } else if let Some(rest) = without_doubt(reason).strip_prefix(crate::graph::SYMBOL_REASON) {
         format!("Evidence (cited symbol): {}", clip(rest, 160))
@@ -669,7 +665,7 @@ fn link_text(
         }
         part
     });
-    let shared = if reason.contains(crate::graph::DEPENDENCY_SHARED_MARK) {
+    let shared = if crate::graph::shared_dependency(reason) {
         let others = if co_owners.is_empty() {
             "another component".to_string()
         } else {
@@ -692,10 +688,7 @@ fn link_text(
 /// same shared dependency as `suggestion` (its co-owners), by label; empty for
 /// a tie that is not a shared dependency.
 fn co_owners(all: &[Suggestion], suggestion: &Suggestion) -> Vec<String> {
-    if !suggestion
-        .reason
-        .contains(crate::graph::DEPENDENCY_SHARED_MARK)
-    {
+    if !crate::graph::shared_dependency(&suggestion.reason) {
         return Vec::new();
     }
     let dependency = crate::graph::cited_dependency(&suggestion.reason);
@@ -2010,25 +2003,15 @@ mod tests {
 
     #[test]
     fn a_cited_symbol_is_accepted_by_the_rules() {
-        let reason = format!(
-            "{}`FLUSH_INTERVAL` (crates/store/src/flush.rs)",
-            crate::graph::SYMBOL_REASON
-        );
+        let reason = crate::graph::symbol_reason("FLUSH_INTERVAL", "crates/store/src/flush.rs");
         assert!(matches!(triage_link(&reason), Triage::Accept(_)));
     }
 
     #[test]
     fn a_cited_dependency_is_accepted_only_when_one_component_declares_it() {
-        let single = format!(
-            "{}\"iroh\" (crates/net/Cargo.toml)",
-            crate::graph::DEPENDENCY_REASON
-        );
+        let single = crate::graph::dependency_reason("iroh", "crates/net/Cargo.toml", false);
         assert!(matches!(triage_link(&single), Triage::Accept(_)));
-        let shared = format!(
-            "{}\"serde\" (crates/net/Cargo.toml{})",
-            crate::graph::DEPENDENCY_REASON,
-            crate::graph::DEPENDENCY_SHARED_MARK
-        );
+        let shared = crate::graph::dependency_reason("serde", "crates/net/Cargo.toml", true);
         assert_eq!(triage_link(&shared), Triage::Ask);
     }
 
@@ -2036,18 +2019,12 @@ mod tests {
     fn a_dependency_or_symbol_in_doubt_is_asked_whatever_it_cites() {
         let doubt = Some(("no", "with no rusqlite handles"));
         let dependency = crate::graph::with_doubt(
-            &format!(
-                "{}\"rusqlite\" (crates/core/Cargo.toml)",
-                crate::graph::DEPENDENCY_REASON
-            ),
+            &crate::graph::dependency_reason("rusqlite", "crates/core/Cargo.toml", false),
             doubt,
         );
         assert_eq!(triage_link(&dependency), Triage::Ask);
         let symbol = crate::graph::with_doubt(
-            &format!(
-                "{}`FLUSH_INTERVAL` (crates/store/src/flush.rs)",
-                crate::graph::SYMBOL_REASON
-            ),
+            &crate::graph::symbol_reason("FLUSH_INTERVAL", "crates/store/src/flush.rs"),
             doubt,
         );
         assert_eq!(triage_link(&symbol), Triage::Ask);
@@ -2056,10 +2033,7 @@ mod tests {
     #[test]
     fn the_judge_is_told_the_polarity_alert_apart_from_the_evidence() {
         let reason = crate::graph::with_doubt(
-            &format!(
-                "{}\"gpui\" (apps/cloud/Cargo.toml)",
-                crate::graph::DEPENDENCY_REASON
-            ),
+            &crate::graph::dependency_reason("gpui", "apps/cloud/Cargo.toml", false),
             Some(("no", "and no GPUI types")),
         );
         let summary = |kind, label: &str, detail: &str| crate::graph::NodeSummary {
@@ -2136,22 +2110,9 @@ mod tests {
         let polarity =
             |reason: String| crate::graph::with_doubt(&reason, Some(("no", "and no sql")));
         let dependency = |name: &str, shared: bool| {
-            let mark = if shared {
-                crate::graph::DEPENDENCY_SHARED_MARK
-            } else {
-                ""
-            };
-            format!(
-                "{}\"{name}\" (crates/core/Cargo.toml{mark})",
-                crate::graph::DEPENDENCY_REASON
-            )
+            crate::graph::dependency_reason(name, "crates/core/Cargo.toml", shared)
         };
-        let symbol = || {
-            format!(
-                "{}`FLUSH_INTERVAL` (crates/store/src/flush.rs)",
-                crate::graph::SYMBOL_REASON
-            )
-        };
+        let symbol = || crate::graph::symbol_reason("FLUSH_INTERVAL", "crates/store/src/flush.rs");
         let reasons = [
             crate::graph::mention_reason("the store crate"),
             crate::graph::ai_link_reason("keep the store small", "it limits the store"),
@@ -2229,11 +2190,7 @@ mod tests {
     fn the_judge_is_told_which_component_shares_the_dependency() {
         let shared = |owner: &str| {
             let mut tie = link(
-                format!(
-                    "{}\"gpui\" (apps/{owner}/Cargo.toml{})",
-                    crate::graph::DEPENDENCY_REASON,
-                    crate::graph::DEPENDENCY_SHARED_MARK
-                ),
+                crate::graph::dependency_reason("gpui", &format!("apps/{owner}/Cargo.toml"), true),
                 "Draw the title bar with gpui hit testing",
             );
             tie.edge_id = format!("edge-{owner}");
@@ -2250,10 +2207,7 @@ mod tests {
             "{alone}"
         );
         let single = link(
-            format!(
-                "{}\"serde\" (crates/net/Cargo.toml)",
-                crate::graph::DEPENDENCY_REASON
-            ),
+            crate::graph::dependency_reason("serde", "crates/net/Cargo.toml", false),
             "Keep serde",
         );
         assert!(co_owners(&pair, &single).is_empty());

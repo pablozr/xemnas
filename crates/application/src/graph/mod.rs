@@ -19,10 +19,12 @@ mod symbols;
 pub use ai_link::{ai_link_quote, ai_link_reason, ai_link_why, AI_LINK_REASON, EXTRACTED_LINK_WHY};
 pub(crate) use derive::edge_exists;
 pub use derive::{
-    added_dependencies, cited_dependency, map_preparer, prepared_documents, prepared_projects,
-    shared_dependency, ComponentProposal, MapPreparer, SuggestionReport, TechnologyProposal,
-    DEPENDENCY_REASON, DEPENDENCY_SHARED_MARK, SYMBOL_REASON,
+    added_dependencies, cited_dependency, cited_dependency_manifest, map_preparer,
+    prepared_documents, prepared_projects, shared_dependency, ComponentProposal, MapPreparer,
+    SuggestionReport, TechnologyProposal, DEPENDENCY_REASON, DEPENDENCY_SHARED_MARK, SYMBOL_REASON,
 };
+#[cfg(test)]
+pub(crate) use derive::{dependency_reason, symbol_reason};
 pub(crate) use discover::project_keys;
 pub use discover::{
     declared_components, description_for_model, infra_kind, infrastructure_components,

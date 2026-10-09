@@ -170,6 +170,11 @@ evidência nova de coexistir com a aresta de dependência do mesmo dono; a regra
 `MAX_OWNERS` é 2, então "três donos, dois citados" só existe no teste de unidade de
 `cites_an_owner`.
 
+**Formato da razão.** Quem lê a razão de dependência está só em `graph/derive.rs`, ao lado de
+`dependency_reason`: `cited_dependency`, `cited_dependency_manifest` e `shared_dependency`. O
+juiz (`triage_link`, `link_text`, `co_owners`) usa essas funções em vez de procurar a marca
+`; também declarada por outro componente` no texto. O formato gravado não mudou.
+
 **Juiz.** Para o vínculo de dependência compartilhada, `link_text` acrescenta `Shared dependency,
 also declared by: <donos>` (os outros pendentes da mesma decisão e dependência, lidos da lista
 que `gather` já tem; "another component" se não houver) e o `LINK_REVIEW_PROMPT` diz que os donos
