@@ -1644,7 +1644,21 @@ impl<S: MapStores> MapScreen<S> {
                     cx,
                 );
                 let (sentence, effect) = link_wording(suggestion);
-                let lead = rich_sentence(theme, &sentence, TypeScale::BODY);
+                // A word that may negate the link sits near its evidence.
+                let alert = application::graph::doubt_parts(&suggestion.reason)
+                    .map(|(trigger, quote)| t::link_polarity_alert(trigger, &clipped(quote, 120)));
+                let lead = div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S2))
+                    .child(rich_sentence(theme, &sentence, TypeScale::BODY))
+                    .when_some(alert, |lead, alert| {
+                        lead.child(
+                            text_style(div(), TypeScale::BODY_SMALL)
+                                .text_color(theme.colors.text_muted())
+                                .child(alert),
+                        )
+                    });
                 list = list.child(suggestion_card(
                     theme,
                     lead,
@@ -1708,9 +1722,14 @@ impl<S: MapStores> MapScreen<S> {
                         proposal.decisions,
                         proposal.description.clone(),
                         proposal.declared,
-                        proposal
-                            .infra
-                            .map(|kind| infra_description(kind, &proposal.pattern)),
+                        // A root or CI component has no stored text: the
+                        // screen writes it.
+                        match proposal.infra {
+                            Some(kind) if proposal.description.is_empty() => {
+                                infra_description(kind, &proposal.pattern)
+                            }
+                            _ => proposal.description.clone(),
+                        },
                     )
                 })
                 .chain(technologies.iter().map(|proposal| {
@@ -1721,19 +1740,12 @@ impl<S: MapStores> MapScreen<S> {
                         proposal.decisions,
                         String::new(),
                         None,
-                        None,
+                        String::new(),
                     )
                 }));
-            for (index, (kind, name, pattern, decisions, description, declared, infra)) in
+            for (index, (kind, name, pattern, decisions, create_description, declared, shown)) in
                 proposals.enumerate()
             {
-                let create_description = description.clone();
-                // A root or CI component has no stored text: the screen writes it.
-                let description = if description.is_empty() {
-                    infra.unwrap_or_default()
-                } else {
-                    description
-                };
                 let project = self.project.clone().unwrap_or_default();
                 let (create_name, create_pattern) = (name.clone(), pattern.clone());
                 let create = self.button(
@@ -1775,11 +1787,11 @@ impl<S: MapStores> MapScreen<S> {
                             ),
                     )
                     .child(rich_sentence(theme, &sentence, TypeScale::BODY))
-                    .when(!description.is_empty(), |lead| {
+                    .when(!shown.is_empty(), |lead| {
                         lead.child(
                             text_style(div(), TypeScale::BODY_SMALL)
                                 .text_color(colors.text_muted())
-                                .child(description.clone()),
+                                .child(shown.clone()),
                         )
                     });
                 list = list.child(suggestion_card(
@@ -3904,7 +3916,9 @@ fn link_wording(suggestion: &Suggestion) -> (Vec<(String, bool)>, String) {
     let shown = clipped(target, 90);
     let rule = suggestion.source.node.kind == NodeKind::Claim;
     let uses = suggestion.kind == EdgeKind::Uses;
-    let reason = suggestion.reason.as_str();
+    // The alarm, if any, is shown apart (see the card): the sentence only
+    // says what was derived.
+    let reason = application::graph::without_doubt(&suggestion.reason);
     if let Some(quote) = application::graph::mention_quote(reason) {
         let sentence = if rule {
             t::link_mention_rule(&source, &shown, quote)
@@ -4001,7 +4015,7 @@ fn shown_description(entity: &EntityRecord) -> String {
         return entity.description.clone();
     }
     application::graph::infra_kind(entity)
-        .map(|kind| infra_description(kind, entity.patterns.first().map_or("", String::as_str)))
+        .map(|infra| infra_description(infra.kind, infra.pattern))
         .unwrap_or_default()
 }
 

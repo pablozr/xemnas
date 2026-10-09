@@ -720,6 +720,20 @@ formats! {
         zh: "持续集成与发布({pattern})",
         ko: "지속적 통합 및 배포 ({pattern})",
         ru: "Непрерывная интеграция и выпуск ({pattern})" }
+    /// Under a suggested tie: a word that may negate it sits near the excerpt
+    /// (`trigger`, as written in `quote`), so check the polarity before
+    /// confirming.
+    link_polarity_alert(trigger: &str, quote: &str) {
+        en: "Check the polarity: “{trigger}” in “{quote}” may negate this link.",
+        pt: "Confira a polaridade: “{trigger}” em “{quote}” pode negar este vínculo.",
+        es: "Revisa la polaridad: “{trigger}” en “{quote}” puede negar este vínculo.",
+        fr: "Vérifiez la polarité : « {trigger} » dans « {quote} » peut nier ce lien.",
+        de: "Polarität prüfen: „{trigger}“ in „{quote}“ kann diese Verknüpfung verneinen.",
+        it: "Verifica la polarità: “{trigger}” in “{quote}” può negare questo collegamento.",
+        ja: "極性を確認: 「{quote}」の中の「{trigger}」がこの関連を否定している可能性があります。",
+        zh: "请确认极性:“{quote}”中的“{trigger}”可能否定了这条关联。",
+        ko: "극성 확인: “{quote}” 안의 “{trigger}”이(가) 이 연결을 부정할 수 있습니다.",
+        ru: "Проверьте полярность: «{trigger}» в «{quote}» может отрицать эту связь." }
     /// Button: show the next page of a long list.
     show_more(step: usize) { en: "Show {step} more", pt: "Mostrar mais {step}",
         es: "Mostrar {step} más", fr: "Afficher {step} de plus",
