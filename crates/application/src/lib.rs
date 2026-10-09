@@ -34,6 +34,7 @@ pub mod limiter;
 pub mod link_suggestions;
 pub mod observations;
 pub mod outbox;
+pub mod output_language;
 pub mod overview;
 pub mod page;
 pub mod paths;

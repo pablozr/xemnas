@@ -12,6 +12,7 @@ use application::extract::{
 };
 use application::graph::{KnowledgeGraph, LinkRequest, NewEntity};
 use application::injection::short_ref;
+use application::output_language::OutputLanguage;
 use application::overview::{JsonValue, OverviewError, ProjectOverviews, StructuredModel};
 use application::profile::{
     build_preview, grant_consent, offline_default_profile, AiProfile, AiSettings, ProfileError,
@@ -86,6 +87,10 @@ impl StructuredModel for Scripted {
         assert_eq!(schema_name, "project_overview");
         assert!(system.contains("never see the code"));
         assert!(
+            user.starts_with("Output language: Brazilian Portuguese\n\n"),
+            "the language comes first: {user}"
+        );
+        assert!(
             user.contains("Qual banco usar?"),
             "decisions go to the model"
         );
@@ -156,7 +161,9 @@ fn an_overview_cites_the_records_and_knows_when_it_is_stale() {
     );
 
     assert_eq!(overviews.current("p1").expect("none yet"), None);
-    let view = overviews.generate("p1").expect("generate");
+    let view = overviews
+        .generate("p1", OutputLanguage::from_tag("pt-BR"))
+        .expect("generate");
     assert_eq!(view.overview.summary.len(), 1, "uncited text is dropped");
     assert_eq!(
         view.overview.flows[0].steps[0].entity_id.as_deref(),
@@ -211,7 +218,7 @@ fn an_overview_cites_the_records_and_knows_when_it_is_stale() {
         Factory(String::new()),
     );
     assert_eq!(
-        offline.generate("p1").map(|_| ()),
+        offline.generate("p1", OutputLanguage::ENGLISH).map(|_| ()),
         Err(OverviewError::ProviderOff)
     );
 }
@@ -225,7 +232,9 @@ fn nothing_recorded_means_nothing_to_summarize() {
         Factory(String::new()),
     );
     assert_eq!(
-        overviews.generate("p1").map(|_| ()),
+        overviews
+            .generate("p1", OutputLanguage::ENGLISH)
+            .map(|_| ()),
         Err(OverviewError::NothingRecorded)
     );
 }

@@ -23,6 +23,7 @@ use crate::extract::ExtractError;
 use crate::graph::{GraphStore, KnowledgeGraph};
 use crate::inbox::InboxStore;
 use crate::injection::short_ref;
+use crate::output_language::OutputLanguage;
 use crate::page::{PageKnowledge, MAX_PAGE_DECISIONS};
 use crate::profile::{choose_extractor, AiSettings, ExtractorChoice, ProfileStore, SecretStore};
 use crate::projects::ProjectRepository;
@@ -248,7 +249,11 @@ pub trait OverviewApi: Send + Sync {
     /// See [`ProjectOverviews::current`].
     fn current(&self, project_id: &str) -> Result<Option<OverviewView>, OverviewError>;
     /// See [`ProjectOverviews::generate`].
-    fn generate(&self, project_id: &str) -> Result<OverviewView, OverviewError>;
+    fn generate(
+        &self,
+        project_id: &str,
+        language: OutputLanguage,
+    ) -> Result<OverviewView, OverviewError>;
     /// See [`ProjectOverviews::page`].
     fn page(&self, project_id: &str, project_name: &str) -> Result<String, OverviewError>;
 }
@@ -258,7 +263,8 @@ pub const OVERVIEW_PROMPT: &str = concat!(
     "Preserve explicit scope and qualifiers in every summary. Empty scope means not informed, not the entire project. Empty qualifiers mean not informed. Artifact-less qualifiers are reviewer declarations, not verified support. Never invent authority or turn unexecuted validation into a successful check. You write the overview of one software project for its own team, using only the recorded knowledge given: decisions in force (D:...), rules (R:...) and \
 the project map (components and technologies) and the project's own documentation (F:..., title, sections and opening paragraph; documents describe intent and may be outdated: when they disagree with a decision, the decision wins). You never see the code; do not invent \
 components, libraries or behaviour that the records do not state.\n\
-Write in the language of the records. summary: 2 to 4 short paragraphs: what the project is \
+Write every text in the output language named on the first line of the message; component \
+names, file names, code and the ids stay as written. summary: 2 to 4 short paragraphs: what the project is \
 for, how it is organised, the central choices and the rules that weigh most. flows: the 3 to \
 6 main flows of the system (how a request, a piece of data or a user action travels \
 through it), each with 3 to 8 ordered steps; a step names the component where it happens \
@@ -536,13 +542,18 @@ where
         }))
     }
 
-    /// Asks the provider for a new overview and stores it.
+    /// Asks the provider for a new overview, written in `language`, and
+    /// stores it.
     ///
     /// # Errors
     ///
     /// `project_not_found`, `nothing_recorded`, `provider_off`, `provider`,
     /// `empty_answer` or `storage`.
-    pub fn generate(&self, project_id: &str) -> Result<OverviewView, OverviewError> {
+    pub fn generate(
+        &self,
+        project_id: &str,
+        language: OutputLanguage,
+    ) -> Result<OverviewView, OverviewError> {
         let project = ProjectRepository::get(&self.store, project_id)
             .map_err(storage)?
             .ok_or(OverviewError::ProjectNotFound)?;
@@ -572,7 +583,7 @@ where
         let answer = model
             .complete(
                 OVERVIEW_PROMPT,
-                &input.text,
+                &format!("Output language: {}\n\n{}", language.name(), input.text),
                 "project_overview",
                 &overview_schema(),
             )
@@ -992,8 +1003,12 @@ where
         ProjectOverviews::current(self, project_id)
     }
 
-    fn generate(&self, project_id: &str) -> Result<OverviewView, OverviewError> {
-        ProjectOverviews::generate(self, project_id)
+    fn generate(
+        &self,
+        project_id: &str,
+        language: OutputLanguage,
+    ) -> Result<OverviewView, OverviewError> {
+        ProjectOverviews::generate(self, project_id, language)
     }
 
     fn page(&self, project_id: &str, project_name: &str) -> Result<String, OverviewError> {

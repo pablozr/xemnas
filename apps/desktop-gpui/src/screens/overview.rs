@@ -145,8 +145,11 @@ impl OverviewScreen {
             return;
         }
         self.generating = true;
+        // The overview is written in the language of the interface.
+        let language =
+            application::output_language::OutputLanguage::from_tag(crate::i18n::current().id());
         self.run(cx, move |api| {
-            Outcome::Generated(api.generate(&project).map_err(product))
+            Outcome::Generated(api.generate(&project, language).map_err(product))
         });
     }
 
