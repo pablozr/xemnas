@@ -27,7 +27,7 @@ pub struct ClaimScopes {
 }
 
 /// Reason of an edge a claim inherited from its source decision.
-pub(crate) const INHERITED_REASON: &str = "herdado da decisão de origem";
+pub const INHERITED_REASON: &str = "herdado da decisão de origem";
 
 /// What it takes to tell which of the components a decision is tied to the
 /// text of a rule names: the entities, the project's names, the dependencies

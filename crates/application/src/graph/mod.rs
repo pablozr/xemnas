@@ -46,7 +46,7 @@ pub(crate) use repo_files::{counted_files, repo_files};
 pub use repo_files::{index_repository, scan_symbols};
 pub use revalidate::StaleComponent;
 pub use scope::ClaimScopes;
-pub(crate) use scope::INHERITED_REASON;
+pub use scope::INHERITED_REASON;
 
 use domain::entities::{
     check_part_of, entity_description, entity_key, entity_name, path_pattern, EdgeActor, EdgeKind,

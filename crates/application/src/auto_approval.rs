@@ -426,15 +426,107 @@ pub trait ApprovalsApi: Send + Sync {
     ) -> Result<(), ReviewError>;
 }
 
+const REPEATS_LIVE_RULE: &str = "repete a regra em vigor: ";
+const REPEATS_PENDING_RULE: &str = "repete outra regra pendente: ";
+
+/// A reason the app itself wrote on the ledger (not the AI's words): stable
+/// variants for the interface to translate. The stored text is
+/// [`AppReason::text`], read back by [`AppReason::parse`], so rows written
+/// before keep mapping.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppReason {
+    /// A candidate repeats a decision already recorded.
+    RepeatsDecision,
+    /// High calibrated confidence, with a source and nothing alike recorded.
+    CalibratedConfidence,
+    /// A relation that depends on another decision, with the quote checked.
+    DependsOnDecision,
+    /// A dependency the text cites and only this component declares.
+    OwnDependency,
+    /// A symbol or file the text cites and only this component defines.
+    OwnSymbol,
+    /// A tie derived from a file or dependency the decision touched.
+    TouchedFileOrDependency,
+    /// Repeats the rule in force (its statement, cut short).
+    RepeatsLiveRule(String),
+    /// Repeats another pending rule (its statement, cut short).
+    RepeatsPendingRule(String),
+    /// The AI accepted, but the change could not be applied.
+    AcceptedNotApplied,
+    /// The AI discarded, but the change could not be applied.
+    DiscardedNotApplied,
+    /// The AI did not answer about the item.
+    JudgeSilent,
+}
+
+impl AppReason {
+    /// The text stored on the ledger.
+    pub fn text(&self) -> std::borrow::Cow<'static, str> {
+        use std::borrow::Cow::{Borrowed, Owned};
+        match self {
+            Self::RepeatsDecision => Borrowed("repete uma decisão já registrada"),
+            Self::CalibratedConfidence => {
+                Borrowed("alta confiança calibrada, com fonte e sem parecido registrado")
+            }
+            Self::DependsOnDecision => Borrowed("depende de outra decisão, com citação conferida"),
+            Self::OwnDependency => Borrowed("dependência citada que só este componente declara"),
+            Self::OwnSymbol => Borrowed("símbolo ou arquivo citado que só este componente define"),
+            Self::TouchedFileOrDependency => {
+                Borrowed("derivado de arquivo ou dependência que a decisão tocou")
+            }
+            Self::RepeatsLiveRule(rule) => Owned(format!("{REPEATS_LIVE_RULE}{rule}")),
+            Self::RepeatsPendingRule(rule) => Owned(format!("{REPEATS_PENDING_RULE}{rule}")),
+            Self::AcceptedNotApplied => {
+                Borrowed("a IA aceitou, mas não foi possível aplicar; revise")
+            }
+            Self::DiscardedNotApplied => {
+                Borrowed("a IA descartou, mas não foi possível aplicar; revise")
+            }
+            Self::JudgeSilent => Borrowed("a IA não respondeu sobre este item"),
+        }
+    }
+
+    /// The reason a stored text stands for; `None` for the AI's own words.
+    pub fn parse(stored: &str) -> Option<Self> {
+        if let Some(rule) = stored.strip_prefix(REPEATS_LIVE_RULE) {
+            return Some(Self::RepeatsLiveRule(rule.to_owned()));
+        }
+        if let Some(rule) = stored.strip_prefix(REPEATS_PENDING_RULE) {
+            return Some(Self::RepeatsPendingRule(rule.to_owned()));
+        }
+        [
+            Self::RepeatsDecision,
+            Self::CalibratedConfidence,
+            Self::DependsOnDecision,
+            Self::OwnDependency,
+            Self::OwnSymbol,
+            Self::TouchedFileOrDependency,
+            Self::AcceptedNotApplied,
+            Self::DiscardedNotApplied,
+            Self::JudgeSilent,
+        ]
+        .into_iter()
+        .find(|reason| reason.text() == stored)
+    }
+}
+
+impl Entry {
+    /// The reason when the app wrote it, for the screen to translate; `None`
+    /// means the AI's words, shown as they are.
+    pub fn app_reason(&self) -> Option<AppReason> {
+        AppReason::parse(&self.reason)
+    }
+}
+
 /// What the local rules say about an item.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Triage {
     /// Accept, for this reason.
-    Accept(&'static str),
+    Accept(AppReason),
     /// Discard, for this reason.
-    Discard(&'static str),
+    Discard(AppReason),
     /// Discard because it repeats a rule; the reason names it.
-    Repeat(String),
+    Repeat(AppReason),
     /// The rules cannot tell: ask the AI.
     Ask,
 }
@@ -507,7 +599,7 @@ pub fn triage_candidate(
         .map(|question| similarity(question, &candidate.question))
         .fold(0.0, f64::max);
     if likeness >= DUPLICATE_AT {
-        return Triage::Discard("repete uma decisão já registrada");
+        return Triage::Discard(AppReason::RepeatsDecision);
     }
     if candidate.kind != CandidateKind::Decision.as_str() {
         return Triage::Ask;
@@ -527,7 +619,7 @@ pub fn triage_candidate(
         && files <= MAX_FILES
         && likeness < SIMILAR_AT
     {
-        Triage::Accept("alta confiança calibrada, com fonte e sem parecido registrado")
+        Triage::Accept(AppReason::CalibratedConfidence)
     } else {
         Triage::Ask
     }
@@ -559,9 +651,7 @@ fn confidence_predicts(decided: &[StoredCandidate]) -> bool {
 /// What the rules say about a relation between decisions.
 pub fn triage_relation(kind: RelationKind) -> Triage {
     match kind {
-        RelationKind::DependsOn => {
-            Triage::Accept("depende de outra decisão, com citação conferida")
-        }
+        RelationKind::DependsOn => Triage::Accept(AppReason::DependsOnDecision),
         RelationKind::Supersedes | RelationKind::ConflictsWith => Triage::Ask,
     }
 }
@@ -583,13 +673,13 @@ pub fn triage_link(reason: &str) -> Triage {
         if crate::graph::shared_dependency(reason) {
             Triage::Ask
         } else {
-            Triage::Accept("dependência citada que só este componente declara")
+            Triage::Accept(AppReason::OwnDependency)
         }
     } else if reason.starts_with(crate::graph::SYMBOL_REASON) {
         // The text cites a name or a file the code of one component holds.
-        Triage::Accept("símbolo ou arquivo citado que só este componente define")
+        Triage::Accept(AppReason::OwnSymbol)
     } else {
-        Triage::Accept("derivado de arquivo ou dependência que a decisão tocou")
+        Triage::Accept(AppReason::TouchedFileOrDependency)
     }
 }
 
@@ -866,7 +956,7 @@ pub fn parse_verdicts(text: &str, ids: &[String]) -> Vec<Judged> {
                 None => Judged {
                     id: id.clone(),
                     verdict: Verdict::NeedsHuman,
-                    reason: "a IA não respondeu sobre este item".to_owned(),
+                    reason: AppReason::JudgeSilent.text().into_owned(),
                     conflicts_with: None,
                     answered: false,
                 },
@@ -1203,8 +1293,7 @@ where
             scored.sort_by(|a, b| b.0.total_cmp(&a.0));
             let best = scored.first().copied().unwrap_or((0.0, ""));
             if best.0 >= DUPLICATE_AT {
-                item.triage =
-                    Triage::Repeat(format!("repete a regra em vigor: {}", clip(best.1, 120)));
+                item.triage = Triage::Repeat(AppReason::RepeatsLiveRule(clip(best.1, 120)));
                 continue;
             }
             if let Some((_, earlier)) = kept
@@ -1212,10 +1301,7 @@ where
                 .map(|(title, other)| (concept_overlap(&own, other), title))
                 .find(|(likeness, _)| *likeness >= DUPLICATE_AT)
             {
-                item.triage = Triage::Repeat(format!(
-                    "repete outra regra pendente: {}",
-                    clip(earlier, 120)
-                ));
+                item.triage = Triage::Repeat(AppReason::RepeatsPendingRule(clip(earlier, 120)));
                 continue;
             }
             if best.0 >= SIMILAR_AT {
@@ -1320,16 +1406,16 @@ where
                         // Still pending but not applicable: record it for the
                         // person, or every pass would ask the AI again.
                         let reason = if verdict == Verdict::Accepted {
-                            "a IA aceitou, mas não foi possível aplicar; revise"
+                            AppReason::AcceptedNotApplied.text()
                         } else {
-                            "a IA descartou, mas não foi possível aplicar; revise"
+                            AppReason::DiscardedNotApplied.text()
                         };
                         return self.settle(
                             project_id,
                             item,
                             Verdict::NeedsHuman,
                             by,
-                            reason,
+                            &reason,
                             conflicts_with,
                             now,
                             report,
@@ -1455,9 +1541,10 @@ where
         // The plain cases, settled by the rules for free.
         for item in &items {
             let (verdict, reason) = match &item.triage {
-                Triage::Accept(reason) => (Verdict::Accepted, *reason),
-                Triage::Discard(reason) => (Verdict::Discarded, *reason),
-                Triage::Repeat(reason) => (Verdict::Discarded, reason.as_str()),
+                Triage::Accept(reason) => (Verdict::Accepted, reason.text()),
+                Triage::Discard(reason) | Triage::Repeat(reason) => {
+                    (Verdict::Discarded, reason.text())
+                }
                 Triage::Ask => continue,
             };
             self.settle(
@@ -1465,7 +1552,7 @@ where
                 item,
                 verdict,
                 By::Rules,
-                reason,
+                &reason,
                 None,
                 now,
                 &mut report,
@@ -2344,5 +2431,62 @@ mod tests {
             add_minutes("2026-03-01T23:50:30Z", 20).as_deref(),
             Some("2026-03-02T00:10:30Z")
         );
+    }
+
+    #[test]
+    fn app_reasons_keep_their_stored_text_and_read_back() {
+        let plain = [
+            (
+                AppReason::RepeatsDecision,
+                "repete uma decisão já registrada",
+            ),
+            (
+                AppReason::CalibratedConfidence,
+                "alta confiança calibrada, com fonte e sem parecido registrado",
+            ),
+            (
+                AppReason::DependsOnDecision,
+                "depende de outra decisão, com citação conferida",
+            ),
+            (
+                AppReason::OwnDependency,
+                "dependência citada que só este componente declara",
+            ),
+            (
+                AppReason::OwnSymbol,
+                "símbolo ou arquivo citado que só este componente define",
+            ),
+            (
+                AppReason::TouchedFileOrDependency,
+                "derivado de arquivo ou dependência que a decisão tocou",
+            ),
+            (
+                AppReason::AcceptedNotApplied,
+                "a IA aceitou, mas não foi possível aplicar; revise",
+            ),
+            (
+                AppReason::DiscardedNotApplied,
+                "a IA descartou, mas não foi possível aplicar; revise",
+            ),
+            (AppReason::JudgeSilent, "a IA não respondeu sobre este item"),
+        ];
+        for (reason, stored) in plain {
+            assert_eq!(reason.text(), stored);
+            assert_eq!(AppReason::parse(stored), Some(reason));
+        }
+        for reason in [
+            AppReason::RepeatsLiveRule("Cache entries must expire".into()),
+            AppReason::RepeatsPendingRule("Cache entries must expire".into()),
+        ] {
+            assert_eq!(AppReason::parse(&reason.text()), Some(reason));
+        }
+        assert_eq!(
+            AppReason::parse("repete a regra em vigor: Cache entries must expire"),
+            Some(AppReason::RepeatsLiveRule(
+                "Cache entries must expire".into()
+            ))
+        );
+        assert_eq!(AppReason::parse("o componente é onde a regra vale"), None);
+        assert_eq!(AppReason::parse(""), None);
     }
 }
