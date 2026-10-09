@@ -1207,4 +1207,11 @@ mod tests {
         assert!(SYSTEM_PROMPT.contains("describes what it does"));
         assert!(SYSTEM_PROMPT.contains("not of the source"));
     }
+
+    #[test]
+    fn system_prompt_has_no_glued_words_or_doubled_spaces() {
+        for glued in ["forthe", "formatching", "  "] {
+            assert!(!SYSTEM_PROMPT.contains(glued), "{glued:?}");
+        }
+    }
 }

@@ -749,7 +749,7 @@ An item may list rules in force that resemble it after the items: discard it whe
 only restates one of them, and keep it (accept or human) when it adds a real constraint, \
 a different condition or another scope.\n\
 Give in reason one short sentence in the output language named on the first line of the \
-message. The ids (I1, D2, R3) are only for\
+message. The ids (I1, D2, R3) are only for \
 the conflicts_with field: never write an id in the reason, name the other item by its title \
 instead, because the reader never sees the ids. When an item contradicts another item of the \
 list or one of the decisions in force listed after the items, put that id in conflicts_with \
@@ -783,7 +783,7 @@ evidence. It may be a false alarm (Portuguese \"no\" means \"in the\"); read the
 discard the link when the component or dependency is named to be excluded, avoided or \
 replaced.\n\
 Give in reason one short sentence in the output language named on the first line of the \
-message. The ids (I1, I2) are only for\
+message. The ids (I1, I2) are only for \
 matching the answer to the items: never write an id in the reason. Reply with one JSON object \
 only, matching exactly: {\"verdicts\":[{\"id\":string,\"verdict\":\"accept|discard|human\",\
 \"reason\":string,\"conflicts_with\":null}]}, one entry per item, using its id exactly as given.",
@@ -2269,6 +2269,25 @@ mod tests {
         for prompt in [REVIEW_PROMPT, LINK_REVIEW_PROMPT] {
             assert!(prompt.contains("output language named on the first line"));
             assert!(!prompt.contains("language of the item"));
+        }
+    }
+
+    /// A `\` that ends a line inside a prompt literal swallows the newline and the
+    /// next line's indentation: a missing space before it glues two words together.
+    #[test]
+    fn prompts_have_no_glued_words_or_doubled_spaces() {
+        let prompts = [
+            ("review", REVIEW_PROMPT),
+            ("link review", LINK_REVIEW_PROMPT),
+            ("link", crate::link_suggestions::LINK_PROMPT),
+            ("relation", crate::relation_suggestions::RELATION_PROMPT),
+            ("overview", crate::overview::OVERVIEW_PROMPT),
+            ("claim", crate::claim_suggestions::CLAIM_PROMPT),
+        ];
+        for (name, prompt) in prompts {
+            for glued in ["forthe", "formatching", "  "] {
+                assert!(!prompt.contains(glued), "{name} prompt contains {glued:?}");
+            }
         }
     }
 
