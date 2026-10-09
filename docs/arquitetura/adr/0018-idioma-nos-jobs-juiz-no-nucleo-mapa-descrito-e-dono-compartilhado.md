@@ -207,6 +207,13 @@ outra evidência passam pela convergência acima; as demais não são reescritas
 - O refresh disparado pela tela do Mapa não aciona o juiz em segundo plano (a Revisão cobre).
 - O descarte de "title bar → cloudrs" como "produto inteiro" vem de o prompt tratar o componente
   homônimo como o produto e pode se repetir; a exceção da dependência depende do juiz.
+- No `cloudrs`, o juiz de vínculos descartou 3 vínculos corretos para o crate `cloudrs`
+  (`apps/cloudrs`, o binário e a casca de UI): "Routes and the back/forward stack live only in the
+  UI", "let the app read and save tokens" e "Read settings synchronously before opening the
+  window"; e aceitou 4 parecidos. Ele não distingue o componente-aplicação do "produto inteiro",
+  e o aviso "same name as the project" o empurra para o descarte. Próximo passo, não feito agora:
+  dizer ao juiz quando o homônimo é a casca da aplicação (binário/UI) e cobrir isso com um caso
+  de corpus.
 - **Pendente:** "session networking → architecture" é erro do proponente de vínculos da IA, não
   estrutural; exigiria um caso em `link_corpus.rs` com resposta de modelo em fixture gerada por
   modelo real (não trivial).
