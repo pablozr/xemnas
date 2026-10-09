@@ -320,6 +320,19 @@ where
             return Err(AdoptionError::Inbox(InboxError::InvalidState));
         }
         let project = reviewed.summary.project_id.clone();
+        // The text the adopted record will have: the edits, else the review.
+        let texts = match &edits {
+            Some(edits) => [
+                edits.question.clone(),
+                edits.choice.clone(),
+                edits.rationale.clone(),
+            ],
+            None => [
+                reviewed.summary.question.clone(),
+                reviewed.summary.choice.clone(),
+                reviewed.rationale.clone(),
+            ],
+        };
         let confirmed = Inbox::new(self.store.clone())
             .confirm_reviewed(reviewed, edits)
             .map_err(AdoptionError::Inbox)?;
@@ -385,6 +398,12 @@ where
                 }
             }
         }
+        suggested += self.suggest_extracted(
+            &project,
+            &reviewed.summary.id,
+            (source_kind, &confirmed.decision_id),
+            &texts,
+        )?;
         // A new decision may depend on, conflict with or replace earlier ones:
         // a background job looks for that without holding the adoption.
         if confirmed.rule {
@@ -443,6 +462,86 @@ where
             linked,
             suggested,
         })
+    }
+}
+
+impl<S> Adoption<S>
+where
+    S: InboxStore + GraphStore + Clone,
+{
+    /// Turns the components the extractor named for the candidate into
+    /// suggestions of the AI's kind, so the separate link call has nothing
+    /// left to ask. Only components that are still live, that no row already
+    /// ties to the record (a structural link, a decline of the person) and
+    /// whose quote the final text still has. Returns how many were written.
+    fn suggest_extracted(
+        &self,
+        project: &str,
+        candidate_id: &str,
+        source: (NodeKind, &str),
+        texts: &[String; 3],
+    ) -> Result<usize, AdoptionError> {
+        let named = InboxStore::candidate_components(&self.store, candidate_id)
+            .map_err(AdoptionError::Inbox)?;
+        if named.is_empty() {
+            return Ok(0);
+        }
+        let kind = if source.0 == NodeKind::Claim {
+            EdgeKind::AppliesTo
+        } else {
+            EdgeKind::Affects
+        };
+        let texts: Vec<&str> = texts.iter().map(String::as_str).collect();
+        let entities = self
+            .store
+            .project_entities(project)
+            .map_err(AdoptionError::Graph)?;
+        let mut edges = self
+            .store
+            .project_edges(project)
+            .map_err(AdoptionError::Graph)?;
+        let now = crate::clock::now_rfc3339();
+        let mut written = 0;
+        for component in named {
+            let live = entities.iter().any(|entity| {
+                entity.entity_id == component.entity_id
+                    && entity.kind == EntityKind::Component
+                    && entity.retired_at.is_none()
+            });
+            let tied = edges.iter().any(|edge| {
+                edge.kind == kind
+                    && edge.source_kind == source.0
+                    && edge.source_id == source.1
+                    && edge.entity_id == component.entity_id
+            });
+            if !live || tied || !crate::link_suggestions::quote_in(&texts, &component.quote) {
+                continue;
+            }
+            let record = crate::graph::EdgeRecord {
+                edge_id: uuid::Uuid::now_v7().to_string(),
+                project_id: project.to_string(),
+                kind,
+                source_kind: source.0,
+                source_id: source.1.to_string(),
+                entity_id: component.entity_id,
+                origin: EdgeOrigin::Derived,
+                reason: crate::graph::ai_link_reason(
+                    &component.quote,
+                    crate::graph::EXTRACTED_LINK_WHY,
+                ),
+                created_at: now.clone(),
+                confirmed_at: None,
+                invalidated_at: None,
+                confirmed_by: None,
+                invalidated_by: None,
+            };
+            self.store
+                .insert_edge(&record)
+                .map_err(AdoptionError::Graph)?;
+            edges.push(record);
+            written += 1;
+        }
+        Ok(written)
     }
 }
 

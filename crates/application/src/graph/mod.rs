@@ -16,7 +16,7 @@ mod revalidate;
 mod scope;
 mod symbols;
 
-pub use ai_link::{ai_link_quote, ai_link_reason, ai_link_why, AI_LINK_REASON};
+pub use ai_link::{ai_link_quote, ai_link_reason, ai_link_why, AI_LINK_REASON, EXTRACTED_LINK_WHY};
 pub use derive::{
     added_dependencies, map_preparer, prepared_documents, prepared_projects, ComponentProposal,
     MapPreparer, SuggestionReport, TechnologyProposal, DEPENDENCY_REASON, DEPENDENCY_SHARED_MARK,
