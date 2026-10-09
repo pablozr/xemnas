@@ -523,10 +523,8 @@ impl Entry {
 pub enum Triage {
     /// Accept, for this reason.
     Accept(AppReason),
-    /// Discard, for this reason.
+    /// Discard, for this reason (a repeated rule's reason names it).
     Discard(AppReason),
-    /// Discard because it repeats a rule; the reason names it.
-    Repeat(AppReason),
     /// The rules cannot tell: ask the AI.
     Ask,
 }
@@ -1293,7 +1291,7 @@ where
             scored.sort_by(|a, b| b.0.total_cmp(&a.0));
             let best = scored.first().copied().unwrap_or((0.0, ""));
             if best.0 >= DUPLICATE_AT {
-                item.triage = Triage::Repeat(AppReason::RepeatsLiveRule(clip(best.1, 120)));
+                item.triage = Triage::Discard(AppReason::RepeatsLiveRule(clip(best.1, 120)));
                 continue;
             }
             if let Some((_, earlier)) = kept
@@ -1301,7 +1299,7 @@ where
                 .map(|(title, other)| (concept_overlap(&own, other), title))
                 .find(|(likeness, _)| *likeness >= DUPLICATE_AT)
             {
-                item.triage = Triage::Repeat(AppReason::RepeatsPendingRule(clip(earlier, 120)));
+                item.triage = Triage::Discard(AppReason::RepeatsPendingRule(clip(earlier, 120)));
                 continue;
             }
             if best.0 >= SIMILAR_AT {
@@ -1542,9 +1540,7 @@ where
         for item in &items {
             let (verdict, reason) = match &item.triage {
                 Triage::Accept(reason) => (Verdict::Accepted, reason.text()),
-                Triage::Discard(reason) | Triage::Repeat(reason) => {
-                    (Verdict::Discarded, reason.text())
-                }
+                Triage::Discard(reason) => (Verdict::Discarded, reason.text()),
                 Triage::Ask => continue,
             };
             self.settle(

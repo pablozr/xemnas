@@ -33,6 +33,16 @@ use serde_json::json;
 /// Maximum bytes read from a provider response.
 pub(crate) const MAX_RESPONSE_BYTES: usize = 512 * 1024;
 
+/// A provider answer longer than [`MAX_RESPONSE_BYTES`].
+pub(crate) fn response_over_limit() -> ExtractError {
+    ExtractError::Extractor("a resposta do provedor excedeu o limite".to_string())
+}
+
+/// A provider answer that could not be read.
+pub(crate) fn response_unreadable() -> ExtractError {
+    ExtractError::Extractor("falha ao ler a resposta do provedor".to_string())
+}
+
 /// Aggregate extraction prompt budget, distinct from the per-artifact profile cap.
 /// The assembled prompt is bounded in characters; bytes are used for early stopping.
 const MAX_INPUT_BYTES: usize = 64 * 1024;
@@ -567,14 +577,10 @@ impl OpenAiCompatibleExtractor {
             .read_to_end(&mut buffer)
             .is_err()
         {
-            return Attempt::Fatal(ExtractError::Extractor(
-                "falha ao ler a resposta do provedor".to_string(),
-            ));
+            return Attempt::Fatal(response_unreadable());
         }
         if buffer.len() > MAX_RESPONSE_BYTES {
-            return Attempt::Fatal(ExtractError::Extractor(
-                "a resposta do provedor excedeu o limite".to_string(),
-            ));
+            return Attempt::Fatal(response_over_limit());
         }
 
         let envelope: ChatEnvelope = match serde_json::from_slice(&buffer) {

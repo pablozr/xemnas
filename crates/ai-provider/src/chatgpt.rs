@@ -28,8 +28,9 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::{
-    build_user_content, output_schema, parse_model_output, retry_after, Attempt,
-    KeyringSecretStore, RetryPolicy, MAX_RESPONSE_BYTES, SYSTEM_PROMPT,
+    build_user_content, output_schema, parse_model_output, response_over_limit,
+    response_unreadable, retry_after, Attempt, KeyringSecretStore, RetryPolicy, MAX_RESPONSE_BYTES,
+    SYSTEM_PROMPT,
 };
 
 /// OpenID issuer of Sign in with ChatGPT.
@@ -835,34 +836,30 @@ const MAX_STREAM_LINE_BYTES: usize = 4 * MAX_RESPONSE_BYTES;
 /// bounds time and bandwidth (lines are not kept).
 const MAX_STREAM_BYTES: usize = 64 * MAX_RESPONSE_BYTES;
 
-fn over_the_limit() -> ExtractError {
-    ExtractError::Extractor("a resposta do provedor excedeu o limite".to_string())
-}
-
 /// Reads a Responses API event stream and returns the final output text.
 /// Only `response.completed` counts as success (plan usage guide). The cap of
 /// [`MAX_RESPONSE_BYTES`] is on the text kept, not on the SSE around it.
 fn read_stream(reader: impl Read) -> Result<StreamResult, ExtractError> {
-    let unreadable = || ExtractError::Extractor("falha ao ler a resposta do provedor".to_string());
     let mut deltas = String::new();
     let mut total = 0usize;
     let mut reader = BufReader::new(reader);
     let mut buffer = Vec::new();
     loop {
         buffer.clear();
-        let read = (&mut reader)
+        let read = reader
+            .by_ref()
             .take(MAX_STREAM_LINE_BYTES as u64 + 1)
             .read_until(b'\n', &mut buffer)
-            .map_err(|_| unreadable())?;
+            .map_err(|_| response_unreadable())?;
         if read == 0 {
             break;
         }
         total += read;
         if total > MAX_STREAM_BYTES || buffer.len() > MAX_STREAM_LINE_BYTES {
-            return Err(over_the_limit());
+            return Err(response_over_limit());
         }
         let line = std::str::from_utf8(&buffer)
-            .map_err(|_| unreadable())?
+            .map_err(|_| response_unreadable())?
             .trim_end_matches(['\r', '\n']);
         let Some(data) = line.strip_prefix("data:") else {
             continue;
@@ -875,14 +872,14 @@ fn read_stream(reader: impl Read) -> Result<StreamResult, ExtractError> {
                 if let Some(delta) = event.get("delta").and_then(|delta| delta.as_str()) {
                     deltas.push_str(delta);
                     if deltas.len() > MAX_RESPONSE_BYTES {
-                        return Err(over_the_limit());
+                        return Err(response_over_limit());
                     }
                 }
             }
             Some("response.completed") => {
                 let text = completed_text(&event).unwrap_or(deltas);
                 if text.len() > MAX_RESPONSE_BYTES {
-                    return Err(over_the_limit());
+                    return Err(response_over_limit());
                 }
                 return Ok(StreamResult::Completed(text));
             }

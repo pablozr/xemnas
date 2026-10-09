@@ -979,8 +979,7 @@ fn link_structure_quality_gate() {
                         }
                     }
                     application::auto_approval::Triage::Ask => tally.to_judge += 1,
-                    application::auto_approval::Triage::Discard(_)
-                    | application::auto_approval::Triage::Repeat(_) => {}
+                    application::auto_approval::Triage::Discard(_) => {}
                 }
             }
             let wrong: Vec<&String> = linked.difference(&expect).collect();
