@@ -418,7 +418,8 @@ fn a_decision_that_never_names_the_component_still_links_to_it_by_what_it_does()
 #[test]
 fn spelling_variations_of_a_name_resolve_and_a_suffixed_word_does_not() {
     // Case, hyphen, underscore, space and backticks never mattered (the key
-    // ignores them); an alias and a path suffix now resolve too.
+    // ignores them); an alias, a path suffix and a description copied after
+    // the name resolve too.
     for (index, name) in [
         "SC-Platform",
         "sc_platform",
@@ -426,6 +427,8 @@ fn spelling_variations_of_a_name_resolve_and_a_suffixed_word_does_not() {
         "`sc-platform`",
         "sc-platform::update",
         "Desktop Shell",
+        "sc-platform: OS integration: window chrome, tray icon and updates",
+        "Desktop Shell: the desktop shell",
     ]
     .into_iter()
     .enumerate()

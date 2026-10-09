@@ -632,7 +632,8 @@ pub const MAX_CANDIDATE_COMPONENTS: usize = 3;
 
 /// The component of the map a written name points to: the name or an alias as
 /// the map keys it (case, accents, hyphens, spaces and backticks aside), or,
-/// failing that, the part of the name before a path suffix (`sc-platform::update`,
+/// failing that, the part of the name before a description or path suffix
+/// (`sc-platform: OS integration...`, `sc-platform::update`,
 /// `sc-platform/src/tray.rs`).
 fn find_component<'m>(map: &'m [MapComponent], name: &str) -> Option<&'m MapComponent> {
     let by_key = |key: &str| {
@@ -640,7 +641,7 @@ fn find_component<'m>(map: &'m [MapComponent], name: &str) -> Option<&'m MapComp
             .find(|component| component.keys.iter().any(|each| each == key))
     };
     by_key(&domain::entities::entity_key(name)).or_else(|| {
-        let head = name.split("::").next()?.split('/').next()?;
+        let head = name.split(':').next()?.split('/').next()?;
         if head.len() < name.len() {
             by_key(&domain::entities::entity_key(head))
         } else {
@@ -1103,6 +1104,7 @@ Applies to the Claude Code adapter only.",
             "SC_Platform",
             "`sc-platform`",
             "Tray",
+            "Tray: the tray icon",
             "sc-platform::update",
             "sc-platform/src/tray.rs",
         ] {
@@ -1130,5 +1132,47 @@ Applies to the Claude Code adapter only.",
             },
             "the repeated name is only proposed"
         );
+    }
+
+    #[test]
+    fn a_name_copied_with_its_description_resolves() {
+        let map: Vec<MapComponent> = ["sc-core", "sc-platform", "CI", "cloudrs"]
+            .iter()
+            .map(|name| MapComponent {
+                entity_id: format!("e-{name}"),
+                name: (*name).into(),
+                keys: vec![domain::entities::entity_key(name)],
+                ..MapComponent::default()
+            })
+            .collect();
+        let quote = "Gravar cada captura na outbox";
+        for (copied, id) in [
+            (
+                "sc-core: cloudrs application core: state, rules and the bridge to SoundCloud",
+                "e-sc-core",
+            ),
+            (
+                "sc-platform: cloudrs OS integration: keychain, tray icon and updates",
+                "e-sc-platform",
+            ),
+            (
+                "CI: Continuous integration and release (.github/workflows/**)",
+                "e-CI",
+            ),
+            (
+                "cloudrs: Native SoundCloud client for the desktop",
+                "e-cloudrs",
+            ),
+        ] {
+            let (ids, tally) = resolved_in(&map, vec![named(copied, quote)]);
+            assert_eq!(ids, [id], "{copied}");
+            assert_eq!((tally.kept, tally.unknown), (1, 0), "{copied}");
+        }
+        assert!(resolved_in(&map, vec![named("billing: something", quote)])
+            .0
+            .is_empty());
+        assert!(resolved_in(&map, vec![named("sc-platform crate", quote)])
+            .0
+            .is_empty());
     }
 }

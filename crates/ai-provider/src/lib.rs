@@ -91,8 +91,9 @@ confidence_reason: one sentence. evidence_refs: copy the ids exactly as written 
 both).\n\
 When the message lists \"Project map components\", say in components where each item \
 applies or is implemented: the part of the project whose code or behavior would change if the \
-item changed. name: copy it exactly as listed (a line may add what the part does after a \
-colon: use it to recognize a part the item describes without naming it). quote: copy a \
+item changed. name: only the part's name, the text before the first colon of its line, \
+copied exactly; what follows that colon says what the part does: use it to recognize a part \
+the item describes without naming it, never copy it into name. quote: copy a \
 stretch of the question, choice or rationale you wrote for this item, not of the source, that \
 names the part or describes what it does; never a part named only to be excluded, avoided, \
 replaced or compared, and a word that merely appears in both does not count. At most 3, and \
@@ -728,7 +729,7 @@ pub(crate) fn build_user_content(
 ) -> String {
     let mut text = String::new();
     if !background.components.is_empty() {
-        text.push_str("## Project map components (write a name exactly as listed)\n");
+        text.push_str("## Project map components (name: what it does; write only the name)\n");
         for component in &background.components {
             text.push_str("- ");
             text.push_str(&application::external::limited_text(&component.name, 80));
@@ -1153,7 +1154,7 @@ mod tests {
             &signals,
             &background,
         );
-        let header = "## Project map components (write a name exactly as listed)\n";
+        let header = "## Project map components (name: what it does; write only the name)\n";
         assert!(one.starts_with(header), "{one}");
         let prefix =
             |text: &str| text[..text.find("## Already recorded").expect("recorded")].to_string();
@@ -1169,7 +1170,7 @@ mod tests {
         // description of the full 100. The description is what lets the model
         // tell that "the updater" is the part that does "tray icon and
         // updates"; the prefix is the same bytes for every capture, so the
-        // provider's cache pays it once. Measured: 7,560 bytes; raise the ceiling with a number.
+        // provider's cache pays it once. Measured: 7,569 bytes; raise the ceiling with a number.
         let bytes = prefix(&one).len();
         println!("gate extracted links: prompt_bytes_60_components={bytes}");
         assert!(bytes <= 8_192, "{bytes} bytes");
@@ -1205,6 +1206,7 @@ mod tests {
         assert!(text.contains("- CI\n\n"), "{text}");
         assert!(SYSTEM_PROMPT.contains("describes what it does"));
         assert!(SYSTEM_PROMPT.contains("not of the source"));
+        assert!(SYSTEM_PROMPT.contains("before the first colon"));
     }
 
     #[test]

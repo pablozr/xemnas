@@ -136,6 +136,13 @@ inventa ou abrevia nomes; `unquoted` alto: ele cita a fonte ou parafraseia; `kep
 (100 caracteres), teto do gate 8.192. É um prefixo idêntico entre capturas, então o cache do
 provedor o paga uma vez. Descrições menores custam menos.
 
+**Rodada real no `cloudrs` (09/10/2026).** Em 12 análises, 54 componentes propostos, 1 mantido e
+46 desconhecidos: o modelo copiava a linha inteira, "nome: descrição", e a chave inteira não casava
+com nenhum componente. As escolhas e as citações estavam certas. Correção: o cabeçalho e o prompt
+pedem só o nome, e `find_component` corta no primeiro `:` (e depois em `/`) quando a chave inteira
+não casa; o cabeçalho a mais custa 9 bytes (7.569 com 60 componentes). As análises já gravadas não
+são refeitas: só uma nova análise usa a correção.
+
 **Não verificável aqui:** o recall real só aparece numa nova rodada no `cloudrs`.
 
 ## Dependência de dois donos
