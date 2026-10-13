@@ -36,6 +36,7 @@
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
+use std::time::Duration;
 
 use domain::entities::EdgeActor;
 use domain::relations::RelationKind;
@@ -46,16 +47,19 @@ use crate::adoption::AdoptionApi;
 use crate::analysis::ExtractorFactory;
 use crate::claim_suggestions::{ClaimSuggestionStore, ClaimSuggestions};
 use crate::claims::ClaimStore;
-use crate::clock::{add_hours, add_seconds, now_rfc3339};
+use crate::clock::{add_hours, add_seconds, now_rfc3339, seconds_between};
 use crate::conflicts::{ConflictView, Conflicts, Resolution};
 use crate::decisions::{DecisionQuery, DecisionStatus, DecisionStore, StoredDecision};
 use crate::extract::{CandidateKind, MIN_SIGNIFICANCE};
 use crate::graph::{
-    ai_link_quote, ai_link_why, mention_quote, EntityRecord, GraphStore, KnowledgeGraph, Suggestion,
+    ai_link_quote, ai_link_why, doubt_of, mention_quote, without_doubt, EntityRecord, GraphStore,
+    KnowledgeGraph, Suggestion,
 };
 use crate::inbox::{
     CandidateStatus, Cursor, Inbox, InboxQuery, InboxStore, StoredCandidate, MAX_PAGE_LIMIT,
 };
+use crate::jobs::{JobFailure, JobKind, JobRecord, JobRepository, JobState};
+use crate::output_language::{fixed, header, LanguageSource, OutputLanguage};
 use crate::overview::StructuredModel;
 use crate::profile::{choose_extractor, AiSettings, ExtractorChoice, ProfileStore, SecretStore};
 use crate::projects::ProjectRepository;
@@ -294,6 +298,24 @@ pub struct RunReport {
     pub left: usize,
     /// Whether the AI was asked.
     pub asked: bool,
+    /// Candidates among the accepted: each one's adoption may have created
+    /// ties to the map that the pass has not seen.
+    pub adopted: usize,
+    /// How long the pause after a failed call still lasts, when it kept the
+    /// pass from asking about items that needed the judge: they wait for a
+    /// later pass, which the background job schedules for that moment.
+    pub deferred: Option<Duration>,
+}
+
+impl std::ops::AddAssign for RunReport {
+    fn add_assign(&mut self, other: Self) {
+        self.accepted += other.accepted;
+        self.discarded += other.discarded;
+        self.left += other.left;
+        self.asked |= other.asked;
+        self.adopted += other.adopted;
+        self.deferred = self.deferred.max(other.deferred);
+    }
 }
 
 impl RunReport {
@@ -380,8 +402,14 @@ pub trait ApprovalsApi: Send + Sync {
     fn status(&self) -> Result<Status, ReviewError>;
     /// Turns the automatic mode on or off.
     fn set_mode(&self, mode: Mode) -> Result<(), ReviewError>;
-    /// One pass for a project.
+    /// One pass for a project, as the screen runs it. Only one pass runs at a
+    /// time: when another is on (the background job's, say) it returns an
+    /// empty report at once instead of waiting, because that pass covers the
+    /// same items.
     fn run(&self, project_id: &str) -> Result<RunReport, ReviewError>;
+    /// One pass for every project, as the background job runs it. It waits
+    /// for a pass that is on, so what it reports is the state after it.
+    fn run_all(&self) -> Result<RunReport, ReviewError>;
     /// What the review decided in a project.
     fn ledger(&self, project_id: &str) -> Result<Vec<Entry>, ReviewError>;
     /// Puts a discarded candidate back in the queue.
@@ -398,15 +426,105 @@ pub trait ApprovalsApi: Send + Sync {
     ) -> Result<(), ReviewError>;
 }
 
+const REPEATS_LIVE_RULE: &str = "repete a regra em vigor: ";
+const REPEATS_PENDING_RULE: &str = "repete outra regra pendente: ";
+
+/// A reason the app itself wrote on the ledger (not the AI's words): stable
+/// variants for the interface to translate. The stored text is
+/// [`AppReason::text`], read back by [`AppReason::parse`], so rows written
+/// before keep mapping.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppReason {
+    /// A candidate repeats a decision already recorded.
+    RepeatsDecision,
+    /// High calibrated confidence, with a source and nothing alike recorded.
+    CalibratedConfidence,
+    /// A relation that depends on another decision, with the quote checked.
+    DependsOnDecision,
+    /// A dependency the text cites and only this component declares.
+    OwnDependency,
+    /// A symbol or file the text cites and only this component defines.
+    OwnSymbol,
+    /// A tie derived from a file or dependency the decision touched.
+    TouchedFileOrDependency,
+    /// Repeats the rule in force (its statement, cut short).
+    RepeatsLiveRule(String),
+    /// Repeats another pending rule (its statement, cut short).
+    RepeatsPendingRule(String),
+    /// The AI accepted, but the change could not be applied.
+    AcceptedNotApplied,
+    /// The AI discarded, but the change could not be applied.
+    DiscardedNotApplied,
+    /// The AI did not answer about the item.
+    JudgeSilent,
+}
+
+impl AppReason {
+    /// The text stored on the ledger.
+    pub fn text(&self) -> std::borrow::Cow<'static, str> {
+        use std::borrow::Cow::{Borrowed, Owned};
+        match self {
+            Self::RepeatsDecision => Borrowed("repete uma decisão já registrada"),
+            Self::CalibratedConfidence => {
+                Borrowed("alta confiança calibrada, com fonte e sem parecido registrado")
+            }
+            Self::DependsOnDecision => Borrowed("depende de outra decisão, com citação conferida"),
+            Self::OwnDependency => Borrowed("dependência citada que só este componente declara"),
+            Self::OwnSymbol => Borrowed("símbolo ou arquivo citado que só este componente define"),
+            Self::TouchedFileOrDependency => {
+                Borrowed("derivado de arquivo ou dependência que a decisão tocou")
+            }
+            Self::RepeatsLiveRule(rule) => Owned(format!("{REPEATS_LIVE_RULE}{rule}")),
+            Self::RepeatsPendingRule(rule) => Owned(format!("{REPEATS_PENDING_RULE}{rule}")),
+            Self::AcceptedNotApplied => {
+                Borrowed("a IA aceitou, mas não foi possível aplicar; revise")
+            }
+            Self::DiscardedNotApplied => {
+                Borrowed("a IA descartou, mas não foi possível aplicar; revise")
+            }
+            Self::JudgeSilent => Borrowed("a IA não respondeu sobre este item"),
+        }
+    }
+
+    /// The reason a stored text stands for; `None` for the AI's own words.
+    pub fn parse(stored: &str) -> Option<Self> {
+        if let Some(rule) = stored.strip_prefix(REPEATS_LIVE_RULE) {
+            return Some(Self::RepeatsLiveRule(rule.to_owned()));
+        }
+        if let Some(rule) = stored.strip_prefix(REPEATS_PENDING_RULE) {
+            return Some(Self::RepeatsPendingRule(rule.to_owned()));
+        }
+        [
+            Self::RepeatsDecision,
+            Self::CalibratedConfidence,
+            Self::DependsOnDecision,
+            Self::OwnDependency,
+            Self::OwnSymbol,
+            Self::TouchedFileOrDependency,
+            Self::AcceptedNotApplied,
+            Self::DiscardedNotApplied,
+            Self::JudgeSilent,
+        ]
+        .into_iter()
+        .find(|reason| reason.text() == stored)
+    }
+}
+
+impl Entry {
+    /// The reason when the app wrote it, for the screen to translate; `None`
+    /// means the AI's words, shown as they are.
+    pub fn app_reason(&self) -> Option<AppReason> {
+        AppReason::parse(&self.reason)
+    }
+}
+
 /// What the local rules say about an item.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Triage {
     /// Accept, for this reason.
-    Accept(&'static str),
-    /// Discard, for this reason.
-    Discard(&'static str),
-    /// Discard because it repeats a rule; the reason names it.
-    Repeat(String),
+    Accept(AppReason),
+    /// Discard, for this reason (a repeated rule's reason names it).
+    Discard(AppReason),
     /// The rules cannot tell: ask the AI.
     Ask,
 }
@@ -479,7 +597,7 @@ pub fn triage_candidate(
         .map(|question| similarity(question, &candidate.question))
         .fold(0.0, f64::max);
     if likeness >= DUPLICATE_AT {
-        return Triage::Discard("repete uma decisão já registrada");
+        return Triage::Discard(AppReason::RepeatsDecision);
     }
     if candidate.kind != CandidateKind::Decision.as_str() {
         return Triage::Ask;
@@ -499,7 +617,7 @@ pub fn triage_candidate(
         && files <= MAX_FILES
         && likeness < SIMILAR_AT
     {
-        Triage::Accept("alta confiança calibrada, com fonte e sem parecido registrado")
+        Triage::Accept(AppReason::CalibratedConfidence)
     } else {
         Triage::Ask
     }
@@ -531,9 +649,7 @@ fn confidence_predicts(decided: &[StoredCandidate]) -> bool {
 /// What the rules say about a relation between decisions.
 pub fn triage_relation(kind: RelationKind) -> Triage {
     match kind {
-        RelationKind::DependsOn => {
-            Triage::Accept("depende de outra decisão, com citação conferida")
-        }
+        RelationKind::DependsOn => Triage::Accept(AppReason::DependsOnDecision),
         RelationKind::Supersedes | RelationKind::ConflictsWith => Triage::Ask,
     }
 }
@@ -541,61 +657,84 @@ pub fn triage_relation(kind: RelationKind) -> Triage {
 /// What the rules say about a suggested tie to the map: one derived from a
 /// touched file or an added dependency is plain; one found by a mention in
 /// the decision's text may be a passing remark, and one proposed by the AI
-/// from that text is its own guess: the AI judges the quote of both.
+/// from that text is its own guess: the AI judges the quote of both. One whose
+/// polarity is in doubt (a word that may negate it sits near the evidence, in
+/// any language) is never accepted by the rules either.
 pub fn triage_link(reason: &str) -> Triage {
-    if mention_quote(reason).is_some() || ai_link_quote(reason).is_some() {
+    if mention_quote(reason).is_some()
+        || ai_link_quote(reason).is_some()
+        || doubt_of(reason).is_some()
+    {
         Triage::Ask
     } else if reason.starts_with(crate::graph::DEPENDENCY_REASON) {
         // The text cites a dependency; one component declaring it is the place.
-        if reason.contains(crate::graph::DEPENDENCY_SHARED_MARK) {
+        if crate::graph::shared_dependency(reason) {
             Triage::Ask
         } else {
-            Triage::Accept("dependência citada que só este componente declara")
+            Triage::Accept(AppReason::OwnDependency)
         }
     } else if reason.starts_with(crate::graph::SYMBOL_REASON) {
         // The text cites a name or a file the code of one component holds.
-        Triage::Accept("símbolo ou arquivo citado que só este componente define")
+        Triage::Accept(AppReason::OwnSymbol)
     } else {
-        Triage::Accept("derivado de arquivo ou dependência que a decisão tocou")
+        Triage::Accept(AppReason::TouchedFileOrDependency)
     }
 }
 
 /// What the AI is told about a suggested tie: the decision or rule (its
 /// question and choice), the component (description and a few paths), and
-/// what suggested it.
-fn link_text(suggestion: &Suggestion, component: Option<&EntityRecord>) -> String {
-    let evidence = if let Some(quote) = mention_quote(&suggestion.reason) {
-        format!("Evidência (menção no texto): {}", clip(quote, SENT_CHARS))
-    } else if let Some(quote) = ai_link_quote(&suggestion.reason) {
-        let why = ai_link_why(&suggestion.reason).unwrap_or_default();
+/// what suggested it. Everything the judge reads but the user's own text is
+/// English: the language of the answer is named on the first line instead.
+fn link_text(
+    suggestion: &Suggestion,
+    component: Option<&EntityRecord>,
+    co_owners: &[String],
+) -> String {
+    let reason = suggestion.reason.as_str();
+    let evidence = if let Some(quote) = mention_quote(reason) {
         format!(
-            "Evidência (proposta pela IA): {} | Motivo da IA: {}",
+            "Evidence (mention in the text): {}",
+            clip(quote, SENT_CHARS)
+        )
+    } else if let Some(quote) = ai_link_quote(reason) {
+        let why = ai_link_why(reason).unwrap_or_default();
+        let why = if why == crate::graph::EXTRACTED_LINK_WHY {
+            "named by the extractor together with the decision"
+        } else {
+            why
+        };
+        format!(
+            "Evidence (proposed by the AI): {} | AI reason: {}",
             clip(quote, SENT_CHARS),
             clip(why, 160)
         )
-    } else if suggestion
-        .reason
-        .starts_with(crate::graph::DEPENDENCY_REASON)
-    {
+    } else if let Some(name) = crate::graph::cited_dependency(reason) {
         format!(
-            "Evidência (dependência citada): {}",
-            clip(&suggestion.reason, 160)
+            "Evidence (cited dependency): \"{}\" ({})",
+            clip(name, 80),
+            clip(
+                crate::graph::cited_dependency_manifest(reason).unwrap_or_default(),
+                120
+            )
         )
-    } else if suggestion.reason.starts_with(crate::graph::SYMBOL_REASON) {
-        format!(
-            "Evidência (símbolo citado): {}",
-            clip(&suggestion.reason, 160)
-        )
+    } else if let Some(rest) = without_doubt(reason).strip_prefix(crate::graph::SYMBOL_REASON) {
+        format!("Evidence (cited symbol): {}", clip(rest, 160))
     } else {
-        format!(
-            "Evidência (arquivo tocado): {}",
-            clip(&suggestion.reason, 160)
-        )
+        format!("Evidence (touched file): {}", clip(reason, 160))
+    };
+    let evidence = match (crate::graph::doubt_parts(reason), doubt_of(reason)) {
+        (Some((trigger, quote)), _) => format!(
+            "{evidence} | Polarity alert: \"{}\" in \"{}\"",
+            clip(trigger, 40),
+            clip(quote, SENT_CHARS)
+        ),
+        (None, Some(doubt)) => format!("{evidence} | Polarity alert: {}", clip(doubt, SENT_CHARS)),
+        (None, None) => evidence,
     };
     let choice = if suggestion.source.detail.is_empty() {
         String::new()
     } else {
-        format!(" | Escolha: {}", clip(&suggestion.source.detail, 200))
+        format!(" | Choice: {}", clip(&suggestion.source.detail, 200))
     };
     let part = component.map_or_else(String::new, |component| {
         let paths: Vec<&str> = component
@@ -605,24 +744,53 @@ fn link_text(suggestion: &Suggestion, component: Option<&EntityRecord>) -> Strin
             .map(String::as_str)
             .collect();
         let mut part = String::new();
-        if !component.description.trim().is_empty() {
-            part.push_str(&format!(
-                " | Componente: {}",
-                clip(&component.description, 160)
-            ));
+        let described = crate::graph::description_for_model(component);
+        if !described.trim().is_empty() {
+            part.push_str(&format!(" | Component: {}", clip(&described, 160)));
         }
         if !paths.is_empty() {
-            part.push_str(&format!(" | Caminhos: {}", paths.join(", ")));
+            part.push_str(&format!(" | Paths: {}", paths.join(", ")));
         }
         part
     });
+    let shared = if crate::graph::shared_dependency(reason) {
+        let others = if co_owners.is_empty() {
+            "another component".to_string()
+        } else {
+            co_owners.join(", ")
+        };
+        format!(" | Shared dependency, also declared by: {others}")
+    } else {
+        String::new()
+    };
     format!(
-        "[vínculo {}] \"{}\"{choice} -> {} \"{}\"{part} | {evidence}",
+        "[link {}] \"{}\"{choice} -> {} \"{}\"{part} | {evidence}{shared}",
         suggestion.kind.as_str(),
         clip(&suggestion.source.label, 160),
         suggestion.entity.detail,
         clip(&suggestion.entity.label, 80),
     )
+}
+
+/// The other components whose pending ties from the same decision cite the
+/// same shared dependency as `suggestion` (its co-owners), by label; empty for
+/// a tie that is not a shared dependency.
+fn co_owners(all: &[Suggestion], suggestion: &Suggestion) -> Vec<String> {
+    if !crate::graph::shared_dependency(&suggestion.reason) {
+        return Vec::new();
+    }
+    let dependency = crate::graph::cited_dependency(&suggestion.reason);
+    let mut labels: Vec<String> = all
+        .iter()
+        .filter(|other| {
+            other.edge_id != suggestion.edge_id
+                && other.source.node.id == suggestion.source.node.id
+                && crate::graph::cited_dependency(&other.reason) == dependency
+        })
+        .map(|other| other.entity.label.clone())
+        .collect();
+    labels.dedup();
+    labels
 }
 
 /// An item of a pass, with what the AI would be told about it.
@@ -659,7 +827,8 @@ conflicts with or replaces another decision is accept only when its quote clearl
 An item may list rules in force that resemble it after the items: discard it when it \
 only restates one of them, and keep it (accept or human) when it adds a real constraint, \
 a different condition or another scope.\n\
-Give in reason one short sentence in the language of the item. The ids (I1, D2, R3) are only for \
+Give in reason one short sentence in the output language named on the first line of the \
+message. The ids (I1, D2, R3) are only for \
 the conflicts_with field: never write an id in the reason, name the other item by its title \
 instead, because the reader never sees the ids. When an item contradicts another item of the \
 list or one of the decisions in force listed after the items, put that id in conflicts_with \
@@ -685,7 +854,15 @@ when the component is only named in passing, is named to be excluded or compared
 is the product as a whole rather than a part of it. A test or tooling component is the place \
 only when the rule is checked there. Answer human only when the evidence does not decide; when \
 in doubt between accept and discard, answer human.\n\
-Give in reason one short sentence in the language of the item. The ids (I1, I2) are only for \
+When a dependency is shared, its owners compete: accept at most one, the component whose code \
+the decision governs, unless the decision is about the dependency itself (its version or \
+features); when the text does not tell which, answer human.\n\
+An item may carry a polarity alert: a negation-like word, in any language, sits near the \
+evidence. It may be a false alarm (Portuguese \"no\" means \"in the\"); read the choice and \
+discard the link when the component or dependency is named to be excluded, avoided or \
+replaced.\n\
+Give in reason one short sentence in the output language named on the first line of the \
+message. The ids (I1, I2) are only for \
 matching the answer to the items: never write an id in the reason. Reply with one JSON object \
 only, matching exactly: {\"verdicts\":[{\"id\":string,\"verdict\":\"accept|discard|human\",\
 \"reason\":string,\"conflicts_with\":null}]}, one entry per item, using its id exactly as given.",
@@ -777,7 +954,7 @@ pub fn parse_verdicts(text: &str, ids: &[String]) -> Vec<Judged> {
                 None => Judged {
                     id: id.clone(),
                     verdict: Verdict::NeedsHuman,
-                    reason: "a IA não respondeu sobre este item".to_owned(),
+                    reason: AppReason::JudgeSilent.text().into_owned(),
                     conflicts_with: None,
                     answered: false,
                 },
@@ -842,6 +1019,10 @@ pub struct Approvals<S, P, K, F> {
     adoption: Arc<dyn AdoptionApi>,
     settings: AiSettings<P, K>,
     factory: F,
+    language: LanguageSource,
+    /// Held by a pass: the screen and the background job share one instance
+    /// of the review, so they never judge at the same time.
+    pass: std::sync::Mutex<()>,
 }
 
 impl<S, P, K, F> Approvals<S, P, K, F>
@@ -873,7 +1054,15 @@ where
             adoption,
             settings,
             factory,
+            language: fixed(OutputLanguage::ENGLISH),
+            pass: std::sync::Mutex::new(()),
         }
+    }
+
+    /// Where the language of the reasons is read, once per pass.
+    pub fn with_language(mut self, source: LanguageSource) -> Self {
+        self.language = source;
+        self
     }
 
     /// Candidates of a project by status, newest first.
@@ -936,17 +1125,17 @@ where
             }
             let triage = triage_candidate(&candidate, &recorded, confidence_trusted);
             let kind = if candidate.kind == CandidateKind::Rule.as_str() {
-                "regra"
+                "rule"
             } else {
-                "decisão"
+                "decision"
             };
             items.push(Item {
                 kind: ItemKind::Candidate,
                 id: candidate.id.clone(),
                 title: candidate.question.clone(),
                 text: format!(
-                    "[{kind}] Pergunta: {} | Escolha: {} | Motivo: {} | Confiança do extrator: \
-                     {:.0}% | Fontes: {}",
+                    "[{kind}] Question: {} | Choice: {} | Why: {} | Extractor confidence: \
+                     {:.0}% | Sources: {}",
                     clip(&candidate.question, 200),
                     clip(&candidate.choice, 200),
                     clip(&candidate.rationale, SENT_CHARS),
@@ -989,7 +1178,7 @@ where
                     view.to_question
                 ),
                 text: format!(
-                    "[relação {}] \"{}\" -> \"{}\" | Citação: {} | Motivo: {}",
+                    "[relation {}] \"{}\" -> \"{}\" | Quote: {} | Reason: {}",
                     record.kind.as_str(),
                     clip(&view.from_question, 160),
                     clip(&view.to_question, 160),
@@ -1019,7 +1208,7 @@ where
                 id: record.suggestion_id.clone(),
                 title: record.statement.clone(),
                 text: format!(
-                    "[contexto {}] {} | Citação: {} | Da decisão: {}",
+                    "[context {}] {} | Quote: {} | From decision: {}",
                     record.kind.as_str(),
                     clip(&record.statement, 200),
                     clip(&record.quote, SENT_CHARS),
@@ -1037,10 +1226,10 @@ where
         let graph = KnowledgeGraph::new(self.store.clone());
         let entities = GraphStore::project_entities(&self.store, project_id)
             .map_err(|error| storage(error.to_string()))?;
-        for suggestion in graph
+        let suggestions = graph
             .suggestions(project_id)
-            .map_err(|error| storage(error.to_string()))?
-        {
+            .map_err(|error| storage(error.to_string()))?;
+        for suggestion in &suggestions {
             if done.contains(&(ItemKind::Link, suggestion.edge_id.clone())) {
                 continue;
             }
@@ -1049,10 +1238,11 @@ where
                 id: suggestion.edge_id.clone(),
                 title: format!("{} → {}", suggestion.source.label, suggestion.entity.label),
                 text: link_text(
-                    &suggestion,
+                    suggestion,
                     entities
                         .iter()
                         .find(|entity| entity.entity_id == suggestion.entity.node.id),
+                    &co_owners(&suggestions, suggestion),
                 ),
                 waiting_since: suggestion.created_at.clone(),
                 triage: triage_link(&suggestion.reason),
@@ -1101,8 +1291,7 @@ where
             scored.sort_by(|a, b| b.0.total_cmp(&a.0));
             let best = scored.first().copied().unwrap_or((0.0, ""));
             if best.0 >= DUPLICATE_AT {
-                item.triage =
-                    Triage::Repeat(format!("repete a regra em vigor: {}", clip(best.1, 120)));
+                item.triage = Triage::Discard(AppReason::RepeatsLiveRule(clip(best.1, 120)));
                 continue;
             }
             if let Some((_, earlier)) = kept
@@ -1110,10 +1299,7 @@ where
                 .map(|(title, other)| (concept_overlap(&own, other), title))
                 .find(|(likeness, _)| *likeness >= DUPLICATE_AT)
             {
-                item.triage = Triage::Repeat(format!(
-                    "repete outra regra pendente: {}",
-                    clip(earlier, 120)
-                ));
+                item.triage = Triage::Discard(AppReason::RepeatsPendingRule(clip(earlier, 120)));
                 continue;
             }
             if best.0 >= SIMILAR_AT {
@@ -1218,16 +1404,16 @@ where
                         // Still pending but not applicable: record it for the
                         // person, or every pass would ask the AI again.
                         let reason = if verdict == Verdict::Accepted {
-                            "a IA aceitou, mas não foi possível aplicar; revise"
+                            AppReason::AcceptedNotApplied.text()
                         } else {
-                            "a IA descartou, mas não foi possível aplicar; revise"
+                            AppReason::DiscardedNotApplied.text()
                         };
                         return self.settle(
                             project_id,
                             item,
                             Verdict::NeedsHuman,
                             by,
-                            reason,
+                            &reason,
                             conflicts_with,
                             now,
                             report,
@@ -1250,7 +1436,12 @@ where
             conflicts_with: conflicts_with.filter(|_| verdict == Verdict::NeedsHuman),
         })?;
         match verdict {
-            Verdict::Accepted => report.accepted += 1,
+            Verdict::Accepted => {
+                report.accepted += 1;
+                if item.kind == ItemKind::Candidate {
+                    report.adopted += 1;
+                }
+            }
             Verdict::Discarded => report.discarded += 1,
             Verdict::NeedsHuman => report.left += 1,
         }
@@ -1271,32 +1462,85 @@ where
         self.factory.external(&profile, secret).ok()
     }
 
-    /// Whether a call may go now: always, unless the last one failed less
-    /// than [`FAILURE_PAUSE_MINUTES`] ago.
-    fn may_ask(&self, now: &str) -> Result<bool, ReviewError> {
+    /// How long a call must still wait: nothing, unless the last one failed
+    /// less than [`FAILURE_PAUSE_MINUTES`] ago.
+    fn pause_left(&self, now: &str) -> Result<Option<Duration>, ReviewError> {
         let day_ago = add_hours(now, -24).unwrap_or_default();
         let calls = self.store.review_calls(&day_ago)?;
         let Some((last, false)) = calls.last() else {
-            return Ok(true);
+            return Ok(None);
         };
         let ready_at = add_minutes(last, FAILURE_PAUSE_MINUTES).unwrap_or_default();
-        Ok(now >= ready_at.as_str())
+        Ok(seconds_between(now, &ready_at)
+            .filter(|seconds| *seconds > 0)
+            .map(|seconds| Duration::from_secs(seconds.unsigned_abs())))
     }
 
-    /// One pass at the given moment (RFC 3339), so tests do not wait.
+    /// One pass at the given moment (RFC 3339), so tests do not wait, as the
+    /// screen runs it: when another pass is on, the background job's, it
+    /// returns at once, because that one covers the same items. A pass that
+    /// accepted a candidate is followed by one over the ties its adoption
+    /// created, which the first had not seen.
     pub fn run_at(&self, project_id: &str, now: &str) -> Result<RunReport, ReviewError> {
+        let _one_at_a_time = match self.pass.try_lock() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return Ok(RunReport::default()),
+        };
+        // Read after the lock: a mode turned off while this waited stands.
+        if self.store.approval_mode()? != Mode::Automatic {
+            return Ok(RunReport::default());
+        }
+        self.project_passes(project_id, now)
+    }
+
+    /// One pass over every project, at the given moment: what the background
+    /// job runs. It waits for a pass that is on. A provider failure stops it
+    /// and is returned.
+    pub fn run_all_at(&self, now: &str) -> Result<RunReport, ReviewError> {
+        let _one_at_a_time = self
+            .pass
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut report = RunReport::default();
         if self.store.approval_mode()? != Mode::Automatic {
             return Ok(report);
         }
-        let items = self.gather(project_id)?;
+        let projects = ProjectRepository::list(&self.store)
+            .map_err(|error| ReviewError::Storage(error.to_string()))?;
+        for project in projects {
+            report += self.project_passes(&project.id, now)?;
+        }
+        Ok(report)
+    }
+
+    /// The passes over one project, with the lock held and the mode checked.
+    fn project_passes(&self, project_id: &str, now: &str) -> Result<RunReport, ReviewError> {
+        let mut report = self.pass(project_id, now, false)?;
+        if report.adopted > 0 {
+            report += self.pass(project_id, now, true)?;
+        }
+        Ok(report)
+    }
+
+    /// One pass; `links_only` leaves out everything but the ties to the map.
+    fn pass(
+        &self,
+        project_id: &str,
+        now: &str,
+        links_only: bool,
+    ) -> Result<RunReport, ReviewError> {
+        let mut report = RunReport::default();
+        let mut items = self.gather(project_id)?;
+        if links_only {
+            items.retain(|item| item.kind == ItemKind::Link);
+        }
 
         // The plain cases, settled by the rules for free.
         for item in &items {
             let (verdict, reason) = match &item.triage {
-                Triage::Accept(reason) => (Verdict::Accepted, *reason),
-                Triage::Discard(reason) => (Verdict::Discarded, *reason),
-                Triage::Repeat(reason) => (Verdict::Discarded, reason.as_str()),
+                Triage::Accept(reason) => (Verdict::Accepted, reason.text()),
+                Triage::Discard(reason) => (Verdict::Discarded, reason.text()),
                 Triage::Ask => continue,
             };
             self.settle(
@@ -1304,7 +1548,7 @@ where
                 item,
                 verdict,
                 By::Rules,
-                reason,
+                &reason,
                 None,
                 now,
                 &mut report,
@@ -1319,7 +1563,11 @@ where
             .filter(|item| item.triage == Triage::Ask)
             .partition(|item| item.kind == ItemKind::Link);
         for (group, prompt) in [(rest, REVIEW_PROMPT), (links, LINK_REVIEW_PROMPT)] {
-            if group.is_empty() || !self.may_ask(now)? {
+            if group.is_empty() {
+                continue;
+            }
+            if let Some(wait) = self.pause_left(now)? {
+                report.deferred = report.deferred.max(Some(wait));
                 continue;
             }
             let Some(model) = self.judge() else {
@@ -1354,71 +1602,7 @@ where
         } else {
             Vec::new()
         };
-        let mut shown: Vec<&StoredDecision> = Vec::new();
-        let mut shown_rules: Vec<&str> = Vec::new();
-        let mut user = String::from("## Items\n");
-        for (id, item) in ids.iter().zip(&batch) {
-            user.push_str(&format!("- {id} {}", item.text));
-            let near = item
-                .near
-                .as_deref()
-                .map(|question| nearest(question, &in_force))
-                .unwrap_or_default();
-            if !near.is_empty() {
-                let named: Vec<String> = near
-                    .into_iter()
-                    .map(|decision| {
-                        let at = shown
-                            .iter()
-                            .position(|seen| seen.decision_id == decision.decision_id)
-                            .unwrap_or_else(|| {
-                                shown.push(decision);
-                                shown.len() - 1
-                            });
-                        format!("D{}", at + 1)
-                    })
-                    .collect();
-                user.push_str(&format!(" | Parecidas em vigor: {}", named.join(", ")));
-            }
-            if !item.similar_rules.is_empty() {
-                let named: Vec<String> = item
-                    .similar_rules
-                    .iter()
-                    .map(|rule| {
-                        let at = shown_rules
-                            .iter()
-                            .position(|seen| *seen == rule.as_str())
-                            .unwrap_or_else(|| {
-                                shown_rules.push(rule);
-                                shown_rules.len() - 1
-                            });
-                        format!("R{}", at + 1)
-                    })
-                    .collect();
-                user.push_str(&format!(
-                    " | Regras parecidas em vigor: {}",
-                    named.join(", ")
-                ));
-            }
-            user.push('\n');
-        }
-        if !shown_rules.is_empty() {
-            user.push_str("## Regras em vigor\n");
-            for (at, rule) in shown_rules.iter().enumerate() {
-                user.push_str(&format!("- R{} {}\n", at + 1, clip(rule, 200)));
-            }
-        }
-        if !shown.is_empty() {
-            user.push_str("## Decisões em vigor\n");
-            for (at, decision) in shown.iter().enumerate() {
-                user.push_str(&format!(
-                    "- D{} \"{}\" -> {}\n",
-                    at + 1,
-                    clip(&decision.question, 160),
-                    clip(&decision.choice, 160)
-                ));
-            }
-        }
+        let (user, shown, shown_rules) = review_message((self.language)(), &ids, &batch, &in_force);
         report.asked = true;
         let answer = match model.complete(prompt, &user, "approval_verdicts", &review_schema()) {
             Ok(answer) => {
@@ -1528,6 +1712,91 @@ where
     }
 }
 
+/// The user message of one judge call: the language line, the items with
+/// their ids, then the rules and decisions in force they point at. Also the
+/// decisions and rules shown, in the order of their ids `D*` and `R*`.
+fn review_message<'a>(
+    language: OutputLanguage,
+    ids: &[String],
+    batch: &[&'a Item],
+    in_force: &'a [StoredDecision],
+) -> (String, Vec<&'a StoredDecision>, Vec<&'a str>) {
+    let mut shown: Vec<&StoredDecision> = Vec::new();
+    let mut shown_rules: Vec<&str> = Vec::new();
+    let mut user = header(language);
+    user.push_str("## Items\n");
+    for (id, item) in ids.iter().zip(batch) {
+        user.push_str(&format!("- {id} {}", item.text));
+        let near = item
+            .near
+            .as_deref()
+            .map(|question| nearest(question, in_force))
+            .unwrap_or_default();
+        if !near.is_empty() {
+            let named: Vec<String> = near
+                .into_iter()
+                .map(|decision| {
+                    let at = position_or_push(&mut shown, decision, |seen, other| {
+                        seen.decision_id == other.decision_id
+                    });
+                    format!("D{}", at + 1)
+                })
+                .collect();
+            user.push_str(&format!(
+                " | Similar decisions in force: {}",
+                named.join(", ")
+            ));
+        }
+        if !item.similar_rules.is_empty() {
+            let named: Vec<String> = item
+                .similar_rules
+                .iter()
+                .map(|rule| {
+                    let at = position_or_push(&mut shown_rules, rule.as_str(), |seen, other| {
+                        seen == other
+                    });
+                    format!("R{}", at + 1)
+                })
+                .collect();
+            user.push_str(&format!(" | Similar rules in force: {}", named.join(", ")));
+        }
+        user.push('\n');
+    }
+    if !shown_rules.is_empty() {
+        user.push_str("## Rules in force\n");
+        for (at, rule) in shown_rules.iter().enumerate() {
+            user.push_str(&format!("- R{} {}\n", at + 1, clip(rule, 200)));
+        }
+    }
+    if !shown.is_empty() {
+        user.push_str("## Decisions in force\n");
+        for (at, decision) in shown.iter().enumerate() {
+            user.push_str(&format!(
+                "- D{} \"{}\" -> {}\n",
+                at + 1,
+                clip(&decision.question, 160),
+                clip(&decision.choice, 160)
+            ));
+        }
+    }
+    (user, shown, shown_rules)
+}
+
+/// Where `value` sits in `shown`, appended first when it is not there yet.
+fn position_or_push<'a, T: ?Sized>(
+    shown: &mut Vec<&'a T>,
+    value: &'a T,
+    same: impl Fn(&T, &T) -> bool,
+) -> usize {
+    shown
+        .iter()
+        .position(|seen| same(seen, value))
+        .unwrap_or_else(|| {
+            shown.push(value);
+            shown.len() - 1
+        })
+}
+
 /// Decisions in force that resemble a question, the closest first, at most
 /// [`NEIGHBORS`].
 fn nearest<'a>(question: &str, in_force: &'a [StoredDecision]) -> Vec<&'a StoredDecision> {
@@ -1604,6 +1873,10 @@ where
         self.run_at(project_id, &now_rfc3339())
     }
 
+    fn run_all(&self) -> Result<RunReport, ReviewError> {
+        self.run_all_at(&now_rfc3339())
+    }
+
     fn ledger(&self, project_id: &str) -> Result<Vec<Entry>, ReviewError> {
         self.store.review_ledger(project_id, 60)
     }
@@ -1634,6 +1907,54 @@ where
             resolution,
         )
     }
+}
+
+/// The kind of the background job that runs the judge over every project.
+pub const REVIEW_JOB_KIND: &str = JobKind::AutoReview.as_str();
+
+/// Queues the judge after a job that may have created items: nothing when the
+/// job did not complete or is not one of those, when the mode is manual, or
+/// when a judge is already waiting (it covers everything in one pass; the
+/// store checks that in the same statement that inserts). Whether one was
+/// queued is returned; a failure is for the caller to log, since the screen's
+/// pass and the next trigger cover a missed one.
+pub fn queue_review_after<S: JobRepository + ApprovalStore>(
+    store: &S,
+    kind: &str,
+    state: JobState,
+) -> Result<bool, ReviewError> {
+    if state != JobState::Completed || !JobKind::parse(kind).is_some_and(JobKind::feeds_review) {
+        return Ok(false);
+    }
+    if store.approval_mode()? != Mode::Automatic {
+        return Ok(false);
+    }
+    JobRepository::insert_unless_queued(store, &JobRecord::queued(REVIEW_JOB_KIND, ""))
+        .map_err(|error| ReviewError::Storage(error.to_string()))
+}
+
+/// What the job queue runs for the judge job.
+pub type ReviewHandler = Arc<dyn Fn(&JobRecord) -> Result<(), JobFailure> + Send + Sync>;
+
+/// The handler of the judge job: one pass over every project. A provider
+/// failure sends the job back to the queue after the pause that follows a
+/// failed call, and so does a pass that left items unasked because that pause
+/// was on, for the moment it ends. Any other error fails the job, to show in
+/// the diagnostics.
+pub fn review_job(api: Arc<dyn ApprovalsApi>) -> ReviewHandler {
+    Arc::new(move |_| match api.run_all() {
+        Ok(RunReport {
+            deferred: Some(wait),
+            ..
+        }) => Err(JobFailure::Deferred {
+            retry_after: Some(wait),
+        }),
+        Ok(_) => Ok(()),
+        Err(ReviewError::Provider(_)) => Err(JobFailure::Deferred {
+            retry_after: Some(Duration::from_secs(FAILURE_PAUSE_MINUTES as u64 * 60)),
+        }),
+        Err(_) => Err(JobFailure::Failed),
+    })
 }
 
 #[cfg(test)]
@@ -1765,26 +2086,243 @@ mod tests {
 
     #[test]
     fn a_cited_symbol_is_accepted_by_the_rules() {
-        let reason = format!(
-            "{}`FLUSH_INTERVAL` (crates/store/src/flush.rs)",
-            crate::graph::SYMBOL_REASON
-        );
+        let reason = crate::graph::symbol_reason("FLUSH_INTERVAL", "crates/store/src/flush.rs");
         assert!(matches!(triage_link(&reason), Triage::Accept(_)));
     }
 
     #[test]
     fn a_cited_dependency_is_accepted_only_when_one_component_declares_it() {
-        let single = format!(
-            "{}\"iroh\" (crates/net/Cargo.toml)",
-            crate::graph::DEPENDENCY_REASON
-        );
+        let single = crate::graph::dependency_reason("iroh", "crates/net/Cargo.toml", false);
         assert!(matches!(triage_link(&single), Triage::Accept(_)));
-        let shared = format!(
-            "{}\"serde\" (crates/net/Cargo.toml{})",
-            crate::graph::DEPENDENCY_REASON,
-            crate::graph::DEPENDENCY_SHARED_MARK
-        );
+        let shared = crate::graph::dependency_reason("serde", "crates/net/Cargo.toml", true);
         assert_eq!(triage_link(&shared), Triage::Ask);
+    }
+
+    #[test]
+    fn a_dependency_or_symbol_in_doubt_is_asked_whatever_it_cites() {
+        let doubt = Some(("no", "with no rusqlite handles"));
+        let dependency = crate::graph::with_doubt(
+            &crate::graph::dependency_reason("rusqlite", "crates/core/Cargo.toml", false),
+            doubt,
+        );
+        assert_eq!(triage_link(&dependency), Triage::Ask);
+        let symbol = crate::graph::with_doubt(
+            &crate::graph::symbol_reason("FLUSH_INTERVAL", "crates/store/src/flush.rs"),
+            doubt,
+        );
+        assert_eq!(triage_link(&symbol), Triage::Ask);
+    }
+
+    #[test]
+    fn the_judge_is_told_the_polarity_alert_apart_from_the_evidence() {
+        let reason = crate::graph::with_doubt(
+            &crate::graph::dependency_reason("gpui", "apps/cloud/Cargo.toml", false),
+            Some(("no", "and no GPUI types")),
+        );
+        let summary = |kind, label: &str, detail: &str| crate::graph::NodeSummary {
+            node: crate::graph::NodeRef {
+                kind,
+                id: label.into(),
+            },
+            label: label.into(),
+            detail: detail.into(),
+            at: String::new(),
+        };
+        let suggestion = Suggestion {
+            edge_id: "e".into(),
+            kind: domain::entities::EdgeKind::Affects,
+            source: summary(
+                domain::entities::NodeKind::Decision,
+                "Persistência",
+                "Manter tipos simples",
+            ),
+            entity: summary(domain::entities::NodeKind::Entity, "cloud", "component"),
+            reason,
+            created_at: String::new(),
+        };
+        let text = link_text(&suggestion, None, &[]);
+        assert!(
+            text.contains("Polarity alert: \"no\" in \"and no GPUI types\""),
+            "{text}"
+        );
+        assert!(
+            text.contains("Evidence (cited dependency): \"gpui\" (apps/cloud/Cargo.toml)"),
+            "{text}"
+        );
+        assert!(!text.contains(char::from(10)), "{text}");
+        assert!(LINK_REVIEW_PROMPT.contains("polarity alert"));
+    }
+
+    fn plain_item(text: &str, similar_rules: Vec<String>) -> Item {
+        Item {
+            kind: ItemKind::Candidate,
+            id: "c".into(),
+            title: "t".into(),
+            text: text.into(),
+            waiting_since: String::new(),
+            triage: Triage::Ask,
+            ai_link: false,
+            near: None,
+            rule: None,
+            similar_rules,
+        }
+    }
+
+    fn link(reason: String, detail: &str) -> Suggestion {
+        let summary = |kind, label: &str, detail: &str| crate::graph::NodeSummary {
+            node: crate::graph::NodeRef {
+                kind,
+                id: label.into(),
+            },
+            label: label.into(),
+            detail: detail.into(),
+            at: String::new(),
+        };
+        Suggestion {
+            edge_id: "e".into(),
+            kind: domain::entities::EdgeKind::Affects,
+            source: summary(domain::entities::NodeKind::Decision, "Storage", detail),
+            entity: summary(domain::entities::NodeKind::Entity, "core", "component"),
+            reason,
+            created_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn nothing_portuguese_reaches_the_judge() {
+        let polarity =
+            |reason: String| crate::graph::with_doubt(&reason, Some(("no", "and no sql")));
+        let dependency = |name: &str, shared: bool| {
+            crate::graph::dependency_reason(name, "crates/core/Cargo.toml", shared)
+        };
+        let symbol = || crate::graph::symbol_reason("FLUSH_INTERVAL", "crates/store/src/flush.rs");
+        let reasons = [
+            crate::graph::mention_reason("the store crate"),
+            crate::graph::ai_link_reason("keep the store small", "it limits the store"),
+            crate::graph::ai_link_reason("keep the store small", crate::graph::EXTRACTED_LINK_WHY),
+            dependency("serde", false),
+            dependency("serde", true),
+            symbol(),
+            "touched crates/store/src/flush.rs".to_owned(),
+            polarity(crate::graph::mention_reason("the store crate")),
+            polarity(dependency("serde", true)),
+            polarity(symbol()),
+        ];
+        let component = EntityRecord {
+            entity_id: "e".into(),
+            project_id: "p".into(),
+            kind: domain::entities::EntityKind::Component,
+            name: "core".into(),
+            key: "core".into(),
+            description: "Core crate".into(),
+            patterns: vec!["crates/core/**".into()],
+            aliases: Vec::new(),
+            created_at: String::new(),
+            retired_at: None,
+        };
+        let items: Vec<Item> = reasons
+            .into_iter()
+            .map(|reason| {
+                let text = link_text(&link(reason, "Keep the store small"), Some(&component), &[]);
+                plain_item(&text, vec!["Never block the UI thread".into()])
+            })
+            .collect();
+        let batch: Vec<&Item> = items.iter().collect();
+        let ids: Vec<String> = (1..=batch.len()).map(|at| format!("I{at}")).collect();
+        let (message, _, rules) =
+            review_message(OutputLanguage::from_tag("pt-BR"), &ids, &batch, &[]);
+        assert_eq!(rules, ["Never block the UI thread"]);
+        assert!(
+            message.starts_with("Output language: Brazilian Portuguese\n\n## Items\n"),
+            "{message}"
+        );
+        for word in [
+            "Pergunta",
+            "Escolha",
+            "Motivo",
+            "Evidência",
+            "Componente",
+            "Caminhos",
+            "Alerta",
+            "vínculo",
+            "relação",
+            "contexto",
+            "Citação",
+            "decisão",
+            "Confiança",
+            "Fontes",
+            "Parecid",
+            "Regras",
+            "Decisões",
+            "citad",
+            "dependência",
+            "símbolo",
+            "também",
+            "sugerido",
+            "polaridade",
+            "indicado",
+            " em \"",
+        ] {
+            assert!(!message.contains(word), "{word:?} in {message}");
+        }
+        assert!(message.contains("## Rules in force"), "{message}");
+        assert!(message.contains("Similar rules in force: R1"), "{message}");
+    }
+
+    #[test]
+    fn the_judge_is_told_which_component_shares_the_dependency() {
+        let shared = |owner: &str| {
+            let mut tie = link(
+                crate::graph::dependency_reason("gpui", &format!("apps/{owner}/Cargo.toml"), true),
+                "Draw the title bar with gpui hit testing",
+            );
+            tie.edge_id = format!("edge-{owner}");
+            tie.entity.label = owner.to_string();
+            tie
+        };
+        let pair = [shared("cloud"), shared("cloud-ui")];
+        assert_eq!(co_owners(&pair, &pair[0]), ["cloud-ui"]);
+        let text = link_text(&pair[0], None, &co_owners(&pair, &pair[0]));
+        assert!(text.contains("also declared by: cloud-ui"), "{text}");
+        let alone = link_text(&pair[0], None, &co_owners(&pair[..1], &pair[0]));
+        assert!(
+            alone.contains("also declared by: another component"),
+            "{alone}"
+        );
+        let single = link(
+            crate::graph::dependency_reason("serde", "crates/net/Cargo.toml", false),
+            "Keep serde",
+        );
+        assert!(co_owners(&pair, &single).is_empty());
+        assert!(!link_text(&single, None, &[]).contains("Shared dependency"));
+        assert!(LINK_REVIEW_PROMPT.contains("owners compete"));
+    }
+
+    #[test]
+    fn both_judge_prompts_name_the_language_line() {
+        for prompt in [REVIEW_PROMPT, LINK_REVIEW_PROMPT] {
+            assert!(prompt.contains("output language named on the first line"));
+            assert!(!prompt.contains("language of the item"));
+        }
+    }
+
+    /// A `\` that ends a line inside a prompt literal swallows the newline and the
+    /// next line's indentation: a missing space before it glues two words together.
+    #[test]
+    fn prompts_have_no_glued_words_or_doubled_spaces() {
+        let prompts = [
+            ("review", REVIEW_PROMPT),
+            ("link review", LINK_REVIEW_PROMPT),
+            ("link", crate::link_suggestions::LINK_PROMPT),
+            ("relation", crate::relation_suggestions::RELATION_PROMPT),
+            ("overview", crate::overview::OVERVIEW_PROMPT),
+            ("claim", crate::claim_suggestions::CLAIM_PROMPT),
+        ];
+        for (name, prompt) in prompts {
+            for glued in ["forthe", "formatching", "  "] {
+                assert!(!prompt.contains(glued), "{name} prompt contains {glued:?}");
+            }
+        }
     }
 
     #[test]
@@ -1889,5 +2427,62 @@ mod tests {
             add_minutes("2026-03-01T23:50:30Z", 20).as_deref(),
             Some("2026-03-02T00:10:30Z")
         );
+    }
+
+    #[test]
+    fn app_reasons_keep_their_stored_text_and_read_back() {
+        let plain = [
+            (
+                AppReason::RepeatsDecision,
+                "repete uma decisão já registrada",
+            ),
+            (
+                AppReason::CalibratedConfidence,
+                "alta confiança calibrada, com fonte e sem parecido registrado",
+            ),
+            (
+                AppReason::DependsOnDecision,
+                "depende de outra decisão, com citação conferida",
+            ),
+            (
+                AppReason::OwnDependency,
+                "dependência citada que só este componente declara",
+            ),
+            (
+                AppReason::OwnSymbol,
+                "símbolo ou arquivo citado que só este componente define",
+            ),
+            (
+                AppReason::TouchedFileOrDependency,
+                "derivado de arquivo ou dependência que a decisão tocou",
+            ),
+            (
+                AppReason::AcceptedNotApplied,
+                "a IA aceitou, mas não foi possível aplicar; revise",
+            ),
+            (
+                AppReason::DiscardedNotApplied,
+                "a IA descartou, mas não foi possível aplicar; revise",
+            ),
+            (AppReason::JudgeSilent, "a IA não respondeu sobre este item"),
+        ];
+        for (reason, stored) in plain {
+            assert_eq!(reason.text(), stored);
+            assert_eq!(AppReason::parse(stored), Some(reason));
+        }
+        for reason in [
+            AppReason::RepeatsLiveRule("Cache entries must expire".into()),
+            AppReason::RepeatsPendingRule("Cache entries must expire".into()),
+        ] {
+            assert_eq!(AppReason::parse(&reason.text()), Some(reason));
+        }
+        assert_eq!(
+            AppReason::parse("repete a regra em vigor: Cache entries must expire"),
+            Some(AppReason::RepeatsLiveRule(
+                "Cache entries must expire".into()
+            ))
+        );
+        assert_eq!(AppReason::parse("o componente é onde a regra vale"), None);
+        assert_eq!(AppReason::parse(""), None);
     }
 }

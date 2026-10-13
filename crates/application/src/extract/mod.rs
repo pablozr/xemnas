@@ -12,9 +12,9 @@ use crate::clock::now_rfc3339;
 
 pub use assessment::{
     fail_provider_setup, failure_detail, input_hash, policy_snapshot, record_skipped_assessment,
-    AssessmentOutcome, AssessmentRecord, AssessmentStore, ProviderSetupError, RunContext,
-    ERROR_CODE_CONSENT, ERROR_CODE_KEYSTORE, ERROR_CODE_PROFILE, ERROR_CODE_PROVIDER_CONFIG,
-    ERROR_CODE_SECRET, FAILURE_DETAIL_MAX_CHARS,
+    AssessmentOutcome, AssessmentRecord, AssessmentStore, ComponentTally, ProviderSetupError,
+    RunContext, ERROR_CODE_CONSENT, ERROR_CODE_KEYSTORE, ERROR_CODE_PROFILE,
+    ERROR_CODE_PROVIDER_CONFIG, ERROR_CODE_SECRET, FAILURE_DETAIL_MAX_CHARS,
 };
 pub use connection_test::{
     connection_test_evidence, run_connection_test, ConnectionTestReport, CONNECTION_TEST_CAPTURE_ID,
@@ -93,6 +93,43 @@ pub struct CandidateProposal {
     pub significance: f64,
     /// Significance criteria the extractor ticked ([`SIGNIFICANCE_CRITERIA`]).
     pub criteria: Vec<String>,
+    /// Map components the extractor says it applies to, each with a quote
+    /// from its own text. Empty when the project has no map or it is unsure.
+    pub components: Vec<ProposedComponent>,
+}
+
+/// A component of the project map as the extractor named it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProposedComponent {
+    /// The component's name, as it was listed to the extractor.
+    pub name: String,
+    /// A quote copied from the question, choice or rationale.
+    pub quote: String,
+}
+
+/// A live component of the project map, listed to the extractor by name.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MapComponent {
+    /// The entity id.
+    pub entity_id: String,
+    /// The name the extractor writes back.
+    pub name: String,
+    /// The keys of the name and of its aliases (`entity_key`): a written name
+    /// matches any.
+    pub keys: Vec<String>,
+    /// What the component does, short, for the extractor to recognize it by
+    /// something other than its name. Empty when the map has none.
+    pub description: String,
+}
+
+/// A component a candidate applies to, checked against the map and against
+/// the candidate's own text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CandidateComponent {
+    /// The entity id.
+    pub entity_id: String,
+    /// The quote that shows the candidate says so.
+    pub quote: String,
 }
 
 /// What a proposal is.
@@ -155,6 +192,9 @@ pub struct ExtractionBackground {
     pub confirmed: Vec<String>,
     /// Candidates the user rejected recently, as `question → choice`.
     pub rejected: Vec<String>,
+    /// The live components of the project map, so the extractor can say which
+    /// ones a candidate applies to (see [`resolve_components`]).
+    pub components: Vec<MapComponent>,
 }
 
 /// A row to persist in `decision_candidates`.
@@ -326,6 +366,15 @@ pub trait ExtractionStore {
     ) -> Result<(), ExtractError> {
         Ok(())
     }
+    /// Persists the components a candidate applies to, found by its
+    /// `dedup_hash`. Stores without the table ignore them.
+    fn record_components(
+        &self,
+        _dedup_hash: &str,
+        _components: &[CandidateComponent],
+    ) -> Result<(), ExtractError> {
+        Ok(())
+    }
     /// Loads the evidence for a capture, or `None` when it no longer exists.
     fn load_evidence(&self, capture_id: &str) -> Result<Option<DecisionEvidence>, ExtractError>;
 
@@ -337,6 +386,15 @@ pub trait ExtractionStore {
         _files: &[String],
     ) -> Result<ExtractionBackground, ExtractError> {
         Ok(ExtractionBackground::default())
+    }
+
+    /// Every entity of the project's map, retired ones included; the use case
+    /// picks the components to list to the extractor. Empty by default.
+    fn map_entities(
+        &self,
+        _project_id: &str,
+    ) -> Result<Vec<crate::graph::EntityRecord>, ExtractError> {
+        Ok(Vec::new())
     }
 
     /// Inserts candidates, ignoring rows whose `dedup_hash` already exists.
@@ -379,13 +437,31 @@ where
             0,
             None,
             None,
+            None,
         )?;
         return Ok(ExtractionReport::default());
     }
 
     // Background is a hint: a failure to read it never blocks extraction.
-    let background = store
+    let mut background = store
         .background(&evidence.project_id, &relevance::diff_file_list(&evidence))
+        .unwrap_or_default();
+    // The map's components are a hint too: without them the extractor simply
+    // names none. (This crate has no logging; the failure leaves the list
+    // empty, like a failed background.)
+    background.components = store
+        .map_entities(&evidence.project_id)
+        .map(|entities| {
+            crate::link_suggestions::candidate_components(&entities)
+                .into_iter()
+                .map(|entity| MapComponent {
+                    entity_id: entity.entity_id.clone(),
+                    name: entity.name.clone(),
+                    keys: entity.keys().collect(),
+                    description: short_description(entity),
+                })
+                .collect()
+        })
         .unwrap_or_default();
     let proposals = match extractor.extract_with(&evidence, &signals, &background) {
         Ok(proposals) => proposals,
@@ -403,6 +479,7 @@ where
                 0,
                 Some(error.code()),
                 Some(failure_detail(&error)),
+                None,
             )?;
             return Err(error);
         }
@@ -453,6 +530,7 @@ where
                 0,
                 Some(error.code()),
                 Some(failure_detail(&error)),
+                None,
             )?;
             return Err(error);
         }
@@ -462,6 +540,18 @@ where
     let natures: Vec<_> = validated
         .iter()
         .map(|(p, signals)| (dedup_hash(capture_id, p, signals), p.nature))
+        .collect();
+    let mut tally = ComponentTally {
+        listed: background.components.len(),
+        ..ComponentTally::default()
+    };
+    let components: Vec<_> = validated
+        .iter()
+        .map(|(p, signals)| {
+            let (resolved, each) = resolve_components(p, &background.components);
+            tally += each;
+            (dedup_hash(capture_id, p, signals), resolved)
+        })
         .collect();
     let records: Vec<DecisionCandidateRecord> = validated
         .into_iter()
@@ -501,6 +591,11 @@ where
     for (hash, nature) in natures {
         store.record_nature(&hash, nature)?;
     }
+    for (hash, resolved) in components {
+        if !resolved.is_empty() {
+            store.record_components(&hash, &resolved)?;
+        }
+    }
     let report = ExtractionReport {
         candidates: records.len(),
         inserted,
@@ -517,8 +612,90 @@ where
         report.inserted as i64,
         None,
         None,
+        Some(tally),
     )?;
     Ok(report)
+}
+
+/// Characters of a component's description listed to the extractor: enough to
+/// say what it does ("OS integration: ... tray icon and updates"), not its docs.
+const MAP_DESCRIPTION_CHARS: usize = 100;
+
+/// The description of a component as the extractor sees it: the one the model
+/// reads elsewhere, cut short, on one line.
+fn short_description(entity: &crate::graph::EntityRecord) -> String {
+    crate::graph::short_description_for_model(entity, MAP_DESCRIPTION_CHARS)
+}
+
+/// Components a candidate can apply to at most.
+pub const MAX_CANDIDATE_COMPONENTS: usize = 3;
+
+/// The component of the map a written name points to: the name or an alias as
+/// the map keys it (case, accents, hyphens, spaces and backticks aside), or,
+/// failing that, the part of the name before a description or path suffix
+/// (`sc-platform: OS integration...`, `sc-platform::update`,
+/// `sc-platform/src/tray.rs`).
+fn find_component<'m>(map: &'m [MapComponent], name: &str) -> Option<&'m MapComponent> {
+    let by_key = |key: &str| {
+        map.iter()
+            .find(|component| component.keys.iter().any(|each| each == key))
+    };
+    by_key(&domain::entities::entity_key(name)).or_else(|| {
+        let head = name.split(':').next()?.split('/').next()?;
+        if head.len() < name.len() {
+            by_key(&domain::entities::entity_key(head))
+        } else {
+            None
+        }
+    })
+}
+
+/// The components the extractor named for `proposal` that the map has and that
+/// the proposal's own text backs: the name matches a listed component or one
+/// of its aliases (see [`find_component`]), the quote is copied from the
+/// question, choice or rationale, and each component counts once. A name the
+/// map does not list, a paraphrase and a quote too short to say anything are
+/// dropped. The tally says how many fell where; its `listed` stays 0, because
+/// the size of the map is not known per proposal: the caller sets it once.
+pub(crate) fn resolve_components(
+    proposal: &CandidateProposal,
+    map: &[MapComponent],
+) -> (Vec<CandidateComponent>, ComponentTally) {
+    let texts = crate::link_suggestions::normalized_texts(&[
+        proposal.question.as_str(),
+        proposal.choice.as_str(),
+        proposal.rationale.as_str(),
+    ]);
+    let mut tally = ComponentTally {
+        proposed: proposal.components.len(),
+        ..ComponentTally::default()
+    };
+    let mut resolved: Vec<CandidateComponent> = Vec::new();
+    for named in &proposal.components {
+        if resolved.len() >= MAX_CANDIDATE_COMPONENTS {
+            break;
+        }
+        let Some(component) = find_component(map, &named.name) else {
+            tally.unknown += 1;
+            continue;
+        };
+        if resolved
+            .iter()
+            .any(|known| known.entity_id == component.entity_id)
+        {
+            continue;
+        }
+        if !crate::link_suggestions::quote_matches(&texts, &named.quote) {
+            tally.unquoted += 1;
+            continue;
+        }
+        resolved.push(CandidateComponent {
+            entity_id: component.entity_id.clone(),
+            quote: named.quote.trim().to_string(),
+        });
+    }
+    tally.kept = resolved.len();
+    (resolved, tally)
 }
 
 /// Replaces what the extractor cannot know better than the app: the diff
@@ -631,8 +808,9 @@ fn dedup_hash(
 #[cfg(test)]
 mod tests {
     use super::{
-        filter_relevant, reconcile_with_evidence, truncate_content, CandidateKind,
-        CandidateProposal, DecisionEvidence, EvidenceArtifact, RelevanceSignal,
+        filter_relevant, reconcile_with_evidence, resolve_components, truncate_content,
+        CandidateKind, CandidateProposal, ComponentTally, DecisionEvidence, EvidenceArtifact,
+        MapComponent, ProposedComponent, RelevanceSignal,
     };
 
     fn proposal(refs: &[&str]) -> CandidateProposal {
@@ -650,6 +828,7 @@ mod tests {
             kind: CandidateKind::Decision,
             significance: 0.8,
             criteria: Vec::new(),
+            components: Vec::new(),
         }
     }
 
@@ -835,5 +1014,165 @@ Applies to the Claude Code adapter only.",
             "diff --git a/src/lib.rs b/src/lib.rs\n+ let formatted = value;\n",
         )]));
         assert!(signals.is_empty());
+    }
+
+    fn map() -> Vec<MapComponent> {
+        ["Storage SQLite", "Núcleo", "outbox", "ui"]
+            .iter()
+            .enumerate()
+            .map(|(n, name)| MapComponent {
+                entity_id: format!("e{n}"),
+                name: (*name).into(),
+                keys: vec![domain::entities::entity_key(name)],
+                ..MapComponent::default()
+            })
+            .collect()
+    }
+
+    fn named(name: &str, quote: &str) -> ProposedComponent {
+        ProposedComponent {
+            name: name.into(),
+            quote: quote.into(),
+        }
+    }
+
+    fn resolved_in(
+        map: &[MapComponent],
+        components: Vec<ProposedComponent>,
+    ) -> (Vec<String>, ComponentTally) {
+        let mut candidate = proposal(&[]);
+        candidate.question = "Onde o núcleo grava as capturas?".into();
+        candidate.choice = "Gravar cada captura na outbox antes de responder.".into();
+        candidate.rationale = "Evita perder eventos se o processo cair.".into();
+        candidate.components = components;
+        let (resolved, tally) = resolve_components(&candidate, map);
+        let ids = resolved
+            .into_iter()
+            .map(|component| component.entity_id)
+            .collect();
+        (ids, tally)
+    }
+
+    fn resolved(components: Vec<ProposedComponent>) -> Vec<String> {
+        resolved_in(&map(), components).0
+    }
+
+    #[test]
+    fn a_component_counts_when_the_map_lists_it_and_the_text_backs_the_quote() {
+        // Case does not matter for the name; case and accents do not matter for
+        // the quote.
+        assert_eq!(
+            resolved(vec![
+                named("NÚCLEO", "O NUCLEO grava as capturas"),
+                named("OUTBOX", "gravar cada captura na outbox"),
+            ]),
+            vec!["e1", "e2"]
+        );
+        // A name the map does not list.
+        assert!(resolved(vec![named("billing", "Gravar cada captura na outbox")]).is_empty());
+        // A paraphrase, and a quote too short to say anything.
+        assert!(resolved(vec![named("outbox", "gravar capturas numa fila")]).is_empty());
+        assert!(resolved(vec![named("outbox", "outbox")]).is_empty());
+        // Once per component, at most three.
+        assert_eq!(
+            resolved(vec![
+                named("outbox", "Gravar cada captura na outbox"),
+                named("Outbox", "antes de responder"),
+            ]),
+            vec!["e2"]
+        );
+        let many = ["Storage SQLite", "Núcleo", "outbox", "ui"]
+            .map(|name| named(name, "Evita perder eventos se o processo cair"));
+        assert_eq!(resolved(many.to_vec()).len(), 3);
+    }
+
+    #[test]
+    fn an_alias_and_a_path_suffix_name_the_component_and_the_tally_says_where_names_fell() {
+        let platform = MapComponent {
+            entity_id: "e-platform".into(),
+            name: "sc-platform".into(),
+            keys: vec![
+                domain::entities::entity_key("sc-platform"),
+                domain::entities::entity_key("Tray"),
+            ],
+            ..MapComponent::default()
+        };
+        let map = [platform];
+        let quote = "Gravar cada captura na outbox";
+        for name in [
+            "sc-platform",
+            "SC_Platform",
+            "`sc-platform`",
+            "Tray",
+            "Tray: the tray icon",
+            "sc-platform::update",
+            "sc-platform/src/tray.rs",
+        ] {
+            let (ids, _) = resolved_in(&map, vec![named(name, quote)]);
+            assert_eq!(ids, ["e-platform"], "{name}");
+        }
+        let (ids, tally) = resolved_in(
+            &map,
+            vec![
+                named("sc-platform crate", quote),
+                named("sc-platform", "um trecho que o texto não tem"),
+                named("sc-platform", quote),
+                named("tray", quote),
+            ],
+        );
+        assert_eq!(ids, ["e-platform"]);
+        assert_eq!(
+            tally,
+            ComponentTally {
+                listed: 0,
+                proposed: 4,
+                kept: 1,
+                unknown: 1,
+                unquoted: 1
+            },
+            "the repeated name is only proposed"
+        );
+    }
+
+    #[test]
+    fn a_name_copied_with_its_description_resolves() {
+        let map: Vec<MapComponent> = ["sc-core", "sc-platform", "CI", "cloudrs"]
+            .iter()
+            .map(|name| MapComponent {
+                entity_id: format!("e-{name}"),
+                name: (*name).into(),
+                keys: vec![domain::entities::entity_key(name)],
+                ..MapComponent::default()
+            })
+            .collect();
+        let quote = "Gravar cada captura na outbox";
+        for (copied, id) in [
+            (
+                "sc-core: cloudrs application core: state, rules and the bridge to SoundCloud",
+                "e-sc-core",
+            ),
+            (
+                "sc-platform: cloudrs OS integration: keychain, tray icon and updates",
+                "e-sc-platform",
+            ),
+            (
+                "CI: Continuous integration and release (.github/workflows/**)",
+                "e-CI",
+            ),
+            (
+                "cloudrs: Native SoundCloud client for the desktop",
+                "e-cloudrs",
+            ),
+        ] {
+            let (ids, tally) = resolved_in(&map, vec![named(copied, quote)]);
+            assert_eq!(ids, [id], "{copied}");
+            assert_eq!((tally.kept, tally.unknown), (1, 0), "{copied}");
+        }
+        assert!(resolved_in(&map, vec![named("billing: something", quote)])
+            .0
+            .is_empty());
+        assert!(resolved_in(&map, vec![named("sc-platform crate", quote)])
+            .0
+            .is_empty());
     }
 }

@@ -37,7 +37,7 @@ atrase a análise da sessão que o desenvolvedor acabou de encerrar.
 | --- | --- | --- |
 | `now` | `analyze_capture` (capturas de sessões de agentes) | até 2 |
 | `documents` | `analyze_document` (documentação importada) | até 2 |
-| `suggestions` | `suggest_relations`, `derive_claims`, `derive_search_terms`, `suggest_links`, `context_routing` | 1 |
+| `suggestions` | `suggest_relations`, `derive_claims`, `derive_search_terms`, `suggest_links`, `context_routing`, `auto_review` | 1 |
 
 - O tipo diz a fila: `JobKind::lane` é um `match` exaustivo, então um tipo
   novo não compila sem fila. Cada worker só reivindica tipos da sua fila.
@@ -62,6 +62,7 @@ antigo): o que o caminho quente do agente precisa vem antes do que só refina.
 | 2 | `suggest_relations` |
 | 3 | `derive_claims` |
 | 4 | `derive_search_terms` |
+| 5 | `auto_review` (o juiz roda depois que tudo o que cria itens esvaziou e cobre todos numa passada) |
 
 A análise das decisões roda em filas próprias (`now`, `documents`), então nunca
 espera por sugestões. Dentro de `documents`, a ordem de enfileirar é a de

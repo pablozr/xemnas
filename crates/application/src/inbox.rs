@@ -459,6 +459,14 @@ pub struct ConfirmOutcome {
 
 /// Persistence port the Inbox use case needs.
 pub trait InboxStore {
+    /// The components the extractor said a candidate applies to, each with
+    /// its quote. Empty for stores without the data.
+    fn candidate_components(
+        &self,
+        _candidate_id: &str,
+    ) -> Result<Vec<crate::extract::CandidateComponent>, InboxError> {
+        Ok(Vec::new())
+    }
     /// Checks presentation eligibility independent of the visible page.
     /// Production stores should implement a bounded per-id query.
     fn eligible_in_review(

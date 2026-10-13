@@ -17,7 +17,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use domain::claims::ClaimKind;
-use domain::entities::{EdgeKind, EdgeOrigin, EntityKind, NodeKind};
+use domain::entities::{EdgeKind, EntityKind, NodeKind};
 use domain::time::Timestamp;
 use serde::Deserialize;
 use serde_json::json;
@@ -27,9 +27,10 @@ use crate::claims::{ClaimRecord, ClaimStore};
 use crate::clock::now_rfc3339;
 use crate::decisions::{DecisionStatus, DecisionStore, StoredDecision};
 use crate::graph::{
-    ai_link_quote, ai_link_reason, mention_quote, EdgeRecord, EntityRecord, GraphStore,
+    ai_link_quote, ai_link_reason, doubt_of, mention_quote, EdgeRecord, EntityRecord, GraphStore,
 };
 use crate::jobs::{JobRecord, JobRepository, JobState};
+use crate::output_language::{fixed, header, LanguageSource, OutputLanguage};
 use crate::overview::StructuredModel;
 use crate::profile::{choose_extractor, AiSettings, ExtractorChoice, ProfileStore, SecretStore};
 use crate::projects::ProjectRepository;
@@ -67,7 +68,8 @@ different if this decision were different? If not, do not link. Prefer no link o
 one; an empty list is a good answer when you are not sure. Give at most 3 links.\n\
 For each link give component_id exactly as listed (c1, c2, ...); quote: the words of the \
 decision, copied verbatim from its question, choice, why or scope, that tie it to the \
-component; and reason: one short sentence, in the language of the decision.\n\
+component; and reason: one short sentence, in the output language named on the first \
+line of the message.\n\
 Reply with one JSON object only, matching exactly: {\"decisions\":[{\"id\":string,\
 \"links\":[{\"component_id\":string,\"quote\":string,\"reason\":string}]}]}, one entry per \
 decision, id being its number.",
@@ -190,11 +192,12 @@ pub fn candidate_components(entities: &[EntityRecord]) -> Vec<&EntityRecord> {
 /// name is one of them is marked, because a decision that names the product
 /// is not about that component.
 pub fn link_request(
+    language: OutputLanguage,
     subjects: &[&LinkSubject],
     components: &[&EntityRecord],
     project_keys: &std::collections::BTreeSet<String>,
 ) -> String {
-    let mut user = String::new();
+    let mut user = header(language);
     for (position, subject) in subjects.iter().enumerate() {
         user.push_str(&format!("## Decision {}\n", position + 1));
         // A claim has only a statement: its empty fields are left out.
@@ -234,14 +237,12 @@ pub fn link_request(
         if !patterns.is_empty() {
             user.push_str(&format!(" | paths: {}", patterns.join(", ")));
         }
-        if !component.description.trim().is_empty() {
-            let description =
-                crate::external::limited_text(&component.description, MAX_DESCRIPTION_CHARS);
-            user.push_str(&format!(
-                " | {}",
-                description.split_whitespace().collect::<Vec<_>>().join(" ")
-            ));
+        let description =
+            crate::graph::short_description_for_model(component, MAX_DESCRIPTION_CHARS);
+        if !description.is_empty() {
+            user.push_str(&format!(" | {description}"));
         }
+
         user.push('\n');
     }
     user
@@ -271,6 +272,19 @@ fn normalized(text: &str) -> String {
         .map(crate::terms::fold)
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Whether `quote` (at least [`MIN_QUOTE_CHARS`] characters of words) is
+/// verbatim in one of the already `normalized` texts.
+pub(crate) fn quote_matches(texts: &[String], quote: &str) -> bool {
+    let needle = normalized(quote);
+    needle.chars().count() >= MIN_QUOTE_CHARS && texts.iter().any(|text| text.contains(&needle))
+}
+
+/// The texts in the form [`quote_matches`] compares: words only, lowercase,
+/// without accents.
+pub(crate) fn normalized_texts(texts: &[&str]) -> Vec<String> {
+    texts.iter().map(|text| normalized(text)).collect()
 }
 
 /// Links from one decision's answer `{"links":[...]}` that name a sent
@@ -331,10 +345,7 @@ fn validated(
             continue;
         };
         let quote = raw.quote.trim();
-        let needle = normalized(quote);
-        if needle.chars().count() < MIN_QUOTE_CHARS
-            || !texts.iter().any(|text| text.contains(&needle))
-        {
+        if !quote_matches(&texts, quote) {
             continue;
         }
         if seen.insert(component.entity_id.clone()) {
@@ -348,17 +359,23 @@ fn validated(
     kept
 }
 
+/// Whether a live link with this reason is a tie of its own: not a mention and
+/// not one whose polarity is in doubt.
+fn is_tie(reason: &str) -> bool {
+    mention_quote(reason).is_none() && doubt_of(reason).is_none()
+}
+
 /// Whether the decision still needs the AI's help to reach the map: it has
 /// no live tie from a file, a dependency or a person, and the AI was not
-/// asked before. Mention and AI suggestions are weak and do not count as
-/// ties.
+/// asked before. Mention and AI suggestions, and any link whose polarity is in
+/// doubt, are weak and do not count as ties.
 pub fn needs_links(edges: &[EdgeRecord], decision_id: &str) -> bool {
     !edges
         .iter()
         .filter(|edge| edge.source_kind == NodeKind::Decision && edge.source_id == decision_id)
         .any(|edge| {
             let asked = ai_link_quote(&edge.reason).is_some();
-            let tie = edge.is_live() && mention_quote(&edge.reason).is_none();
+            let tie = edge.is_live() && is_tie(&edge.reason);
             asked || tie
         })
 }
@@ -377,8 +394,7 @@ pub fn claim_needs_links(edges: &[EdgeRecord], claim: &ClaimRecord, at: &Timesta
         edge.kind == EdgeKind::AppliesTo
             && edge.source_kind == NodeKind::Claim
             && edge.source_id == claim.claim_id
-            && (ai_link_quote(&edge.reason).is_some()
-                || (edge.is_live() && mention_quote(&edge.reason).is_none()))
+            && (ai_link_quote(&edge.reason).is_some() || (edge.is_live() && is_tie(&edge.reason)))
     });
     if own {
         return false;
@@ -533,11 +549,12 @@ struct Target {
 
 /// The job: the components one adopted decision, or one standing rule,
 /// applies to, proposed by the model and stored as pending suggestions.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LinkFinder<S, P, K, F> {
     store: S,
     settings: AiSettings<P, K>,
     factory: F,
+    language: LanguageSource,
 }
 
 impl<S, P, K, F> LinkFinder<S, P, K, F>
@@ -554,7 +571,14 @@ where
             store,
             settings,
             factory,
+            language: fixed(OutputLanguage::ENGLISH),
         }
+    }
+
+    /// Where the language of the reasons is read, once per provider call.
+    pub fn with_language(mut self, source: LanguageSource) -> Self {
+        self.language = source;
+        self
     }
 
     /// The project's edges, read once per project and kept in `cache` for the
@@ -706,7 +730,7 @@ where
         let answer = model
             .complete(
                 LINK_PROMPT,
-                &link_request(&subjects, &components, &project_keys),
+                &link_request((self.language)(), &subjects, &components, &project_keys),
                 "decision_links",
                 &link_schema(),
             )
@@ -735,21 +759,14 @@ where
                 }) {
                     continue;
                 }
-                let record = EdgeRecord {
-                    edge_id: uuid::Uuid::now_v7().to_string(),
-                    project_id: target.project_id.clone(),
-                    kind: target.edge_kind,
-                    source_kind: target.source_kind,
-                    source_id: target.source_id.clone(),
-                    entity_id: link.entity_id,
-                    origin: EdgeOrigin::Derived,
-                    reason: ai_link_reason(&link.quote, &link.reason),
-                    created_at: now.clone(),
-                    confirmed_at: None,
-                    invalidated_at: None,
-                    confirmed_by: None,
-                    invalidated_by: None,
-                };
+                let record = EdgeRecord::pending_derived(
+                    &target.project_id,
+                    target.edge_kind,
+                    (target.source_kind, &target.source_id),
+                    &link.entity_id,
+                    ai_link_reason(&link.quote, &link.reason),
+                    &now,
+                );
                 self.store.insert_edge(&record).map_err(storage)?;
                 edges.push(record);
                 count += 1;
@@ -777,6 +794,44 @@ mod tests {
             created_at: "2026-01-01T00:00:00Z".into(),
             retired_at: None,
         }
+    }
+
+    /// The request for the sample decision, in English.
+    fn english_request(components: &[&EntityRecord], keys: &BTreeSet<String>) -> String {
+        link_request(OutputLanguage::ENGLISH, &[&subject()], components, keys)
+    }
+
+    #[test]
+    fn the_request_names_the_output_language_first() {
+        let request = link_request(
+            OutputLanguage::from_tag("pt-BR"),
+            &[&subject()],
+            &[&component("e-core", "core")],
+            &BTreeSet::new(),
+        );
+        assert!(
+            request.starts_with("Output language: Brazilian Portuguese\n\n## Decision 1"),
+            "{request}"
+        );
+        assert!(LINK_PROMPT.contains("output language named on the first line"));
+        assert!(!LINK_PROMPT.contains("language of the decision"));
+    }
+
+    #[test]
+    fn the_root_and_ci_reach_the_model_described_in_english() {
+        let mut root = component("e-root", "workspace");
+        root.patterns = vec!["*".into()];
+        let mut ci = component("e-ci", "CI");
+        ci.patterns = vec![".github/workflows/**".into()];
+        let request = english_request(&[&root, &ci], &BTreeSet::new());
+        assert!(
+            request.contains("Root files: workspace manifest, toolchain and shared configuration"),
+            "{request}"
+        );
+        assert!(
+            request.contains("Continuous integration and release (.github/workflows/**)"),
+            "{request}"
+        );
     }
 
     fn subject() -> LinkSubject {
@@ -858,7 +913,7 @@ mod tests {
         let mut core = component("e-core-secret-id", "core");
         core.aliases = vec!["núcleo".into()];
         core.description = "Regras\ndo núcleo".into();
-        let request = link_request(&[&subject()], &[&core], &BTreeSet::new());
+        let request = english_request(&[&core], &BTreeSet::new());
         assert!(request.contains("## Decision 1\nQuestion: Como o veredito"));
         assert!(request.contains("Scope: Política de desfecho V0.1"));
         assert!(request.contains(
@@ -872,7 +927,7 @@ mod tests {
         let app = component("e-app", "acme");
         let other = component("e-other", "store");
         let keys = BTreeSet::from(["acme".to_string()]);
-        let request = link_request(&[&subject()], &[&app, &other], &keys);
+        let request = english_request(&[&app, &other], &keys);
         assert!(request.contains("- c1 | acme | same name as the project"));
         assert!(request.contains("- c2 | store | paths:"));
         assert!(!request.contains("store | same name"));
@@ -904,7 +959,7 @@ mod tests {
         .to_string();
         let started = std::time::Instant::now();
         for _ in 0..200 {
-            let _ = link_request(&[&subject()], &components, &BTreeSet::new());
+            let _ = english_request(&components, &BTreeSet::new());
             assert_eq!(parse_links(&answer, &subject(), &components).len(), 1);
         }
         let per_run = started.elapsed() / 200;
@@ -920,7 +975,7 @@ mod tests {
             source_kind: NodeKind::Decision,
             source_id: "d".into(),
             entity_id: "e".into(),
-            origin: EdgeOrigin::Derived,
+            origin: domain::entities::EdgeOrigin::Derived,
             reason: reason.into(),
             created_at: "2026-01-01T00:00:00Z".into(),
             confirmed_at: None,
@@ -946,6 +1001,11 @@ mod tests {
         assert!(needs_links(&[edge("crates/core/src/lib.rs", false)], "d"));
         let mention = crate::graph::mention_reason("o core");
         assert!(needs_links(&[edge(&mention, true)], "d"));
+        let in_doubt = crate::graph::with_doubt(&cited, Some(("no", "com no iroh")));
+        assert!(
+            needs_links(&[edge(&in_doubt, true)], "d"),
+            "a link whose polarity is in doubt is no tie"
+        );
         let asked = ai_link_reason("o core grava", "r");
         assert!(!needs_links(&[edge(&asked, false)], "d"));
         assert!(needs_links(

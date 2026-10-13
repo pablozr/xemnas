@@ -54,6 +54,7 @@ fn demo_failed_assessment(
         error_detail: Some(
             "proposta inválida: qualificador sem citação literal verificável".into(),
         ),
+        components: None,
     })?;
     Ok(())
 }

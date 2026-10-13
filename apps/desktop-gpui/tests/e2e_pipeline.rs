@@ -561,7 +561,11 @@ fn run_the_pipeline_over_a_real_project() {
         ai_provider::ProviderFactory::new(chatgpt.clone()).with_limiter(limiter.clone()),
     );
     let started = Instant::now();
-    match application::overview::OverviewApi::generate(&overview, &project_id) {
+    match application::overview::OverviewApi::generate(
+        &overview,
+        &project_id,
+        application::output_language::OutputLanguage::ENGLISH,
+    ) {
         Ok(view) => report.line(format!(
             "[overview] {} paragraph(s), {} flow(s), queued {} document(s) in {:.1}s",
             view.overview.summary.len(),

@@ -10,7 +10,7 @@ use domain::entities::{
 };
 use domain::time::Timestamp;
 
-use super::mention::{entity_terms, Folded};
+use super::mention::{code_words_of, entity_terms, Folded};
 use super::{EdgeRecord, GraphError, GraphStore, KnowledgeGraph};
 use crate::claims::{ClaimRecord, ClaimStore};
 use crate::clock::now_rfc3339;
@@ -27,7 +27,7 @@ pub struct ClaimScopes {
 }
 
 /// Reason of an edge a claim inherited from its source decision.
-pub(crate) const INHERITED_REASON: &str = "herdado da decisão de origem";
+pub const INHERITED_REASON: &str = "herdado da decisão de origem";
 
 /// What it takes to tell which of the components a decision is tied to the
 /// text of a rule names: the entities, the project's names, the dependencies
@@ -71,7 +71,7 @@ impl NarrowContext {
                 }
             }
         }
-        let words: Vec<String> = folded.iter().flat_map(Folded::code_words).collect();
+        let words = code_words_of(&folded);
         if !words.is_empty() {
             let listing = super::repo_files(&self.root);
             if let Some(repo) = listing.as_ref().as_ref().filter(|repo| !repo.partial()) {
@@ -89,7 +89,7 @@ impl NarrowContext {
                     repo,
                     root: &self.root,
                 };
-                for word in &words {
+                for (word, _) in &words {
                     if let Some((owner, _)) = super::derive::symbol_owner(&cited, word) {
                         if let Some(id) = tied.iter().find(|id| **id == owner) {
                             named.insert(id);

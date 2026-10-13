@@ -132,6 +132,24 @@ pub struct JobRecord {
     pub updated_at: String,
 }
 
+impl JobRecord {
+    /// A new idempotent job waiting in the queue.
+    pub(crate) fn queued(kind: &str, payload: &str) -> Self {
+        let now = crate::clock::now_rfc3339();
+        Self {
+            id: uuid::Uuid::now_v7().to_string(),
+            kind: kind.to_string(),
+            payload: payload.to_string(),
+            state: JobState::Queued,
+            idempotent: true,
+            attempts: 0,
+            last_error: None,
+            created_at: now.clone(),
+            updated_at: now,
+        }
+    }
+}
+
 /// Typed reason a handler reports a job as not completed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobFailure {
@@ -305,11 +323,13 @@ pub enum JobKind {
     DeriveSearchTerms,
     /// Map components a decision applies to, proposed by the AI.
     SuggestLinks,
+    /// The automatic judge, over everything that waits for a person.
+    AutoReview,
 }
 
 impl JobKind {
     /// Every product kind.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::AnalyzeCapture,
         Self::AnalyzeDocument,
         Self::SuggestRelations,
@@ -318,6 +338,7 @@ impl JobKind {
         Self::ContextRouting,
         Self::DeriveSearchTerms,
         Self::SuggestLinks,
+        Self::AutoReview,
     ];
 
     /// Literal persisted in the `kind` column.
@@ -331,6 +352,7 @@ impl JobKind {
             Self::ContextRouting => crate::context_routing::CONTEXT_ROUTING_KIND,
             Self::DeriveSearchTerms => "derive_search_terms",
             Self::SuggestLinks => "suggest_links",
+            Self::AutoReview => "auto_review",
         }
     }
 
@@ -350,6 +372,26 @@ impl JobKind {
             Self::SuggestRelations => 2,
             Self::DeriveClaims => 3,
             Self::DeriveSearchTerms => 4,
+            // After the links, relations, rules and terms emptied: one pass
+            // then judges all of them.
+            Self::AutoReview => 5,
+        }
+    }
+
+    /// Whether the job's completion can leave items waiting for a person, so
+    /// the automatic judge is queued after it. The match is exhaustive: a new
+    /// kind cannot compile without saying.
+    pub const fn feeds_review(self) -> bool {
+        match self {
+            Self::AnalyzeCapture
+            | Self::AnalyzeDocument
+            | Self::SuggestRelations
+            | Self::DeriveClaims
+            | Self::SuggestLinks => true,
+            Self::RefreshObservations
+            | Self::ContextRouting
+            | Self::DeriveSearchTerms
+            | Self::AutoReview => false,
         }
     }
 
@@ -365,7 +407,9 @@ impl JobKind {
             | Self::DeriveClaims
             | Self::ContextRouting
             | Self::DeriveSearchTerms
-            | Self::SuggestLinks => Lane::Suggestions,
+            | Self::SuggestLinks
+            // One worker in the lane: two judges never run together.
+            | Self::AutoReview => Lane::Suggestions,
         }
     }
 }
@@ -440,6 +484,10 @@ type Observer = Arc<dyn Fn(JobEvent) + Send + Sync + 'static>;
 pub trait JobRepository {
     /// Inserts a new record.
     fn insert(&self, record: &JobRecord) -> Result<(), JobError>;
+
+    /// Inserts the record unless a queued job of the same kind exists, in one
+    /// atomic step; whether it was inserted.
+    fn insert_unless_queued(&self, record: &JobRecord) -> Result<bool, JobError>;
 
     /// Returns the record with the given identifier, if any.
     fn get(&self, id: &str) -> Result<Option<JobRecord>, JobError>;
@@ -1088,6 +1136,21 @@ mod tests {
             Ok(())
         }
 
+        fn insert_unless_queued(&self, record: &JobRecord) -> Result<bool, JobError> {
+            let mut records = self
+                .records
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if records
+                .iter()
+                .any(|each| each.kind == record.kind && each.state == JobState::Queued)
+            {
+                return Ok(false);
+            }
+            records.push(record.clone());
+            Ok(true)
+        }
+
         fn get(&self, id: &str) -> Result<Option<JobRecord>, JobError> {
             Ok(self
                 .records
@@ -1237,6 +1300,10 @@ mod tests {
     impl JobRepository for FakeRepository {
         fn insert(&self, _record: &JobRecord) -> Result<(), JobError> {
             Ok(())
+        }
+
+        fn insert_unless_queued(&self, _record: &JobRecord) -> Result<bool, JobError> {
+            Ok(true)
         }
 
         fn get(&self, _id: &str) -> Result<Option<JobRecord>, JobError> {
@@ -1609,6 +1676,26 @@ mod tests {
                 "lane {lane:?} serves no kind"
             );
         }
+    }
+
+    #[test]
+    fn only_the_kinds_that_create_items_feed_the_review() {
+        use super::JobKind;
+        let feeding: Vec<&str> = JobKind::ALL
+            .into_iter()
+            .filter(|kind| kind.feeds_review())
+            .map(|kind| kind.as_str())
+            .collect();
+        assert_eq!(
+            feeding,
+            [
+                "analyze_capture",
+                "analyze_document",
+                "suggest_relations",
+                "derive_claims",
+                "suggest_links",
+            ]
+        );
     }
 
     #[test]

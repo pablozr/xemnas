@@ -250,6 +250,30 @@ impl ExtractionStore for SqliteStore {
             .map_err(storage_error)?;
         Ok(())
     }
+    fn record_components(
+        &self,
+        dedup_hash: &str,
+        components: &[application::extract::CandidateComponent],
+    ) -> Result<(), ExtractError> {
+        let connection = self.lock();
+        for component in components {
+            connection
+                .execute(
+                    "INSERT OR IGNORE INTO candidate_components(candidate_id, entity_id, quote)
+                     SELECT id, ?2, ?3 FROM decision_candidates WHERE dedup_hash = ?1",
+                    params![dedup_hash, component.entity_id, component.quote],
+                )
+                .map_err(storage_error)?;
+        }
+        Ok(())
+    }
+    fn map_entities(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<application::graph::EntityRecord>, ExtractError> {
+        application::graph::GraphStore::project_entities(self, project_id)
+            .map_err(|error| ExtractError::Storage(error.to_string()))
+    }
     fn background(
         &self,
         project_id: &str,
@@ -345,6 +369,7 @@ impl ExtractionStore for SqliteStore {
             known,
             confirmed,
             rejected,
+            components: Vec::new(),
         })
     }
 

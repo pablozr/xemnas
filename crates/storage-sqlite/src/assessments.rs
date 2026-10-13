@@ -24,9 +24,10 @@ impl AssessmentStore for SqliteStore {
                  (id, capture_id, job_id, profile_id, adapter, model, policy, \
                   consent_preview_hash, input_hash, started_at, finished_at, outcome, \
                   candidates, inserted, error_code, attempt, reason, durable_count, detail_count, \
-                  error_detail) \
+                  error_detail, components_listed, components_proposed, components_kept, \
+                  components_unknown, components_unquoted) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
-                    ?16, ?17, ?18, ?19, ?20)",
+                    ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
                 params![
                     row.id,
                     row.capture_id,
@@ -48,6 +49,11 @@ impl AssessmentStore for SqliteStore {
                     row.durable_count as i64,
                     row.detail_count as i64,
                     row.error_detail,
+                    row.components.map(|tally| tally.listed as i64),
+                    row.components.map(|tally| tally.proposed as i64),
+                    row.components.map(|tally| tally.kept as i64),
+                    row.components.map(|tally| tally.unknown as i64),
+                    row.components.map(|tally| tally.unquoted as i64),
                 ],
             )
             .map(|_| ())

@@ -30,7 +30,7 @@ use application::graph::{GraphStore, KnowledgeGraph};
 use application::inbox::{CandidateEdits, Inbox};
 use application::jobs::{JobRecord, JobState, ANALYZE_CAPTURE_KIND};
 use application::projects::{ProjectRecord, ProjectRepository};
-use domain::entities::{EdgeKind, NodeKind};
+use domain::entities::{EdgeActor, EdgeKind, NodeKind};
 use storage_sqlite::SqliteStore;
 
 /// Floors measured on the corpus; raise them when the rule improves. History
@@ -42,8 +42,32 @@ use storage_sqlite::SqliteStore;
 /// with dependency owners: precision 1.000 (24/24), recall 0.774 (24/31).
 /// with symbols and file names: precision 1.000 (27/27), recall 0.871 (27/31); scan of 2,000 code files 0.5 s.
 /// with root and CI components: precision 1.000 (31/31), recall 1.000 (31/31).
+/// 2026-10-09, baseline with the multilingual polarity cases (the `cloud`
+/// project and a34): precision 0.857 (36/42), recall 1.000 (36/36), the rules
+/// accept 2 wrong links (`no rusqlite handles`, `no usa rusqlite`), 4 negated
+/// links, 23 links go to the judge.
+/// 2026-10-09, a polarity word of any language raises doubt instead of
+/// deciding (scopes of 3, 4 and 5 words gave the same result; 3 kept): the
+/// links asserted are precision 1.000 (32/32), recall 0.889 (32/36); the 10
+/// links in doubt (4 right: Portuguese "no X", Spanish "sin gpui en X"; 6
+/// wrong) go to the judge, and with it the recall is 1.000 (36/36); no wrong
+/// link is accepted by the rules and 26 go to the judge (23 before). Asserted
+/// recall is lower on purpose: "gravar no sc-core" is asked, not decided.
+/// 2026-10-09, a dependency two components declare ties to its owners only
+/// when the decision names none of them by other evidence (cases p09 and p10,
+/// the "icons" and "title bar" decisions of the real project): before the
+/// rule they added 2 wrong links, precision 0.944 (34/36) and 29 to the judge;
+/// with it precision 1.000 (34/34), recall 0.895 (34/38), recall with the
+/// judge 1.000, 17 accepted by the rules (the title bar's file) and 27 to the
+/// judge (26 before the two cases: the icons' mention of the UI crate).
 const PRECISION_FLOOR: f64 = 0.95;
-const RECALL_FLOOR: f64 = 0.95;
+const RECALL_FLOOR: f64 = 0.88;
+const RECALL_WITH_JUDGE_FLOOR: f64 = 0.95;
+/// Ceilings of the cost: links the rules accept that are wrong, and links that
+/// go to the judge or to the person.
+const RULE_ACCEPTED_WRONG_CEILING: usize = 0;
+const TO_JUDGE_CEILING: usize = 27;
+const DOUBTFUL_CEILING: usize = 10;
 /// Ceilings: the count of wrong links of each kind.
 const NEGATED_CEILING: usize = 0;
 const HOMONYM_CEILING: usize = 0;
@@ -139,7 +163,7 @@ const ACME_DOCUMENT_FILES: &[&str] = &[
 ];
 
 fn fixtures() -> Vec<Fixture> {
-    vec![acme(), shop(), toolkit(), solo()]
+    vec![acme(), shop(), toolkit(), solo(), cloud()]
 }
 
 fn acme() -> Fixture {
@@ -400,6 +424,13 @@ fn acme() -> Fixture {
                 "The storage engine is chosen per tenant.",
                 &[],
             ),
+            // Neither: the polarity is clear in English.
+            case(
+                "a34",
+                Kind::Negated,
+                "The core depends on neither quinn nor rusqlite.",
+                &["acme-core"],
+            ),
         ],
     }
 }
@@ -563,6 +594,136 @@ fn solo() -> Fixture {
     }
 }
 
+/// A workspace whose app shares the project's name and whose UI crate shares a
+/// dependency with it, the shape of a real project where "no GPUI types" in a
+/// decision linked both owners of `gpui`. The decisions are written in several
+/// languages: the polarity of a text must not depend on the language.
+fn cloud() -> Fixture {
+    Fixture {
+        folder: "cloud",
+        homonym: Some("cloud"),
+        files: &[
+            (
+                "Cargo.toml",
+                "[workspace]
+resolver = \"2\"
+members = [\"apps/cloud\", \"crates/*\"]
+",
+            ),
+            (
+                "apps/cloud/Cargo.toml",
+                "[package]
+name = \"cloud\"
+
+[dependencies]
+gpui = \"0.2\"
+cloud-ui = { path = \"../../crates/ui\" }
+",
+            ),
+            ("apps/cloud/src/main.rs", "fn main() {}
+"),
+            (
+                "crates/ui/Cargo.toml",
+                "[package]
+name = \"cloud-ui\"
+
+[dependencies]
+gpui = \"0.2\"
+",
+            ),
+            ("crates/ui/src/lib.rs", "pub mod view;
+"),
+            (
+                "crates/core/Cargo.toml",
+                "[package]
+name = \"sc-core\"
+
+[dependencies]
+rusqlite = \"0.40\"
+",
+            ),
+            ("crates/core/src/lib.rs", "pub mod state;
+"),
+            (
+                "crates/platform/Cargo.toml",
+                "[package]
+name = \"sc-platform\"
+
+[dependencies]
+self_update = \"0.40\"
+",
+            ),
+            ("crates/platform/src/lib.rs", "pub mod update;
+"),
+        ],
+        cases: vec![
+            case(
+                "p01",
+                Kind::Negated,
+                "Results and player state use plain data structs with an `apply(Event)` step and no GPUI types.",
+                &[],
+            ),
+            case(
+                "p02",
+                Kind::Negated,
+                "Keep the domain types plain, with no rusqlite handles.",
+                &[],
+            ),
+            case(
+                "p03",
+                Kind::Negated,
+                "The settings row depends on neither rusqlite nor self_update.",
+                &[],
+            ),
+            case(
+                "p04",
+                Kind::Plain,
+                "As configurações ficam numa linha gravada no sc-core.",
+                &["sc-core"],
+            ),
+            case(
+                "p05",
+                Kind::Plain,
+                "Gravar o histórico no rusqlite com WAL.",
+                &["sc-core"],
+            ),
+            case(
+                "p06",
+                Kind::Plain,
+                "Usar self_update para el canal de actualizaciones.",
+                &["sc-platform"],
+            ),
+            case(
+                "p07",
+                Kind::Negated,
+                "El núcleo no usa rusqlite; la caché vive en memoria.",
+                &[],
+            ),
+            case(
+                "p08",
+                Kind::Plain,
+                "Sin gpui en sc-core: el estado es datos planos.",
+                &["sc-core"],
+            ),
+            // The two decisions of the real project (`cloudrs`) that linked
+            // both owners of `gpui`: "icons" is about the UI crate it cites,
+            // "title bar" about the app whose file it touches.
+            case(
+                "p09",
+                Kind::Plain,
+                "Serve the icons from cloud-ui and draw them with gpui's svg() as tinted masks.",
+                &["cloud-ui"],
+            ),
+            code(
+                "p10",
+                "Draw the title bar with gpui hit testing in the window code.",
+                &["apps/cloud/src/main.rs"],
+                &["cloud"],
+            ),
+        ],
+    }
+}
+
 fn write_tree(root: &Path, files: &[(&str, &str)]) {
     for (relative, content) in files {
         let path = root.join(relative);
@@ -711,14 +872,29 @@ fn at_most(count: usize, ceiling: usize) -> bool {
     count <= ceiling
 }
 
+/// Whether the reason of a link carries a polarity alarm.
+fn doubtful(reason: &str) -> bool {
+    application::graph::doubt_of(reason).is_some()
+}
+
 #[derive(Default)]
 struct Tally {
-    found: usize,
+    /// Live links with no polarity alarm: what the machine asserts.
+    asserted: usize,
     expected: usize,
     correct: usize,
     negated_linked: usize,
     homonym_linked: usize,
     ghost_proposals: usize,
+    /// Live links that carry a polarity alarm, and how many were right.
+    doubtful: usize,
+    doubtful_right: usize,
+    doubtful_wrong: usize,
+    /// Pending links the rules would accept without the judge, and the wrong ones.
+    rule_accepted: usize,
+    rule_accepted_wrong: usize,
+    /// Pending links that go to the judge (or to the person).
+    to_judge: usize,
 }
 
 fn scratch(tag: &str) -> PathBuf {
@@ -767,7 +943,7 @@ fn link_structure_quality_gate() {
         };
         let edges = test.store.project_edges(&project).expect("edges");
         for (decision_id, case) in &decisions {
-            let linked: BTreeSet<String> = edges
+            let live: Vec<&application::graph::EdgeRecord> = edges
                 .iter()
                 .filter(|edge| {
                     edge.kind == EdgeKind::Affects
@@ -775,17 +951,44 @@ fn link_structure_quality_gate() {
                         && edge.source_id == *decision_id
                         && edge.is_live()
                 })
-                .map(|edge| name_of(&edge.entity_id))
                 .collect();
             let expect: BTreeSet<String> =
                 case.expect.iter().map(|name| name.to_string()).collect();
-            tally.found += linked.len();
+            let names = |in_doubt: bool| -> BTreeSet<String> {
+                live.iter()
+                    .filter(|edge| doubtful(&edge.reason) == in_doubt)
+                    .map(|edge| name_of(&edge.entity_id))
+                    .collect()
+            };
+            let linked = names(false);
+            let in_doubt = names(true);
+            tally.asserted += linked.len();
             tally.expected += expect.len();
             tally.correct += linked.intersection(&expect).count();
+            tally.doubtful += in_doubt.len();
+            tally.doubtful_right += in_doubt.intersection(&expect).count();
+            tally.doubtful_wrong += in_doubt.difference(&expect).count();
+            for edge in live.iter().filter(|edge| edge.confirmed_at.is_none()) {
+                let name = name_of(&edge.entity_id);
+                match application::auto_approval::triage_link(&edge.reason) {
+                    application::auto_approval::Triage::Accept(_) => {
+                        tally.rule_accepted += 1;
+                        if !expect.contains(&name) {
+                            tally.rule_accepted_wrong += 1;
+                            println!("  case {}: rule-accepted wrong {name}", case.key);
+                        }
+                    }
+                    application::auto_approval::Triage::Ask => tally.to_judge += 1,
+                    application::auto_approval::Triage::Discard(_) => {}
+                }
+            }
             let wrong: Vec<&String> = linked.difference(&expect).collect();
             let missed: Vec<&String> = expect.difference(&linked).collect();
-            if !wrong.is_empty() || !missed.is_empty() {
-                println!("  case {}: wrong {wrong:?} missed {missed:?}", case.key);
+            if !wrong.is_empty() || !missed.is_empty() || !in_doubt.is_empty() {
+                println!(
+                    "  case {}: wrong {wrong:?} missed {missed:?} doubtful {in_doubt:?}",
+                    case.key
+                );
             }
             if case.kind == Kind::Negated {
                 tally.negated_linked += wrong.len();
@@ -799,21 +1002,50 @@ fn link_structure_quality_gate() {
         }
     }
     let _ = std::fs::remove_dir_all(&base);
-    let precision = tally.correct as f64 / tally.found.max(1) as f64;
+    let precision = tally.correct as f64 / tally.asserted.max(1) as f64;
     let recall = tally.correct as f64 / tally.expected.max(1) as f64;
+    let recall_with_judge =
+        (tally.correct + tally.doubtful_right) as f64 / tally.expected.max(1) as f64;
     println!(
         "gate structural links: precision {precision:.3} ({}/{}) recall {recall:.3} ({}/{}) \
+         recall_with_judge {recall_with_judge:.3} doubtful {} doubtful_right {} \
+         doubtful_wrong {} rule_accepted {} rule_accepted_wrong {} to_judge {} \
          negated_linked {} homonym_linked {} ghost_proposals {}",
         tally.correct,
-        tally.found,
+        tally.asserted,
         tally.correct,
         tally.expected,
+        tally.doubtful,
+        tally.doubtful_right,
+        tally.doubtful_wrong,
+        tally.rule_accepted,
+        tally.rule_accepted_wrong,
+        tally.to_judge,
         tally.negated_linked,
         tally.homonym_linked,
         tally.ghost_proposals,
     );
     assert!(precision >= PRECISION_FLOOR, "precision {precision:.3}");
     assert!(recall >= RECALL_FLOOR, "recall {recall:.3}");
+    assert!(
+        recall_with_judge >= RECALL_WITH_JUDGE_FLOOR,
+        "recall_with_judge {recall_with_judge:.3}"
+    );
+    assert!(
+        at_most(tally.rule_accepted_wrong, RULE_ACCEPTED_WRONG_CEILING),
+        "rule_accepted_wrong {}",
+        tally.rule_accepted_wrong
+    );
+    assert!(
+        at_most(tally.to_judge, TO_JUDGE_CEILING),
+        "to_judge {}",
+        tally.to_judge
+    );
+    assert!(
+        at_most(tally.doubtful, DOUBTFUL_CEILING),
+        "doubtful {}",
+        tally.doubtful
+    );
     assert!(
         at_most(tally.negated_linked, NEGATED_CEILING),
         "negated_linked {}",
@@ -829,6 +1061,161 @@ fn link_structure_quality_gate() {
         "ghost_proposals {}",
         tally.ghost_proposals
     );
+}
+
+/// The `cloud` project, registered and assembled, with one decision.
+struct SharedGpui {
+    graph: KnowledgeGraph<SqliteStore>,
+    test: support::TestStore,
+    project: String,
+    decision: String,
+    base: PathBuf,
+}
+
+fn shared_gpui(tag: &str, text: &'static str) -> SharedGpui {
+    let base = scratch(tag);
+    let test = support::open(tag, &[]);
+    let fixture = cloud();
+    let project = "p-shared".to_string();
+    let root = base.join(fixture.folder);
+    write_tree(&root, fixture.files);
+    register(&test.store, &project, &root);
+    let case = case("s01", Kind::Plain, text, &[]);
+    let decision = confirm_decision(&test.store, &project, &root.to_string_lossy(), &case);
+    let graph = KnowledgeGraph::new(test.store.clone());
+    graph.assemble(&project).expect("assemble");
+    SharedGpui {
+        graph,
+        test,
+        project,
+        decision,
+        base,
+    }
+}
+
+impl SharedGpui {
+    fn entity(&self, name: &str) -> String {
+        self.test
+            .store
+            .project_entities(&self.project)
+            .expect("entities")
+            .into_iter()
+            .find(|entity| entity.name == name)
+            .unwrap_or_else(|| panic!("entity {name}"))
+            .entity_id
+    }
+
+    /// The rows of the decision toward a component, oldest first.
+    fn rows(&self, name: &str) -> Vec<application::graph::EdgeRecord> {
+        let entity = self.entity(name);
+        self.test
+            .store
+            .project_edges(&self.project)
+            .expect("edges")
+            .into_iter()
+            .filter(|edge| {
+                edge.source_id == self.decision
+                    && edge.entity_id == entity
+                    && edge.kind == EdgeKind::Affects
+            })
+            .collect()
+    }
+
+    fn refresh(&self) {
+        self.graph
+            .refresh_suggestions(&self.project)
+            .expect("refresh");
+    }
+}
+
+impl Drop for SharedGpui {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.base);
+    }
+}
+
+/// A mention the person rejected cites nothing: the dependency still ties the
+/// owner that has no row of its own.
+#[test]
+fn a_rejected_mention_does_not_silence_the_shared_dependency() {
+    let shared = shared_gpui(
+        "shared-rejected",
+        "Serve the icons from cloud-ui and draw them with gpui's svg() as tinted masks.",
+    );
+    shared.refresh();
+    let mention = shared.rows("cloud-ui");
+    assert_eq!(mention.len(), 1, "the mention of cloud-ui");
+    assert!(
+        mention[0].reason.contains("cloud-ui"),
+        "{}",
+        mention[0].reason
+    );
+    assert!(
+        shared.rows("cloud").is_empty(),
+        "the cited owner is the only tie"
+    );
+
+    shared
+        .graph
+        .invalidate(&mention[0].edge_id)
+        .expect("reject");
+    shared.refresh();
+    let app = shared.rows("cloud");
+    assert_eq!(app.len(), 1, "the dependency ties the other owner");
+    assert!(app[0].is_live());
+    assert!(application::graph::shared_dependency(&app[0].reason));
+}
+
+/// The order the evidence arrives in does not matter: with no owner cited a
+/// shared dependency ties both; once the AI ties one of them, the dependency
+/// edge of the other is dropped by the rules and nothing is written twice.
+#[test]
+fn the_shared_dependency_converges_when_an_owner_is_cited_later() {
+    let shared = shared_gpui(
+        "shared-converge",
+        "Draw the title bar with gpui hit testing in the window code.",
+    );
+    shared.refresh();
+    let app = shared.rows("cloud");
+    let ui = shared.rows("cloud-ui");
+    assert_eq!((app.len(), ui.len()), (1, 1), "both owners are tied");
+    assert!(app[0].confirmed_at.is_none() && ui[0].confirmed_at.is_none());
+
+    // The AI ties the app: its row replaces the dependency row of that owner.
+    shared
+        .graph
+        .invalidate_as(&app[0].edge_id, EdgeActor::Rules)
+        .expect("drop the app's dependency row");
+    let asked = application::graph::EdgeRecord::pending_derived(
+        &shared.project,
+        EdgeKind::Affects,
+        (NodeKind::Decision, &shared.decision),
+        &shared.entity("cloud"),
+        application::graph::ai_link_reason("title bar in the window code", "the window"),
+        "2030-01-01T00:00:00Z",
+    );
+    shared.test.store.insert_edge(&asked).expect("AI link");
+
+    shared.refresh();
+    let ui = shared.rows("cloud-ui");
+    assert_eq!(ui.len(), 1);
+    assert!(
+        !ui[0].is_live(),
+        "the other owner's dependency row is dropped"
+    );
+    assert_eq!(ui[0].invalidated_by, Some(EdgeActor::Rules));
+    let app = shared.rows("cloud");
+    let live: Vec<_> = app.iter().filter(|edge| edge.is_live()).collect();
+    assert_eq!(live.len(), 1, "the cited owner is not tied twice");
+    assert!(application::graph::ai_link_quote(&live[0].reason).is_some());
+
+    shared.refresh();
+    assert_eq!(
+        shared.rows("cloud-ui").len(),
+        1,
+        "a second refresh changes nothing"
+    );
+    assert_eq!(shared.rows("cloud").len(), 2);
 }
 
 /// A decision of the scale project.

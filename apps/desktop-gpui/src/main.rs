@@ -207,7 +207,8 @@ fn main() {
                 store.clone(),
                 settings.clone(),
                 ai_provider::ProviderFactory::new(chatgpt.clone()).with_limiter(limiter.clone()),
-            );
+            )
+            .with_language(interface_language());
             move |records: &[application::jobs::JobRecord]| {
                 let ids: Vec<&str> = records.iter().map(|job| job.payload.as_str()).collect();
                 finder
@@ -324,7 +325,8 @@ fn main() {
                 store.clone(),
                 settings.clone(),
                 ai_provider::ProviderFactory::new(chatgpt.clone()).with_limiter(limiter.clone()),
-            );
+            )
+            .with_language(interface_language());
             move |records: &[application::jobs::JobRecord]| {
                 let ids: Vec<&str> = records.iter().map(|job| job.payload.as_str()).collect();
                 finder
@@ -351,7 +353,25 @@ fn main() {
             }
         }),
     );
-    jobs.observe_with(|event| match event {
+    // The automatic judge runs here, not on a screen: it is queued when a job
+    // that may create items completes (nothing in manual mode) and covers all
+    // projects in one pass. The Revisão screen shares this instance, so the
+    // two never judge together and ask the provider through the same limiter.
+    let judge: Arc<dyn application::auto_approval::ApprovalsApi> = Arc::new(
+        application::auto_approval::Approvals::new(
+            store.clone(),
+            Arc::new(application::adoption::Adoption::new(store.clone())),
+            settings.clone(),
+            ai_provider::ProviderFactory::new(chatgpt.clone()).with_limiter(limiter.clone()),
+        )
+        .with_language(interface_language()),
+    );
+    jobs.register(
+        application::auto_approval::REVIEW_JOB_KIND,
+        application::auto_approval::review_job(judge.clone()),
+    );
+    let observed = store.clone();
+    jobs.observe_with(move |event| match event {
         application::jobs::JobEvent::Finished(outcome) => {
             tracing::info!(
                 job_id = %outcome.job_id,
@@ -360,6 +380,13 @@ fn main() {
                 attempts = outcome.attempts,
                 "job finished"
             );
+            if let Err(error) = application::auto_approval::queue_review_after(
+                &observed,
+                &outcome.kind,
+                outcome.state,
+            ) {
+                tracing::warn!(error = %error, operation = "queue_review", "could not queue");
+            }
         }
         application::jobs::JobEvent::StorageError(detail) => {
             tracing::error!(
@@ -446,7 +473,7 @@ fn main() {
     );
     let overview = overview_api(ai_settings(&paths.ai_profile), chatgpt.clone());
     let reviewer = review_api(ai_settings(&paths.ai_profile), chatgpt.clone());
-    let approvals = approvals_api(ai_settings(&paths.ai_profile), chatgpt.clone());
+    let approvals: ApprovalsFactory = Box::new(move |_| judge);
     run_shell_mode(
         Ok(store),
         services,
@@ -692,13 +719,23 @@ where
     Box::new(move |store| {
         let adoption: Arc<dyn application::adoption::AdoptionApi> =
             Arc::new(application::adoption::Adoption::new(store.clone()));
-        Arc::new(application::auto_approval::Approvals::new(
-            store,
-            adoption,
-            settings,
-            ai_provider::ProviderFactory::new(chatgpt),
-        ))
+        Arc::new(
+            application::auto_approval::Approvals::new(
+                store,
+                adoption,
+                settings,
+                ai_provider::ProviderFactory::new(chatgpt),
+            )
+            .with_language(interface_language()),
+        )
     })
+}
+
+/// The language the interface shows now, read when a job asks the AI for
+/// prose, so a change of language applies to the next request.
+fn interface_language() -> application::output_language::LanguageSource {
+    use application::output_language::OutputLanguage;
+    Arc::new(|| OutputLanguage::from_tag(xemnas_desktop::i18n::current().id()))
 }
 
 fn review_api<P, K>(

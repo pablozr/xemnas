@@ -81,6 +81,29 @@ impl JobRepository for SqliteStore {
             .map_err(storage_error)
     }
 
+    fn insert_unless_queued(&self, record: &JobRecord) -> Result<bool, JobError> {
+        self.lock()
+            .execute(
+                "INSERT INTO jobs \
+                 (id, kind, payload, state, idempotent, attempts, last_error, created_at, updated_at) \
+                 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9 \
+                 WHERE NOT EXISTS (SELECT 1 FROM jobs WHERE state = 'queued' AND kind = ?2)",
+                params![
+                    record.id,
+                    record.kind,
+                    record.payload,
+                    record.state.as_str(),
+                    record.idempotent,
+                    record.attempts,
+                    record.last_error,
+                    record.created_at,
+                    record.updated_at,
+                ],
+            )
+            .map(|inserted| inserted > 0)
+            .map_err(storage_error)
+    }
+
     fn get(&self, id: &str) -> Result<Option<JobRecord>, JobError> {
         self.lock()
             .query_row(

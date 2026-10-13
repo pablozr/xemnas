@@ -19,6 +19,7 @@ use std::sync::Arc;
 use application::analysis::ExtractorFactory;
 use application::batching::{answers, BATCH_SIZE};
 use application::link_suggestions::{candidate_components, link_request, link_schema, LINK_PROMPT};
+use application::output_language::OutputLanguage;
 use application::overview::StructuredModel;
 use application::paths::AppPaths;
 use application::profile::{AiSettings, FileProfileStore};
@@ -53,7 +54,12 @@ fn generate_link_corpus_answers() {
     for batch in corpus::DECISIONS.chunks(BATCH_SIZE) {
         let subjects: Vec<_> = batch.iter().map(corpus::subject).collect();
         let subjects: Vec<_> = subjects.iter().collect();
-        let request = link_request(&subjects, &components, &BTreeSet::new());
+        let request = link_request(
+            OutputLanguage::ENGLISH,
+            &subjects,
+            &components,
+            &BTreeSet::new(),
+        );
         let answer = model
             .complete(LINK_PROMPT, &request, "decision_links", &link_schema())
             .expect("provider answer");
