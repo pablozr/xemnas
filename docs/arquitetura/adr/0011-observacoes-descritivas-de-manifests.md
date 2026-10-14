@@ -18,7 +18,7 @@ Membership encerrado é OutOfScope, não falha transitória. Suportes de workspa
 participam da igualdade/versionamento e da elegibilidade.
 
 Context Pack/MCP/injeção/exportação compartilham a seleção descritiva por nomes
-explícitos e escopo dos arquivos. Normas mantêm prioridade de orçamento. Observações
+explícitos e escopo dos arquivos (a injeção não pedida ainda restringe ao que o pedido nomeia; ver Estado hoje). Normas mantêm prioridade de orçamento. Observações
 levam referências O e autoridade descritiva; correções distinguem invalidação,
 incerteza e revalidação, com auditoria separada por Project/sessão/modo. A gravação
 reconfere fonte, suportes, versão e dirty generation. Consulta histórica não entrega

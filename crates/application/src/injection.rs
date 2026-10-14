@@ -36,7 +36,7 @@ const HARNESS_PROMPT_PREFIXES: &[&str] = &["<task-notification>"];
 /// Whether `prompt` is a synthetic message and not something the user typed.
 /// Claude Code delivers the end of a background subagent as a user message;
 /// it carries no request, so it gets no context and records nothing.
-pub fn is_harness_prompt(prompt: &str) -> bool {
+pub(crate) fn is_harness_prompt(prompt: &str) -> bool {
     let prompt = prompt.trim_start();
     HARNESS_PROMPT_PREFIXES
         .iter()
@@ -299,9 +299,11 @@ where
             .map(|file| project_file(file, &project.location, &request.canonical_path))
             .filter(|file| !file.is_empty())
             .collect();
-        let mut explicit = files.clone();
+        let mut explicit = Vec::new();
         let mut named = BTreeSet::new();
-        if !edit {
+        if edit {
+            explicit.clone_from(&files);
+        } else {
             explicit = mentioned_paths(&prompt, &project.location);
             explicit.extend(mentioned_root_manifests(&prompt));
             files.extend(explicit.iter().cloned());
@@ -530,13 +532,16 @@ const ROOT_MANIFESTS: &[&str] = &["package.json", "Cargo.toml"];
 
 /// Root manifests the prompt names by file name (`revise o package.json`).
 fn mentioned_root_manifests(prompt: &str) -> Vec<String> {
-    let words: Vec<String> = prompt
-        .split(|character: char| character.is_whitespace() || "`'\"()[]{}<>,;".contains(character))
-        .map(|word| word.trim_end_matches(['.', ':', '!', '?']).to_lowercase())
-        .collect();
     ROOT_MANIFESTS
         .iter()
-        .filter(|manifest| words.contains(&manifest.to_lowercase()))
+        .filter(|manifest| {
+            prompt
+                .split(|c: char| c.is_whitespace() || "`'\"()[]{}<>,;".contains(c))
+                .any(|word| {
+                    word.trim_end_matches(['.', ':', '!', '?'])
+                        .eq_ignore_ascii_case(manifest)
+                })
+        })
         .map(|manifest| manifest.to_string())
         .collect()
 }
@@ -548,6 +553,10 @@ fn keep_requested_observations(
     tokens: &BTreeSet<String>,
     explicit_files: &[String],
 ) {
+    if tokens.is_empty() && explicit_files.is_empty() {
+        observations.clear();
+        return;
+    }
     observations.retain(|item| {
         let record = &item.record;
         tokens.contains(&record.subject.name().to_lowercase())
@@ -1296,8 +1305,7 @@ mod tests {
         let fresh = || vec![dev_dependency("vitest", "package.json")];
         let kept = |prompt: &str, explicit: &[&str]| {
             let mut observations = fresh();
-            let explicit: Vec<String> = explicit.iter().map(|file| file.to_string()).collect();
-            let mut explicit = explicit;
+            let mut explicit: Vec<String> = explicit.iter().map(|file| file.to_string()).collect();
             explicit.extend(mentioned_root_manifests(prompt));
             let named = crate::context::observation_tokens(prompt);
             keep_requested_observations(&mut observations, &named, &explicit);
