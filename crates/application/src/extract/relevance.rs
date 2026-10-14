@@ -360,22 +360,45 @@ pub fn filter_relevant(evidence: &DecisionEvidence) -> Vec<RelevanceSignal> {
 /// Only `user_text` counts, because the decision lives there; what the turn
 /// touched (test-only diff, trivial markers) does not veto it.
 fn user_changes_course(evidence: &DecisionEvidence) -> bool {
-    let mut hints = 0;
+    let text = user_words(evidence);
+    if text.is_empty() {
+        return false;
+    }
+    contains_any_token(&text, COURSE_CHANGE)
+        || COURSE_CHANGE_HINTS
+            .iter()
+            .filter(|phrase| contains_token(&text, phrase))
+            .take(2)
+            .count()
+            == 2
+}
+
+/// Every `user_text` of the turn, folded, with typographic apostrophes made
+/// plain and whitespace runs collapsed so phrases match across line breaks
+/// inside one message. Messages are kept apart by a newline.
+fn user_words(evidence: &DecisionEvidence) -> String {
+    let mut text = String::new();
     for artifact in &evidence.artifacts {
         if artifact.kind != "user_text" {
             continue;
         }
-        let folded = crate::terms::fold(&artifact.content).replace('\u{2019}', "'");
-        let text = folded.split_whitespace().collect::<Vec<_>>().join(" ");
-        if contains_any_token(&text, COURSE_CHANGE) {
-            return true;
+        if !text.is_empty() {
+            text.push('\n');
         }
-        hints += COURSE_CHANGE_HINTS
-            .iter()
-            .filter(|phrase| contains_token(&text, phrase))
-            .count();
+        let mut space = false;
+        for ch in crate::terms::fold(&artifact.content).chars() {
+            if ch.is_whitespace() {
+                space = true;
+                continue;
+            }
+            if space && !text.is_empty() && !text.ends_with('\n') {
+                text.push(' ');
+            }
+            space = false;
+            text.push(if ch == '\u{2019}' { '\'' } else { ch });
+        }
     }
-    hints >= 2
+    text
 }
 
 /// Lowercased concatenation of kinds, contents and metadata, in artifact order.
@@ -532,9 +555,6 @@ const COURSE_CHANGE: &[&str] = &[
     "daqui pra frente",
     "daqui para frente",
     "daqui em diante",
-    "prioriza",
-    "priorizar",
-    "priorizamos",
     "from now on",
     "going forward",
     "let's drop",
@@ -545,19 +565,23 @@ const COURSE_CHANGE: &[&str] = &[
     "postpone",
     "postponed",
     "deprioritize",
-    "prioritize",
     "we no longer",
     "we'll no longer",
     "stop using",
     "let's go with",
     "lets go with",
-    "abandon",
     "drop support for",
 ];
 
-/// Common alone in operational requests; two distinct ones make a course
-/// change. No entry may contain another as whole words.
+/// Common alone in operational requests ("prioriza os testes que falharam");
+/// two distinct ones make a course change. No entry may contain another as
+/// whole words.
 const COURSE_CHANGE_HINTS: &[&str] = &[
+    "prioriza",
+    "priorizar",
+    "priorizamos",
+    "prioritize",
+    "abandon",
     "por enquanto",
     "por ora",
     "seguir pra",
@@ -882,5 +906,31 @@ mod tests {
                 "{text} with a test diff"
             );
         }
+    }
+
+    #[test]
+    fn course_phrases_are_folded_ascii_and_hints_never_nest() {
+        for phrase in COURSE_CHANGE.iter().chain(COURSE_CHANGE_HINTS) {
+            assert_eq!(
+                crate::terms::fold(phrase),
+                *phrase,
+                "{phrase} is not folded"
+            );
+            assert!(phrase.is_ascii(), "{phrase} is not ASCII");
+        }
+        for a in COURSE_CHANGE_HINTS {
+            for b in COURSE_CHANGE_HINTS {
+                assert!(a == b || !contains_token(a, b), "{a} contains {b}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_hint_repeated_across_messages_counts_once() {
+        let evidence = evidence(vec![
+            artifact("a0", "user_text", "por enquanto roda os testes"),
+            artifact("a1", "user_text", "por enquanto so isso"),
+        ]);
+        assert!(filter_relevant(&evidence).is_empty());
     }
 }

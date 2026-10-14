@@ -250,6 +250,21 @@ const CASES: &[Case] = &[
         &[],
         false,
     ),
+    // Operational verbs alone are hints, not a course change.
+    case(
+        "prioriza-testes",
+        "prioriza os testes que falharam",
+        "Rodei primeiro os tres que falharam.",
+        &["tests/api_test.rs"],
+        false,
+    ),
+    case(
+        "abandon-loop",
+        "abandon the retry loop in this function",
+        "Removed the loop; the call now fails fast.",
+        &["src/retry.rs"],
+        false,
+    ),
 ];
 
 fn artifact(index: usize, kind: &str, content: String, metadata: String) -> EvidenceArtifact {
