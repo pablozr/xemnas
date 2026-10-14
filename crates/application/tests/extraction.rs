@@ -19,6 +19,7 @@ const DURABLE: &[&str] = &[
     "durable-migration.json",
     "durable-dependency.json",
     "durable-migration-with-formatting-note.json",
+    "durable-course-change.json",
 ];
 const TRIVIAL: &[&str] = &["trivial-formatting.json", "trivial-test-explained.json"];
 const TRIVIAL_INCIDENTAL: &[&str] = &[
@@ -200,6 +201,23 @@ fn durable_fixtures_produce_pending_candidates() {
             assert!(!record.dedup_hash.is_empty());
         }
     }
+}
+
+#[test]
+fn a_course_change_by_the_user_reaches_the_extractor_despite_a_test_only_diff() {
+    let evidence = evidence("durable-course-change.json");
+    let store = FakeStore::with(evidence.clone());
+    let report = run_extraction(
+        &store,
+        &FakeCandidateExtractor,
+        &evidence.capture_id,
+        &RunContext::for_tests(),
+    )
+    .expect("extraction runs");
+
+    assert!(report.candidates >= 1, "expected a candidate");
+    assert_eq!(report.signals, vec![RelevanceSignal::ChangesCourse]);
+    assert_eq!(store.assessments()[0].outcome, AssessmentOutcome::Ok);
 }
 
 #[test]

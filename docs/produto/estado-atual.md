@@ -17,7 +17,7 @@ fechado, a captura espera numa outbox de arquivos e entra quando o app abre.
 
 **Análise.** Um job em segundo plano lê a captura e propõe candidatos: decisões e regras
 (uma regra vira claim). Detalhes de implementação são descartados. Cada candidato traz
-relevância, evidências e, quando há, ressalvas de alcance. O extrator padrão é offline. Fatos
+relevância, evidências e, quando há, ressalvas de alcance. O extrator padrão é offline. Uma captura só chega ao extrator quando um filtro local, sem IA, acha sinal de escolha durável; uma mudança de rumo dita pelo usuário (deixar algo de lado, adiar, priorizar, trocar, "a partir de agora") conta como sinal mesmo num turno que só mexeu em testes. Fatos
 de manifests (`Cargo.toml`, `package.json`) viram observações descritivas locais, que nunca
 entram na fila de revisão. Documentação do projeto (README, ADRs, `docs/`) é indexada e pode
 gerar candidatos. O mapa do projeto existe desde a primeira análise: ao registrar o projeto

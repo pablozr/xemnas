@@ -1017,6 +1017,7 @@ fn signal_from_str(label: &str) -> Option<RelevanceSignal> {
         "maintenance_onboarding" => Some(RelevanceSignal::MaintenanceOnboarding),
         "delegated_to_agent" => Some(RelevanceSignal::DelegatedToAgent),
         "unproven_assumption" => Some(RelevanceSignal::UnprovenAssumption),
+        "changes_course" => Some(RelevanceSignal::ChangesCourse),
         _ => None,
     }
 }

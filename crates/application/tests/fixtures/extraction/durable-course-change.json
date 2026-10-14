@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "capture_id": "018f2d3c-4b5a-7c6d-8e9f-000000000112",
+  "idempotency_key": "claude-code:e2e-course-change:msg-course-1:hash1",
+  "source": {
+    "adapter": "claude-code",
+    "adapter_version": "0.0.0",
+    "session_id": "session-course-1",
+    "message_id": "msg-course-1"
+  },
+  "project": {
+    "canonical_path": "C:/synthetic/projects/extraction"
+  },
+  "observed_at": "2026-02-01T14:00:00Z",
+  "artifacts": [
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000000219",
+      "kind": "user_text",
+      "content": "atualiza e vamos deioxar o v2 do opencode de lado po0r enquanto e seguir pra adaptacao pro claude code",
+      "metadata": {},
+      "fingerprint": "d64f4ed722a7d60e585c1d213e2be2e82c83d431ba4dbd03cbb0eecc49646774"
+    },
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000000220",
+      "kind": "assistant_text",
+      "content": "Corrigi os tres testes do plugin e desfiz o bun add que tinha escrito no diretorio home; a suite passa de novo.",
+      "metadata": {},
+      "fingerprint": "acbf734f5d8c9a0a6a4f3c75dbcf62c349d254686a41614221608d418088164d"
+    },
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000000221",
+      "kind": "diff_hunk",
+      "content": "diff --git a/packages/plugin/test/artifact.test.ts b/packages/plugin/test/artifact.test.ts\n@@ -1,2 +1,3 @@\n+  expect(artifact.kind).toBe(\"diff_hunk\");\n",
+      "metadata": {
+        "file": "packages/plugin/test/artifact.test.ts"
+      },
+      "fingerprint": "98fa1b47ce8261c6a951c966aadb6cd26e0af0da7e029aebf76e41ffc4fe04d1"
+    },
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000000222",
+      "kind": "tool_summary",
+      "content": "{\"status\":\"ok\",\"tool\":\"Bash\"}",
+      "metadata": {
+        "status": "ok",
+        "tool": "Bash"
+      },
+      "fingerprint": "cf67a8fcd08d21a6dae734cc181b18b955e33f9b6d76d27871e7c3dddb8ae6a2"
+    }
+  ]
+}

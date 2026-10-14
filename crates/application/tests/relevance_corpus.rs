@@ -8,8 +8,8 @@ use application::extract::{filter_relevant, DecisionEvidence, EvidenceArtifact};
 use integration_contracts::capture::CaptureEnvelope;
 
 /// Floor for the share of relevant captures that reach the extractor.
-const RELEVANCE_RECALL_FLOOR: f64 = 0.235;
-/// Ceiling for trivial captures that reach the extractor (wasted AI calls).
+const RELEVANCE_RECALL_FLOOR: f64 = 1.0;
+/// Ceiling for trivial captures that reach the extractor (wasted AI calls); zero, so the gate is exact.
 const RELEVANCE_FALSE_PASSES_CEILING: usize = 0;
 /// Ceiling for filtering 2,000 realistic captures.
 const RELEVANCE_LATENCY_CEILING_MS: u128 = 800;
@@ -19,6 +19,7 @@ const FIXTURES_RELEVANT: &[&str] = &[
     "durable-migration.json",
     "durable-dependency.json",
     "durable-migration-with-formatting-note.json",
+    "durable-course-change.json",
 ];
 /// Fixtures that must stay Empty.
 const FIXTURES_TRIVIAL: &[&str] = &[
@@ -372,8 +373,9 @@ fn relevance_quality_gate() {
         recall >= RELEVANCE_RECALL_FLOOR,
         "recall {recall:.3} fell below {RELEVANCE_RECALL_FLOOR}"
     );
-    assert!(
-        false_passes <= RELEVANCE_FALSE_PASSES_CEILING,
+    // A ceiling of zero: any pass of a trivial capture is a wasted AI call.
+    assert_eq!(
+        false_passes, RELEVANCE_FALSE_PASSES_CEILING,
         "{false_passes} trivial captures reached the extractor"
     );
 }

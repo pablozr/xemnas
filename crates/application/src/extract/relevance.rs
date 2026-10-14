@@ -41,6 +41,8 @@ pub enum RelevanceSignal {
     DelegatedToAgent,
     /// Rests on an unproven assumption.
     UnprovenAssumption,
+    /// The user changes the course of the work: drops, postpones, prioritizes or switches it.
+    ChangesCourse,
 }
 
 impl RelevanceSignal {
@@ -63,6 +65,7 @@ impl RelevanceSignal {
             Self::MaintenanceOnboarding => "maintenance_onboarding",
             Self::DelegatedToAgent => "delegated_to_agent",
             Self::UnprovenAssumption => "unproven_assumption",
+            Self::ChangesCourse => "changes_course",
         }
     }
 
@@ -79,6 +82,7 @@ impl RelevanceSignal {
                 | Self::RejectsAlternative
                 | Self::ConditionsFutureWork
                 | Self::MaterialBlastRadius
+                | Self::ChangesCourse
         )
     }
 }
@@ -269,9 +273,15 @@ fn is_comment_prefix(content: &str) -> bool {
 /// Returns the relevance signals that pass the §6 filter, or an empty list.
 pub fn filter_relevant(evidence: &DecisionEvidence) -> Vec<RelevanceSignal> {
     let text = aggregate_text(evidence);
+    let changes_course = user_changes_course(evidence);
 
     if is_trivially_excluded(evidence, &text) {
-        return Vec::new();
+        // The user's words decide; what the turn touched does not veto them.
+        return if changes_course {
+            vec![RelevanceSignal::ChangesCourse]
+        } else {
+            Vec::new()
+        };
     }
 
     let mut detected = BTreeSet::new();
@@ -334,12 +344,38 @@ pub fn filter_relevant(evidence: &DecisionEvidence) -> Vec<RelevanceSignal> {
         detected.insert(RelevanceSignal::UnprovenAssumption);
     }
 
+    if changes_course {
+        detected.insert(RelevanceSignal::ChangesCourse);
+    }
+
     let strong = detected.iter().filter(|signal| signal.is_strong()).count();
     let moderate = detected.len() - strong;
     if strong == 0 && moderate < 2 {
         return Vec::new();
     }
     detected.into_iter().collect()
+}
+
+/// Returns `true` when the user's own words change the course of the work.
+/// Only `user_text` counts, because the decision lives there; what the turn
+/// touched (test-only diff, trivial markers) does not veto it.
+fn user_changes_course(evidence: &DecisionEvidence) -> bool {
+    let mut hints = 0;
+    for artifact in &evidence.artifacts {
+        if artifact.kind != "user_text" {
+            continue;
+        }
+        let folded = crate::terms::fold(&artifact.content).replace('\u{2019}', "'");
+        let text = folded.split_whitespace().collect::<Vec<_>>().join(" ");
+        if contains_any_token(&text, COURSE_CHANGE) {
+            return true;
+        }
+        hints += COURSE_CHANGE_HINTS
+            .iter()
+            .filter(|phrase| contains_token(&text, phrase))
+            .count();
+    }
+    hints >= 2
 }
 
 /// Lowercased concatenation of kinds, contents and metadata, in artifact order.
@@ -462,6 +498,100 @@ fn contains_any_phrase(text: &str, phrases: &[&str]) -> bool {
 fn is_word_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_'
 }
+
+/// Matched as whole words on the user's text, folded to lowercase ASCII.
+const COURSE_CHANGE: &[&str] = &[
+    "de lado",
+    "deixa pra depois",
+    "deixa para depois",
+    "deixar pra depois",
+    "deixar para depois",
+    "fica pra depois",
+    "fica para depois",
+    "nao vamos mais",
+    "nao vou mais",
+    "nunca mais",
+    "vamos parar de",
+    "para de usar",
+    "parar de usar",
+    "desiste de",
+    "desistir de",
+    "desistimos",
+    "abandona",
+    "abandonar",
+    "abandonamos",
+    "adia",
+    "adiar",
+    "adiamos",
+    "adiado",
+    "adiada",
+    "engaveta",
+    "engavetar",
+    "a partir de agora",
+    "de agora em diante",
+    "daqui pra frente",
+    "daqui para frente",
+    "daqui em diante",
+    "prioriza",
+    "priorizar",
+    "priorizamos",
+    "from now on",
+    "going forward",
+    "let's drop",
+    "lets drop",
+    "let's park",
+    "lets park",
+    "on hold",
+    "postpone",
+    "postponed",
+    "deprioritize",
+    "prioritize",
+    "we no longer",
+    "we'll no longer",
+    "stop using",
+    "let's go with",
+    "lets go with",
+    "abandon",
+    "drop support for",
+];
+
+/// Common alone in operational requests; two distinct ones make a course
+/// change. No entry may contain another as whole words.
+const COURSE_CHANGE_HINTS: &[&str] = &[
+    "por enquanto",
+    "por ora",
+    "seguir pra",
+    "seguir para",
+    "segue pra",
+    "segue para",
+    "focar em",
+    "focar no",
+    "focar na",
+    "foca em",
+    "foca no",
+    "foca na",
+    "esquece o",
+    "esquece a",
+    "esquece esse",
+    "esquece essa",
+    "troca pra",
+    "troca para",
+    "trocar pra",
+    "trocar para",
+    "muda pra",
+    "muda para",
+    "mudar pra",
+    "mudar para",
+    "em vez de",
+    "ao inves de",
+    "no lugar de",
+    "for now",
+    "switch to",
+    "move on to",
+    "focus on",
+    "instead of",
+    "rather than",
+];
 
 const TRIVIAL_MARKERS: &[&str] = &[
     "formatting",
@@ -658,3 +788,99 @@ const UNPROVEN_ASSUMPTION: &[&str] = &[
     "without evidence",
     "unverified",
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const REAL_USER: &str = "atualiza e vamos deioxar o v2 do opencode de lado po0r enquanto e seguir pra adaptacao pro claude code";
+    const REAL_ASSISTANT: &str = "Corrigi os tres testes do plugin e desfiz o bun add que tinha escrito no diretorio home; a suite passa de novo.";
+
+    fn artifact(id: &str, kind: &str, content: &str) -> EvidenceArtifact {
+        EvidenceArtifact {
+            artifact_id: id.to_string(),
+            kind: kind.to_string(),
+            content: content.to_string(),
+            metadata: "{}".to_string(),
+        }
+    }
+
+    fn evidence(artifacts: Vec<EvidenceArtifact>) -> DecisionEvidence {
+        DecisionEvidence {
+            capture_id: "capture-1".to_string(),
+            project_id: "project-1".to_string(),
+            adapter: Some("claude-code".to_string()),
+            session_id: Some("session-1".to_string()),
+            observed_at: Some("2026-01-01T00:00:00Z".to_string()),
+            artifacts,
+        }
+    }
+
+    fn said(text: &str) -> Vec<RelevanceSignal> {
+        filter_relevant(&evidence(vec![artifact("a0", "user_text", text)]))
+    }
+
+    fn test_diff() -> EvidenceArtifact {
+        artifact(
+            "diff",
+            "diff_hunk",
+            "diff --git a/tests/a_test.rs b/tests/a_test.rs\n@@ -1,2 +1,3 @@\n+    let value = 1;\n",
+        )
+    }
+
+    #[test]
+    fn the_users_course_change_passes_despite_a_test_only_diff() {
+        let signals = filter_relevant(&evidence(vec![
+            artifact("a0", "user_text", REAL_USER),
+            artifact("a1", "assistant_text", REAL_ASSISTANT),
+            artifact(
+                "a2",
+                "diff_hunk",
+                "diff --git a/packages/plugin/test/artifact.test.ts b/packages/plugin/test/artifact.test.ts\n@@ -1,2 +1,3 @@\n+    let value = 1;\n",
+            ),
+            artifact("a3", "tool_summary", "{\"status\":\"ok\",\"tool\":\"Bash\"}"),
+        ]));
+        assert_eq!(signals, vec![RelevanceSignal::ChangesCourse]);
+    }
+
+    #[test]
+    fn a_course_change_needs_one_firm_phrase_or_two_hints() {
+        assert!(said("pode seguir para o proximo passo").is_empty());
+        assert!(said("esquece o redis por enquanto").contains(&RelevanceSignal::ChangesCourse));
+        assert!(said("Deixa isso DE LADO").contains(&RelevanceSignal::ChangesCourse));
+    }
+
+    #[test]
+    fn only_the_users_words_change_the_course() {
+        let signals = filter_relevant(&evidence(vec![
+            artifact("a0", "user_text", "e agora?"),
+            artifact("a1", "assistant_text", REAL_USER),
+        ]));
+        assert!(signals.is_empty());
+    }
+
+    #[test]
+    fn phrases_are_whole_words_without_accents() {
+        assert!(said("não vamos mais usar X").contains(&RelevanceSignal::ChangesCourse));
+        assert!(said("adianta rodar de novo?").is_empty());
+        assert!(said("let\u{2019}s park the API").contains(&RelevanceSignal::ChangesCourse));
+    }
+
+    #[test]
+    fn trivial_requests_stay_empty() {
+        for text in [
+            "roda os testes",
+            "pode ser",
+            "obrigado",
+            "faca a limpeza vc mesmo",
+            "atualiza o README",
+        ] {
+            let user = artifact("a0", "user_text", text);
+            assert!(said(text).is_empty(), "{text}");
+            assert!(
+                filter_relevant(&evidence(vec![user, test_diff()])).is_empty(),
+                "{text} with a test diff"
+            );
+        }
+    }
+}
