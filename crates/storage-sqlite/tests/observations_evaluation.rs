@@ -556,7 +556,7 @@ fn historical_unknown_and_normative_budget_retention() {
         let block = render_compact(&after, 4000, &BTreeSet::new()).unwrap();
         assert!(block.text.contains("Não enviar dados pessoais"));
         if !block.observations.is_empty() {
-            assert!(block.text.contains("observado localmente; não é regra"));
+            assert!(block.text.contains("declarado, não é regra"));
         }
     }
     println!("CASE historical_and_normative_priority historical unknown; normative claims retained budgets=500,8000; total used_chars includes descriptive text; descriptive authority passed");
@@ -586,7 +586,7 @@ fn scoped_latency_report() {
         let block = render_compact(&pack, 2000, &BTreeSet::new()).unwrap();
         samples[3].push(start.elapsed().as_micros());
         assert!(block.items.is_empty());
-        assert!(block.text.contains("observado localmente; não é regra"));
+        assert!(block.text.contains("declarado, não é regra"));
     }
     for (label, values) in [
         "refresh_cold",

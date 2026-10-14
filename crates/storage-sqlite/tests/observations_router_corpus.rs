@@ -599,7 +599,7 @@ fn failed_checks_notify_uncertainty_not_removal_and_recovery_preserves_version()
 }
 
 #[test]
-fn supporting_root_changed_after_pack_rejects_delivery_and_render_keeps_provenance() {
+fn supporting_root_changed_after_pack_rejects_delivery_and_render_omits_provenance() {
     use application::injection::{estimate_tokens, render_compact};
     use std::collections::BTreeSet;
     let test = support::open("observation-support-cas", &["p1"]);
@@ -639,10 +639,10 @@ fn supporting_root_changed_after_pack_rejects_delivery_and_render_keeps_provenan
         })
         .unwrap();
     let block = render_compact(&pack, 2000, &BTreeSet::new()).unwrap();
-    assert!(block.text.contains("workspace-root"));
-    assert!(block.text.contains("workspace-hash"));
-    assert!(block.text.contains("workspace.dependencies.serde"));
-    assert!(block.text.contains("observado localmente; não é regra"));
+    assert!(!block.text.contains("workspace-root"));
+    assert!(!block.text.contains("workspace-hash"));
+    assert!(!block.text.contains("workspace.dependencies.serde"));
+    assert!(block.text.contains("declarado, não é regra"));
     assert!(block.items.is_empty());
     assert_eq!(block.tokens, estimate_tokens(&block.text));
     connection
