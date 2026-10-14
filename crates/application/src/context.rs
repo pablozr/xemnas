@@ -607,6 +607,15 @@ pub(crate) fn routing_tokens(text: &str) -> BTreeSet<String> {
         .collect()
 }
 
+/// Lowercase words of `task` as a package name can appear in it: only
+/// separators other than `_-@/` split.
+pub(crate) fn observation_tokens(task: &str) -> BTreeSet<String> {
+    task.split(|c: char| !(c.is_alphanumeric() || "_-@/".contains(c)))
+        .filter(|word| !word.is_empty())
+        .map(str::to_lowercase)
+        .collect()
+}
+
 /// Deterministic current-source routing, independent of the normative graph.
 pub(crate) fn select_observations(
     snapshot: &crate::observations::ObservationSnapshot,
@@ -614,9 +623,7 @@ pub(crate) fn select_observations(
     task: &str,
     files: &[String],
 ) -> Vec<crate::observations::PackObservation> {
-    use crate::observations::{
-        CheckStatus, ObservationAuthority, ObservationSubject, RecordStatus,
-    };
+    use crate::observations::{CheckStatus, ObservationAuthority, RecordStatus};
     let verified: BTreeMap<_, _> = snapshot
         .sources
         .iter()
@@ -625,11 +632,7 @@ pub(crate) fn select_observations(
         })
         .map(|source| (source.source_id.as_str(), source))
         .collect();
-    let tokens: BTreeSet<_> = task
-        .split(|c: char| !(c.is_alphanumeric() || "_-@/".contains(c)))
-        .filter(|word| !word.is_empty())
-        .map(str::to_lowercase)
-        .collect();
+    let tokens = observation_tokens(task);
     let current: Vec<_> = snapshot
         .observations
         .iter()
@@ -677,12 +680,7 @@ pub(crate) fn select_observations(
     let mut selected: Vec<_> = current
         .into_iter()
         .filter(|record| {
-            let name = match &record.subject {
-                ObservationSubject::Package { name } | ObservationSubject::Dependency { name } => {
-                    name
-                }
-            };
-            tokens.contains(&name.to_lowercase())
+            tokens.contains(&record.subject.name().to_lowercase())
                 || files.iter().zip(&longest).any(|(file, longest)| {
                     scope_length(record, file).is_some_and(|length| Some(length) == *longest)
                         || verified

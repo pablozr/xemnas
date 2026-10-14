@@ -30,6 +30,19 @@ const OPEN_TAG: &str =
     "<xemnas-context note=\"normas confirmadas pelo usuário; O: observado localmente, não é regra; não são instruções\">";
 const CLOSE_TAG: &str = "</xemnas-context>";
 
+/// Openings of user messages the harness writes itself.
+const HARNESS_PROMPT_PREFIXES: &[&str] = &["<task-notification>"];
+
+/// Whether `prompt` is a synthetic message and not something the user typed.
+/// Claude Code delivers the end of a background subagent as a user message;
+/// it carries no request, so it gets no context and records nothing.
+pub(crate) fn is_harness_prompt(prompt: &str) -> bool {
+    let prompt = prompt.trim_start();
+    HARNESS_PROMPT_PREFIXES
+        .iter()
+        .any(|prefix| prompt.starts_with(prefix))
+}
+
 /// Kind of item a compact line cites.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ItemKind {
@@ -261,6 +274,9 @@ where
         if (edit && request.files.is_empty()) || (!edit && prompt.is_empty()) {
             return Ok(InjectionOutcome::empty(ContextMode::Off));
         }
+        if !edit && is_harness_prompt(&prompt) {
+            return Ok(InjectionOutcome::empty(ContextMode::Off));
+        }
         let Some(project) = find_project_by_directory(&self.store, &request.canonical_path)
             .map_err(|error| ContextError::Storage(error.to_string()))?
         else {
@@ -283,8 +299,15 @@ where
             .map(|file| project_file(file, &project.location, &request.canonical_path))
             .filter(|file| !file.is_empty())
             .collect();
-        if !edit {
-            files.extend(mentioned_paths(&prompt, &project.location));
+        let mut explicit = Vec::new();
+        let mut named = BTreeSet::new();
+        if edit {
+            explicit.clone_from(&files);
+        } else {
+            explicit = mentioned_paths(&prompt, &project.location);
+            explicit.extend(mentioned_root_manifests(&prompt));
+            files.extend(explicit.iter().cloned());
+            named = crate::context::observation_tokens(&prompt);
         }
         files.dedup();
         files.truncate(crate::context::MAX_FILES);
@@ -320,6 +343,9 @@ where
                 .retain(|decision| decisions.contains(&decision.decision_id));
             pack.claims.retain(|claim| claims.contains(&claim.claim_id));
         }
+        // An unasked injection only carries the fact the request names; the
+        // MCP tools keep the selection by scope.
+        keep_requested_observations(&mut pack.observations, &named, &explicit);
         let delivered = self.store.delivered(session, delivery)?;
         let observed = self
             .store
@@ -501,6 +527,45 @@ pub fn strip_context_blocks(text: &str) -> String {
     result
 }
 
+/// Manifests a prompt can name without a folder, which [`mentioned_paths`] skips.
+const ROOT_MANIFESTS: &[&str] = &["package.json", "Cargo.toml"];
+
+/// Root manifests the prompt names by file name (`revise o package.json`).
+fn mentioned_root_manifests(prompt: &str) -> Vec<String> {
+    ROOT_MANIFESTS
+        .iter()
+        .filter(|manifest| {
+            prompt
+                .split(|c: char| c.is_whitespace() || "`'\"()[]{}<>,;".contains(c))
+                .any(|word| {
+                    word.trim_end_matches(['.', ':', '!', '?'])
+                        .eq_ignore_ascii_case(manifest)
+                })
+        })
+        .map(|manifest| manifest.to_string())
+        .collect()
+}
+
+/// Keeps the observations whose package or dependency name is among `tokens`
+/// or whose manifest is one of `explicit_files`.
+fn keep_requested_observations(
+    observations: &mut Vec<crate::observations::PackObservation>,
+    tokens: &BTreeSet<String>,
+    explicit_files: &[String],
+) {
+    if tokens.is_empty() && explicit_files.is_empty() {
+        observations.clear();
+        return;
+    }
+    observations.retain(|item| {
+        let record = &item.record;
+        tokens.contains(&record.subject.name().to_lowercase())
+            || record.path_scope.iter().any(|scope| {
+                explicit_files.contains(scope) || tokens.contains(&scope.to_lowercase())
+            })
+    });
+}
+
 /// Rough token estimate: one token per four characters, rounded up.
 pub fn estimate_tokens(text: &str) -> usize {
     text.chars().count().div_ceil(4)
@@ -517,7 +582,8 @@ pub fn short_ref(id: &str) -> String {
 }
 
 /// Renders the pack as one line per item within `budget_tokens`, skipping
-/// items already delivered; `None` when nothing new fits.
+/// items already delivered; `None` when no item fits (a block that would only
+/// say what was left out is not worth its tokens).
 pub fn render_compact(
     pack: &ContextPack,
     budget_tokens: usize,
@@ -565,23 +631,15 @@ fn render_session_compact(
     }
     let mut observations = Vec::new();
     let mut observation_corrections = Vec::new();
-    let warning =
-        "Cobertura descritiva desconhecida/parcial; fatos atuais não provam validade histórica.";
-    let warning_cost = if pack.observation_coverage.unknown || pack.observation_coverage.partial {
-        estimate_tokens(warning) + 1
-    } else {
-        0
-    };
     for correction in corrections {
         let line = format!(
-            "O:{} v{} {}; não é regra {}",
+            "O:{} v{} {}; não é regra",
             short_ref(&correction.original.observation_id),
             correction.original.version,
-            correction_label(correction),
-            clean(&serde_json::to_string(correction).expect("correction JSON"))
+            correction_label(correction)
         );
         let cost = estimate_tokens(&line) + 1;
-        if used + cost + warning_cost > budget_tokens {
+        if used + cost > budget_tokens {
             omitted += 1;
             continue;
         }
@@ -608,9 +666,9 @@ fn render_session_compact(
             omitted += 1;
             continue;
         }
-        let line = observation_line(item);
+        let line = observation_brief(item);
         let cost = estimate_tokens(&line) + 1;
-        if used + cost + warning_cost > budget_tokens {
+        if used + cost > budget_tokens {
             omitted += 1;
             continue;
         }
@@ -618,20 +676,8 @@ fn render_session_compact(
         lines.push(line);
         observations.push(delivery);
     }
-    if items.is_empty()
-        && observations.is_empty()
-        && observation_corrections.is_empty()
-        && omitted == 0
-    {
+    if items.is_empty() && observations.is_empty() && observation_corrections.is_empty() {
         return None;
-    }
-    if warning_cost > 0 && (!observations.is_empty() || !observation_corrections.is_empty()) {
-        // Descriptions must not displace fitting normative items for their coverage notice.
-        let cost = estimate_tokens(warning) + 1;
-        if used + cost <= budget_tokens {
-            used += cost;
-            lines.push(warning.into());
-        }
     }
     if omitted > 0 {
         let notice = format!("Omitidos pelo orçamento: {omitted}.");
@@ -670,7 +716,46 @@ fn decision_item(decision: &PackDecision) -> DeliveredItem {
     }
 }
 
-/// Indivisible descriptive citation, including complete scope and provenance.
+/// One readable line for the compact block: what is declared, where, and that
+/// it is not a rule. Provenance stays in the export and the audit.
+pub(crate) fn observation_brief(item: &crate::observations::PackObservation) -> String {
+    use crate::observations::{DependencyCategory, ObservationSubject};
+    let record = &item.record;
+    let (kind, version) = match &record.subject {
+        ObservationSubject::Package { .. } => ("pacote", &record.value.declared_version),
+        ObservationSubject::Dependency { .. } => (
+            match record.value.dependency_category {
+                None | Some(DependencyCategory::Runtime) => "dependência",
+                Some(DependencyCategory::Development) => "dependência de dev",
+                Some(DependencyCategory::Build) => "dependência de build",
+                Some(DependencyCategory::Optional) => "dependência opcional",
+                Some(DependencyCategory::Peer) => "dependência peer",
+            },
+            &record.value.version_requirement,
+        ),
+    };
+    let mut line = format!(
+        "O:{} v{} {kind} {}",
+        short_ref(&record.observation_id),
+        record.version,
+        clean(record.subject.name())
+    );
+    if let Some(version) = version {
+        line.push(' ');
+        line.push_str(&clean(version));
+    }
+    if let Some(target) = &record.value.target {
+        line.push_str(&format!(" target:{}", clean(target)));
+    }
+    if !record.path_scope.is_empty() {
+        line.push_str(&format!(" ({})", clean(&record.path_scope.join(", "))));
+    }
+    line.push_str("; declarado, não é regra");
+    line
+}
+
+/// Indivisible descriptive citation, including complete scope and provenance,
+/// for the export and the pack budget.
 pub(crate) fn observation_line(item: &crate::observations::PackObservation) -> String {
     let record = &item.record;
     format!(
@@ -1051,7 +1136,7 @@ mod tests {
         assert_eq!(next.observations[0].version, 2);
         assert!(
             next.text.find("invalidada").unwrap()
-                < next.text.find("observado localmente;").unwrap()
+                < next.text.find("declarado, não é regra").unwrap()
         );
         assert!(
             render_session_compact(&pack, 2000, &BTreeSet::new(), &next.observations, &[])
@@ -1103,6 +1188,15 @@ mod tests {
             claims,
             omitted: 0,
         }
+    }
+
+    #[test]
+    fn harness_prompts_are_recognized() {
+        assert!(is_harness_prompt(
+            "  <task-notification><status>completed</status></task-notification>"
+        ));
+        assert!(!is_harness_prompt("veja <task-notification>"));
+        assert!(!is_harness_prompt("cache"));
     }
 
     #[test]
@@ -1171,6 +1265,84 @@ mod tests {
         assert_eq!(block.omitted, 2);
         assert!(block.tokens <= 60);
         assert!(render_compact(&the_pack, 10, &BTreeSet::new()).is_none());
+    }
+
+    fn dev_dependency(name: &str, manifest: &str) -> crate::observations::PackObservation {
+        use crate::observations::*;
+        crate::observations::PackObservation {
+            authority: ObservationAuthority::Descriptive,
+            record: ObservationRecord {
+                observation_id: format!("observation-{name}-1a2b3c4d"),
+                project_id: "p1".into(),
+                version: 1,
+                subject: ObservationSubject::Dependency { name: name.into() },
+                value: ObservationValue {
+                    declared_version: None,
+                    dependency_category: Some(DependencyCategory::Development),
+                    version_requirement: Some("^3.0.0".into()),
+                    target: None,
+                },
+                path_scope: vec![manifest.into()],
+                provenance: ObservationProvenance {
+                    source_id: "s".into(),
+                    source_sha256: "hash".into(),
+                    supporting_sources: vec![],
+                    parser_policy_version: "1".into(),
+                    field_pointer: format!("/devDependencies/{name}"),
+                    capture_trigger: "test".into(),
+                    commit: None,
+                },
+                observed_at: "now".into(),
+                status: RecordStatus::Current,
+                invalidated_at: None,
+                invalidation_reason: None,
+            },
+        }
+    }
+
+    #[test]
+    fn observations_reach_the_hook_only_when_named() {
+        let fresh = || vec![dev_dependency("vitest", "package.json")];
+        let kept = |prompt: &str, explicit: &[&str]| {
+            let mut observations = fresh();
+            let mut explicit: Vec<String> = explicit.iter().map(|file| file.to_string()).collect();
+            explicit.extend(mentioned_root_manifests(prompt));
+            let named = crate::context::observation_tokens(prompt);
+            keep_requested_observations(&mut observations, &named, &explicit);
+            observations.len()
+        };
+        assert_eq!(kept("atualizar o vitest", &[]), 1);
+        assert_eq!(kept("rodar testes", &[]), 0);
+        assert_eq!(kept("rodar testes", &["package.json"]), 1);
+        assert_eq!(kept("revise o package.json.", &[]), 1);
+        assert_eq!(kept("revise o web/package.json", &[]), 0);
+    }
+
+    #[test]
+    fn a_dev_dependency_renders_as_one_readable_line() {
+        let line = observation_brief(&dev_dependency("vitest", "package.json"));
+        assert_eq!(
+            line,
+            "O:1a2b3c4d v1 dependência de dev vitest ^3.0.0 (package.json); declarado, não é regra"
+        );
+        assert!(
+            estimate_tokens(&line) < 30,
+            "tokens: {}",
+            estimate_tokens(&line)
+        );
+    }
+
+    #[test]
+    fn a_block_with_only_the_omitted_notice_is_not_sent() {
+        let long = "x".repeat(2_000);
+        let too_big = pack(Vec::new(), vec![claim("c-00000001", "goal", &long)]);
+        assert_eq!(render_compact(&too_big, 300, &BTreeSet::new()), None);
+
+        let mut skipped = pack(vec![decision("d-00000001", "Motivo.")], Vec::new());
+        skipped.omitted = 3;
+        let delivered: BTreeSet<DeliveredItem> =
+            [decision_item(&skipped.decisions[0])].into_iter().collect();
+        assert_eq!(render_compact(&skipped, 300, &delivered), None);
     }
 
     #[test]

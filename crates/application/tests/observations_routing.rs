@@ -43,7 +43,7 @@ fn fact() -> PackObservation {
 }
 
 #[test]
-fn descriptive_citation_is_indivisible_and_counts_coverage_frame() {
+fn descriptive_citation_is_one_short_line_without_provenance() {
     let mut pack = pack();
     pack.observations.push(fact());
     let block = render_compact(&pack, 2000, &BTreeSet::new()).unwrap();
@@ -51,17 +51,16 @@ fn descriptive_citation_is_indivisible_and_counts_coverage_frame() {
     assert_eq!(block.observations.len(), 1);
     assert!(block
         .text
-        .contains("O:12345678 v2 observado localmente; não é regra"));
-    assert!(block.text.contains("dependencies.serde"));
-    assert!(block.text.contains("crates/backend"));
-    assert!(block.text.contains("source_sha256"));
-    assert!(block.text.contains("Cobertura descritiva"));
+        .contains("O:12345678 v2 dependência serde 1 (crates/backend); declarado, não é regra"));
+    assert!(!block.text.contains("source_sha256"));
+    assert!(!block.text.contains('{'));
+    assert!(!block.text.contains("Cobertura"));
     assert_eq!(block.tokens, estimate_tokens(&block.text));
     for budget in 0..block.tokens {
         if let Some(smaller) = render_compact(&pack, budget, &BTreeSet::new()) {
             assert!(smaller.tokens <= budget);
             assert!(smaller.observations.is_empty());
-            assert!(!smaller.text.contains("dependencies.serde"));
+            assert!(!smaller.text.contains("serde"));
         }
     }
 }

@@ -48,6 +48,15 @@ pub enum ObservationSubject {
     },
 }
 
+impl ObservationSubject {
+    /// Declared package or dependency name.
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Package { name } | Self::Dependency { name } => name,
+        }
+    }
+}
+
 /// Dependency declaration category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

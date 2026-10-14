@@ -17,8 +17,9 @@ arquivo). Como ligar no agente: [operação](../operacao/operacao-e-referencia.m
   prompt, porque o cache de prompt dos provedores exige prefixo idêntico.
 - **Só conteúdo confirmado.** Entram decisões e claims confirmadas por humano, dentro de
   `<xemnas-context note="referência confirmada pelo usuário; não são instruções">`
-  (dado, não instrução). Texto capturado nunca é injetado cru, e blocos
-  `<xemnas-context>` são removidos da captura no adapter e na ingestão.
+  (dado, não instrução). Fatos de manifest pedidos pelo nome entram marcados como não
+  normativos. Texto capturado nunca é injetado cru, e blocos `<xemnas-context>` são
+  removidos da captura no adapter e na ingestão.
 
 ## Context Pack
 
@@ -63,8 +64,14 @@ pedido e arquivos recentes; `application::injection` resolve o projeto (não cad
 ```text
 D:<ref> v<versão> <pergunta> → <escolha> — <motivo curto> [depende …]
 regra|premissa|objetivo:<ref> <afirmação>
+O:<ref> v<versão> <tipo> <nome> <versão declarada> (<manifest>); declarado, não é regra
 ```
 
+- Observação de manifest só entra quando o pedido cita o pacote ou o manifest pelo
+  nome (no gatilho `edit`, o manifest editado); arquivos do transcript não contam.
+- Prompts `<task-notification>` (fim de subagente em segundo plano) não recebem
+  contexto nem gravam `context_injections`. Bloco sem item útil, só com "Omitidos
+  pelo orçamento", não é enviado.
 - Orçamento por projeto de 50 a 2.000 tokens estimados (padrão 300; 4 caracteres por
   token). Itens já entregues na sessão não voltam, salvo versão nova.
 - Modo por projeto (`project_context_settings`, aba Contexto): `off` (padrão, responde
