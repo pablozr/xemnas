@@ -58,6 +58,9 @@ const fn case(
     }
 }
 
+/// Separates user messages inside `Case::user`; each becomes its own `user_text`.
+const NEXT_MESSAGE: char = '\u{1e}';
+
 const JEVGUARD_USER: &str = "atualiza e vamos deioxar o v2 do opencode de lado po0r enquanto e seguir pra adaptacao pro claude code";
 
 const CASES: &[Case] = &[
@@ -258,6 +261,14 @@ const CASES: &[Case] = &[
         &["tests/api_test.rs"],
         false,
     ),
+    // Hints from different messages do not add up.
+    case(
+        "dicas-em-mensagens-separadas",
+        "foca no teste que falhou\u{1e}troca pra cargo nextest",
+        "",
+        &["tests/api_test.rs"],
+        false,
+    ),
     case(
         "abandon-loop",
         "abandon the retry loop in this function",
@@ -278,11 +289,11 @@ fn artifact(index: usize, kind: &str, content: String, metadata: String) -> Evid
 
 fn evidence_of(case: &Case) -> DecisionEvidence {
     let mut artifacts = Vec::new();
-    if !case.user.is_empty() {
+    for message in case.user.split(NEXT_MESSAGE).filter(|m| !m.is_empty()) {
         artifacts.push(artifact(
             artifacts.len(),
             "user_text",
-            case.user.to_string(),
+            message.to_string(),
             "{}".to_string(),
         ));
     }

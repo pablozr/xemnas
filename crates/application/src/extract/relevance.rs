@@ -358,45 +358,41 @@ pub fn filter_relevant(evidence: &DecisionEvidence) -> Vec<RelevanceSignal> {
 
 /// Returns `true` when the user's own words change the course of the work.
 /// Only `user_text` counts, because the decision lives there; what the turn
-/// touched (test-only diff, trivial markers) does not veto it.
+/// touched (test-only diff, trivial markers) does not veto it. A firm phrase
+/// counts from any message; hints must be two distinct ones inside the same
+/// message, so "foca no teste X" and, later, "troca pra nextest" do not add up.
 fn user_changes_course(evidence: &DecisionEvidence) -> bool {
-    let text = user_words(evidence);
-    if text.is_empty() {
-        return false;
-    }
-    contains_any_token(&text, COURSE_CHANGE)
-        || COURSE_CHANGE_HINTS
-            .iter()
-            .filter(|phrase| contains_token(&text, phrase))
-            .take(2)
-            .count()
-            == 2
+    evidence
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.kind == "user_text")
+        .any(|artifact| {
+            let text = plain_words(&artifact.content);
+            contains_any_token(&text, COURSE_CHANGE)
+                || COURSE_CHANGE_HINTS
+                    .iter()
+                    .filter(|phrase| contains_token(&text, phrase))
+                    .take(2)
+                    .count()
+                    == 2
+        })
 }
 
-/// Every `user_text` of the turn, folded, with typographic apostrophes made
-/// plain and whitespace runs collapsed so phrases match across line breaks
-/// inside one message. Messages are kept apart by a newline.
-fn user_words(evidence: &DecisionEvidence) -> String {
-    let mut text = String::new();
-    for artifact in &evidence.artifacts {
-        if artifact.kind != "user_text" {
+/// One message folded, with typographic apostrophes made plain and whitespace
+/// runs collapsed so phrases match across line breaks inside the message.
+fn plain_words(content: &str) -> String {
+    let mut text = String::with_capacity(content.len());
+    let mut space = false;
+    for ch in crate::terms::fold(content).chars() {
+        if ch.is_whitespace() {
+            space = true;
             continue;
         }
-        if !text.is_empty() {
-            text.push('\n');
+        if space && !text.is_empty() {
+            text.push(' ');
         }
-        let mut space = false;
-        for ch in crate::terms::fold(&artifact.content).chars() {
-            if ch.is_whitespace() {
-                space = true;
-                continue;
-            }
-            if space && !text.is_empty() && !text.ends_with('\n') {
-                text.push(' ');
-            }
-            space = false;
-            text.push(if ch == '\u{2019}' { '\'' } else { ch });
-        }
+        space = false;
+        text.push(if ch == '\u{2019}' { '\'' } else { ch });
     }
     text
 }
@@ -932,5 +928,16 @@ mod tests {
             artifact("a1", "user_text", "por enquanto so isso"),
         ]);
         assert!(filter_relevant(&evidence).is_empty());
+    }
+
+    #[test]
+    fn hints_in_different_messages_do_not_add_up() {
+        let apart = evidence(vec![
+            artifact("a0", "user_text", "foca no teste que falhou"),
+            artifact("a1", "user_text", "troca pra cargo nextest"),
+        ]);
+        assert!(filter_relevant(&apart).is_empty());
+        let together = said("foca no cache e troca pra nextest");
+        assert!(together.contains(&RelevanceSignal::ChangesCourse));
     }
 }
