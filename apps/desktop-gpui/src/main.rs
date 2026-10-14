@@ -563,6 +563,7 @@ impl ObservationReconciler {
         let thread = std::thread::spawn(move || {
             use application::observations::{ObservationStore, RefreshRequest};
             let mut cursor = None;
+            let mut gate = application::observations::reconcile::ReconcileGate::default();
             loop {
                 if *signal.0.lock().unwrap_or_else(|error| error.into_inner()) {
                     break;
@@ -573,6 +574,9 @@ impl ObservationReconciler {
                         for project_id in refresh_batch(ids, &mut cursor) {
                             if *signal.0.lock().unwrap_or_else(|error| error.into_inner()) {
                                 break;
+                            }
+                            if !gate.changed(&store, &project_id) {
+                                continue;
                             }
                             if let Err(error) = store.request_refresh(&RefreshRequest {
                                 project_id,

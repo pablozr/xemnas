@@ -58,7 +58,7 @@ antigo): o que o caminho quente do agente precisa vem antes do que só refina.
 | Prioridade | Tipos |
 | --- | --- |
 | 0 | `analyze_capture`, `analyze_document`, `context_routing` |
-| 1 | `suggest_links` (a decisão chega ao componente que ela rege), `refresh_observations` |
+| 1 | `suggest_links` (a decisão chega ao componente que ela rege), `refresh_observations` (projeto parado custa 0 jobs: o reconciliador só agenda quando o tamanho ou a data de um manifest mudou) |
 | 2 | `suggest_relations` |
 | 3 | `derive_claims` |
 | 4 | `derive_search_terms` |

@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod reader;
+pub mod reconcile;
 pub mod refresh;
 
 /// Maximum manifest candidates in one refresh.

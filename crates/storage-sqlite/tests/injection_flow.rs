@@ -279,6 +279,27 @@ fn an_edit_brings_what_the_map_ties_to_the_file_once_per_session() {
     let unrelated = injection.prepare(edit("web/app.ts")).expect("unrelated");
     assert_eq!(unrelated.block, None, "no map tie, nothing injected");
 
+    // Only a manifest edit schedules an observation refresh.
+    let generation = || -> i64 {
+        Connection::open(test.root.join("app.db"))
+            .expect("raw")
+            .query_row(
+                "SELECT COALESCE(MAX(generation), 0) FROM observation_refresh",
+                [],
+                |row| row.get(0),
+            )
+            .expect("generation")
+    };
+    let before = generation();
+    injection
+        .prepare(edit("web/other.ts"))
+        .expect("source edit");
+    assert_eq!(generation(), before, "a source edit schedules no refresh");
+    injection
+        .prepare(edit("package.json"))
+        .expect("manifest edit");
+    assert!(generation() > before, "a manifest edit schedules a refresh");
+
     // From the canonical location: CI temp dirs come as 8.3 short names
     // (`RUNNER~1`), which never prefix the project's canonical long path.
     let root = canonicalize_location(&path).expect("canonical");

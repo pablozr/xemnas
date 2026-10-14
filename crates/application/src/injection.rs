@@ -311,7 +311,8 @@ where
         }
         files.dedup();
         files.truncate(crate::context::MAX_FILES);
-        if edit {
+        // Only manifests feed the refresh; any other edit would be a wasted job.
+        if edit && files.iter().any(|file| is_manifest_name(file)) {
             self.store
                 .request_refresh(&crate::observations::RefreshRequest {
                     project_id: project.id.clone(),
@@ -772,6 +773,14 @@ fn claim_item(claim: &PackClaim) -> DeliveredItem {
         id: claim.claim_id.clone(),
         version: 1,
     }
+}
+
+/// Whether the path names a manifest the observation refresh reads.
+fn is_manifest_name(path: &str) -> bool {
+    matches!(
+        path.rsplit(['/', '\\']).next(),
+        Some("Cargo.toml" | "package.json")
+    )
 }
 
 fn decision_line(decision: &PackDecision) -> String {
