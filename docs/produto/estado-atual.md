@@ -102,7 +102,9 @@ mostra a fila real e leva à tela certa; ainda não conversa com um modelo.
 - **Claude Code:** `xemnas-mcp hook prompt` injeta contexto, `hook stop` captura os turnos e
   `hook session-end` envia o que ficou retido. O mesmo `xemnas-mcp` serve o MCP. Um hook
   nunca bloqueia nem quebra o Claude Code. Notificações de subagentes não recebem contexto, e
-  fatos de manifest só entram, numa linha curta, quando o pedido os nomeia.
+  fatos de manifest só entram, numa linha curta, quando o pedido os nomeia. As linhas de
+  decisão e regra levam escopo e qualificadores como texto simples (sem JSON nem id de artefato),
+  então cabem mais itens no mesmo orçamento.
 - **Provedores de IA** ([ADR-0004](../arquitetura/adr/0004-provedores-de-ia-conta-chatgpt-e-opencode.md)):
   heurística local, API compatível com OpenAI (inclui modelo local), conta ChatGPT, OpenCode
   Zen/Go e Claude Code local (experimental).

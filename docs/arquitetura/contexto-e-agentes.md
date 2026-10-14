@@ -62,11 +62,13 @@ pedido e arquivos recentes; `application::injection` resolve o projeto (não cad
 ⇒ nada), monta o pack e devolve uma linha por item:
 
 ```text
-D:<ref> v<versão> <pergunta> → <escolha> — <motivo curto> [depende …]
-regra|premissa|objetivo:<ref> <afirmação>
+D:<ref> v<versão> <pergunta> → <escolha> — <motivo curto> [escopo: …; alcance: …; autoria: …; validação: …] [depende …]
+regra|premissa|objetivo:<ref> <afirmação> [escopo: …; alcance: …]
 O:<ref> v<versão> <tipo> <nome> <versão declarada> (<manifest>); declarado, não é regra
 ```
 
+- Os qualificadores vão como texto simples, inteiros (`*` vira `projeto todo`); o id do artefato
+  que os sustenta fica de fora da linha e se confere em `get_decision` e na exportação.
 - Observação de manifest só entra quando o pedido cita o pacote ou o manifest pelo
   nome (no gatilho `edit`, o manifest editado); arquivos do transcript não contam.
 - Prompts `<task-notification>` (fim de subagente em segundo plano) não recebem

@@ -30,4 +30,6 @@ revisão por exceção e context router são direção futura, não efeitos dest
 
 ## Estado hoje
 
+A linha compacta entregue ao agente leva rótulo e texto inteiros de cada qualificador, sem o id do artefato (que fica em `get_decision` e na exportação); a unidade continua inteira ou omitida, nunca cortada.
+
 A memória descritiva é o [ADR-0011](0011-observacoes-descritivas-de-manifests.md); a revisão por exceção está em `application::review_exception`; o roteador de contexto existe como julgamento opcional em segundo plano (`application::context_routing`, com limites de chamadas). A confirmação normativa continua humana, salvo no modo automático que o usuário liga ([ADR-0012](0012-modo-automatico-e-autoridade.md)).

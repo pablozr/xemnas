@@ -782,16 +782,12 @@ fn decision_line(decision: &PackDecision) -> String {
         clean(&decision.question),
         clean(&decision.choice)
     );
-    line.push_str(&format!(
-        " [scope:{} qualifiers:{}]",
-        clean(&serde_json::to_string(&decision.scope).expect("scope JSON")),
-        clean(&serde_json::to_string(&decision.qualifiers).expect("qualifier JSON"))
-    ));
     let reason = first_sentence(&clean(&decision.rationale));
     if !reason.is_empty() {
         line.push_str(" — ");
         line.push_str(&reason);
     }
+    line.push_str(&knowledge_suffix(&decision.scope, &decision.qualifiers));
     let refs = |ids: &[String]| -> String {
         ids.iter()
             .map(|id| format!("D:{}", short_ref(id)))
@@ -815,12 +811,47 @@ fn claim_line(claim: &PackClaim) -> String {
         _ => "nota",
     };
     format!(
-        "{tag}:{} v1 {} [qualifiers:{} scope:{}]",
+        "{tag}:{} v1 {}{}",
         short_ref(&claim.claim_id),
         clean(&claim.statement),
-        clean(&serde_json::to_string(&claim.qualifiers).expect("qualifier JSON")),
-        clean(&serde_json::to_string(&claim.inherited_scope).expect("scope JSON"))
+        knowledge_suffix(&claim.inherited_scope, &claim.qualifiers)
     )
+}
+
+/// Scope and qualifiers as plain labelled text, whole (ADR-0010); the artifact
+/// ids stay in `get_decision` and the export, where they can be checked.
+fn knowledge_suffix(
+    scope: &[String],
+    qualifiers: &[crate::qualifiers::KnowledgeQualifier],
+) -> String {
+    use crate::qualifiers::QualifierKind;
+    let plain = |text: &str| match clean(text).as_str() {
+        crate::context::GLOBAL_SCOPE => "projeto todo".to_string(),
+        cleaned => cleaned.to_string(),
+    };
+    let mut segments: Vec<String> = Vec::new();
+    let mut push = |segment: String| {
+        if !segments.contains(&segment) {
+            segments.push(segment);
+        }
+    };
+    if !scope.is_empty() {
+        let names: Vec<String> = scope.iter().map(|item| plain(item)).collect();
+        push(format!("escopo: {}", names.join(", ")));
+    }
+    for qualifier in qualifiers {
+        let label = match qualifier.kind {
+            QualifierKind::Scope => "alcance",
+            QualifierKind::Attribution => "autoria",
+            QualifierKind::Validation => "validação",
+        };
+        push(format!("{label}: {}", plain(&qualifier.text)));
+    }
+    if segments.is_empty() {
+        String::new()
+    } else {
+        format!(" [{}]", segments.join("; "))
+    }
 }
 
 /// One line of plain text: whitespace collapsed and angle brackets neutralized.
@@ -1220,7 +1251,7 @@ mod tests {
         assert_eq!(
             block.text,
             format!(
-                "{OPEN_TAG}\nD:bbbbcccc v2 Qual banco? → SQLite [scope:[] qualifiers:[]] — App local, sem servidor. [depende D:22223333]\nregra:55556666 v1 Erros em português [qualifiers:[] scope:[]]\n{CLOSE_TAG}"
+                "{OPEN_TAG}\nD:bbbbcccc v2 Qual banco? → SQLite — App local, sem servidor. [depende D:22223333]\nregra:55556666 v1 Erros em português\n{CLOSE_TAG}"
             )
         );
         assert_eq!(block.items.len(), 2);
@@ -1230,6 +1261,58 @@ mod tests {
             "a two-item block stays tiny: {}",
             block.tokens
         );
+    }
+
+    #[test]
+    fn qualifiers_render_as_plain_text_without_ids() {
+        use crate::qualifiers::{KnowledgeQualifier, QualifierKind};
+        let uuid = "01a11834-2a51-71d1-ab30-e3d5dce2a335";
+        let make = |kind, text: &str| KnowledgeQualifier {
+            kind,
+            text: text.to_string(),
+            artifact_id: Some(uuid.to_string()),
+        };
+        let mut one = decision("d-00000001", "Motivo.");
+        one.scope = vec!["*".to_string(), "packages/core".to_string()];
+        one.qualifiers = vec![
+            make(QualifierKind::Scope, "*"),
+            make(QualifierKind::Attribution, "dito pelo Pablo"),
+            make(QualifierKind::Validation, "testado em CI"),
+            make(QualifierKind::Validation, "testado em CI"),
+        ];
+        let line = decision_line(&one);
+        assert!(
+            !line.contains(uuid) && !line.contains("artifact_id"),
+            "{line}"
+        );
+        let expected = [
+            "[escopo: projeto todo, packages/core",
+            "alcance: projeto todo",
+            "autoria: dito pelo Pablo",
+            "validação: testado em CI] [depende D:22223333]",
+        ]
+        .join("; ");
+        assert!(line.ends_with(&expected), "{line}");
+        assert_eq!(line.matches("validação:").count(), 1, "{line}");
+
+        let long = "x".repeat(1_000);
+        let mut big = claim("c-00000001", "constraint", "Regra");
+        big.qualifiers = vec![make(QualifierKind::Validation, &long)];
+        let whole = claim_line(&big);
+        assert!(whole.contains(&long), "never cut");
+        let block = render_compact(
+            &pack(Vec::new(), vec![big]),
+            DEFAULT_BUDGET_TOKENS,
+            &BTreeSet::new(),
+        )
+        .expect("fits");
+        assert!(block.text.contains(&long));
+        let tiny = render_compact(
+            &pack(Vec::new(), vec![claim("c-00000002", "constraint", "Regra")]),
+            12,
+            &BTreeSet::new(),
+        );
+        assert!(tiny.is_none_or(|b| !b.text.contains("…")));
     }
 
     #[test]

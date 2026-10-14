@@ -296,8 +296,9 @@ fn p95_ms() -> f64 {
     p95
 }
 
-/// Measured on 14/10/2026: 79 tokens on average. Raise it only with a reason.
-const AVG_TOKENS_CEILING: usize = 80;
+/// Measured on 14/10/2026: 74 tokens on average (79 before plain-text
+/// qualifiers). Raise it only with a reason.
+const AVG_TOKENS_CEILING: usize = 75;
 
 /// Same slack as the context pack gate.
 const PREPARE_P95_CEILING_MS: f64 = 20.0;
@@ -327,5 +328,148 @@ fn injection_latency_gate() {
     assert!(
         p95 <= PREPARE_P95_CEILING_MS,
         "prepare p95 {p95:.2}ms above {PREPARE_P95_CEILING_MS}ms"
+    );
+}
+
+const UUID: &str = "01a11834-2a51-71d1-ab30-e3d5dce2a335";
+
+fn qualifier(
+    kind: application::qualifiers::QualifierKind,
+    text: String,
+) -> application::qualifiers::KnowledgeQualifier {
+    application::qualifiers::KnowledgeQualifier {
+        kind,
+        text,
+        artifact_id: Some(UUID.to_string()),
+    }
+}
+
+/// A pack shaped like the JevGuard dogfood: 16 decisions and 53 claims, half
+/// of them scoped, each carrying one or two qualifiers with an artifact id.
+fn jevguard_pack() -> application::context::ContextPack {
+    use application::context::{ContextPack, PackClaim, PackDecision};
+    use application::qualifiers::QualifierKind::{Scope, Validation};
+    let filler = |label: &str, length: usize| -> String {
+        let mut text = format!("{label} ");
+        while text.chars().count() < length {
+            text.push_str("palavra ");
+        }
+        text.chars().take(length).collect()
+    };
+    let qualifiers = |index: usize| {
+        let scope_text = if index.is_multiple_of(11) {
+            "*".to_string()
+        } else {
+            filler(&format!("escopo {index}"), 80)
+        };
+        let mut list = vec![qualifier(Scope, scope_text)];
+        if index.is_multiple_of(2) {
+            list.push(qualifier(
+                Validation,
+                filler(&format!("validado {index}"), 60),
+            ));
+        }
+        list
+    };
+    let scoped = |index: usize| -> Vec<String> {
+        if index.is_multiple_of(2) {
+            vec!["packages/core".to_string()]
+        } else {
+            Vec::new()
+        }
+    };
+    let decisions = (0..16)
+        .map(|index| PackDecision {
+            qualifiers: qualifiers(index),
+            scope: scoped(index),
+            decision_id: format!("01a11834-0000-7000-8000-{index:012}"),
+            version: 1,
+            question: filler(&format!("pergunta {index}"), 60),
+            choice: filler(&format!("escolha {index}"), 40),
+            rationale: filler(&format!("motivo {index}"), 120),
+            confirmed_at: "2026-10-01T00:00:00Z".to_string(),
+            evidence: vec![UUID.to_string()],
+            depends_on: Vec::new(),
+            conflicts_with: Vec::new(),
+        })
+        .collect();
+    let claims = (0..53)
+        .map(|index| PackClaim {
+            source_version: Some(1),
+            inherited_scope: scoped(index),
+            qualifiers: qualifiers(index),
+            claim_id: format!("01a11834-1111-7000-8000-{index:012}"),
+            kind: "constraint".to_string(),
+            statement: filler(&format!("regra {index}"), 100),
+            valid_from: "2026-10-01T00:00:00Z".to_string(),
+            valid_until: None,
+            source_decision_id: None,
+            matched: true,
+        })
+        .collect();
+    ContextPack {
+        observations: Vec::new(),
+        observation_coverage: Default::default(),
+        project_id: "p1".to_string(),
+        task: "t".to_string(),
+        as_of: "2026-10-14T00:00:00Z".to_string(),
+        budget_chars: 8_000,
+        used_chars: 0,
+        decisions,
+        claims,
+        omitted: 0,
+    }
+}
+
+/// Measured on 14/10/2026 over `jevguard_pack`: 2 items at 478 chars each with
+/// the JSON qualifiers, 3 items at 350 chars with plain text.
+const MIN_COMPACT_ITEMS: usize = 3;
+const MAX_CHARS_PER_ITEM: usize = 360;
+
+#[test]
+fn compact_density_gate() {
+    use application::injection::{render_compact, DEFAULT_BUDGET_TOKENS};
+    let pack = jevguard_pack();
+    let block = render_compact(&pack, DEFAULT_BUDGET_TOKENS, &Default::default()).expect("block");
+    let lines: Vec<&str> = block.text.lines().filter(|l| !l.starts_with('<')).collect();
+    let items = block.items.len();
+    let chars: usize = lines.iter().map(|line| line.chars().count()).sum();
+    let chars_per_item = chars.checked_div(items).unwrap_or(usize::MAX);
+    println!(
+        "gate compact items={items} chars_per_item={chars_per_item} omitted={}",
+        block.omitted
+    );
+    for line in &lines {
+        for forbidden in ["artifact_id", "qualifiers:", UUID] {
+            assert!(!line.contains(forbidden), "{forbidden} leaked: {line}");
+        }
+    }
+    // Every delivered item keeps the meaning of its qualifiers.
+    for decision in &pack.decisions {
+        let prefix = format!(
+            "D:{}",
+            application::injection::short_ref(&decision.decision_id)
+        );
+        if let Some(line) = lines.iter().find(|l| l.starts_with(&prefix)) {
+            for q in decision.qualifiers.iter().filter(|q| q.text != "*") {
+                assert!(line.contains(&q.text), "{prefix} lost {}", q.text);
+            }
+        }
+    }
+    for claim in &pack.claims {
+        let prefix = format!(
+            "regra:{}",
+            application::injection::short_ref(&claim.claim_id)
+        );
+        if let Some(line) = lines.iter().find(|l| l.starts_with(&prefix)) {
+            for q in claim.qualifiers.iter().filter(|q| q.text != "*") {
+                assert!(line.contains(&q.text), "{prefix} lost {}", q.text);
+            }
+        }
+    }
+    assert!(items >= MIN_COMPACT_ITEMS, "only {items} items fit");
+    assert!(
+        chars_per_item <= MAX_CHARS_PER_ITEM,
+        "{chars_per_item} chars per item"
     );
 }
