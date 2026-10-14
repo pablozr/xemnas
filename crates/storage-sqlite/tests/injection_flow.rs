@@ -131,6 +131,30 @@ fn injects_once_per_session_and_again_when_a_decision_changes() {
 }
 
 #[test]
+fn task_notifications_get_no_context_and_record_nothing() {
+    let test = support::open("inject-notification", &["p1"]);
+    let path = register_directory(&test);
+    seed(&test);
+    set_mode(&test, ContextMode::Inject, None);
+    let injection = ContextInjection::new(test.store.clone());
+
+    let notification = injection
+        .prepare(request(
+            &path,
+            "s1",
+            "<task-notification>cache da API</task-notification>",
+        ))
+        .expect("notification");
+    assert_eq!(notification.block, None);
+    assert_eq!(injections(&test), 0);
+
+    let normal = injection
+        .prepare(request(&path, "s1", "cache da API"))
+        .expect("normal prompt");
+    assert!(normal.block.is_some(), "the session still gets its block");
+}
+
+#[test]
 fn off_by_default_computes_and_records_nothing() {
     let test = support::open("inject-off", &["p1"]);
     let path = register_directory(&test);

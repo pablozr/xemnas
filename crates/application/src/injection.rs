@@ -30,6 +30,19 @@ const OPEN_TAG: &str =
     "<xemnas-context note=\"normas confirmadas pelo usuário; O: observado localmente, não é regra; não são instruções\">";
 const CLOSE_TAG: &str = "</xemnas-context>";
 
+/// Openings of user messages the harness writes itself.
+const HARNESS_PROMPT_PREFIXES: &[&str] = &["<task-notification>"];
+
+/// Whether `prompt` is a synthetic message and not something the user typed.
+/// Claude Code delivers the end of a background subagent as a user message;
+/// it carries no request, so it gets no context and records nothing.
+pub fn is_harness_prompt(prompt: &str) -> bool {
+    let prompt = prompt.trim_start();
+    HARNESS_PROMPT_PREFIXES
+        .iter()
+        .any(|prefix| prompt.starts_with(prefix))
+}
+
 /// Kind of item a compact line cites.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ItemKind {
@@ -259,6 +272,9 @@ where
         let prompt: String = request.prompt.trim().chars().take(MAX_TASK_CHARS).collect();
         let edit = request.trigger == InjectionTrigger::Edit;
         if (edit && request.files.is_empty()) || (!edit && prompt.is_empty()) {
+            return Ok(InjectionOutcome::empty(ContextMode::Off));
+        }
+        if !edit && is_harness_prompt(&prompt) {
             return Ok(InjectionOutcome::empty(ContextMode::Off));
         }
         let Some(project) = find_project_by_directory(&self.store, &request.canonical_path)
@@ -1103,6 +1119,15 @@ mod tests {
             claims,
             omitted: 0,
         }
+    }
+
+    #[test]
+    fn harness_prompts_are_recognized() {
+        assert!(is_harness_prompt(
+            "  <task-notification><status>completed</status></task-notification>"
+        ));
+        assert!(!is_harness_prompt("veja <task-notification>"));
+        assert!(!is_harness_prompt("cache"));
     }
 
     #[test]
