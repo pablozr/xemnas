@@ -251,6 +251,20 @@ mod tests {
     }
 
     #[test]
+    fn every_interface_language_has_an_output_language_for_the_ai() {
+        use application::output_language::OutputLanguage;
+        for language in Language::ALL {
+            let output = OutputLanguage::from_tag(language.id());
+            assert_eq!(
+                output == OutputLanguage::ENGLISH,
+                language == Language::English,
+                "{}",
+                language.id()
+            );
+        }
+    }
+
+    #[test]
     fn formatted_copy_names_its_arguments() {
         assert_eq!(settings::settings_at("Language"), "Settings › Language");
     }

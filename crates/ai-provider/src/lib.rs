@@ -33,6 +33,16 @@ use serde_json::json;
 /// Maximum bytes read from a provider response.
 pub(crate) const MAX_RESPONSE_BYTES: usize = 512 * 1024;
 
+/// A provider answer longer than [`MAX_RESPONSE_BYTES`].
+pub(crate) fn response_over_limit() -> ExtractError {
+    ExtractError::Extractor("a resposta do provedor excedeu o limite".to_string())
+}
+
+/// A provider answer that could not be read.
+pub(crate) fn response_unreadable() -> ExtractError {
+    ExtractError::Extractor("falha ao ler a resposta do provedor".to_string())
+}
+
 /// Aggregate extraction prompt budget, distinct from the per-artifact profile cap.
 /// The assembled prompt is bounded in characters; bytes are used for early stopping.
 const MAX_INPUT_BYTES: usize = 64 * 1024;
@@ -89,6 +99,15 @@ to 1, how sure you are that it was actually decided (not merely discussed); \
 confidence_reason: one sentence. evidence_refs: copy the ids exactly as written after \
 \"### artifact\". diff_summary: files touched and number of artifacts (the app recomputes \
 both).\n\
+When the message lists \"Project map components\", say in components where each item \
+applies or is implemented: the part of the project whose code or behavior would change if the \
+item changed. name: only the part's name, the text before the first colon of its line, \
+copied exactly; what follows that colon says what the part does: use it to recognize a part \
+the item describes without naming it, never copy it into name. quote: copy a \
+stretch of the question, choice or rationale you wrote for this item, not of the source, that \
+names the part or describes what it does; never a part named only to be excluded, avoided, \
+replaced or compared, and a word that merely appears in both does not count. At most 3, and \
+an empty list when nothing is listed or you are not sure.\n\
 Keep explicit attribution, scope and validation restrictions in qualifiers, even when rationale \
 is long. Each qualifier text must be a literal excerpt from the cited artifact_id. Do not infer \
 missing qualifications; use an empty array when none are stated. \
@@ -96,7 +115,7 @@ Reply with a single JSON object only, no prose, with optional nature as specifie
 {\"proposals\":[{\"kind\":\"decision|rule|detail\",\"question\":string,\"choice\":string,\
 \"rationale\":string,\"confidence\":number,\"confidence_reason\":string,\
 \"significance\":number,\"criteria\":[string],\"evidence_refs\":[string],\
-\"qualifiers\":[{\"kind\":\"attribution|scope|validation\",\"text\":string,\"artifact_id\":string}],\"diff_summary\":{\"files\":[string],\"artifacts\":number}}]}. No extra fields.",
+\"qualifiers\":[{\"kind\":\"attribution|scope|validation\",\"text\":string,\"artifact_id\":string}],\"components\":[{\"name\":string,\"quote\":string}],\"diff_summary\":{\"files\":[string],\"artifacts\":number}}]}. No extra fields.",
     application::plain_rules!()
 );
 
@@ -558,14 +577,10 @@ impl OpenAiCompatibleExtractor {
             .read_to_end(&mut buffer)
             .is_err()
         {
-            return Attempt::Fatal(ExtractError::Extractor(
-                "falha ao ler a resposta do provedor".to_string(),
-            ));
+            return Attempt::Fatal(response_unreadable());
         }
         if buffer.len() > MAX_RESPONSE_BYTES {
-            return Attempt::Fatal(ExtractError::Extractor(
-                "a resposta do provedor excedeu o limite".to_string(),
-            ));
+            return Attempt::Fatal(response_over_limit());
         }
 
         let envelope: ChatEnvelope = match serde_json::from_slice(&buffer) {
@@ -619,7 +634,7 @@ pub(crate) fn output_schema() -> serde_json::Value {
                     "required": [
                         "nature", "kind", "question", "choice", "rationale", "confidence",
                         "confidence_reason", "significance", "criteria", "qualifiers",
-                        "evidence_refs", "diff_summary"
+                        "evidence_refs", "diff_summary", "components"
                     ],
                     "properties": {
                         "nature": {"type": "string", "enum": ["description", "inference", "normative", "unknown"]},
@@ -633,6 +648,19 @@ pub(crate) fn output_schema() -> serde_json::Value {
                                     "text": {"type": "string", "minLength": 1,
                                         "maxLength": application::qualifiers::MAX_QUALIFIER_CHARS},
                                     "artifact_id": {"type": "string", "minLength": 1, "maxLength": 256}
+                                }
+                            }
+                        },
+                        "components": {
+                            "type": "array",
+                            "maxItems": application::extract::MAX_CANDIDATE_COMPONENTS,
+                            "items": {
+                                "type": "object", "additionalProperties": false,
+                                "required": ["name", "quote"],
+                                "properties": {
+                                    "name": {"type": "string", "minLength": 1, "maxLength": 200},
+                                    "quote": {"type": "string", "minLength": 1,
+                                        "maxLength": MAX_FIELD_CHARS}
                                 }
                             }
                         },
@@ -695,9 +723,10 @@ pub(crate) fn sanitized_transport_error(error: reqwest::Error) -> ExtractError {
 /// Most lines of background per section sent with a capture.
 const MAX_BACKGROUND_LINES: usize = 12;
 
-/// Builds the user content: what the project already records and what the
-/// user accepted or rejected before, then the signals and the bounded
-/// artifacts.
+/// Builds the user content: the names of the map's components (first, so the
+/// part that changes least between captures is a stable prefix), what the
+/// project already records and what the user accepted or rejected before,
+/// then the signals and the bounded artifacts.
 pub(crate) fn build_user_content(
     profile: &AiProfile,
     input: &DecisionEvidence,
@@ -705,6 +734,19 @@ pub(crate) fn build_user_content(
     background: &ExtractionBackground,
 ) -> String {
     let mut text = String::new();
+    if !background.components.is_empty() {
+        text.push_str("## Project map components (name: what it does; write only the name)\n");
+        for component in &background.components {
+            text.push_str("- ");
+            text.push_str(&application::external::limited_text(&component.name, 80));
+            if !component.description.is_empty() {
+                text.push_str(": ");
+                text.push_str(&component.description);
+            }
+            text.push('\n');
+        }
+        text.push('\n');
+    }
     for (title, lines) in [
         (
             "Already recorded in this project (do not propose these again or anything they already cover)",
@@ -813,6 +855,40 @@ struct ModelProposal {
     /// Significance criteria ticked; unknown ones are dropped.
     #[serde(default)]
     criteria: Vec<String>,
+    /// Map components the item applies to; absent reads as none. Read item
+    /// by item ([`read_components`]): a bad one is dropped, never the answer.
+    #[serde(default)]
+    components: serde_json::Value,
+}
+
+/// The components of an item, one by one: an item with a field too many, a
+/// field too long or the wrong shape is dropped, and so is everything past
+/// the first three; the rest of the answer stands.
+fn read_components(value: serde_json::Value) -> Vec<application::extract::ProposedComponent> {
+    let serde_json::Value::Array(items) = value else {
+        return Vec::new();
+    };
+    items
+        .into_iter()
+        .filter_map(|item| serde_json::from_value::<ModelComponent>(item).ok())
+        .filter(|component| {
+            component.name.chars().count() <= MAX_FIELD_CHARS
+                && component.quote.chars().count() <= MAX_FIELD_CHARS
+        })
+        .take(application::extract::MAX_CANDIDATE_COMPONENTS)
+        .map(|component| application::extract::ProposedComponent {
+            name: component.name,
+            quote: component.quote,
+        })
+        .collect()
+}
+
+/// A component of the project map the model says an item applies to.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModelComponent {
+    name: String,
+    quote: String,
 }
 
 /// Strict diff summary shape expected by `validate_diff_summary`.
@@ -887,6 +963,7 @@ impl ModelEnvelope {
                     .into_iter()
                     .filter(|criterion| SIGNIFICANCE_CRITERIA.contains(&criterion.as_str()))
                     .collect(),
+                components: read_components(proposal.components),
             });
         }
         Ok(proposals)
@@ -976,5 +1053,172 @@ mod tests {
             proposals[0].significance,
             application::extract::MIN_SIGNIFICANCE
         );
+    }
+
+    fn proposal_json(components: &str) -> String {
+        format!(
+            r#"{{"proposals":[{{"kind":"decision","question":"q","choice":"c","rationale":"r","confidence":0.7,"confidence_reason":"x","evidence_refs":["a"],"diff_summary":{{"files":[],"artifacts":1}}{components}}}]}}"#
+        )
+    }
+
+    #[test]
+    fn the_schema_requires_components_with_a_name_and_a_quote() {
+        let schema = output_schema();
+        let item = &schema["properties"]["proposals"]["items"];
+        assert!(item["required"]
+            .as_array()
+            .expect("required")
+            .iter()
+            .any(|value| value == "components"));
+        let components = &item["properties"]["components"];
+        assert_eq!(components["maxItems"], 3);
+        assert_eq!(components["items"]["additionalProperties"], false);
+        assert_eq!(
+            components["items"]["required"],
+            serde_json::json!(["name", "quote"])
+        );
+    }
+
+    #[test]
+    fn components_are_read_and_an_old_answer_without_them_stays_valid() {
+        let signals = [RelevanceSignal::SecurityPrivacy];
+        let with =
+            proposal_json(r#","components":[{"name":"storage-sqlite","quote":"grava no banco"}]"#);
+        let proposals = parse_model_output(&with, &signals).expect("parse");
+        assert_eq!(proposals[0].components.len(), 1);
+        assert_eq!(proposals[0].components[0].name, "storage-sqlite");
+        assert_eq!(proposals[0].components[0].quote, "grava no banco");
+        let without = parse_model_output(&proposal_json(""), &signals).expect("old answer");
+        assert!(without[0].components.is_empty());
+        // One bad item costs only itself, never the answer.
+        let long = "x".repeat(MAX_FIELD_CHARS + 1);
+        let mixed = proposal_json(&format!(
+            r#","components":[{{"name":"a","quote":"b","why":"c"}},{{"name":"{long}","quote":"b"}},
+            {{"name":"core","quote":"grava no banco"}},"text",{{"name":"x"}}]"#
+        ));
+        let proposals = parse_model_output(&mixed, &signals).expect("a bad item is dropped");
+        assert_eq!(proposals[0].components.len(), 1);
+        assert_eq!(proposals[0].components[0].name, "core");
+        let shapeless = proposal_json(r#","components":"core""#);
+        let proposals = parse_model_output(&shapeless, &signals).expect("not a list");
+        assert!(proposals[0].components.is_empty());
+    }
+
+    fn evidence(content: &str) -> DecisionEvidence {
+        DecisionEvidence {
+            capture_id: "c".into(),
+            project_id: "p".into(),
+            adapter: None,
+            session_id: None,
+            observed_at: None,
+            artifacts: vec![application::extract::EvidenceArtifact {
+                artifact_id: "a1".into(),
+                kind: "diff_hunk".into(),
+                content: content.into(),
+                metadata: "{}".into(),
+            }],
+        }
+    }
+
+    fn profile() -> AiProfile {
+        AiProfile {
+            id: "p".into(),
+            kind: ProfileKind::Fake,
+            model: String::new(),
+            endpoint: None,
+            max_input_chars: 10_000,
+            external_calls_enabled: false,
+            consent: None,
+            chatgpt: None,
+        }
+    }
+
+    fn map(count: usize) -> ExtractionBackground {
+        ExtractionBackground {
+            components: (0..count)
+                .map(|n| application::extract::MapComponent {
+                    entity_id: format!("e{n}"),
+                    name: format!("component-{n:06}-xxx"),
+                    keys: vec![format!("component{n:06}xxx")],
+                    // The longest description the app lists (100 characters).
+                    description: format!("{n:06} ").repeat(16)[..100].to_string(),
+                })
+                .collect(),
+            known: vec!["q → c".into()],
+            ..ExtractionBackground::default()
+        }
+    }
+
+    #[test]
+    fn the_map_comes_first_and_is_the_same_bytes_for_any_capture() {
+        let background = map(60);
+        let signals = [RelevanceSignal::SecurityPrivacy];
+        let one = build_user_content(&profile(), &evidence("+one"), &signals, &background);
+        let other = build_user_content(
+            &profile(),
+            &evidence("-other\n+more"),
+            &signals,
+            &background,
+        );
+        let header = "## Project map components (name: what it does; write only the name)\n";
+        assert!(one.starts_with(header), "{one}");
+        let prefix =
+            |text: &str| text[..text.find("## Already recorded").expect("recorded")].to_string();
+        assert_eq!(
+            prefix(&one),
+            prefix(&other),
+            "a stable prefix for the cache"
+        );
+        assert_ne!(one, other);
+        let bare = build_user_content(&profile(), &evidence("+one"), &signals, &map(0));
+        assert!(!bare.contains("Project map components"));
+        // What the list costs: 60 names of 20 characters, each with a
+        // description of the full 100. The description is what lets the model
+        // tell that "the updater" is the part that does "tray icon and
+        // updates"; the prefix is the same bytes for every capture, so the
+        // provider's cache pays it once. Measured: 7,569 bytes; raise the ceiling with a number.
+        let bytes = prefix(&one).len();
+        println!("gate extracted links: prompt_bytes_60_components={bytes}");
+        assert!(bytes <= 8_192, "{bytes} bytes");
+    }
+
+    #[test]
+    fn a_component_is_listed_with_what_it_does() {
+        let mut background = map(0);
+        background.components = vec![
+            application::extract::MapComponent {
+                entity_id: "e1".into(),
+                name: "sc-platform".into(),
+                keys: vec!["scplatform".into()],
+                description: "OS integration: window chrome, tray icon and updates".into(),
+            },
+            application::extract::MapComponent {
+                entity_id: "e2".into(),
+                name: "CI".into(),
+                keys: vec!["ci".into()],
+                ..Default::default()
+            },
+        ];
+        let text = build_user_content(
+            &profile(),
+            &evidence("+one"),
+            &[RelevanceSignal::SecurityPrivacy],
+            &background,
+        );
+        assert!(
+            text.contains("- sc-platform: OS integration: window chrome, tray icon and updates\n"),
+            "{text}"
+        );
+        assert!(text.contains("- CI\n\n"), "{text}");
+        assert!(SYSTEM_PROMPT.contains("describes what it does"));
+        assert!(SYSTEM_PROMPT.contains("not of the source"));
+        assert!(SYSTEM_PROMPT.contains("before the first colon"));
+    }
+
+    #[test]
+    fn system_prompt_has_no_glued_words_or_doubled_spaces() {
+        for glued in ["forthe", "formatching", "  "] {
+            assert!(!SYSTEM_PROMPT.contains(glued), "{glued:?}");
+        }
     }
 }

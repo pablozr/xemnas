@@ -67,6 +67,27 @@ fn enqueue_persists_before_execution() {
 }
 
 #[test]
+fn insert_unless_queued_inserts_one_waiting_job_per_kind() {
+    let (store, root) = store_in("unless-queued");
+    let first = record("a", "judge", JobState::Queued, true, "2026-01-01T00:00:00Z");
+    let second = record("b", "judge", JobState::Queued, true, "2026-01-01T00:00:01Z");
+    assert!(store.insert_unless_queued(&first).expect("first"));
+    assert!(
+        !store.insert_unless_queued(&second).expect("second"),
+        "one is already waiting"
+    );
+    let other = record("c", "other", JobState::Queued, true, "2026-01-01T00:00:02Z");
+    assert!(store.insert_unless_queued(&other).expect("other kind"));
+    assert!(store.get("b").expect("get").is_none());
+
+    // A running job is not waiting: the next trigger queues another.
+    let kinds = vec!["judge".to_string()];
+    store.claim_next(&kinds).expect("claim").expect("claimed");
+    assert!(store.insert_unless_queued(&second).expect("after claim"));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn claim_next_is_atomic_and_skips_unregistered_kinds() {
     let (store, root) = store_in("claim");
     store

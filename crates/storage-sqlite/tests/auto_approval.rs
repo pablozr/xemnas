@@ -10,13 +10,17 @@ use std::sync::{Arc, Mutex};
 use application::adoption::{Adoption, AdoptionApi};
 use application::analysis::ExtractorFactory;
 use application::auto_approval::{
-    Approvals, ApprovalsApi, By, ItemKind, Mode, ReviewError, Verdict, BATCH,
+    queue_review_after, review_job, Approvals, ApprovalsApi, By, ItemKind, Mode, ReviewError,
+    Verdict, BATCH, REVIEW_JOB_KIND,
 };
 use application::extract::{
     CandidateExtractor, CandidateProposal, DecisionCandidateRecord, DecisionEvidence, ExtractError,
     ExtractionStore, RelevanceSignal,
 };
 use application::inbox::{CandidateStatus, InboxStore};
+use application::jobs::{
+    JobFailure, JobKind, JobRecord, JobState, Jobs, Lane, ANALYZE_CAPTURE_KIND,
+};
 use application::overview::{JsonValue, StructuredModel};
 use application::profile::{
     build_preview, grant_consent, offline_default_profile, AiProfile, AiSettings, ProfileError,
@@ -77,6 +81,9 @@ struct Judge {
     asked: Arc<Mutex<Vec<String>>>,
     /// The system prompt of each call.
     prompts: Arc<Mutex<Vec<String>>>,
+    /// A call waits here after it was counted: held by a test, it keeps the
+    /// judge in the middle of a pass.
+    hold: Arc<Mutex<()>>,
 }
 
 impl Judge {
@@ -86,6 +93,7 @@ impl Judge {
             calls: Arc::new(AtomicUsize::new(0)),
             asked: Arc::new(Mutex::new(Vec::new())),
             prompts: Arc::new(Mutex::new(Vec::new())),
+            hold: Arc::new(Mutex::new(())),
         }
     }
 
@@ -116,6 +124,7 @@ impl StructuredModel for Judge {
     ) -> Result<String, ExtractError> {
         assert_eq!(schema_name, "approval_verdicts");
         self.calls.fetch_add(1, Ordering::SeqCst);
+        drop(self.hold.lock().expect("lock"));
         self.prompts.lock().expect("lock").push(system.to_owned());
         self.asked.lock().expect("lock").push(user.to_owned());
         self.answer
@@ -285,6 +294,15 @@ fn the_rules_settle_the_plain_cases_and_one_batched_call_settles_the_rest() {
     );
     let asked = judge.asked.lock().expect("lock")[0].clone();
     assert!(asked.contains("qual formato exportar relatorios"));
+    assert!(
+        asked.starts_with("Output language: English"),
+        "the language line comes first: {asked}"
+    );
+    assert!(
+        asked.contains("[decision] Question: qual formato exportar relatorios")
+            && asked.contains("Extractor confidence: 60% | Sources: 1"),
+        "{asked}"
+    );
     assert!(
         !asked.contains("como versionar as revisoes passadas"),
         "the plain one is not sent"
@@ -554,7 +572,7 @@ fn a_link_found_by_mention_is_asked_with_its_quote_and_a_file_link_is_accepted()
     );
     let asked = judge.asked.lock().expect("lock")[0].clone();
     assert!(
-        asked.contains("Evidência (menção no texto):") && asked.contains("o core grava"),
+        asked.contains("Evidence (mention in the text):") && asked.contains("o core grava"),
         "{asked}"
     );
     assert!(
@@ -638,8 +656,8 @@ fn a_link_the_ai_proposed_is_judged_with_its_quote_and_reason() {
     assert_eq!((report.accepted, report.left), (1, 0));
     let asked = judge.asked.lock().expect("lock")[0].clone();
     assert!(
-        asked.contains("Evidência (proposta pela IA): resultado de um turno")
-            && asked.contains("Motivo da IA: A decisão rege o desfecho do motor."),
+        asked.contains("Evidence (proposed by the AI): resultado de um turno")
+            && asked.contains("AI reason: A decisão rege o desfecho do motor."),
         "{asked}"
     );
     assert!(graph.suggestions(PROJECT).expect("pending").is_empty());
@@ -812,8 +830,8 @@ fn a_decision_in_force_that_resembles_the_candidate_is_named_to_the_judge() {
 
     let asked = judge.asked.lock().expect("lock")[0].clone();
     assert!(
-        asked.contains("Parecidas em vigor: D1")
-            && asked.contains("## Decisões em vigor")
+        asked.contains("Similar decisions in force: D1")
+            && asked.contains("## Decisions in force")
             && asked.contains("D1 \"faixas de probabilidade para o juiz\" -> usar três faixas"),
         "{asked}"
     );
@@ -982,16 +1000,16 @@ fn links_are_asked_apart_with_their_own_prompt_and_the_whole_evidence() {
     assert_eq!(prompts[0], REVIEW_PROMPT);
     assert_eq!(prompts[1], LINK_REVIEW_PROMPT);
     let asked = judge.asked.lock().expect("lock").clone();
-    assert!(asked[0].contains("qual formato exportar") && !asked[0].contains("[vínculo"));
+    assert!(asked[0].contains("qual formato exportar") && !asked[0].contains("[link"));
     let links = &asked[1];
-    assert!(links.contains("[vínculo affects]"), "{links}");
-    assert!(links.contains("Escolha: escolha de mention"), "{links}");
+    assert!(links.contains("[link affects]"), "{links}");
+    assert!(links.contains("Choice: escolha de mention"), "{links}");
     assert!(
-        links.contains("Componente: Valida e grava as capturas."),
+        links.contains("Component: Valida e grava as capturas."),
         "{links}"
     );
-    assert!(links.contains("Caminhos: crates/core/**"), "{links}");
-    assert!(links.contains("Evidência (menção no texto)"), "{links}");
+    assert!(links.contains("Paths: crates/core/**"), "{links}");
+    assert!(links.contains("Evidence (mention in the text)"), "{links}");
     assert!(
         !links.contains("qual formato"),
         "no candidate in the link batch"
@@ -1088,7 +1106,7 @@ fn structural_links_are_settled_by_the_rules_without_the_ai() {
     // Only the mention link went to the judge.
     let asked = judge.asked.lock().expect("lock").clone();
     assert_eq!(asked.len(), 1);
-    assert!(asked[0].contains("Evidência (menção no texto)"));
+    assert!(asked[0].contains("Evidence (mention in the text)"));
     assert!(!asked[0].contains("dependência citada"));
 }
 
@@ -1446,8 +1464,10 @@ fn a_rule_that_only_resembles_one_in_force_goes_to_the_judge_with_it() {
 
     let asked = judge.asked.lock().expect("lock")[0].clone();
     assert!(
-        asked.contains("Regras parecidas em vigor: R1")
-            && asked.contains("## Regras em vigor\n- R1 Cache entries expire after ten minutes"),
+        asked.contains(
+            "[rule] Question: regra hours | Choice: Cache entries expire after ten hours"
+        ) && asked.contains("Similar rules in force: R1")
+            && asked.contains("## Rules in force\n- R1 Cache entries expire after ten minutes"),
         "{asked}"
     );
     assert_eq!(status_of(&test.store, "hours"), CandidateStatus::Pending);
@@ -1553,3 +1573,225 @@ fn the_local_duplicate_rule_never_discards_a_different_rule_and_finds_the_plain_
 
 /// Recall measured on [`RULE_PAIRS`]; raise it when the rule improves.
 const RECALL_FLOOR: f64 = 0.3;
+
+/// The judge as the composition root wires it: a job that runs the judge over
+/// every project, queued when another job completes.
+fn judge_jobs(test: &support::TestStore, judge: &Judge) -> Jobs<SqliteStore> {
+    let review = review_with(&test.store, consented(), judge);
+    review.set_mode(Mode::Automatic).expect("on");
+    let mut jobs = Jobs::new(test.store.clone());
+    jobs.register(REVIEW_JOB_KIND, review_job(Arc::new(review)));
+    jobs
+}
+
+fn queued_reviews(store: &SqliteStore) -> usize {
+    application::jobs::JobRepository::counts(store)
+        .expect("counts")
+        .iter()
+        .filter(|(kind, state, _)| kind == REVIEW_JOB_KIND && *state == JobState::Queued)
+        .map(|(_, _, count)| count)
+        .sum()
+}
+
+#[test]
+fn a_new_candidate_is_judged_without_the_screen_in_automatic_mode() {
+    let test = support::open("review-job", &[PROJECT]);
+    let judge = Judge::answering(r#"{"verdicts":[{"id":"I1","verdict":"accept","reason":"ok"}]}"#);
+    let mut jobs = judge_jobs(&test, &judge);
+    // The analysis that creates the item; the worker would tell the observer
+    // it completed, and `run_next_in` does not, so the trigger runs by hand.
+    let store = test.store.clone();
+    jobs.register(
+        ANALYZE_CAPTURE_KIND,
+        Arc::new(move |_| {
+            store
+                .insert_candidates(&[old("amb", 0.60, "qual formato exportar relatorios")])
+                .expect("candidate");
+            Ok(())
+        }),
+    );
+    jobs.enqueue(ANALYZE_CAPTURE_KIND, "", true).expect("queue");
+    let analysis = jobs
+        .run_next_in(Lane::Now)
+        .expect("run")
+        .expect("analysis ran");
+    assert_eq!(analysis.state, JobState::Completed);
+    assert!(queue_review_after(&test.store, &analysis.kind, analysis.state).expect("queue"));
+    assert!(
+        !queue_review_after(&test.store, &analysis.kind, analysis.state).expect("queue again"),
+        "a judge is already waiting"
+    );
+    assert_eq!(queued_reviews(&test.store), 1, "a second trigger adds none");
+
+    let judging = jobs
+        .run_next_in(Lane::Suggestions)
+        .expect("run")
+        .expect("judge ran");
+    assert_eq!(
+        (judging.kind.as_str(), judging.state),
+        (REVIEW_JOB_KIND, JobState::Completed)
+    );
+    assert_eq!(status_of(&test.store, "amb"), CandidateStatus::Accepted);
+    assert_eq!(judge.calls.load(Ordering::SeqCst), 1);
+
+    queue_review_after(&test.store, &analysis.kind, analysis.state).expect("queue");
+    jobs.run_next_in(Lane::Suggestions).expect("run");
+    assert_eq!(
+        judge.calls.load(Ordering::SeqCst),
+        1,
+        "everything was reviewed: a second judge asks nothing"
+    );
+}
+
+#[test]
+fn in_manual_mode_no_review_job_is_queued() {
+    let test = support::open("review-job-manual", &[PROJECT]);
+    let judge = Judge::answering("{}");
+    let review = review_with(&test.store, consented(), &judge);
+    test.store
+        .insert_candidates(&[old("amb", 0.60, "qual formato exportar relatorios")])
+        .expect("pending");
+    assert!(!review.status().expect("status").automatic);
+    assert!(
+        !queue_review_after(&test.store, ANALYZE_CAPTURE_KIND, JobState::Completed)
+            .expect("manual")
+    );
+    assert_eq!(queued_reviews(&test.store), 0);
+    assert_eq!(judge.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(status_of(&test.store, "amb"), CandidateStatus::Pending);
+    // Neither a failed job nor one that cannot create items queues a judge.
+    review.set_mode(Mode::Automatic).expect("on");
+    for (kind, state) in [
+        (ANALYZE_CAPTURE_KIND, JobState::Failed),
+        ("derive_search_terms", JobState::Completed),
+    ] {
+        assert!(!queue_review_after(&test.store, kind, state).expect("not feeding"));
+    }
+    assert_eq!(queued_reviews(&test.store), 0);
+    let queued: Vec<bool> = JobKind::ALL
+        .into_iter()
+        .filter(|kind| kind.feeds_review())
+        .map(|kind| queue_review_after(&test.store, kind.as_str(), JobState::Completed))
+        .collect::<Result<_, _>>()
+        .expect("feeding");
+    assert_eq!(queued.iter().filter(|each| **each).count(), 1);
+    assert_eq!(queued_reviews(&test.store), 1, "one judge covers them all");
+}
+
+/// What the background job does with the pause that follows a failed call:
+/// the items it could not ask about are not forgotten.
+#[test]
+fn the_pause_after_a_failed_call_defers_the_job_for_what_is_left_of_it() {
+    let test = support::open("review-deferred", &[PROJECT]);
+    let judge = Judge::failing();
+    let review = review_with(&test.store, consented(), &judge);
+    review.set_mode(Mode::Automatic).expect("on");
+    test.store
+        .insert_candidates(&[old("amb", 0.60, "qual formato exportar relatorios")])
+        .expect("pending");
+
+    assert!(matches!(
+        review.run_all_at(NOW),
+        Err(ReviewError::Provider(_))
+    ));
+    let soon = review
+        .run_all_at("2026-03-01T10:05:00Z")
+        .expect("paused pass");
+    assert!(!soon.asked);
+    assert_eq!(soon.deferred, Some(std::time::Duration::from_secs(15 * 60)));
+    assert_eq!(status_of(&test.store, "amb"), CandidateStatus::Pending);
+
+    let later = review.run_all_at("2026-03-01T10:20:00Z");
+    assert!(
+        matches!(later, Err(ReviewError::Provider(_))),
+        "asked again"
+    );
+
+    // Through the job: the pause that just started ends in about 20 minutes.
+    let handler = review_job(Arc::new(review));
+    let record = JobRecord {
+        id: "j".into(),
+        kind: REVIEW_JOB_KIND.into(),
+        payload: String::new(),
+        state: JobState::Running,
+        idempotent: true,
+        attempts: 1,
+        last_error: None,
+        created_at: NOW.into(),
+        updated_at: NOW.into(),
+    };
+    let first = handler(&record);
+    let Err(JobFailure::Deferred {
+        retry_after: Some(wait),
+    }) = first
+    else {
+        panic!("the provider failed: {first:?}");
+    };
+    assert!(
+        wait.as_secs() > 19 * 60 && wait.as_secs() <= 20 * 60,
+        "{wait:?}"
+    );
+    let second = handler(&record);
+    let Err(JobFailure::Deferred {
+        retry_after: Some(left),
+    }) = second
+    else {
+        panic!("the pause is on: {second:?}");
+    };
+    assert!(left <= wait && left.as_secs() > 19 * 60, "{left:?}");
+}
+
+/// The screen and the background job share one review: while the job judges,
+/// the screen's pass returns at once instead of waiting or judging twice.
+#[test]
+fn the_screen_does_not_wait_for_the_pass_of_the_job() {
+    let test = support::open("review-lock", &[PROJECT]);
+    let judge = Judge::answering(r#"{"verdicts":[{"id":"I1","verdict":"accept","reason":"ok"}]}"#);
+    let review = review_with(&test.store, consented(), &judge);
+    review.set_mode(Mode::Automatic).expect("on");
+    test.store
+        .insert_candidates(&[old("amb", 0.60, "qual formato exportar relatorios")])
+        .expect("pending");
+    let held = judge.hold.lock().expect("hold");
+    std::thread::scope(|scope| {
+        let job = scope.spawn(|| review.run_all_at(NOW));
+        while judge.calls.load(Ordering::SeqCst) == 0 {
+            std::thread::yield_now();
+        }
+        let screen = review.run_at(PROJECT, NOW).expect("screen");
+        assert!(!screen.asked && !screen.changed(), "the job covers it");
+        drop(held);
+        let report = job.join().expect("job").expect("pass");
+        assert!(report.asked && report.accepted == 1);
+    });
+    assert_eq!(judge.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(status_of(&test.store, "amb"), CandidateStatus::Accepted);
+}
+
+#[test]
+fn a_pass_with_nothing_new_asks_nothing_and_is_cheap() {
+    let projects = ["p1", "p2", "p3"];
+    let test = support::open("review-idle", &projects);
+    let judge = Judge::answering(r#"{"verdicts":[{"id":"I1","verdict":"human","reason":"ok"}]}"#);
+    let review = review_with(&test.store, consented(), &judge);
+    review.set_mode(Mode::Automatic).expect("on");
+    test.store
+        .insert_candidates(&[old("amb", 0.60, "qual formato exportar relatorios")])
+        .expect("pending");
+    let first = review.run_all_at(NOW).expect("first");
+    assert!(first.asked);
+    let calls = judge.calls.load(Ordering::SeqCst);
+
+    // The best of a few, so a busy machine does not count as the idle cost.
+
+    let mut elapsed = std::time::Duration::MAX;
+    for _ in 0..5 {
+        let started = std::time::Instant::now();
+        let idle = review.run_all_at(NOW).expect("idle");
+        elapsed = elapsed.min(started.elapsed());
+        assert!(!idle.asked && !idle.changed());
+    }
+    println!("latency auto_review_idle_ms={}", elapsed.as_millis());
+    assert_eq!(judge.calls.load(Ordering::SeqCst), calls);
+    assert!(elapsed.as_millis() < 200, "{elapsed:?}");
+}

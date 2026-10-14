@@ -20,6 +20,7 @@ use crate::context::match_any_query;
 use crate::decisions::{DecisionStatus, DecisionStore, DecisionsError, StoredDecision};
 use crate::graph::GraphStore;
 use crate::injection::short_ref;
+use crate::output_language::{fixed, header, LanguageSource, OutputLanguage};
 use crate::overview::StructuredModel;
 use crate::profile::{choose_extractor, AiSettings, ExtractorChoice, ProfileStore, SecretStore};
 use crate::relations::{DecisionRelations, RelationStore};
@@ -209,8 +210,9 @@ decision answers the same question as the earlier one with a different choice, r
 it. none: anything else. Most pairs are none; sharing a topic, a component or words is not a \
 relation.\n\
 For every relation other than none, copy in quote one sentence, verbatim, from the texts \
-given that shows it, and explain it in one sentence in reason, in the language of the \
-decisions. direction is new_to_earlier when the new decision is the source (the new one \
+given that shows it, and explain it in one sentence in reason, in the output language named \
+on the first line of the message. direction is new_to_earlier when the new decision is the \
+source (the new one \
 depends on, conflicts with or supersedes the earlier one) and earlier_to_new otherwise; \
 supersedes is always new_to_earlier.\n\
 Reply with one JSON object only, matching exactly: {\"decisions\":[{\"id\":string,\
@@ -277,10 +279,10 @@ pub struct RelationSubject<'a> {
     pub earlier: &'a [StoredDecision],
 }
 
-/// The user message: each new decision numbered from 1, with its earlier
-/// decisions listed under it; secrets redacted.
-pub fn relation_request(subjects: &[RelationSubject<'_>]) -> String {
-    let mut user = String::new();
+/// The user message: the output language, then each new decision numbered from
+/// 1, with its earlier decisions listed under it; secrets redacted.
+pub fn relation_request(language: OutputLanguage, subjects: &[RelationSubject<'_>]) -> String {
+    let mut user = header(language);
     for (position, subject) in subjects.iter().enumerate() {
         user.push_str(&format!(
             "## New decision {} D:{}\nQuestion: {}\nChoice: {}\nWhy: {}\n\n### Earlier decisions\n",
@@ -431,11 +433,12 @@ fn validated(
 }
 
 /// The job: earlier decisions related to a new one, judged by the model.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RelationFinder<S, P, K, F> {
     store: S,
     settings: AiSettings<P, K>,
     factory: F,
+    language: LanguageSource,
 }
 
 impl<S, P, K, F> RelationFinder<S, P, K, F>
@@ -452,7 +455,14 @@ where
             store,
             settings,
             factory,
+            language: fixed(OutputLanguage::ENGLISH),
         }
+    }
+
+    /// Where the language of the reasons is read, once per provider call.
+    pub fn with_language(mut self, source: LanguageSource) -> Self {
+        self.language = source;
+        self
     }
 
     /// Earlier accepted decisions worth comparing with `new`: those tied to
@@ -611,7 +621,7 @@ where
         let answer = model
             .complete(
                 RELATION_PROMPT,
-                &relation_request(subjects),
+                &relation_request((self.language)(), subjects),
                 "decision_relations",
                 &relation_schema(),
             )
@@ -787,7 +797,9 @@ mod tests {
         assert_eq!(parsed[1][0].2, RelationKind::Supersedes);
         assert!(parse_relations_batch("not json", &subjects)[1].is_empty());
 
-        let request = relation_request(&subjects);
+        let request = relation_request(OutputLanguage::from_tag("pt-BR"), &subjects);
+        assert!(request.starts_with("Output language: Brazilian Portuguese\n\n## New decision 1"));
+        assert!(RELATION_PROMPT.contains("output language named on the first line"));
         assert!(request.contains("## New decision 1 D:0000aaaa\n"));
         assert!(request.contains("## New decision 2 D:0000dddd\n"));
     }

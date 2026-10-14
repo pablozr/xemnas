@@ -14,9 +14,9 @@ use application::claim_suggestions::{ClaimSuggestionStore, ClaimSuggestionView, 
 use application::claims::{ClaimStore, Claims};
 use application::decisions::{DecisionFilter, DecisionStatus, DecisionStore, Decisions};
 use application::graph::{
-    EntityDetail, EntityEdit, EntityRecord, FileLens, GraphStore, KnowledgeGraph, LinkRequest,
-    MapEntity, NewEntity, NodeSummary, ProjectGraph, ProjectMap, Suggestion, SuggestionReport,
-    TimelineEvent, TimelineKind,
+    EntityDetail, EntityEdit, EntityRecord, FileLens, GraphStore, InfraKind, KnowledgeGraph,
+    LinkRequest, MapEntity, NewEntity, NodeSummary, ProjectGraph, ProjectMap, Suggestion,
+    SuggestionReport, TimelineEvent, TimelineKind,
 };
 use application::projects::ProjectRepository;
 use application::relation_suggestions::{
@@ -1644,7 +1644,21 @@ impl<S: MapStores> MapScreen<S> {
                     cx,
                 );
                 let (sentence, effect) = link_wording(suggestion);
-                let lead = rich_sentence(theme, &sentence, TypeScale::BODY);
+                // A word that may negate the link sits near its evidence.
+                let alert = application::graph::doubt_parts(&suggestion.reason)
+                    .map(|(trigger, quote)| t::link_polarity_alert(trigger, &clipped(quote, 120)));
+                let lead = div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S2))
+                    .child(rich_sentence(theme, &sentence, TypeScale::BODY))
+                    .when_some(alert, |lead, alert| {
+                        lead.child(
+                            text_style(div(), TypeScale::BODY_SMALL)
+                                .text_color(theme.colors.text_muted())
+                                .child(alert),
+                        )
+                    });
                 list = list.child(suggestion_card(
                     theme,
                     lead,
@@ -1708,6 +1722,14 @@ impl<S: MapStores> MapScreen<S> {
                         proposal.decisions,
                         proposal.description.clone(),
                         proposal.declared,
+                        // A root or CI component has no stored text: the
+                        // screen writes it.
+                        match proposal.infra {
+                            Some(kind) if proposal.description.is_empty() => {
+                                infra_description(kind, &proposal.pattern)
+                            }
+                            _ => proposal.description.clone(),
+                        },
                     )
                 })
                 .chain(technologies.iter().map(|proposal| {
@@ -1718,12 +1740,12 @@ impl<S: MapStores> MapScreen<S> {
                         proposal.decisions,
                         String::new(),
                         None,
+                        String::new(),
                     )
                 }));
-            for (index, (kind, name, pattern, decisions, description, declared)) in
+            for (index, (kind, name, pattern, decisions, create_description, declared, shown)) in
                 proposals.enumerate()
             {
-                let create_description = description.clone();
                 let project = self.project.clone().unwrap_or_default();
                 let (create_name, create_pattern) = (name.clone(), pattern.clone());
                 let create = self.button(
@@ -1765,11 +1787,11 @@ impl<S: MapStores> MapScreen<S> {
                             ),
                     )
                     .child(rich_sentence(theme, &sentence, TypeScale::BODY))
-                    .when(!description.is_empty(), |lead| {
+                    .when(!shown.is_empty(), |lead| {
                         lead.child(
                             text_style(div(), TypeScale::BODY_SMALL)
                                 .text_color(colors.text_muted())
-                                .child(description.clone()),
+                                .child(shown.clone()),
                         )
                     });
                 list = list.child(suggestion_card(
@@ -1958,6 +1980,7 @@ impl<S: MapStores> MapScreen<S> {
         });
 
         let picker = self.render_picker(theme, cx);
+        let shown_description = shown_description(&entity);
 
         let mut column = div().flex().flex_col().gap(px(SpacingScale::S8)).child(
             div()
@@ -1966,11 +1989,11 @@ impl<S: MapStores> MapScreen<S> {
                 .gap(px(SpacingScale::S2))
                 .child(section_label(theme, kind_label(entity.kind)))
                 .child(text_style(div(), TypeScale::HEADING_1).child(entity.name.clone()))
-                .when(!entity.description.is_empty(), |header| {
+                .when(!shown_description.is_empty(), |header| {
                     header.child(
                         text_style(div(), TypeScale::BODY)
                             .text_color(colors.text_secondary())
-                            .child(entity.description.clone()),
+                            .child(shown_description.clone()),
                     )
                 })
                 .when(!entity.patterns.is_empty(), |header| {
@@ -3893,7 +3916,9 @@ fn link_wording(suggestion: &Suggestion) -> (Vec<(String, bool)>, String) {
     let shown = clipped(target, 90);
     let rule = suggestion.source.node.kind == NodeKind::Claim;
     let uses = suggestion.kind == EdgeKind::Uses;
-    let reason = suggestion.reason.as_str();
+    // The alarm, if any, is shown apart (see the card): the sentence only
+    // says what was derived.
+    let reason = application::graph::without_doubt(&suggestion.reason);
     if let Some(quote) = application::graph::mention_quote(reason) {
         let sentence = if rule {
             t::link_mention_rule(&source, &shown, quote)
@@ -3972,6 +3997,26 @@ fn item_wording(
         ),
     };
     (t::spans(&sentence), effect)
+}
+
+/// The text of a root or CI component, which the database stores empty so
+/// each language writes its own.
+fn infra_description(kind: InfraKind, pattern: &str) -> String {
+    match kind {
+        InfraKind::Root => t::infra_root_description().to_owned(),
+        InfraKind::Ci => t::infra_ci_description(pattern),
+    }
+}
+
+/// The description shown for an entity: the stored one, else the text of its
+/// kind of structure (root files, CI).
+fn shown_description(entity: &EntityRecord) -> String {
+    if !entity.description.is_empty() {
+        return entity.description.clone();
+    }
+    application::graph::infra_kind(entity)
+        .map(|infra| infra_description(infra.kind, infra.pattern))
+        .unwrap_or_default()
 }
 
 fn kind_label(kind: EntityKind) -> &'static str {

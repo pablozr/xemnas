@@ -33,6 +33,37 @@ impl AssessmentOutcome {
     }
 }
 
+/// What became of the map components the extractor named in one run, counted
+/// without keeping any text. Read it as: of `proposed` names, `kept` reached
+/// the candidates; the rest were `unknown` to the map or had a quote the
+/// candidate's own text does not back (`unquoted`); a repeated name or one
+/// beyond the cap is in `proposed` only. `listed` is the size of the map the
+/// extractor was shown. Items the provider adapter dropped as malformed are
+/// not counted.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ComponentTally {
+    /// Components listed to the extractor.
+    pub listed: usize,
+    /// Components the extractor named, over the candidates that validated.
+    pub proposed: usize,
+    /// Names kept as the candidates' components.
+    pub kept: usize,
+    /// Names the map does not list.
+    pub unknown: usize,
+    /// Names the map lists whose quote the candidate's text does not back.
+    pub unquoted: usize,
+}
+
+impl std::ops::AddAssign for ComponentTally {
+    fn add_assign(&mut self, other: Self) {
+        self.listed += other.listed;
+        self.proposed += other.proposed;
+        self.kept += other.kept;
+        self.unknown += other.unknown;
+        self.unquoted += other.unquoted;
+    }
+}
+
 /// One provenance row written to `assessments` (MVP-SPEC §12 line 645).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssessmentRecord {
@@ -77,6 +108,9 @@ pub struct AssessmentRecord {
     /// Sanitized, bounded text of the error that failed the run; see
     /// [`failure_detail`].
     pub error_detail: Option<String>,
+    /// What became of the components the extractor named, when the run got far
+    /// enough to resolve them.
+    pub components: Option<ComponentTally>,
 }
 
 /// Longest failure detail kept, in characters.
@@ -239,6 +273,7 @@ where
         0,
         Some(ERROR_CODE_CONSENT),
         None,
+        None,
     )
 }
 
@@ -313,6 +348,7 @@ where
         0,
         Some(error.code()),
         None,
+        None,
     )?;
     Ok(JobFailure::Failed)
 }
@@ -335,6 +371,7 @@ pub(super) fn record_assessment<S: AssessmentStore>(
     inserted: i64,
     error_code: Option<&str>,
     error_detail: Option<String>,
+    components: Option<ComponentTally>,
 ) -> Result<(), ExtractError> {
     let row = AssessmentRecord {
         attempt: context.attempt,
@@ -367,6 +404,7 @@ pub(super) fn record_assessment<S: AssessmentStore>(
         inserted,
         error_code: error_code.map(str::to_string),
         error_detail,
+        components,
     };
     store.record_assessment(&row)
 }

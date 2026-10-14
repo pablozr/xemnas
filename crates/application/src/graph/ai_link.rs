@@ -9,6 +9,10 @@
 /// between double quotes and, after a line break, the model's reason.
 pub const AI_LINK_REASON: &str = "sugerido pela IA: ";
 
+/// The reason of a suggestion that came from the extractor, not from the
+/// separate call: it named the component together with the decision itself.
+pub const EXTRACTED_LINK_WHY: &str = "indicado pelo extrator junto com a decisão";
+
 /// Longest reason or quote kept, in characters.
 const MAX_PART_CHARS: usize = 240;
 

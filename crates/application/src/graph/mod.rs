@@ -16,20 +16,26 @@ mod revalidate;
 mod scope;
 mod symbols;
 
-pub use ai_link::{ai_link_quote, ai_link_reason, ai_link_why, AI_LINK_REASON};
+pub use ai_link::{ai_link_quote, ai_link_reason, ai_link_why, AI_LINK_REASON, EXTRACTED_LINK_WHY};
+pub(crate) use derive::edge_exists;
 pub use derive::{
-    added_dependencies, map_preparer, prepared_documents, prepared_projects, ComponentProposal,
-    MapPreparer, SuggestionReport, TechnologyProposal, DEPENDENCY_REASON, DEPENDENCY_SHARED_MARK,
-    SYMBOL_REASON,
+    added_dependencies, cited_dependency, cited_dependency_manifest, map_preparer,
+    prepared_documents, prepared_projects, shared_dependency, ComponentProposal, MapPreparer,
+    SuggestionReport, TechnologyProposal, DEPENDENCY_REASON, DEPENDENCY_SHARED_MARK, SYMBOL_REASON,
 };
+#[cfg(test)]
+pub(crate) use derive::{dependency_reason, symbol_reason};
 pub(crate) use discover::project_keys;
 pub use discover::{
-    declared_components, infrastructure_components, project_names, DeclaredComponent, InfraKind,
-    WorkspaceKind,
+    declared_components, description_for_model, infra_kind, infrastructure_components,
+    project_names, short_description_for_model, DeclaredComponent, Infra, InfraKind, WorkspaceKind,
 };
 pub use domain::entities::EntityKind;
 pub(crate) use mention::Folded;
-pub use mention::{mention_quote, mention_reason, MENTION_REASON};
+pub use mention::{
+    doubt_of, doubt_parts, mention_quote, mention_reason, with_doubt, without_doubt, DOUBT_MARK,
+    MENTION_REASON,
+};
 pub use query::{
     DecisionParts, EntityDetail, FileLens, GraphEdge, GraphNode, MapEntity, Neighborhood, NodeRef,
     NodeSummary, PartCount, ProjectGraph, ProjectMap, Suggestion, TimelineEvent, TimelineKind,
@@ -40,7 +46,7 @@ pub(crate) use repo_files::{counted_files, repo_files};
 pub use repo_files::{index_repository, scan_symbols};
 pub use revalidate::StaleComponent;
 pub use scope::ClaimScopes;
-pub(crate) use scope::INHERITED_REASON;
+pub use scope::INHERITED_REASON;
 
 use domain::entities::{
     check_part_of, entity_description, entity_key, entity_name, path_pattern, EdgeActor, EdgeKind,
@@ -220,6 +226,32 @@ pub struct EdgeRecord {
 }
 
 impl EdgeRecord {
+    /// A suggestion the machine derived: pending, with its reason.
+    pub fn pending_derived(
+        project_id: &str,
+        kind: EdgeKind,
+        source: (NodeKind, &str),
+        entity_id: &str,
+        reason: String,
+        now: &str,
+    ) -> Self {
+        Self {
+            edge_id: uuid::Uuid::now_v7().to_string(),
+            project_id: project_id.to_string(),
+            kind,
+            source_kind: source.0,
+            source_id: source.1.to_string(),
+            entity_id: entity_id.to_string(),
+            origin: EdgeOrigin::Derived,
+            reason,
+            created_at: now.to_string(),
+            confirmed_at: None,
+            invalidated_at: None,
+            confirmed_by: None,
+            invalidated_by: None,
+        }
+    }
+
     /// Whether the edge holds at `at`: confirmed by then and not invalidated.
     pub fn holds_at(&self, at: &Timestamp) -> bool {
         self.confirmed_at
@@ -257,6 +289,9 @@ pub struct DecisionNode {
     pub context: Vec<String>,
     /// RFC 3339 confirmation time.
     pub confirmed_at: String,
+    /// RFC 3339 time of the last revision of its text (the confirmation when
+    /// it was never edited).
+    pub updated_at: String,
     /// Files the decision's capture changed (`diff_summary.files`).
     pub files: Vec<String>,
     /// Diff hunks of the decision's evidence, for dependency detection.

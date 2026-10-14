@@ -10,17 +10,19 @@
 //! [`super::repo_files`]), so a path an ADR cites relative to a crate, or one
 //! that does not exist, never becomes a component.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use domain::entities::{
-    component_prefix, entity_key, pattern_matches, EdgeActor, EdgeKind, EdgeOrigin, EntityKind,
-    NodeKind,
+    component_prefix, entity_key, pattern_matches, EdgeActor, EdgeKind, EntityKind, NodeKind,
 };
 use domain::time::Timestamp;
 
 use super::ai_link::ai_link_quote;
-use super::mention::{dependency_term, entity_terms, mention_quote, mention_reason, Folded, Term};
+use super::mention::{
+    code_words_of, dependency_term, doubt_of, entity_terms, mention_quote, mention_reason,
+    with_doubt, without_doubt, CodeWord, Folded, Mention, Term,
+};
 use super::repo_files::{counted_files, repo_files, RepoFiles};
 use super::{DecisionNode, EdgeRecord, EntityRecord, GraphError, GraphStore, KnowledgeGraph};
 use crate::claims::ClaimStore;
@@ -43,6 +45,9 @@ pub struct ComponentProposal {
     pub description: String,
     /// The manifest that declares it, when it is a workspace member.
     pub declared: Option<super::WorkspaceKind>,
+    /// Root files or CI, which carry no stored description: the interface
+    /// writes it.
+    pub infra: Option<super::InfraKind>,
 }
 
 /// A technology the captured work added as a dependency, not yet created.
@@ -80,6 +85,53 @@ pub const SYMBOL_REASON: &str = "símbolo citado: ";
 /// Appended to that reason when a second component declares the dependency
 /// too, so the rules do not accept it alone.
 pub const DEPENDENCY_SHARED_MARK: &str = "; também declarada por outro componente";
+/// The reason of a link derived from the dependency `name`, declared by
+/// `manifest` (and by another component too when `shared`).
+pub fn dependency_reason(name: &str, manifest: &str, shared: bool) -> String {
+    let shared = if shared { DEPENDENCY_SHARED_MARK } else { "" };
+    format!("{DEPENDENCY_REASON}\"{name}\" ({manifest}{shared})")
+}
+
+/// The dependency a reason cites, `None` for any other reason.
+pub fn cited_dependency(reason: &str) -> Option<&str> {
+    without_doubt(reason)
+        .strip_prefix(DEPENDENCY_REASON)?
+        .strip_prefix('"')?
+        .split('"')
+        .next()
+}
+
+/// The manifest a dependency reason names, without the mark of a shared one;
+/// `None` for any other reason.
+pub fn cited_dependency_manifest(reason: &str) -> Option<&str> {
+    let rest = without_doubt(reason)
+        .strip_prefix(DEPENDENCY_REASON)?
+        .strip_prefix('"')?;
+    let inside = rest.split_once("\" (")?.1;
+    let inside = inside.split(DEPENDENCY_SHARED_MARK).next()?;
+    Some(inside.split(')').next()?.trim())
+}
+
+/// Whether a reason cites a dependency that a second component declares too.
+pub fn shared_dependency(reason: &str) -> bool {
+    cited_dependency(reason).is_some() && without_doubt(reason).contains(DEPENDENCY_SHARED_MARK)
+}
+
+/// The reason of a link derived from the symbol or file name `word`, defined
+/// in `file`.
+pub fn symbol_reason(word: &str, file: &str) -> String {
+    format!("{SYMBOL_REASON}`{word}` ({file})")
+}
+
+/// The symbol or file name a reason cites, `None` for any other reason.
+pub fn cited_symbol(reason: &str) -> Option<&str> {
+    without_doubt(reason)
+        .strip_prefix(SYMBOL_REASON)?
+        .strip_prefix('`')?
+        .split('`')
+        .next()
+}
+
 /// Components that may declare a dependency for it to point at them; a
 /// dependency of more is shared plumbing, not a place.
 const MAX_OWNERS: usize = 2;
@@ -145,7 +197,7 @@ impl<S> KnowledgeGraph<S> {
 
 /// What a decision cites between backticks and what it is looked up in.
 pub(super) struct Cited<'a> {
-    pub(super) words: &'a [String],
+    pub(super) words: &'a [CodeWord],
     pub(super) components: &'a [&'a EntityRecord],
     pub(super) reserved: &'a BTreeSet<String>,
     pub(super) repo: &'a RepoFiles,
@@ -586,10 +638,17 @@ where
             .store
             .project_claims(project_id)
             .map_err(|error| GraphError::Storage(error.to_string()))?;
-        report.revalidated =
-            self.revalidate(project_id, &mut edges, &decisions, &named, &claims)?;
-
         let owned = Self::dependency_owners(&live, &declared);
+        let (revalidated, dropped) =
+            self.revalidate(project_id, &mut edges, &decisions, &named, &owned, &claims)?;
+        report.revalidated = revalidated;
+        // What the rules just dropped is read again below: the evidence may
+        // be the same text in doubt, which is written back with the alarm.
+        edges.retain(|edge| !dropped.contains(&edge.edge_id));
+
+        // Where each decision's live ties sit, read once: the shared pass asks
+        // for them per decision.
+        let ties = DecisionTies::of(&edges);
         // Names the text may use for something else: never read as a symbol.
         let reserved: BTreeSet<String> = live
             .iter()
@@ -597,6 +656,7 @@ where
             .chain(owned.iter().map(|dependency| entity_key(&dependency.name)))
             .collect();
         for decision in &decisions {
+            let first_new = edges.len();
             let texts = decision_texts(decision);
             let has_files = decision
                 .files
@@ -640,6 +700,7 @@ where
                         (NodeKind::Decision, &decision.decision_id),
                         &component.entity_id,
                         file,
+                        None,
                         &now,
                     )?;
                 }
@@ -662,6 +723,7 @@ where
                             (NodeKind::Decision, &decision.decision_id),
                             &technology.entity_id,
                             &dependency,
+                            None,
                             &now,
                         )?;
                     }
@@ -674,9 +736,11 @@ where
                     }
                 }
             }
-            report.new_edges +=
-                self.suggest_dependencies(&mut edges, project_id, decision, &texts, &owned, &now)?;
-            let words: Vec<String> = texts.iter().flat_map(Folded::code_words).collect();
+            // A dependency one component declares: that component is the place.
+            report.new_edges += self.suggest_owned_dependencies(
+                &mut edges, project_id, decision, &texts, &owned, &now,
+            )?;
+            let words = code_words_of(&texts);
             if !words.is_empty() {
                 let repo = Arc::clone(listing.get_or_insert_with(|| repo_files(root)));
                 if let Some(repo) = repo.as_ref().as_ref().filter(|repo| !repo.partial()) {
@@ -693,6 +757,13 @@ where
             }
             report.new_edges +=
                 self.suggest_mentions(&mut edges, project_id, decision, &texts, &named, &now)?;
+            // A dependency two components declare says nothing about which one
+            // the decision governs: it comes last, when the other evidence has
+            // already named the owner it is about.
+            let cited = ties.cited(&edges, &decision.decision_id, first_new);
+            report.new_edges += self.suggest_shared_dependencies(
+                &mut edges, project_id, decision, &texts, &owned, &cited, &now,
+            )?;
         }
 
         // Decisions no file tied to the map ask the AI which components they
@@ -756,6 +827,7 @@ where
                         (NodeKind::Claim, &rule.claim_id),
                         &component.entity_id,
                         file,
+                        None,
                         &now,
                     )?;
                 }
@@ -795,6 +867,7 @@ where
                         decisions: ids.len(),
                         description: String::new(),
                         declared: None,
+                        infra: None,
                     }
                 })
             })
@@ -817,6 +890,7 @@ where
                 // Root files and CI are not a workspace member: no manifest
                 // declares them.
                 declared: member.infra.is_none().then_some(member.source),
+                infra: member.infra,
             })
             .collect();
         report.components.retain(|inferred| {
@@ -879,9 +953,9 @@ where
     }
 
     /// Ties the decision to the component that declares a dependency its text
-    /// cites (not to exclude it). With a second declaring component the
-    /// reason says so.
-    fn suggest_dependencies(
+    /// cites (not to exclude it), for the dependencies only one component
+    /// declares.
+    fn suggest_owned_dependencies(
         &self,
         edges: &mut Vec<EdgeRecord>,
         project_id: &str,
@@ -890,35 +964,81 @@ where
         owned: &[OwnedDependency],
         now: &str,
     ) -> Result<usize, GraphError> {
-        let source = (NodeKind::Decision, decision.decision_id.as_str());
         let mut written = 0;
-        for dependency in owned {
-            if !texts
-                .iter()
-                .any(|text| text.mention(&dependency.term).is_some())
-            {
+        for dependency in owned
+            .iter()
+            .filter(|dependency| dependency.owners.len() == 1)
+        {
+            if let Some(mention) = best_mention(texts, &dependency.term) {
+                written +=
+                    self.tie_owners(edges, project_id, decision, dependency, &mention, now)?;
+            }
+        }
+        Ok(written)
+    }
+
+    /// Ties the decision to the owners of a dependency two or more components
+    /// declare, whose reason says so. It has to run after `suggest_mentions`
+    /// (and the file and symbol evidence): `cited` is what the other evidence
+    /// already tied the decision to. When any owner is there the decision is
+    /// about that owner and the others are no evidence at all, so nothing is
+    /// written; with none cited it ties to every owner and the judge, told who
+    /// competes, picks.
+    #[allow(clippy::too_many_arguments)]
+    fn suggest_shared_dependencies(
+        &self,
+        edges: &mut Vec<EdgeRecord>,
+        project_id: &str,
+        decision: &DecisionNode,
+        texts: &[Folded],
+        owned: &[OwnedDependency],
+        cited: &BTreeSet<String>,
+        now: &str,
+    ) -> Result<usize, GraphError> {
+        let mut written = 0;
+        for dependency in owned
+            .iter()
+            .filter(|dependency| dependency.owners.len() > 1)
+        {
+            if cites_an_owner(&dependency.owners, cited) {
                 continue;
             }
-            let shared = if dependency.owners.len() > 1 {
-                DEPENDENCY_SHARED_MARK
-            } else {
-                ""
-            };
-            for (entity_id, manifest) in &dependency.owners {
-                let reason = format!(
-                    "{DEPENDENCY_REASON}\"{}\" ({manifest}{shared})",
-                    dependency.name
-                );
-                written += self.suggest(
-                    edges,
-                    project_id,
-                    EdgeKind::Affects,
-                    source,
-                    entity_id,
-                    &reason,
-                    now,
-                )?;
+            if let Some(mention) = best_mention(texts, &dependency.term) {
+                written +=
+                    self.tie_owners(edges, project_id, decision, dependency, &mention, now)?;
             }
+        }
+        Ok(written)
+    }
+
+    /// Writes the dependency's link to each of its owners.
+    fn tie_owners(
+        &self,
+        edges: &mut Vec<EdgeRecord>,
+        project_id: &str,
+        decision: &DecisionNode,
+        dependency: &OwnedDependency,
+        mention: &Mention,
+        now: &str,
+    ) -> Result<usize, GraphError> {
+        let source = (NodeKind::Decision, decision.decision_id.as_str());
+        let shared = dependency.owners.len() > 1;
+        let mut written = 0;
+        for (entity_id, manifest) in &dependency.owners {
+            let reason = with_doubt(
+                &dependency_reason(&dependency.name, manifest, shared),
+                mention.alarm(),
+            );
+            written += self.suggest(
+                edges,
+                project_id,
+                EdgeKind::Affects,
+                source,
+                entity_id,
+                &reason,
+                Some(&decision.updated_at),
+                now,
+            )?;
         }
         Ok(written)
     }
@@ -936,9 +1056,14 @@ where
     ) -> Result<usize, GraphError> {
         let source = (NodeKind::Decision, decision.decision_id.as_str());
         let mut written = 0;
-        for word in cited.words {
+        for (word, doubt) in cited.words {
             if let Some((entity_id, file)) = symbol_owner(cited, word) {
-                let reason = format!("{SYMBOL_REASON}`{word}` ({file})");
+                let reason = with_doubt(
+                    &symbol_reason(word, &file),
+                    doubt
+                        .as_ref()
+                        .map(|(trigger, quote)| (trigger.as_str(), quote.as_str())),
+                );
                 written += self.suggest(
                     edges,
                     project_id,
@@ -946,6 +1071,7 @@ where
                     source,
                     &entity_id,
                     &reason,
+                    Some(&decision.updated_at),
                     now,
                 )?;
             }
@@ -971,20 +1097,29 @@ where
         let source = (NodeKind::Decision, decision.decision_id.as_str());
         let mut written = 0;
         for (entity, kind, terms) in named {
-            if edge_exists(edges, *kind, source, &entity.entity_id) {
+            // Any row stands in the way, except one the rules invalidated in
+            // this refresh or before the text last changed: only then can the
+            // evidence be other than what made them drop it.
+            // (The plain existence test first: it is the hot path, run for
+            // every decision and every component.)
+            if edge_exists(edges, *kind, source, &entity.entity_id)
+                && edges.iter().any(|edge| {
+                    same_edge(edge, *kind, source, &entity.entity_id)
+                        && !reopens(edge, Some(&decision.updated_at))
+                })
+            {
                 continue;
             }
-            let quote = terms
-                .iter()
-                .find_map(|term| texts.iter().find_map(|text| text.mention(term)));
-            if let Some(quote) = quote {
+            let found = terms.iter().find_map(|term| best_mention(texts, term));
+            if let Some(found) = found {
                 written += self.suggest(
                     edges,
                     project_id,
                     *kind,
                     source,
                     &entity.entity_id,
-                    &mention_reason(&quote),
+                    &with_doubt(&mention_reason(&found.quote), found.alarm()),
+                    Some(&decision.updated_at),
                     now,
                 )?;
             }
@@ -1004,31 +1139,105 @@ where
         source: (NodeKind, &str),
         entity_id: &str,
         reason: &str,
+        edited: Option<&str>,
         now: &str,
     ) -> Result<usize, GraphError> {
-        let (source_kind, source_id) = source;
-        if blocked(edges, kind, source, entity_id, reason) {
+        if blocked(edges, kind, source, entity_id, reason, edited) {
             return Ok(0);
         }
-        let record = EdgeRecord {
-            edge_id: uuid::Uuid::now_v7().to_string(),
-            project_id: project_id.to_string(),
+        let record = EdgeRecord::pending_derived(
+            project_id,
             kind,
-            source_kind,
-            source_id: source_id.to_string(),
-            entity_id: entity_id.to_string(),
-            origin: EdgeOrigin::Derived,
-            reason: reason.to_string(),
-            created_at: now.to_string(),
-            confirmed_at: None,
-            invalidated_at: None,
-            confirmed_by: None,
-            invalidated_by: None,
-        };
+            source,
+            entity_id,
+            reason.to_string(),
+            now,
+        );
         self.store.insert_edge(&record)?;
         // Later files of the same decision see it and do not repeat it.
         edges.push(record);
         Ok(1)
+    }
+}
+
+/// Where the live `affects` edges of each decision sit in the project's edge
+/// list, so the components a decision is tied to are found without reading
+/// every edge of the project for each decision.
+pub(super) struct DecisionTies(HashMap<String, Vec<usize>>);
+
+impl DecisionTies {
+    pub(super) fn of(edges: &[EdgeRecord]) -> Self {
+        let mut by_decision: HashMap<String, Vec<usize>> = HashMap::new();
+        for (index, edge) in edges.iter().enumerate() {
+            if edge.kind == EdgeKind::Affects
+                && edge.source_kind == NodeKind::Decision
+                && edge.is_live()
+            {
+                by_decision
+                    .entry(edge.source_id.clone())
+                    .or_default()
+                    .push(index);
+            }
+        }
+        Self(by_decision)
+    }
+
+    /// The components the decision is already tied to by evidence other than a
+    /// dependency or an alarm: the ones its text names, whose files it touched
+    /// or whose symbols it cites, and the AI's. Only live rows count: a
+    /// mention a person rejected, or the rules dropped, cites nothing. The
+    /// rows from `first_new` on were written after the index was built.
+    pub(super) fn cited(
+        &self,
+        edges: &[EdgeRecord],
+        decision_id: &str,
+        first_new: usize,
+    ) -> BTreeSet<String> {
+        let known = self.0.get(decision_id).map_or(&[][..], Vec::as_slice);
+        known
+            .iter()
+            .map(|&index| &edges[index])
+            .chain(
+                edges[first_new..]
+                    .iter()
+                    .filter(|edge| edge.source_id == decision_id),
+            )
+            .filter(|edge| {
+                edge.kind == EdgeKind::Affects
+                    && edge.source_kind == NodeKind::Decision
+                    && edge.is_live()
+                    && cited_dependency(&edge.reason).is_none()
+                    && doubt_of(&edge.reason).is_none()
+            })
+            .map(|edge| edge.entity_id.clone())
+            .collect()
+    }
+}
+
+/// Whether any owner of a dependency is among the components already cited.
+pub(super) fn cites_an_owner(owners: &[(String, String)], cited: &BTreeSet<String>) -> bool {
+    owners
+        .iter()
+        .any(|(entity_id, _)| cited.contains(entity_id))
+}
+
+/// Whether the rules invalidated `edge` before the decision's text last
+/// changed, so the evidence may have come back. A live row, one invalidated by
+/// someone else, and one the rules dropped for a text that has not changed
+/// since never reopen: the evidence cannot differ, so there is nothing to
+/// read again. (What the rules dropped in this very refresh is taken out of
+/// the rows the derivation sees, see `refresh_suggestions`.)
+fn reopens(edge: &EdgeRecord, edited: Option<&str>) -> bool {
+    if edge.is_live() || edge.invalidated_by != Some(EdgeActor::Rules) {
+        return false;
+    }
+    let (Some(edited), Some(invalidated)) = (edited, edge.invalidated_at.as_deref()) else {
+        return false;
+    };
+    match (Timestamp::parse(edited), Timestamp::parse(invalidated)) {
+        (Some(edited), Some(invalidated)) => edited > invalidated,
+        // A time that cannot be read: read the text again, to be safe.
+        _ => true,
     }
 }
 
@@ -1045,19 +1254,27 @@ fn blocked(
     source: (NodeKind, &str),
     entity_id: &str,
     reason: &str,
+    edited: Option<&str>,
 ) -> bool {
     let structural = mention_quote(reason).is_none() && ai_link_quote(reason).is_none();
+    // What `revalidate` looks at: a dependency, a symbol or a mention. When
+    // the rules invalidated one of them, the evidence could not support it;
+    // if the derivation writes it again (the same reason or one with the
+    // alarm), the evidence is back, and the old row must not stop it. A
+    // row the rules invalidated on another reason (a file the person
+    // declined while adopting) still blocks.
+    let revalidated = reason.starts_with(DEPENDENCY_REASON)
+        || reason.starts_with(SYMBOL_REASON)
+        || mention_quote(reason).is_some();
     edges
         .iter()
-        .filter(|edge| {
-            edge.kind == kind
-                && edge.source_kind == source.0
-                && edge.source_id == source.1
-                && edge.entity_id == entity_id
-        })
+        .filter(|edge| same_edge(edge, kind, source, entity_id))
         .any(|edge| {
             if edge.is_live() {
                 return true;
+            }
+            if revalidated && reopens(edge, edited) {
+                return false;
             }
             let revisable = matches!(
                 edge.invalidated_by,
@@ -1065,6 +1282,19 @@ fn blocked(
             );
             !(structural && revisable && edge.reason != reason)
         })
+}
+
+/// The best mention of `term` in the texts of a decision: a clean one in any
+/// text before one in doubt.
+pub(super) fn best_mention(texts: &[Folded], term: &Term) -> Option<Mention> {
+    let mut doubtful = None;
+    for found in texts.iter().filter_map(|text| text.mention(term)) {
+        if found.doubt.is_none() {
+            return Some(found);
+        }
+        doubtful.get_or_insert(found);
+    }
+    doubtful
 }
 
 /// The text of a decision, ready to be searched: question, choice, rationale,
@@ -1079,23 +1309,111 @@ pub(super) fn decision_texts(decision: &DecisionNode) -> Vec<Folded> {
 
 /// Whether any row (pending, confirmed or rejected) ties `source` to the
 /// entity with `kind`.
-fn edge_exists(
+fn same_edge(edge: &EdgeRecord, kind: EdgeKind, source: (NodeKind, &str), entity_id: &str) -> bool {
+    edge.kind == kind
+        && edge.source_kind == source.0
+        && edge.source_id == source.1
+        && edge.entity_id == entity_id
+}
+
+/// Whether any row, in any state, exists for the edge.
+pub(crate) fn edge_exists(
     edges: &[EdgeRecord],
     kind: EdgeKind,
     source: (NodeKind, &str),
     entity_id: &str,
 ) -> bool {
-    edges.iter().any(|edge| {
-        edge.kind == kind
-            && edge.source_kind == source.0
-            && edge.source_id == source.1
-            && edge.entity_id == entity_id
-    })
+    edges
+        .iter()
+        .any(|edge| same_edge(edge, kind, source, entity_id))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::added_dependencies;
+    use super::{added_dependencies, cites_an_owner, DecisionTies};
+    use crate::graph::EdgeRecord;
+    use domain::entities::{EdgeActor, EdgeKind, NodeKind};
+    use std::collections::BTreeSet;
+
+    fn tie(decision: &str, entity: &str, reason: &str) -> EdgeRecord {
+        EdgeRecord::pending_derived(
+            "p",
+            EdgeKind::Affects,
+            (NodeKind::Decision, decision),
+            entity,
+            reason.to_string(),
+            "2026-01-01T00:00:00Z",
+        )
+    }
+
+    #[test]
+    fn a_dependency_reason_is_read_back_whole() {
+        use crate::graph::{cited_dependency_manifest, dependency_reason, shared_dependency};
+        let single = dependency_reason("serde", "crates/net/Cargo.toml", false);
+        assert_eq!(
+            cited_dependency_manifest(&single),
+            Some("crates/net/Cargo.toml")
+        );
+        assert!(!shared_dependency(&single));
+        let shared = dependency_reason("serde", "apps/cloud/Cargo.toml", true);
+        assert_eq!(
+            cited_dependency_manifest(&shared),
+            Some("apps/cloud/Cargo.toml")
+        );
+        assert!(shared_dependency(&shared));
+        let alarmed = crate::graph::with_doubt(&shared, Some(("no", "and no serde")));
+        assert_eq!(
+            cited_dependency_manifest(&alarmed),
+            Some("apps/cloud/Cargo.toml")
+        );
+        assert!(shared_dependency(&alarmed));
+        assert_eq!(
+            cited_dependency_manifest("símbolo citado: `x` (x.rs)"),
+            None
+        );
+    }
+
+    #[test]
+    fn cited_owners_are_live_ties_other_than_dependencies() {
+        let mut rejected = tie("d1", "ui", "mention: \"gpui\"");
+        rejected.invalidated_at = Some("2026-01-02T00:00:00Z".into());
+        rejected.invalidated_by = Some(EdgeActor::Person);
+        let edges = vec![
+            tie("d1", "app", "símbolo citado: `main` (src/main.rs)"),
+            rejected,
+            tie("d1", "core", "dependência citada: \"serde\" (Cargo.toml)"),
+            tie("d2", "other", "símbolo citado: `x` (x.rs)"),
+        ];
+        let ties = DecisionTies::of(&edges);
+        let cited = ties.cited(&edges, "d1", edges.len());
+        assert_eq!(cited, BTreeSet::from(["app".to_string()]));
+    }
+
+    #[test]
+    fn cited_owners_include_what_was_written_after_the_index() {
+        let mut edges = vec![tie("d1", "app", "símbolo citado: `main` (src/main.rs)")];
+        let ties = DecisionTies::of(&edges);
+        let first_new = edges.len();
+        edges.push(tie("d1", "ui", "símbolo citado: `view` (ui/view.rs)"));
+        edges.push(tie("d2", "other", "símbolo citado: `x` (x.rs)"));
+        let cited = ties.cited(&edges, "d1", first_new);
+        assert_eq!(cited.len(), 2);
+        assert!(cited.contains("app") && cited.contains("ui"));
+    }
+
+    #[test]
+    fn one_cited_owner_is_enough_to_skip_a_shared_dependency() {
+        let owners = vec![
+            ("a".to_string(), "a/Cargo.toml".to_string()),
+            ("b".to_string(), "b/Cargo.toml".to_string()),
+            ("c".to_string(), "c/Cargo.toml".to_string()),
+        ];
+        assert!(!cites_an_owner(&owners, &BTreeSet::new()));
+        assert!(cites_an_owner(&owners, &BTreeSet::from(["a".to_string()])));
+        let two = BTreeSet::from(["a".to_string(), "b".to_string()]);
+        assert!(cites_an_owner(&owners, &two));
+        assert!(!cites_an_owner(&owners, &BTreeSet::from(["d".to_string()])));
+    }
 
     #[test]
     fn reads_added_dependencies_from_manifest_hunks() {
