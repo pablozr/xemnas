@@ -204,7 +204,9 @@ fn the_project_budget_limits_the_block() {
         .prepare(request(&path, "s1", "cache da API"))
         .expect("budgeted");
     assert!(outcome.tokens <= 50, "tokens: {}", outcome.tokens);
-    assert_eq!(outcome.items + outcome.omitted, 2);
+    // Neither item fits in 50 tokens, and a block with no item is not sent.
+    assert_eq!(outcome.block.is_some(), outcome.items > 0);
+    assert!(outcome.items + outcome.omitted <= 2);
 }
 
 #[test]

@@ -533,7 +533,8 @@ pub fn short_ref(id: &str) -> String {
 }
 
 /// Renders the pack as one line per item within `budget_tokens`, skipping
-/// items already delivered; `None` when nothing new fits.
+/// items already delivered; `None` when no item fits (a block that would only
+/// say what was left out is not worth its tokens).
 pub fn render_compact(
     pack: &ContextPack,
     budget_tokens: usize,
@@ -637,7 +638,6 @@ fn render_session_compact(
     if items.is_empty()
         && observations.is_empty()
         && observation_corrections.is_empty()
-        && omitted == 0
     {
         return None;
     }
@@ -1196,6 +1196,19 @@ mod tests {
         assert_eq!(block.omitted, 2);
         assert!(block.tokens <= 60);
         assert!(render_compact(&the_pack, 10, &BTreeSet::new()).is_none());
+    }
+
+    #[test]
+    fn a_block_with_only_the_omitted_notice_is_not_sent() {
+        let long = "x".repeat(2_000);
+        let too_big = pack(Vec::new(), vec![claim("c-00000001", "goal", &long)]);
+        assert_eq!(render_compact(&too_big, 300, &BTreeSet::new()), None);
+
+        let mut skipped = pack(vec![decision("d-00000001", "Motivo.")], Vec::new());
+        skipped.omitted = 3;
+        let delivered: BTreeSet<DeliveredItem> =
+            [decision_item(&skipped.decisions[0])].into_iter().collect();
+        assert_eq!(render_compact(&skipped, 300, &delivered), None);
     }
 
     #[test]
