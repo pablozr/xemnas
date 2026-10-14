@@ -33,6 +33,7 @@ GATES = [
     ('structural links', 'storage-sqlite', 'test:link_structure_corpus', 'link_structure_quality_gate', False),
     ('structural links at scale', 'storage-sqlite', 'test:link_structure_corpus', 'link_structure_scales', True),
     ('extracted links', 'storage-sqlite', 'test:extracted_links', '', False),
+    ('relevance filter', 'application', 'test:relevance_corpus', '', False),
     ('extractor prompt cost', 'ai-provider', 'lib', 'the_map_comes_first', False),
     ('batched ai jobs', 'storage-sqlite', 'test:batched_jobs', '', False),
     ('automatic review', 'storage-sqlite', 'test:auto_approval', '', False),
