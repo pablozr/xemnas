@@ -131,6 +131,8 @@ fn upgrade_33_to_34_preserves_legacy_artifacts_without_reconstructing_identity()
         ALTER TABLE assessments DROP COLUMN components_kept;
         ALTER TABLE assessments DROP COLUMN components_unknown;
         ALTER TABLE assessments DROP COLUMN components_unquoted;
+        ALTER TABLE context_routing_entries DROP COLUMN failure_code;
+        ALTER TABLE context_routing_entries DROP COLUMN failure_detail;
         ALTER TABLE entity_edges DROP COLUMN confirmed_by;
         ALTER TABLE entity_edges DROP COLUMN invalidated_by;
         DELETE FROM schema_migrations WHERE version >= 38;",

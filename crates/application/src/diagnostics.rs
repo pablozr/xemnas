@@ -202,6 +202,17 @@ pub struct ContextMetrics {
     pub inject: ContextModeMetrics,
 }
 
+/// Context routing outcomes: counts and failure codes only, never a message.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct RoutingMetrics {
+    /// Entries whose judgment was published.
+    pub completed: i64,
+    /// Logical provider calls made.
+    pub calls: i64,
+    /// Failed entries by short failure code (`unknown` before codes existed).
+    pub failed: std::collections::BTreeMap<String, i64>,
+}
+
 /// Operational metrics for the dogfood (spec §780).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DiagnosticsMetrics {
@@ -219,6 +230,9 @@ pub struct DiagnosticsMetrics {
     /// Whether the extractor's confidence predicts what is accepted.
     #[serde(default)]
     pub calibration: crate::calibration::Calibration,
+    /// Context routing calls and why they failed.
+    #[serde(default)]
+    pub routing: RoutingMetrics,
 }
 
 /// The exported diagnostics document.

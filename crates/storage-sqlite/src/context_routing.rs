@@ -1,8 +1,8 @@
 //! Atomic local queue/cache and publication CAS for optional context routing.
 use application::context_routing::{
-    fingerprint as artifact_fingerprint, RoutingJudgment, RoutingRequest, RoutingStore,
-    RoutingWork, CONTEXT_ROUTING_KIND, COOLDOWN_SECONDS, MAX_DAILY_CALLS, MAX_ENTRIES, MAX_PENDING,
-    TTL_SECONDS,
+    fingerprint as artifact_fingerprint, RoutingFailure, RoutingJudgment, RoutingRequest,
+    RoutingStore, RoutingWork, CONTEXT_ROUTING_KIND, COOLDOWN_SECONDS, MAX_DAILY_CALLS,
+    MAX_ENTRIES, MAX_PENDING, TTL_SECONDS,
 };
 use domain::time::Timestamp;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -185,6 +185,7 @@ impl RoutingStore for SqliteStore {
         let now = seconds(&tx)?;
         tx.execute(
             "UPDATE context_routing_entries SET state='failed',request_json=NULL,result_json=NULL,
+            failure_code=COALESCE(failure_code,CASE WHEN expires_at<=?2 THEN 'expired' ELSE 'orphaned' END),
             expires_at=MIN(expires_at,?2+60)
             WHERE project_id=?1 AND state IN ('pending','running') AND (expires_at<=?2 OR
             NOT EXISTS (SELECT 1 FROM jobs WHERE kind='context_routing' AND id=context_routing_entries.owner_job_id
@@ -356,7 +357,7 @@ impl RoutingStore for SqliteStore {
         {
             tx.execute(
                 "UPDATE context_routing_entries SET state='failed',request_json=NULL,
-                result_json=NULL WHERE key=?1",
+                result_json=NULL,failure_code='stale_before_call' WHERE key=?1",
                 [key],
             )
             .map_err(error)?;
@@ -407,7 +408,7 @@ impl RoutingStore for SqliteStore {
     fn finish(
         &self,
         work: &RoutingWork,
-        result: Option<&[RoutingJudgment]>,
+        result: Result<&[RoutingJudgment], &RoutingFailure>,
         authorized: &dyn Fn() -> bool,
     ) -> Result<(), String> {
         let mut c = self.lock();
@@ -415,35 +416,44 @@ impl RoutingStore for SqliteStore {
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(error)?;
         let current = snapshot(&tx, &work.request.project_id)?;
-        let result =
-            if current == Some((work.snapshot.clone(), work.generation, false)) && authorized() {
-                result
-                    .map(serde_json::to_string)
-                    .transpose()
-                    .map_err(error)?
-            } else {
-                None
-            };
+        let unchanged = current == Some((work.snapshot.clone(), work.generation, false));
+        let (stored, code, detail) = match result {
+            Err(failure) => (
+                None,
+                Some(failure.code()),
+                failure.detail().map(str::to_owned),
+            ),
+            Ok(_) if !unchanged => (None, Some("snapshot_changed".to_string()), None),
+            Ok(_) if !authorized() => (None, Some("profile_changed".to_string()), None),
+            Ok(judgments) => (
+                Some(serde_json::to_string(judgments).map_err(error)?),
+                None,
+                None,
+            ),
+        };
         tx.execute(
             "UPDATE context_routing_entries SET state=?2,request_json=NULL,result_json=?3,
+            failure_code=?5,failure_detail=?6,
             expires_at=CASE WHEN ?2='failed' THEN ?4+60 ELSE expires_at END
             WHERE key=?1 AND state='running' AND expires_at>?4",
             params![
                 work.key,
-                if result.is_some() {
+                if stored.is_some() {
                     "completed"
                 } else {
                     "failed"
                 },
-                result,
-                seconds(&tx)?
+                stored,
+                seconds(&tx)?,
+                code,
+                detail
             ],
         )
         .map_err(error)?;
         // Also erase payload on an expired in-flight operation.
         tx.execute(
-            "UPDATE context_routing_entries SET state='failed',request_json=NULL,result_json=NULL
-            WHERE key=?1 AND state='running'",
+            "UPDATE context_routing_entries SET state='failed',request_json=NULL,result_json=NULL,
+            failure_code=COALESCE(failure_code,'expired') WHERE key=?1 AND state='running'",
             [&work.key],
         )
         .map_err(error)?;

@@ -28,6 +28,7 @@ const MARKER_OUTBOX: &str = "SECRET-MARKER-OUTBOX";
 const MARKER_PATH: &str = "SECRET-MARKER-PATH";
 const MARKER_PW: &str = "SECRET-MARKER-PW";
 const MARKER_QS: &str = "SECRET-MARKER-QS";
+const MARKER_ROUTING: &str = "SECRET-MARKER-ROUTING";
 
 fn temporary_directory(tag: &str) -> std::path::PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -227,6 +228,17 @@ fn exported_diagnostics_never_carry_content_markers() {
         std::fs::write(directory.join("item.json"), marker).expect("write item");
     }
 
+    // A failed routing judgment: its code is exported, its detail never is.
+    rusqlite::Connection::open(root.join("app.db"))
+        .expect("open for seeding")
+        .execute(
+            "INSERT INTO context_routing_entries (key,project_id,snapshot,generation,profile_hash,
+            state,created_at,expires_at,logical_invocations,failure_code,failure_detail)
+            VALUES ('k1','project-1','s',1,'h','failed',1,2,1,'provider_extractor',?1)",
+            [MARKER_ROUTING],
+        )
+        .expect("seed routing entry");
+
     let diagnostics = Diagnostics::new(
         store.clone(),
         AiSettings::new(
@@ -247,6 +259,7 @@ fn exported_diagnostics_never_carry_content_markers() {
         MARKER_PATH,
         MARKER_PW,
         MARKER_QS,
+        MARKER_ROUTING,
         "sk-synthetic",
     ] {
         assert!(
@@ -255,6 +268,8 @@ fn exported_diagnostics_never_carry_content_markers() {
         );
     }
 
+    assert_eq!(document.metrics.routing.failed["provider_extractor"], 1);
+    assert_eq!(document.metrics.routing.calls, 1);
     assert_eq!(
         document.schema.migrations_version,
         storage_sqlite::SCHEMA_VERSION

@@ -93,6 +93,7 @@ impl DiagnosticsStore for FakeStore {
                 outbox_rejected: 0,
             },
             context: Default::default(),
+            routing: Default::default(),
         })
     }
 }
@@ -140,6 +141,7 @@ impl DiagnosticsStore for EmptyStore {
                 outbox_rejected: 0,
             },
             context: Default::default(),
+            routing: Default::default(),
         })
     }
     fn recent_jobs(&self, _limit: usize) -> Result<Vec<JobDiagnosticRow>, DiagnosticsError> {

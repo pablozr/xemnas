@@ -83,7 +83,9 @@ vigente, justificativa inventada) reprova a fidelidade da tarefa.
   sem vínculo normativo; fonte incerta vira abstenção, não remoção. Juiz de
   relevância opcional (consentimento `context_routing`): só filtra ambiguidades
   de até seis candidatos, cache de 1 h, dois pendentes por projeto, oito
-  solicitações lógicas/dia, cooldown de 60 s. Migrations 28–29.
+  solicitações lógicas/dia, cooldown de 60 s. Migrations 28–29. Em 14/10/2026 cada
+  falha do juiz passou a gravar um motivo (migração 0051) e o Diagnóstico exportado
+  conta as falhas por código em `metrics.routing`; antes a falha era silenciosa.
 - **Medição:** 16/16 cenários descritivos; fatos exigidos 11/11; pertinentes
   11/14 (78,6%); negativos limpos 3/3. Por escopo (30 amostras, p50/p95 em µs):
   refresh cold 4840/6843, warm 5820/7021, `build_pack` 474/649, render 18/32.

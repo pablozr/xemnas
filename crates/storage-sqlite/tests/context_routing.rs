@@ -14,7 +14,7 @@ use application::{
     profile::{self, AiProfile, AiSettings, ProfileError, ProfileStore, SecretStore},
 };
 use domain::claims::ClaimKind;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc, Mutex,
@@ -94,6 +94,9 @@ impl StructuredModel for Model {
             .collect();
         match self.0.mode {
             "malformed" => return Ok("not json".into()),
+            "provider_error" => {
+                return Err(ExtractError::Extractor("o provedor respondeu 400".into()))
+            }
             "foreign" => rows[0]["id"] = "foreign".into(),
             "revision" => rows[0]["revision"] = "stale".into(),
             "extra" => rows[0]["command"] = "delete rules".into(),
@@ -385,6 +388,19 @@ fn count(test: &support::TestStore, sql: &str) -> i64 {
         .unwrap()
 }
 
+/// The failure code and detail of the only routing entry, if any.
+fn failure(test: &support::TestStore) -> Option<(Option<String>, Option<String>)> {
+    Connection::open(test.root.join("app.db"))
+        .unwrap()
+        .query_row(
+            "SELECT failure_code,failure_detail FROM context_routing_entries",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .unwrap()
+}
+
 #[test]
 fn first_lookup_baseline_then_worker_filters_only_weak_and_erases_content() {
     let test = support::open("routing-baseline", &["p1"]);
@@ -463,6 +479,7 @@ fn strict_failures_and_all_irrelevant_fall_back_without_repair() {
         "extra",
         "duplicate",
         "all_irrelevant",
+        "provider_error",
     ] {
         let test = support::open(mode, &["p1"]);
         seed(&test);
@@ -482,6 +499,27 @@ fn strict_failures_and_all_irrelevant_fall_back_without_repair() {
         );
         assert_eq!(factory.calls.load(Ordering::SeqCst), 1);
         assert_eq!(count(&test,"SELECT COUNT(*) FROM context_routing_entries WHERE result_json IS NOT NULL OR request_json IS NOT NULL"),0);
+        let (code, detail) = failure(&test).expect("one entry");
+        let expected = match mode {
+            "malformed" | "extra" => "answer_unparsable",
+            "foreign" | "revision" | "duplicate" => "invalid_judgments",
+            "all_irrelevant" => "all_irrelevant",
+            _ => "provider_extractor",
+        };
+        assert_eq!(code.as_deref(), Some(expected), "{mode}");
+        if mode == "provider_error" {
+            let detail = detail.expect("provider detail");
+            assert!(
+                detail.chars().count() <= 200 && detail.contains("400"),
+                "{detail}"
+            );
+            assert!(
+                !detail.contains("Cache"),
+                "request content leaked: {detail}"
+            );
+        } else {
+            assert_eq!(detail, None, "{mode}");
+        }
     }
 }
 
@@ -577,6 +615,18 @@ fn changes_during_provider_block_publication_and_revoke_blocks_consumption() {
             .run(&routing_job(&test))
             .unwrap();
         assert_eq!(count(&test,"SELECT COUNT(*) FROM context_routing_entries WHERE result_json IS NOT NULL OR request_json IS NOT NULL"),0, "{mutation}");
+        let expected = match mutation {
+            "claim" | "new_item" | "dirty" => Some("snapshot_changed"),
+            "profile" => Some("profile_changed"),
+            _ => None,
+        };
+        match (failure(&test), expected) {
+            (Some((code, _)), Some(expected)) => {
+                assert_eq!(code.as_deref(), Some(expected), "{mutation}")
+            }
+            (None, None) => (),
+            (found, expected) => panic!("{mutation}: {found:?} vs {expected:?}"),
+        }
         if mutation == "profile" {
             assert_eq!(untimed(packs.build_pack(request()).unwrap()), before);
         }

@@ -4,7 +4,7 @@ use crate::store::SqliteStore;
 use application::diagnostics::{
     AssessmentDiagnosticRow, ContextMetrics, ContextModeMetrics, DiagnosticsCounts,
     DiagnosticsError, DiagnosticsMetrics, DiagnosticsStore, Distribution, JobDiagnosticRow,
-    LossMetrics, NoiseMetrics, ReceiptDiagnosticRow,
+    LossMetrics, NoiseMetrics, ReceiptDiagnosticRow, RoutingMetrics,
 };
 use std::collections::BTreeMap;
 
@@ -276,8 +276,41 @@ impl DiagnosticsStore for SqliteStore {
                 shadow: context_mode(&connection, "shadow")?,
                 inject: context_mode(&connection, "inject")?,
             },
+            routing: routing(&connection)?,
         })
     }
+}
+
+/// Counts routing entries by outcome and failure code; the stored detail is
+/// never read here.
+fn routing(connection: &rusqlite::Connection) -> Result<RoutingMetrics, DiagnosticsError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT state, COALESCE(failure_code, 'unknown'),              COALESCE(SUM(logical_invocations), 0), COUNT(*)              FROM context_routing_entries GROUP BY 1, 2",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })
+        .map_err(storage_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(storage_error)?;
+    let mut metrics = RoutingMetrics::default();
+    for (state, code, calls, entries) in rows {
+        metrics.calls += calls;
+        match state.as_str() {
+            "completed" => metrics.completed += entries,
+            "failed" => *metrics.failed.entry(code).or_default() += entries,
+            _ => {}
+        }
+    }
+    Ok(metrics)
 }
 
 /// Aggregates the context injection audit for one mode.

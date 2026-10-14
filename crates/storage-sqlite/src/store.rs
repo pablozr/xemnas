@@ -204,6 +204,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 50,
         sql: include_str!("migrations/0050_assessment_component_counts.sql"),
     },
+    Migration {
+        version: 51,
+        sql: include_str!("migrations/0051_context_routing_failure.sql"),
+    },
 ];
 
 /// Schema version this build migrates to: the last embedded migration.
