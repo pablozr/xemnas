@@ -234,7 +234,7 @@ pub fn refresh_project_with_metrics<S: ObservationStore, R: ObservationReader>(
     for candidate in store.current_sources(project_id)? {
         pending.insert(candidate.project_relative_path.clone(), candidate);
     }
-    for path in ["Cargo.toml", "package.json"] {
+    for path in super::ROOT_MANIFESTS {
         pending
             .entry(path.into())
             .or_insert_with(|| source(project_id, path));

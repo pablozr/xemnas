@@ -185,12 +185,17 @@ impl RoutingStore for SqliteStore {
         let now = seconds(&tx)?;
         tx.execute(
             "UPDATE context_routing_entries SET state='failed',request_json=NULL,result_json=NULL,
-            failure_code=COALESCE(failure_code,CASE WHEN expires_at<=?2 THEN 'expired' ELSE 'orphaned' END),
+            failure_code=COALESCE(failure_code,CASE WHEN expires_at<=?2 THEN ?3 ELSE ?4 END),
             expires_at=MIN(expires_at,?2+60)
             WHERE project_id=?1 AND state IN ('pending','running') AND (expires_at<=?2 OR
             NOT EXISTS (SELECT 1 FROM jobs WHERE kind='context_routing' AND id=context_routing_entries.owner_job_id
             AND state IN ('queued','running')))",
-            params![request.project_id, now],
+            params![
+                request.project_id,
+                now,
+                RoutingFailure::Expired.code(),
+                RoutingFailure::Orphaned.code()
+            ],
         )
         .map_err(error)?;
         let Some((fingerprint, generation, dirty)) = snapshot(&tx, &request.project_id)? else {
@@ -357,8 +362,8 @@ impl RoutingStore for SqliteStore {
         {
             tx.execute(
                 "UPDATE context_routing_entries SET state='failed',request_json=NULL,
-                result_json=NULL,failure_code='stale_before_call' WHERE key=?1",
-                [key],
+                result_json=NULL,failure_code=?2 WHERE key=?1",
+                params![key, RoutingFailure::StaleBeforeCall.code()],
             )
             .map_err(error)?;
             tx.commit().map_err(error)?;
@@ -417,20 +422,18 @@ impl RoutingStore for SqliteStore {
             .map_err(error)?;
         let current = snapshot(&tx, &work.request.project_id)?;
         let unchanged = current == Some((work.snapshot.clone(), work.generation, false));
-        let (stored, code, detail) = match result {
-            Err(failure) => (
-                None,
-                Some(failure.code()),
-                failure.detail().map(str::to_owned),
-            ),
-            Ok(_) if !unchanged => (None, Some("snapshot_changed".to_string()), None),
-            Ok(_) if !authorized() => (None, Some("profile_changed".to_string()), None),
-            Ok(judgments) => (
-                Some(serde_json::to_string(judgments).map_err(error)?),
-                None,
-                None,
-            ),
+        let failure = match result {
+            Err(failure) => Some(failure.clone()),
+            Ok(_) if !unchanged => Some(RoutingFailure::SnapshotChanged),
+            Ok(_) if !authorized() => Some(RoutingFailure::ProfileChanged),
+            Ok(_) => None,
         };
+        let stored = match (result, &failure) {
+            (Ok(judgments), None) => Some(serde_json::to_string(judgments).map_err(error)?),
+            _ => None,
+        };
+        let code = failure.as_ref().map(RoutingFailure::code);
+        let detail = failure.as_ref().and_then(RoutingFailure::detail);
         tx.execute(
             "UPDATE context_routing_entries SET state=?2,request_json=NULL,result_json=?3,
             failure_code=?5,failure_detail=?6,
@@ -453,8 +456,8 @@ impl RoutingStore for SqliteStore {
         // Also erase payload on an expired in-flight operation.
         tx.execute(
             "UPDATE context_routing_entries SET state='failed',request_json=NULL,result_json=NULL,
-            failure_code=COALESCE(failure_code,'expired') WHERE key=?1 AND state='running'",
-            [&work.key],
+            failure_code=COALESCE(failure_code,?2) WHERE key=?1 AND state='running'",
+            params![work.key, RoutingFailure::Expired.code()],
         )
         .map_err(error)?;
         tx.commit().map_err(error)?;

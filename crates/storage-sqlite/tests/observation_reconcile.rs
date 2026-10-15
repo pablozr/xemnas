@@ -109,13 +109,7 @@ fn queued_jobs(test: &support::TestStore) -> i64 {
 /// One reconciler pass over the project, as `main.rs` does it. Returns whether
 /// a refresh was scheduled.
 fn tick(test: &support::TestStore, gate: &mut ReconcileGate, project: &str) -> bool {
-    if !gate.changed(&test.store, project) {
-        return false;
-    }
-    test.store
-        .request_refresh(&request(project, "reconciler"))
-        .unwrap();
-    true
+    gate.reconcile(&test.store, project).expect("reconcile")
 }
 
 #[test]

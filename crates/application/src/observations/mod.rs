@@ -8,6 +8,9 @@ pub mod refresh;
 
 /// Maximum manifest candidates in one refresh.
 pub const MAX_SOURCES: usize = 64;
+/// Manifests every refresh reads at the project root; the reconciler and the
+/// edit trigger watch the same list.
+pub const ROOT_MANIFESTS: [&str; 2] = ["Cargo.toml", "package.json"];
 /// Maximum bytes read from one manifest.
 pub const MAX_SOURCE_BYTES: usize = 256 * 1024;
 /// Maximum total bytes read in one refresh.

@@ -561,7 +561,6 @@ impl ObservationReconciler {
         let stop = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
         let signal = stop.clone();
         let thread = std::thread::spawn(move || {
-            use application::observations::{ObservationStore, RefreshRequest};
             let mut cursor = None;
             let mut gate = application::observations::reconcile::ReconcileGate::default();
             loop {
@@ -575,14 +574,7 @@ impl ObservationReconciler {
                             if *signal.0.lock().unwrap_or_else(|error| error.into_inner()) {
                                 break;
                             }
-                            if !gate.changed(&store, &project_id) {
-                                continue;
-                            }
-                            if let Err(error) = store.request_refresh(&RefreshRequest {
-                                project_id,
-                                capture_trigger: "reconciler".into(),
-                                requested_at: chrono::Utc::now().to_rfc3339(),
-                            }) {
+                            if let Err(error) = gate.reconcile(&store, &project_id) {
                                 tracing::error!(error = %error, operation = "observation_refresh",
                                     "could not schedule refresh");
                             }

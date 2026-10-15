@@ -131,6 +131,8 @@ pub enum RoutingFailure {
     ProfileChanged,
     /// The single logical call could not be recorded (snapshot moved or already used).
     CallNotRecorded,
+    /// Recording the call failed in storage.
+    CallRecordError,
     /// The provider call failed.
     Provider {
         /// Stable `ExtractError` code.
@@ -146,24 +148,37 @@ pub enum RoutingFailure {
     InvalidJudgments,
     /// Every candidate was judged irrelevant; treated as a failure on purpose.
     AllIrrelevant,
+    /// The store saw the snapshot or generation move before publishing.
+    SnapshotChanged,
+    /// The store saw the snapshot move before the call began.
+    StaleBeforeCall,
+    /// The store expired an entry that never finished.
+    Expired,
+    /// The store found an entry whose job is gone.
+    Orphaned,
 }
 
 impl RoutingFailure {
     /// Short stable code stored with the entry.
-    pub fn code(&self) -> String {
-        match self {
-            Self::NoProfile => "no_profile".into(),
-            Self::MissingSecret => "missing_secret".into(),
-            Self::AuthorizeFailed => "authorize_failed".into(),
-            Self::InputTooLarge => "input_too_large".into(),
-            Self::ProfileChanged => "profile_changed".into(),
-            Self::CallNotRecorded => "call_not_recorded".into(),
-            Self::Provider { code, .. } => format!("provider_{code}"),
-            Self::AnswerTooLarge => "answer_too_large".into(),
-            Self::AnswerUnparsable => "answer_unparsable".into(),
-            Self::InvalidJudgments => "invalid_judgments".into(),
-            Self::AllIrrelevant => "all_irrelevant".into(),
-        }
+    pub fn code(&self) -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed(match self {
+            Self::NoProfile => "no_profile",
+            Self::MissingSecret => "missing_secret",
+            Self::AuthorizeFailed => "authorize_failed",
+            Self::InputTooLarge => "input_too_large",
+            Self::ProfileChanged => "profile_changed",
+            Self::CallNotRecorded => "call_not_recorded",
+            Self::CallRecordError => "call_record_error",
+            Self::Provider { code, .. } => return format!("provider_{code}").into(),
+            Self::AnswerTooLarge => "answer_too_large",
+            Self::AnswerUnparsable => "answer_unparsable",
+            Self::InvalidJudgments => "invalid_judgments",
+            Self::AllIrrelevant => "all_irrelevant",
+            Self::SnapshotChanged => "snapshot_changed",
+            Self::StaleBeforeCall => "stale_before_call",
+            Self::Expired => "expired",
+            Self::Orphaned => "orphaned",
+        })
     }
 
     /// Sanitized provider message; `None` for every other failure.
@@ -415,7 +430,11 @@ where
             if self.settings.profile().as_ref().map(profile_hash) != Some(hash.clone()) {
                 return Err(RoutingFailure::ProfileChanged);
             }
-            if !self.store.record_call(&work).unwrap_or(false) {
+            if !self
+                .store
+                .record_call(&work)
+                .map_err(|_| RoutingFailure::CallRecordError)?
+            {
                 return Err(RoutingFailure::CallNotRecorded);
             }
             let answer = model

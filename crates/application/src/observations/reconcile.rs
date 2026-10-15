@@ -5,11 +5,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::time::SystemTime;
 
-use super::ObservationStore;
+use super::{ObservationStore, ROOT_MANIFESTS};
 use crate::projects::ProjectRepository;
-
-/// Manifests every refresh reads at the project root.
-const ROOT_MANIFESTS: [&str; 2] = ["Cargo.toml", "package.json"];
 
 type Stamp = Vec<(String, Option<(u64, SystemTime)>)>;
 
@@ -53,6 +50,28 @@ impl ReconcileGate {
                 (path, metadata)
             })
             .collect();
-        self.stamps.insert(project_id.to_string(), stamp.clone()) != Some(stamp)
+        if self.stamps.get(project_id) == Some(&stamp) {
+            return false;
+        }
+        self.stamps.insert(project_id.to_string(), stamp);
+        true
+    }
+
+    /// One reconciler look at a project: schedules a refresh only when
+    /// [`Self::changed`] says so, and returns whether it did.
+    pub fn reconcile<S: ObservationStore + ProjectRepository>(
+        &mut self,
+        store: &S,
+        project_id: &str,
+    ) -> Result<bool, super::ObservationError> {
+        if !self.changed(store, project_id) {
+            return Ok(false);
+        }
+        store.request_refresh(&super::RefreshRequest {
+            project_id: project_id.to_string(),
+            capture_trigger: "reconciler".into(),
+            requested_at: crate::clock::now_rfc3339(),
+        })?;
+        Ok(true)
     }
 }

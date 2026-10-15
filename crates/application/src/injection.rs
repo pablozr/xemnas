@@ -528,12 +528,10 @@ pub fn strip_context_blocks(text: &str) -> String {
     result
 }
 
-/// Manifests a prompt can name without a folder, which [`mentioned_paths`] skips.
-const ROOT_MANIFESTS: &[&str] = &["package.json", "Cargo.toml"];
-
-/// Root manifests the prompt names by file name (`revise o package.json`).
+/// Root manifests the prompt names by file name (`revise o package.json`), which
+/// [`mentioned_paths`] skips because they have no folder.
 fn mentioned_root_manifests(prompt: &str) -> Vec<String> {
-    ROOT_MANIFESTS
+    crate::observations::ROOT_MANIFESTS
         .iter()
         .filter(|manifest| {
             prompt
@@ -777,10 +775,9 @@ fn claim_item(claim: &PackClaim) -> DeliveredItem {
 
 /// Whether the path names a manifest the observation refresh reads.
 fn is_manifest_name(path: &str) -> bool {
-    matches!(
-        path.rsplit(['/', '\\']).next(),
-        Some("Cargo.toml" | "package.json")
-    )
+    path.rsplit(['/', '\\'])
+        .next()
+        .is_some_and(|name| crate::observations::ROOT_MANIFESTS.contains(&name))
 }
 
 fn decision_line(decision: &PackDecision) -> String {
@@ -834,9 +831,13 @@ fn knowledge_suffix(
     qualifiers: &[crate::qualifiers::KnowledgeQualifier],
 ) -> String {
     use crate::qualifiers::QualifierKind;
-    let plain = |text: &str| match clean(text).as_str() {
-        crate::context::GLOBAL_SCOPE => "projeto todo".to_string(),
-        cleaned => cleaned.to_string(),
+    let plain = |text: &str| {
+        let cleaned = clean(text);
+        if cleaned == crate::context::GLOBAL_SCOPE {
+            "projeto todo".to_string()
+        } else {
+            cleaned
+        }
     };
     let mut segments: Vec<String> = Vec::new();
     let mut push = |segment: String| {
