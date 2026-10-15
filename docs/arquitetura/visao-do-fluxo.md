@@ -1,0 +1,59 @@
+# Visão do fluxo: da conversa ao contexto do agente
+
+Mapa de uma página do caminho que uma conversa percorre até voltar ao agente como contexto.
+Cada etapa diz o que faz, se usa IA (custo), onde está o código, onde está a regra e o
+número que a mede. O detalhe fica no documento citado; em caso de divergência, vale ele
+(e o código acima de todos, ver [precedência](../README.md#precedência)).
+
+```mermaid
+flowchart LR
+    A[Captura<br/>hooks e plugin] --> B[Filtro de relevância<br/>sem IA]
+    B -- sem sinal --> X[Empty<br/>custo zero]
+    B -- com sinal --> C[Extrator<br/>IA]
+    C --> D[Revisão<br/>manual ou juiz IA]
+    D --> E[Decisões e regras<br/>+ mapa]
+    M[Manifests] --> O[Observações<br/>sem IA]
+    E --> F[Seleção do pacote<br/>sem IA]
+    O --> F
+    F --> R[Roteador<br/>IA, só remove]
+    R --> G[Linha compacta<br/>no orçamento]
+    G --> H[Agente]
+    E --> I[MCP sob demanda]
+    I --> H
+```
+
+## Etapas
+
+| Etapa | O que faz | IA | Código | Regra | Medida |
+| --- | --- | --- | --- | --- | --- |
+| Captura | O `hook stop` do Claude Code e o plugin do OpenCode mandam o turno à API local; com o app fechado, à outbox. Segredos mascarados no adapter e no motor. | não | `apps/mcp-server/src/hook/`, `crates/application/src/captures.rs` | [contexto-e-agentes](contexto-e-agentes.md#hooks-do-claude-code) | dogfood: capturas, perdas |
+| Filtro de relevância | Decide se a captura vai ao extrator: vetos (diff só de teste, marcador trivial) e sinais de escolha durável; a mudança de rumo dita pelo usuário fura os vetos. Sem sinal, termina `Empty`. | não | `crates/application/src/extract/relevance.rs` (`filter_relevant`) | [qualidade-do-nucleo](qualidade-do-nucleo.md#filtro-de-relevância) | portão `relevance filter`; dogfood: capturas × candidatos |
+| Extrator | Lê a captura e propõe candidatos (decisão ou regra) com evidência literal, relevância, ressalvas (qualificadores) e componentes do mapa. | sim | `crates/application/src/extract/`, job `analyze_capture` | [ADR-0006](adr/0006-tipo-e-relevancia-dos-candidatos.md), [ADR-0010](adr/0010-qualificadores-e-fronteira-de-envio.md) | dogfood: candidatos, latência |
+| Revisão | Manual (padrão) ou automática: regras locais tiram repetições e um juiz de IA decide o resto em lote; o duvidoso volta para a pessoa. | só no automático | `crates/application/src/auto_approval.rs` | [ADR-0012](adr/0012-modo-automatico-e-autoridade.md) | portão `automatic review`; dogfood: confirmados, ruído, desfeitos |
+| Decisões, regras e mapa | O confirmado vira decisão versionada ou regra (claim); vínculos com componentes nascem de menção afirmativa e de sinais do repositório. | em lote, para vínculos, relações, regras e termos | `crates/application/src/graph/`, `claims` | [ADR-0014](adr/0014-regras-com-escopo-por-componente.md), [ADR-0016](adr/0016-vinculos-por-estrutura-e-mencao-afirmativa.md) | portões de vínculos |
+| Observações | Fatos descritivos dos manifests (`Cargo.toml`, `package.json`); nunca viram regra nem entram na revisão. O reconciliador relê só quando tamanho ou data de um manifest mudou. | não | `crates/application/src/observations/` (`refresh.rs`, `reconcile.rs`) | [ADR-0011](adr/0011-observacoes-descritivas-de-manifests.md) | portão `observation reconcile` (0 jobs parado) |
+| Seleção do pacote | A cada pedido, escolhe decisões e regras que tocam a tarefa: texto, arquivos citados, componentes do mapa e regras globais (`*`). Busca FTS5 + grafo, sem embeddings. | não | `crates/application/src/context.rs` (`build_pack`) | [ADR-0013](adr/0013-contexto-sem-embeddings.md), [contexto-e-agentes](contexto-e-agentes.md#context-pack) | portões de seleção de contexto |
+| Roteador | Para itens de casamento ambíguo, um juiz de IA em segundo plano marca relevante, irrelevante ou abstém; o resultado vale do pedido seguinte em diante e só pode **tirar** item duvidoso. Toda falha grava um código. | sim | `crates/application/src/context_routing.rs` | [ADR-0011](adr/0011-observacoes-descritivas-de-manifests.md) | Diagnóstico: `routing.failed` por código |
+| Linha compacta | Cada item vira uma linha `D:`/`regra:` com escopo e qualificadores em texto, dentro do orçamento (300 tokens por padrão); o que não cabe é contado em "Omitidos". Prompts do harness não recebem bloco. | não | `crates/application/src/injection.rs` (`render_session_compact`, `knowledge_suffix`) | [contexto-e-agentes](contexto-e-agentes.md#injeção-no-pedido) | portão `context injection` e `compact_density_gate`; dogfood: injeções, tokens, omitidos |
+| MCP | O agente pede mais quando precisa: `get_decision` (motivo e qualificadores completos, com artefato), `search_context`, `file_context`. | não | `crates/application/src/agent_access.rs`, `apps/mcp-server/` | [contexto-e-agentes](contexto-e-agentes.md#mcp-somente-leitura) | dogfood: MCP, MCP respondidas |
+
+## Onde a IA custa
+
+Só quatro etapas chamam o provedor: extrator, juiz da revisão automática, sugestões em lote
+depois de uma adoção e roteador. Todas rodam em segundo plano, nunca no caminho do pedido do
+agente. O que corta custo antes delas: o filtro de relevância (captura sem sinal não chama
+IA), os lotes de até 10 decisões e o roteador só ver itens ambíguos.
+
+## Como ler o dogfood
+
+`python tools/dogfood-report.py` dá a tabela diária ([dogfood-log](../operacao/dogfood-log.md)).
+Um sintoma aponta para a etapa:
+
+- Muitas capturas e poucos candidatos: filtro de relevância.
+- Ruído alto ou muitos desfeitos: extrator ou juiz da revisão.
+- Muitos omitidos por injeção: linha compacta e orçamento.
+- MCP em zero: o agente não pede mais contexto; a injeção é o único canal.
+- Perdas: jobs e análises que falharam, com o motivo no Diagnóstico.
+
+Para medir a seleção sobre os dados reais, com casos rotulados fora do repositório, use o
+teste ignorado `crates/storage-sqlite/tests/dogfood_context.rs` (instruções no cabeçalho).
