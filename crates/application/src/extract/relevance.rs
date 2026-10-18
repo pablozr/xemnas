@@ -43,6 +43,9 @@ pub enum RelevanceSignal {
     UnprovenAssumption,
     /// The user changes the course of the work: drops, postpones, prioritizes or switches it.
     ChangesCourse,
+    /// The user picks one of the options put in front of them: an answer to a
+    /// question the assistant asked, or "o 1 funciona, mas o 2 nao".
+    UserPicksOption,
 }
 
 impl RelevanceSignal {
@@ -66,6 +69,7 @@ impl RelevanceSignal {
             Self::DelegatedToAgent => "delegated_to_agent",
             Self::UnprovenAssumption => "unproven_assumption",
             Self::ChangesCourse => "changes_course",
+            Self::UserPicksOption => "user_picks_option",
         }
     }
 
@@ -83,6 +87,7 @@ impl RelevanceSignal {
                 | Self::ConditionsFutureWork
                 | Self::MaterialBlastRadius
                 | Self::ChangesCourse
+                | Self::UserPicksOption
         )
     }
 }
@@ -147,6 +152,9 @@ fn has_diff_hunk(evidence: &DecisionEvidence) -> bool {
 /// Returns `true` when a production `diff_hunk` carries a strong structural
 /// signal.
 fn has_structural_strong(evidence: &DecisionEvidence) -> bool {
+    if normative_document_edited(evidence) {
+        return true;
+    }
     for artifact in &evidence.artifacts {
         if artifact.kind != "diff_hunk" {
             continue;
@@ -274,14 +282,18 @@ fn is_comment_prefix(content: &str) -> bool {
 pub fn filter_relevant(evidence: &DecisionEvidence) -> Vec<RelevanceSignal> {
     let text = aggregate_text(evidence);
     let changes_course = user_changes_course(evidence);
+    let picks_option = user_picks_option(evidence);
 
     if is_trivially_excluded(evidence, &text) {
         // The user's words decide; what the turn touched does not veto them.
-        return if changes_course {
-            vec![RelevanceSignal::ChangesCourse]
-        } else {
-            Vec::new()
-        };
+        let mut kept = Vec::new();
+        if changes_course {
+            kept.push(RelevanceSignal::ChangesCourse);
+        }
+        if picks_option {
+            kept.push(RelevanceSignal::UserPicksOption);
+        }
+        return kept;
     }
 
     let mut detected = BTreeSet::new();
@@ -347,6 +359,14 @@ pub fn filter_relevant(evidence: &DecisionEvidence) -> Vec<RelevanceSignal> {
     if changes_course {
         detected.insert(RelevanceSignal::ChangesCourse);
     }
+    if picks_option {
+        detected.insert(RelevanceSignal::UserPicksOption);
+    }
+    // Editing an ADR, a specification or an agent rules file conditions the
+    // work after it, whatever else the turn reported.
+    if normative_document_edited(evidence) {
+        detected.insert(RelevanceSignal::ConditionsFutureWork);
+    }
 
     let strong = detected.iter().filter(|signal| signal.is_strong()).count();
     let moderate = detected.len() - strong;
@@ -376,6 +396,127 @@ fn user_changes_course(evidence: &DecisionEvidence) -> bool {
                     .count()
                     == 2
         })
+}
+
+/// Whether the user chose among options: the tool that asks them ran, the
+/// adapter recorded their answer, or their own words pick one. A choice is
+/// where the decision lives, so, like a course change, the diff does not veto it.
+fn user_picks_option(evidence: &DecisionEvidence) -> bool {
+    evidence
+        .artifacts
+        .iter()
+        .any(|artifact| match artifact.kind.as_str() {
+            "tool_summary" => is_ask_user_question(artifact),
+            "user_text" => {
+                answers_a_question(artifact)
+                    || (is_user_speech(artifact)
+                        && words_pick_option(&plain_words(&artifact.content)))
+            }
+            _ => false,
+        })
+}
+
+/// A finished `AskUserQuestion` call; the tool name is in the content (or, for
+/// older captures, the metadata).
+fn is_ask_user_question(artifact: &EvidenceArtifact) -> bool {
+    [&artifact.content, &artifact.metadata]
+        .into_iter()
+        .filter(|source| source.contains("AskUserQuestion"))
+        .any(|source| {
+            let value: serde_json::Value = serde_json::from_str(source).unwrap_or_default();
+            value["tool"] == "AskUserQuestion" && value["status"] == "ok"
+        })
+}
+
+/// The adapter writes the answer to a question as `user_text` with this source.
+fn answers_a_question(artifact: &EvidenceArtifact) -> bool {
+    artifact.metadata.contains(ASK_USER_QUESTION_SOURCE)
+        && serde_json::from_str::<serde_json::Value>(&artifact.metadata)
+            .is_ok_and(|value| value["source"] == ASK_USER_QUESTION_SOURCE)
+}
+
+/// Which option the words at `index` name ("o 1", "item 2", "a primeira"),
+/// and how many words the reference takes.
+fn ordinal_at(words: &[&str], index: usize) -> Option<(usize, usize)> {
+    let (first, second) = (*words.get(index)?, *words.get(index + 1)?);
+    if OPTION_NOUNS.contains(&first) {
+        if let [digit @ b'1'..=b'9'] = second.as_bytes() {
+            return Some((usize::from(digit - b'0'), 2));
+        }
+    }
+    if matches!(first, "o" | "a" | "the") {
+        let position = ORDINAL_WORDS.iter().position(|word| *word == second)?;
+        return Some((position % 3 + 1, 2));
+    }
+    None
+}
+
+/// "o 1 funciona, mas o 2 nao pq ..." or "vai com o 2": the words refer to
+/// options and either judge them against each other or choose one. Several
+/// options listed to be done ("faz o item 1 e o item 2") do not count.
+fn words_pick_option(text: &str) -> bool {
+    let words: Vec<&str> = text
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect();
+    let mut options = BTreeSet::new();
+    let mut judged = false;
+    for index in 0..words.len() {
+        let Some((number, taken)) = ordinal_at(&words, index) else {
+            continue;
+        };
+        options.insert(number);
+        let after = &words[(index + taken).min(words.len())..];
+        judged |= after
+            .iter()
+            .take(2)
+            .any(|word| OPTION_VERDICTS.contains(word));
+    }
+    if options.is_empty() {
+        return false;
+    }
+    OPTION_CHOICE_VERBS
+        .iter()
+        .any(|verb| contains_token(text, verb))
+        || (options.len() >= 2 && judged && contains_any_token(text, OPTION_CONTRAST))
+}
+
+/// Whether the diff adds a line to a normative document: an ADR, a
+/// specification, `AGENTS.md` or `CLAUDE.md`, outside an archive folder.
+fn normative_document_edited(evidence: &DecisionEvidence) -> bool {
+    evidence
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.kind == "diff_hunk")
+        .any(|artifact| {
+            let mut normative = false;
+            for line in artifact.content.lines() {
+                if let Some(rest) = line.strip_prefix("diff --git ") {
+                    let token = rest.split_whitespace().next().unwrap_or("");
+                    normative = is_normative_path(token.strip_prefix("a/").unwrap_or(token));
+                    continue;
+                }
+                if !normative {
+                    continue;
+                }
+                if let Some(added) = line.strip_prefix('+') {
+                    if !added.starts_with("++") && !added.trim().is_empty() {
+                        return true;
+                    }
+                }
+            }
+            false
+        })
+}
+
+fn is_normative_path(path: &str) -> bool {
+    use crate::documents::{classify, is_archived_path, is_documentation_path, DocumentKind};
+    if !is_documentation_path(path) || is_archived_path(path) {
+        return false;
+    }
+    let file = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
+    matches!(file.as_str(), "agents.md" | "claude.md")
+        || matches!(classify(path), DocumentKind::Adr | DocumentKind::Spec)
 }
 
 /// Whether the artifact is something the user said: not a message the harness
@@ -536,6 +677,43 @@ fn contains_any_phrase(text: &str, phrases: &[&str]) -> bool {
 fn is_word_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_'
 }
+
+/// Metadata source the adapter gives to the answer of an `AskUserQuestion`.
+const ASK_USER_QUESTION_SOURCE: &str = "ask_user_question";
+
+/// Words that name an option when followed by its digit: "o 1", "item 2".
+const OPTION_NOUNS: &[&str] = &["o", "a", "opcao", "option", "item", "alternativa"];
+
+/// "primeira/o", "segunda/o", "terceira/o" and the English ones; the option
+/// number is the position modulo 3, plus one.
+const ORDINAL_WORDS: &[&str] = &[
+    "primeira", "segunda", "terceira", "primeiro", "segundo", "terceiro", "first", "second",
+    "third",
+];
+
+/// Said right after an option, they judge it.
+const OPTION_VERDICTS: &[&str] = &[
+    "funciona", "nao", "sim", "serve", "melhor", "pior", "ok", "works", "no", "not", "better",
+    "worse",
+];
+
+/// Contrast or reason between two judgements.
+const OPTION_CONTRAST: &[&str] = &[
+    "mas", "porem", "pq", "porque", "pois", "but", "because", "since",
+];
+
+/// Choosing phrases, matched as whole words.
+const OPTION_CHOICE_VERBS: &[&str] = &[
+    "vai com",
+    "vamos com",
+    "fica com",
+    "fico com",
+    "escolho",
+    "prefiro",
+    "go with",
+    "pick",
+    "prefer",
+];
 
 /// Matched as whole words on the user's text, folded to lowercase ASCII.
 const COURSE_CHANGE: &[&str] = &[
@@ -953,6 +1131,96 @@ mod tests {
         }
         let after_reminder = "<system-reminder>x</system-reminder>\na partir de agora usa redis";
         assert!(said(after_reminder).contains(&RelevanceSignal::ChangesCourse));
+    }
+
+    const REAL_PICK: &str = "ok o 1 funciona, mas o 2 nao pq dai todo usuario teria q ter isso, qual a forma de pormos isso incluso na regra do jevguard para que n fique dando esse erro chato";
+
+    fn picks(text: &str) -> bool {
+        said(text).contains(&RelevanceSignal::UserPicksOption)
+    }
+
+    #[test]
+    fn the_user_picking_an_option_is_a_signal() {
+        assert!(picks(REAL_PICK));
+        assert!(picks("vai com o 2 porque e mais barato"));
+        assert!(picks("fico com a primeira"));
+        assert!(picks("go with the second"));
+        assert!(picks("o 1 serve, but o 3 nao, since fica lento"));
+    }
+
+    #[test]
+    fn listed_or_incidental_ordinals_are_not_a_choice() {
+        for text in [
+            "faz o item 1 e o item 2 mas sem commitar",
+            "o 2 nao compilou porque falta lib",
+            "o 1 e o 2 nao compilam",
+            "a primeira vez que rodei deu erro",
+            "roda o 1 de novo",
+        ] {
+            assert!(!picks(text), "{text}");
+        }
+        let harness = "<task-notification>o 1 funciona, mas o 2 nao pq</task-notification>";
+        assert!(!picks(harness));
+    }
+
+    fn tool(status: &str) -> EvidenceArtifact {
+        artifact(
+            "t0",
+            "tool_summary",
+            &format!("{{\"tool\":\"AskUserQuestion\",\"status\":\"{status}\"}}"),
+        )
+    }
+
+    #[test]
+    fn a_finished_question_to_the_user_is_a_choice_even_with_trivial_markers() {
+        let assistant = artifact("a1", "assistant_text", "`pnpm lint`: sem correcoes");
+        let ok = filter_relevant(&evidence(vec![assistant.clone(), tool("ok"), test_diff()]));
+        assert_eq!(ok, vec![RelevanceSignal::UserPicksOption]);
+        let failed = filter_relevant(&evidence(vec![assistant, tool("error"), test_diff()]));
+        assert!(failed.is_empty());
+    }
+
+    #[test]
+    fn the_recorded_answer_to_a_question_is_a_choice() {
+        let mut answer = artifact("a0", "user_text", "question: x\nanswer: Redis");
+        answer.metadata = "{\"source\":\"ask_user_question\"}".to_string();
+        assert!(filter_relevant(&evidence(vec![answer, test_diff()]))
+            .contains(&RelevanceSignal::UserPicksOption));
+    }
+
+    fn edit_of(path: &str) -> Vec<EvidenceArtifact> {
+        vec![
+            artifact("a0", "assistant_text", "`pnpm lint`: sem correcoes"),
+            artifact(
+                "d0",
+                "diff_hunk",
+                &format!(
+                    "diff --git a/{path} b/{path}\n@@ -1,2 +1,3 @@\n+Decidimos usar SQLite.\n"
+                ),
+            ),
+        ]
+    }
+
+    #[test]
+    fn editing_a_normative_document_passes_despite_trivial_markers() {
+        for path in [
+            "docs/adr/0014-x.md",
+            "specs/capture.md",
+            "AGENTS.md",
+            "sub/CLAUDE.md",
+        ] {
+            let signals = filter_relevant(&evidence(edit_of(path)));
+            assert!(
+                signals.contains(&RelevanceSignal::ConditionsFutureWork),
+                "{path}"
+            );
+        }
+        for path in ["docs/archive/adr/0001.md", "docs/guia.md", "src/lib.rs"] {
+            assert!(
+                filter_relevant(&evidence(edit_of(path))).is_empty(),
+                "{path}"
+            );
+        }
     }
 
     #[test]

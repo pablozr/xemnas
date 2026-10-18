@@ -21,6 +21,9 @@ const FIXTURES_RELEVANT: &[&str] = &[
     "durable-migration-with-formatting-note.json",
     "durable-course-change.json",
     "notification-with-migration.json",
+    "real-option-pick.json",
+    "real-ask-user-question.json",
+    "ask-user-answer.json",
 ];
 /// Fixtures that must stay Empty.
 const FIXTURES_TRIVIAL: &[&str] = &[
@@ -290,6 +293,21 @@ const CASES: &[Case] = &[
         "<task-notification><summary>deixei o v2 de lado a partir de agora</summary></task-notification>",
         "",
         &["tests/a_test.rs"],
+        false,
+    ),
+    // Editing a normative document counts even when the report says "lint".
+    case(
+        "adr-editado-com-relatorio-de-lint",
+        "atualiza o adr",
+        "Atualizei o ADR. `pnpm lint`: sem correcoes.",
+        &["docs/adr/0014-x.md"],
+        true,
+    ),
+    case(
+        "adr-arquivado-com-relatorio-de-lint",
+        "atualiza o adr",
+        "Atualizei o ADR. `pnpm lint`: sem correcoes.",
+        &["docs/archive/adr/0014-x.md"],
         false,
     ),
 ];

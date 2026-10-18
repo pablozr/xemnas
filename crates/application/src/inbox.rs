@@ -1018,6 +1018,7 @@ fn signal_from_str(label: &str) -> Option<RelevanceSignal> {
         "delegated_to_agent" => Some(RelevanceSignal::DelegatedToAgent),
         "unproven_assumption" => Some(RelevanceSignal::UnprovenAssumption),
         "changes_course" => Some(RelevanceSignal::ChangesCourse),
+        "user_picks_option" => Some(RelevanceSignal::UserPicksOption),
         _ => None,
     }
 }
