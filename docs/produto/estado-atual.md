@@ -28,7 +28,7 @@ chamada ao provedor, e os vínculos vão antes do resto; um projeto de dezenas d
 algumas chamadas por tipo em vez de uma por decisão. Uma análise de documento que falhou
 volta para a fila na próxima importação do arquivo, ou quando o app propõe documentos de novo
 (até 3 execuções no total por versão), e "Reprocessar" vale sempre. Documentos em pastas de arquivo (`archive`, `archive-*`, `arquivados`...) entram no índice, mas
-nunca são propostos à Revisão; só "Importar documento…" os aceita. O motivo de uma falha
+nunca são propostos à Revisão; só "Importar documento…" os aceita. Com o provedor ligado, um documento central editado (inclusive por um subagente) chega à Revisão em 1 a 2 minutos, sem atualizar o overview: o app confere a cada minuto, sem abrir arquivo, se algum documento do projeto mudou, espera uma volta e enfileira só os que mudaram; um projeto parado custa 0 jobs, e projeto nunca indexado fica de fora. O motivo de uma falha
 (só a mensagem do erro, limpa e com até 200 caracteres) fica guardado e aparece em
 Configurações → Diagnóstico, na lista de capturas.
 

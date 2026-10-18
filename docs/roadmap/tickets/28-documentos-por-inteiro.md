@@ -6,7 +6,7 @@
 
 **Status: open**
 
-- [ ] `PROPOSE_PER_RUN = 12` em `crates/application/src/documents.rs`, chamado só em `overview.rs`: um ADR com decisões numeradas sai com zero candidatos. Medir quantas decisões numeradas ficam de fora e subir o teto com o custo medido.
+- [ ] `PROPOSE_PER_RUN = 12` em `crates/application/src/documents.rs`, chamado por `overview.rs` e, para os documentos alterados, pelo vigia (`DocumentWatch`, a cada 60 s): um ADR com decisões numeradas sai com zero candidatos. Medir quantas decisões numeradas ficam de fora e subir o teto com o custo medido.
 - [ ] Seções "Refinements", "Later decision" e "superseded by" viram relação e não enunciado solto.
 - [ ] Claims sem sujeito (o enunciado não diz a quem vale) e justificativa virando enunciado: rejeitar na extração.
 

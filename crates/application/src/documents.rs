@@ -61,6 +61,7 @@ const MAX_HEADINGS: usize = 12;
 const EXCERPT_CHARS: usize = 600;
 
 mod digest;
+pub mod watch;
 
 pub use digest::{digest as digest_document, Digest, Verdict, DIGEST_CHARS};
 
@@ -275,6 +276,27 @@ where
     ///
     /// `project_not_found`, `folder_unavailable` or `storage`.
     pub fn index(&self, project_id: &str) -> Result<DocumentIndex, DocumentError> {
+        let (index, _) = self.reindex(project_id)?;
+        self.prepare_map(project_id);
+        Ok(index)
+    }
+
+    /// The project's folder, as registered.
+    ///
+    /// # Errors
+    ///
+    /// `project_not_found` or `storage`.
+    pub fn location(&self, project_id: &str) -> Result<PathBuf, DocumentError> {
+        let project = ProjectRepository::get(&self.store, project_id)
+            .map_err(|error| DocumentError::Storage(error.to_string()))?
+            .ok_or(DocumentError::ProjectNotFound)?;
+        Ok(PathBuf::from(project.location))
+    }
+
+    /// Reads the folder again and replaces the index, without preparing the
+    /// map. Returns the index and the paths that are new or whose content
+    /// changed.
+    fn reindex(&self, project_id: &str) -> Result<(DocumentIndex, Vec<String>), DocumentError> {
         let project = ProjectRepository::get(&self.store, project_id)
             .map_err(|error| DocumentError::Storage(error.to_string()))?
             .ok_or(DocumentError::ProjectNotFound)?;
@@ -303,26 +325,27 @@ where
             .collect();
         let mut documents = documents;
         documents.extend(imported);
-        let changed = documents
+        let changed: Vec<String> = documents
             .iter()
             .filter(|document| {
                 !previous
                     .iter()
                     .any(|old| old.path == document.path && old.fingerprint == document.fingerprint)
             })
-            .count();
+            .map(|document| document.path.clone())
+            .collect();
         let removed = previous
             .iter()
             .filter(|old| !documents.iter().any(|document| document.path == old.path))
             .count();
         self.store.replace_documents(project_id, &documents)?;
-        self.prepare_map(project_id);
-        Ok(DocumentIndex {
+        let index = DocumentIndex {
             total: documents.len(),
-            changed,
+            changed: changed.len(),
             removed,
             truncated,
-        })
+        };
+        Ok((index, changed))
     }
 }
 
@@ -343,6 +366,28 @@ where
     /// `project_not_found` or `storage`.
     pub fn propose(&self, project_id: &str, limit: usize) -> Result<usize, DocumentError> {
         self.propose_matching(project_id, limit, None, true)
+    }
+
+    /// Reads the folder of an already indexed project again and queues, like
+    /// [`Self::propose`], only the documents whose content changed since the
+    /// last read (new files included), never the backlog. A project that was
+    /// never indexed is left alone. Returns how many were queued.
+    ///
+    /// # Errors
+    ///
+    /// `project_not_found`, `folder_unavailable` or `storage`.
+    pub fn refresh_changed(&self, project_id: &str, limit: usize) -> Result<usize, DocumentError> {
+        if self.store.project_documents(project_id)?.is_empty() {
+            return Ok(0);
+        }
+        let (index, changed) = self.reindex(project_id)?;
+        if changed.is_empty() {
+            if index.removed > 0 {
+                self.prepare_map(project_id);
+            }
+            return Ok(0);
+        }
+        self.propose_matching(project_id, limit, Some(&changed), true)
     }
 
     /// Imports one documentation file from the project folder or from a git
@@ -579,11 +624,54 @@ fn capture_error(error: CaptureError) -> DocumentError {
 /// Documentation files under `root`: root files first, then documentation
 /// folders, in a stable order.
 pub fn scan(root: &Path) -> (Vec<(String, PathBuf)>, bool) {
-    let mut found = Vec::new();
+    let (found, truncated) = scan_stamped(root);
+    let found = found
+        .into_iter()
+        .map(|(relative, path, _)| (relative, path))
+        .collect();
+    (found, truncated)
+}
+
+/// Size and modification time of a file, as the folder listing reports them.
+type FileStamp = Option<(u64, std::time::SystemTime)>;
+
+/// A documentation file found by the walk: relative path, absolute path and stamp.
+type FoundDocument = (String, PathBuf, FileStamp);
+
+fn file_stamp(metadata: &std::fs::Metadata) -> FileStamp {
+    Some((metadata.len(), metadata.modified().ok()?))
+}
+
+/// A cheap digest of the documentation files under `root`: path, size and
+/// modification time of each, without opening any of them. It changes when a
+/// document is created, edited, renamed or removed (an edit that keeps the
+/// size within the same filesystem timestamp tick can escape it). Documents
+/// imported from outside the folder are not part of it.
+pub fn documentation_stamp(root: &Path) -> u64 {
+    let (found, _) = scan_stamped(root);
+    let mut hash = Fnv::new();
+    for (relative, _, stamp) in found {
+        hash.write(relative.as_bytes());
+        if let Some((len, modified)) = stamp {
+            let since_epoch = modified
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default();
+            hash.write(&len.to_le_bytes());
+            hash.write(&since_epoch.as_nanos().to_le_bytes());
+        }
+        hash.write(&[0]);
+    }
+    hash.finish()
+}
+
+fn scan_stamped(root: &Path) -> (Vec<FoundDocument>, bool) {
+    let mut found: Vec<FoundDocument> = Vec::new();
     for name in ROOT_DOCS {
         let path = root.join(name);
-        if path.is_file() {
-            found.push((name.to_string(), path));
+        if let Ok(metadata) = std::fs::metadata(&path) {
+            if metadata.is_file() {
+                found.push((name.to_string(), path, file_stamp(&metadata)));
+            }
         }
     }
     let mut truncated = false;
@@ -605,7 +693,7 @@ fn walk(
     folder: &Path,
     relative: &str,
     depth: usize,
-    found: &mut Vec<(String, PathBuf)>,
+    found: &mut Vec<FoundDocument>,
     truncated: &mut bool,
 ) {
     if depth > MAX_DEPTH || found.len() >= MAX_DOCUMENTS {
@@ -635,7 +723,11 @@ fn walk(
                 *truncated = true;
                 return;
             }
-            found.push((child, entry.path()));
+            let stamp = entry
+                .metadata()
+                .ok()
+                .and_then(|metadata| file_stamp(&metadata));
+            found.push((child, entry.path(), stamp));
         }
     }
 }
@@ -864,14 +956,31 @@ pub fn document_ref(path: &str) -> String {
     fingerprint(path.as_bytes())[..8].to_string()
 }
 
+/// FNV-1a 64, fed in pieces.
+struct Fnv(u64);
+
+impl Fnv {
+    fn new() -> Self {
+        Self(0xcbf2_9ce4_8422_2325)
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 ^= u64::from(*byte);
+            self.0 = self.0.wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
 /// FNV-1a 64 of the bytes, hex.
 fn fingerprint(bytes: &[u8]) -> String {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0100_0000_01b3);
-    }
-    format!("{hash:016x}")
+    let mut hash = Fnv::new();
+    hash.write(bytes);
+    format!("{:016x}", hash.finish())
 }
 
 #[cfg(test)]

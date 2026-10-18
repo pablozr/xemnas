@@ -604,6 +604,15 @@ where
         self.profiles.load()
     }
 
+    /// Whether extraction runs through the external provider: the profile
+    /// exists and has consent and enablement. Reads only; it seeds nothing.
+    pub fn external_extraction_enabled(&self) -> bool {
+        matches!(
+            choose_extractor(self.profiles.load().ok().flatten().as_ref()),
+            ExtractorChoice::ExternalEnabled
+        )
+    }
+
     /// Loads the stored profile, creating the offline default when absent.
     pub fn load_or_seed(&self) -> Result<AiProfile, ProfileError> {
         match self.profiles.load()? {

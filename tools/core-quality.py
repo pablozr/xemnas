@@ -43,6 +43,7 @@ GATES = [
     ('observations latency', 'storage-sqlite', 'test:observations_evaluation', 'scoped_latency_report', True),
     ('observation query latency', 'storage-sqlite', 'test:observations_router_corpus', 'observation_query_latency', True),
     ('observation reconcile', 'storage-sqlite', 'test:observation_reconcile', '', False),
+    ('document watch', 'storage-sqlite', 'test:document_watch', '', False),
 ]
 
 # Gates that need a fixture generated once by a live model (never in CI):
