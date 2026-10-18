@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "capture_id": "01a14ca0-4d1a-71c0-b00d-225e3fce382d",
+  "idempotency_key": "claude-code:real:01a14ca0",
+  "source": {
+    "adapter": "claude-code",
+    "adapter_version": "0.0.0",
+    "session_id": "session-real",
+    "message_id": "msg-01a14ca0"
+  },
+  "project": {
+    "canonical_path": "C:/synthetic/projects/jevguard"
+  },
+  "observed_at": "2026-10-18T01:28:56Z",
+  "artifacts": [
+    {
+      "artifact_id": "01a14ca0-4d1a-71c0-b00d-225a0d9cbb34",
+      "kind": "user_text",
+      "content": "veja ai se ja ta a versao nova na tag release com o miniplayer e tal",
+      "metadata": {},
+      "fingerprint": "fc0c9ce955c4612192f58f8b4146751e470af33a059c754f00689ae6bd08117b"
+    },
+    {
+      "artifact_id": "01a14ca0-4d1a-71c0-b00d-225b63b4080f",
+      "kind": "assistant_text",
+      "content": "Sim, a versão nova já tá publicada.\n\n**[cloudrs 0.1.0-beta.2](https://github.com/dev/cloudrs/releases/tag/v0.1.0-beta.2)** (tag `v0.1.0-beta.2`) saiu em 09/10, marcada como *Latest*. Não é rascunho.\n- **O que tem dentro:** o mini player. Os commits dele estão na tag, por exemplo `17ba605` (redesenha só quando muda) e `b867e48` (abrir o mini player não tira o foco da janela principal). Também tem a chave de assinatura do updater (`85fcd24`), então o auto-update já funciona a partir dessa versão.\n- **Arquivos:** instalador `.exe` do Windows, `.dmg` e `.app.tar.gz` do macOS, `.deb` e `.AppImage` do Linux, e o `latest.json` que o updater lê.\n\n**Ainda fora da release:** 8 commits que estão no `master`, mas não entraram em nenhuma tag:\n- a barra de rolagem: o componente novo e o uso nas listas, nas páginas, na sidebar e na paleta de comandos;\n- as Configurações reorganizadas em cards;\n- uma correção no preamp do equalizador;\n- presets de equalizador para techno e hard dance.\n\nSe quiser que esses commits cheguem a quem já instalou, é preciso uma nova tag, tipo `v0.1.0-beta.3`. Isso cria um push no remoto, então só faço se você mandar.",
+      "metadata": {},
+      "fingerprint": "f2e4d2731d1dc56e7cf1c2a3aafaba404beb8f7b78e9e6449cb851123fbd26f1"
+    },
+    {
+      "artifact_id": "01a14ca0-4d1a-71c0-b00d-225cbbc8127e",
+      "kind": "tool_summary",
+      "content": "{\"tool\":\"PowerShell\",\"status\":\"ok\"}",
+      "metadata": {
+        "tool": "PowerShell",
+        "status": "ok"
+      },
+      "fingerprint": "7c1a1bb4d89a9ab41324ab0686c709adc579d53f144868b6dd42f0263fe7bddb"
+    }
+  ]
+}

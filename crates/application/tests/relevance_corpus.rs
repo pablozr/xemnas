@@ -20,6 +20,7 @@ const FIXTURES_RELEVANT: &[&str] = &[
     "durable-dependency.json",
     "durable-migration-with-formatting-note.json",
     "durable-course-change.json",
+    "notification-with-migration.json",
 ];
 /// Fixtures that must stay Empty.
 const FIXTURES_TRIVIAL: &[&str] = &[
@@ -32,6 +33,13 @@ const FIXTURES_TRIVIAL: &[&str] = &[
     "trivial-sql-whitespace.json",
     "trivial-prose-strong-text.json",
     "trivial-manifest-comment.json",
+    "real-merge-push.json",
+    "real-compact.json",
+    "real-task-notification.json",
+    "real-task-notification-short.json",
+    "real-build-and-next.json",
+    "real-release-tag.json",
+    "real-review-findings-applied.json",
 ];
 
 struct Case {
@@ -274,6 +282,14 @@ const CASES: &[Case] = &[
         "abandon the retry loop in this function",
         "Removed the loop; the call now fails fast.",
         &["src/retry.rs"],
+        false,
+    ),
+    // A message the harness wrote is not the user's word.
+    case(
+        "notificacao-com-frase-de-rumo",
+        "<task-notification><summary>deixei o v2 de lado a partir de agora</summary></task-notification>",
+        "",
+        &["tests/a_test.rs"],
         false,
     ),
 ];

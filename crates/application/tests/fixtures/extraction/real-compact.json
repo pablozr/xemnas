@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "capture_id": "01a14c74-b370-77d2-b14f-b104b6602a85",
+  "idempotency_key": "claude-code:real:01a14c74",
+  "source": {
+    "adapter": "claude-code",
+    "adapter_version": "0.0.0",
+    "session_id": "session-real",
+    "message_id": "msg-01a14c74"
+  },
+  "project": {
+    "canonical_path": "C:/synthetic/projects/jevguard"
+  },
+  "observed_at": "2026-10-18T00:41:18Z",
+  "artifacts": [
+    {
+      "artifact_id": "01a14c74-b370-77d2-b14f-b103581c3b31",
+      "kind": "user_text",
+      "content": "/compact",
+      "metadata": {},
+      "fingerprint": "52e657bd1470bb75a808df9dbe93b8f82606f0b614db4d82e9a09dd291bf3f74"
+    }
+  ]
+}

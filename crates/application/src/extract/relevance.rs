@@ -365,7 +365,7 @@ fn user_changes_course(evidence: &DecisionEvidence) -> bool {
     evidence
         .artifacts
         .iter()
-        .filter(|artifact| artifact.kind == "user_text")
+        .filter(|artifact| is_user_speech(artifact))
         .any(|artifact| {
             let text = plain_words(&artifact.content);
             contains_any_token(&text, COURSE_CHANGE)
@@ -376,6 +376,25 @@ fn user_changes_course(evidence: &DecisionEvidence) -> bool {
                     .count()
                     == 2
         })
+}
+
+/// Whether the artifact is something the user said: not a message the harness
+/// wrote (task notification, command echo, `<system-reminder>`) and not a bare
+/// `/command`, which names an action and states no choice.
+fn is_user_speech(artifact: &EvidenceArtifact) -> bool {
+    artifact.kind == "user_text"
+        && !crate::injection::is_harness_prompt(&artifact.content)
+        && !is_bare_command(&artifact.content)
+}
+
+/// `/compact`, `/clear`: a slash and one word, nothing else.
+fn is_bare_command(content: &str) -> bool {
+    content.trim().strip_prefix('/').is_some_and(|word| {
+        !word.is_empty()
+            && word
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'_' | b'-'))
+    })
 }
 
 /// One message folded, with typographic apostrophes made plain and whitespace
@@ -919,6 +938,21 @@ mod tests {
                 assert!(a == b || !contains_token(a, b), "{a} contains {b}");
             }
         }
+    }
+
+    #[test]
+    fn harness_messages_and_bare_commands_are_not_the_users_words() {
+        for text in [
+            "<task-notification><summary>deixei o v2 de lado a partir de agora</summary></task-notification>",
+            "<command-name>/compact</command-name> a partir de agora",
+            "<system-reminder>a partir de agora</system-reminder>",
+            "/compact",
+            "/superpowers:plan",
+        ] {
+            assert!(said(text).is_empty(), "{text}");
+        }
+        let after_reminder = "<system-reminder>x</system-reminder>\na partir de agora usa redis";
+        assert!(said(after_reminder).contains(&RelevanceSignal::ChangesCourse));
     }
 
     #[test]

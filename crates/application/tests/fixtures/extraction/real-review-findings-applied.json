@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "capture_id": "01a14c97-ec03-7689-b106-b28447a9b96c",
+  "idempotency_key": "claude-code:real:01a14c97",
+  "source": {
+    "adapter": "claude-code",
+    "adapter_version": "0.0.0",
+    "session_id": "session-real",
+    "message_id": "msg-01a14c97"
+  },
+  "project": {
+    "canonical_path": "C:/synthetic/projects/jevguard"
+  },
+  "observed_at": "2026-10-18T01:19:47Z",
+  "artifacts": [
+    {
+      "artifact_id": "01a14c97-ec02-748e-84ce-904d1a52b392",
+      "kind": "user_text",
+      "content": "<task-notification>\n<task-id>a289bfa8797679bef</task-id>\n<tool-use-id>toolu_014GP6TkVXtGi5GaQMavJ91b</tool-use-id>\n<output-file>C:\\Users\\dev\\AppData\\Local\\Temp\\claude\\C--Users-Pablo-Desktop-Projetos-JevGuard\\6f89dd78-5235-4b27-8242-37a0995eb9d9\\tasks\\a289bfa8797679bef.output</output-file>\n<status>completed</status>\n<summary>Agent \"Revisão: altitude\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>This agent's report was delivered to you as a message from \"a289bfa8797679bef\" (its SubagentHandback call). Read it there; it is not repeated here.\n</result>\n<usage><subagent_tokens>33222</subagent_tokens><tool_uses>7</tool_uses><duration_ms>68132</duration_ms></usage>\n</task-notification>",
+      "metadata": {},
+      "fingerprint": "ee8f9d839598d95ddf74d5565ee4a0a9f99ce09922bf2146bc359f4631cd356d"
+    },
+    {
+      "artifact_id": "01a14c97-ec02-748e-84ce-904ec413d141",
+      "kind": "assistant_text",
+      "content": "Aplico: deduplicação com `Map` movida para o core, ao lado de `latestDecisions`, e os dois ajustes de teste.\nAgora o teste no core e a verificação.\nEssa constante não é exportada pelo index; importo direto do módulo.\nO `git status` está marcando ~200 arquivos como modificados. Vou ver se é só fim de linha, por causa do `pnpm format`.\nFiz o item 2 inteiro e a parte local do item 1 (passos 1–9). Não teve publish no npm, push, commit nem tag.\n\n**O que mudou**\n- **Item 2:** quando o `feedback.jsonl` passa de 1 MiB, ele é compactado sem perder decisões. Fica a última decisão de cada FAIL respondido, até 5000. Arquivos novos: `packages/node-infra/src/feedback/compact.ts` e `record.ts`, mais 18 testes em `feedback-compaction.test.ts`. Esses testes provam que a calibração, a lista de pendentes e o resultado de `planFeedbackDecision` ficam iguais antes e depois de compactar.\n- **Item 1:**\n  - O catálogo novo é `.claude-plugin/marketplace.json`, apontando para `@devrrr/dev@example.com` no npm.\n  - O lockfile do artefato virou `npm-shrinkwrap.json`.\n  - `package.json` e `plugin.json` do artefato foram completados para publicação.\n  - Há testes de contrato novos para o lockfile e para o catálogo.\n  - Criei o script `pnpm claude-artifact:publish:check`.\n  - A instalação está documentada em `docs/configuration.md`, `docs/security.md` e no README.\n  - O ADR 0014 foi atualizado (fica só local).\n\n**Revisão (4 revisores) e o que apliquei**\n- A deduplicação \"última resposta por FAIL\" foi para o core, como `latestFeedbackRecords` em `packages/core/src/feedback/identity.ts`, ao lado de `latestDecisions`. Assim a regra fica num lugar só, e ganhou um teste no core.\n- Nos testes, troquei a chave de identidade montada na mão por `failIdentityKey` e o 5000 fixo por `DEFAULT_FEEDBACK_MAX_RECORDS`.\n\n**Só apontei, não mexi**\n- **Compactação a cada escrita:** com IDs muito longos (perto de 1 KB), as 5000 linhas que sobram já passam de 1 MiB, e então todo `append` recompacta. Com IDs normais isso não acontece, e a rotação antiga já tinha o mesmo problema. Dá para resolver fazendo a compactação esperar o arquivo crescer bem além do tamanho que ficou na última vez, se você quiser.\n- **Código repetido:** `compactFeedbackFile` repete a estrutura de `boundJsonLinesFile`. Juntar as duas mexe na escrita do histórico, que está fora deste diff.\n\n**Evidência**\n- `pnpm format` e `pnpm lint`: sem correções.\n- `pnpm typecheck`: sem erros.\n- `pnpm test`: 70 arquivos e 1449 testes passaram (13 pulados).\n- `pnpm claude-artifact:publish:check`: dry-run com exatamente os 9 arquivos esperados.\n- `claude plugin validate .`: passou na rodada do executor; o catálogo não mudou depois disso.\n- `npm ci` dentro do `dist`, para ver o keyring instalando, não foi verificado.\n\n**Desvios**\n- O `git status` mostra cerca de 200 arquivos como modificados porque o `pnpm format` trocou CRLF por LF. O `git diff` mostra conteúdo alterado só nos 14 arquivos rastreados da tarefa, então os outros são só fim de linha e voltam ao normal no próximo checkout.\n- O executor não trocou temporariamente a lógica para a rotação antiga para ver o teste de equivalência falhar. A cobertura disso ficou com o teste de regressão.\n\n**Falta você decidir**\n- Commitar a correção do keyring à parte, antes da release.\n- Liberar a release, que é remota: `npm publish ./packages/claude-code-plugin/dist --access public`, depois commit e `git push` do catálogo, e a tag `jevguard--v0.1.0` se quiser.",
+      "metadata": {},
+      "fingerprint": "edba97a182bc26ad63c727afa53a6b047016a93ef649cefcf8d018be918ac7a7"
+    },
+    {
+      "artifact_id": "01a14c97-ec02-748e-84ce-904f26b87321",
+      "kind": "diff_hunk",
+      "content": "diff --git a/packages/core/src/feedback/identity.ts b/packages/core/src/feedback/identity.ts\n@@ -48,3 +48,20 @@\n \n   return decisions;\n }\n+\n+/**\n+ * One record per FAIL identity, the last written, ordered by last write. Its\n+ * `latestDecisions` always equals that of the input.\n+ */\n+export function latestFeedbackRecords(feedback: readonly FeedbackRecord[]): FeedbackRecord[] {\n+  const latest = new Map<string, FeedbackRecord>();\n+\n+  for (const record of feedback) {\n+    const key = failIdentityKey(record);\n+\n+    latest.delete(key);\n+    latest.set(key, record);\n+  }\n+\n+  return [...latest.values()];\n+}\n",
+      "metadata": {
+        "file": "packages/core/src/feedback/identity.ts"
+      },
+      "fingerprint": "59bcd94a86f414a75fa06cde4d3fec83a967ba91c95ba2bd6301a6c497e47504"
+    },
+    {
+      "artifact_id": "01a14c97-ec02-748e-84ce-9050f004fd10",
+      "kind": "diff_hunk",
+      "content": "diff --git a/packages/core/src/index.ts b/packages/core/src/index.ts\n@@ -126,7 +126,12 @@\n   PendingFailList,\n   RuleFail,\n } from \"./feedback/types\";\n-export { collectRuleFails, failIdentityKey, latestDecisions } from \"./feedback/identity\";\n+export {\n+  collectRuleFails,\n+  failIdentityKey,\n+  latestDecisions,\n+  latestFeedbackRecords,\n+} from \"./feedback/identity\";\n export { FEEDBACK_LIST_LIMIT, listPendingFails } from \"./feedback/pending\";\n export { planFeedbackDecision, resolveFeedbackTarget } from \"./feedback/resolve\";\n export type {\n",
+      "metadata": {
+        "file": "packages/core/src/index.ts"
+      },
+      "fingerprint": "f1292cad7b1f9969460af1dc826bdd683ed316b4ad2de15f01d5c367f6fea940"
+    },
+    {
+      "artifact_id": "01a14c97-ec02-748e-84ce-905111847a88",
+      "kind": "diff_hunk",
+      "content": "diff --git a/packages/node-infra/src/feedback/compact.ts b/packages/node-infra/src/feedback/compact.ts\n@@ -1,38 +1,19 @@\n-import { type FeedbackRecord, failIdentityKey } from \"@jevguard/core\";\n+import { type FeedbackRecord, latestFeedbackRecords } from \"@jevguard/core\";\n import { parseJsonLines } from \"../history/jsonl-file\";\n import type { ReviewHistoryFileSystem } from \"../history/types\";\n import { parseFeedbackRecord, serializeFeedbackRecord } from \"./record\";\n \n /**\n- * Keeps one record per `{turnId, ruleId}` identity, the last written, in order of last\n- * write, then drops the oldest identities beyond `maxRecords`. While the input holds at\n- * most `maxRecords` identities, `latestDecisions` of the result equals that of the input.\n+ * Keeps the latest record per FAIL identity, then drops the least recently answered\n+ * identities beyond `maxRecords`.\n  */\n export function compactFeedbackRecords(\n   records: readonly FeedbackRecord[],\n   maxRecords: number,\n ): FeedbackRecord[] {\n-  const seen = new Set<string>();\n-  const newestFirst: FeedbackRecord[] = [];\n+  const latest = latestFeedbackRecords(records);\n \n-  for (let index = records.length - 1; index >= 0; index -= 1) {\n-    const record = records[index];\n-\n-    if (record === undefined) {\n-      continue;\n-    }\n-\n-    const key = failIdentityKey(record);\n-\n-    if (!seen.has(key)) {\n-      seen.add(key);\n-      newestFirst.push(record);\n-    }\n-  }\n-\n-  const oldestFirst = newestFirst.reverse();\n-\n-  return oldestFirst.slice(Math.max(0, oldestFirst.length - maxRecords));\n+  return latest.slice(Math.max(0, latest.length - maxRecords));\n }\n \n /**\n",
+      "metadata": {
+        "file": "packages/node-infra/src/feedback/compact.ts"
+      },
+      "fingerprint": "6f14a89041fcb280d3219077c5d621c4f0ba94926c6f8daaef0c0b9d81ad0d84"
+    },
+    {
+      "artifact_id": "01a14c97-ec02-748e-84ce-90520582c9e9",
+      "kind": "diff_hunk",
+      "content": "diff --git a/packages/node-infra/test/feedback-compaction.test.ts b/packages/node-infra/test/feedback-compaction.test.ts\n@@ -266,7 +266,7 @@\n     const decisions = latestDecisions(result.records);\n \n     expect(result.records).toHaveLength(MAX_RECORDS);\n-    expect(decisions.get(JSON.stringify([\"t0\", \"no-eval\"]))).toBe(\"WRONG\");\n-    expect(decisions.get(JSON.stringify([\"t4999\", \"no-eval\"]))).toBe(\"WRONG\");\n+    expect(decisions.get(failIdentityKey({ turnId: \"t0\", ruleId: \"no-eval\" }))).toBe(\"WRONG\");\n+    expect(decisions.get(failIdentityKey({ turnId: \"t4999\", ruleId: \"no-eval\" }))).toBe(\"WRONG\");\n   });\n });\n@@ -2,6 +2,7 @@\n   aggregateReviewHistory,\n   type FeedbackDecision,\n   type FeedbackRecord,\n+  failIdentityKey,\n   latestDecisions,\n   listPendingFails,\n   planFeedbackDecision,\n@@ -12,10 +12,10 @@\n import { describe, expect, test } from \"vitest\";\n import { resolveFeedbackFilePath } from \"../src/feedback\";\n import { compactFeedbackFile, compactFeedbackRecords } from \"../src/feedback/compact\";\n-import { createLocalFeedbackStore } from \"../src/index\";\n+import { createLocalFeedbackStore, DEFAULT_FEEDBACK_MAX_RECORDS } from \"../src/index\";\n import { context, FakeHistoryFileSystem } from \"./support/history-fakes\";\n \n-const MAX_RECORDS = 5000;\n+const MAX_RECORDS = DEFAULT_FEEDBACK_MAX_RECORDS;\n \n function entry(\n   turnId: string,\n@@ -12,7 +12,8 @@\n import { describe, expect, test } from \"vitest\";\n import { resolveFeedbackFilePath } from \"../src/feedback\";\n import { compactFeedbackFile, compactFeedbackRecords } from \"../src/feedback/compact\";\n-import { createLocalFeedbackStore, DEFAULT_FEEDBACK_MAX_RECORDS } from \"../src/index\";\n+import { DEFAULT_FEEDBACK_MAX_RECORDS } from \"../src/feedback/local\";\n+import { createLocalFeedbackStore } from \"../src/index\";\n import { context, FakeHistoryFileSystem } from \"./support/history-fakes\";\n \n const MAX_RECORDS = DEFAULT_FEEDBACK_MAX_RECORDS;\n",
+      "metadata": {
+        "file": "packages/node-infra/test/feedback-compaction.test.ts"
+      },
+      "fingerprint": "77e4a6a7aef4c9ff1c989ebf612859fa44ae7b36d672be77b9cfd31bc045403d"
+    },
+    {
+      "artifact_id": "01a14c97-ec02-748e-84ce-90533328bd27",
+      "kind": "diff_hunk",
+      "content": "diff --git a/packages/core/test/feedback.test.ts b/packages/core/test/feedback.test.ts\n@@ -128,6 +128,21 @@\n   });\n });\n \n+describe(\"latestFeedbackRecords\", () => {\n+  test(\"keeps the last record per identity in order of last write\", () => {\n+    const feedback = [\n+      answer(\"t1\", \"A\", \"RIGHT\"),\n+      answer(\"t2\", \"A\", \"RIGHT\"),\n+      answer(\"t1\", \"A\", \"WRONG\"),\n+    ];\n+\n+    const latest = latestFeedbackRecords(feedback);\n+\n+    expect(latest).toEqual([answer(\"t2\", \"A\", \"RIGHT\"), answer(\"t1\", \"A\", \"WRONG\")]);\n+    expect(latestDecisions(latest)).toEqual(latestDecisions(feedback));\n+  });\n+});\n+\n describe(\"failIdentityKey\", () => {\n   test(\"does not collide when identifiers contain separators\", () => {\n     const left = failIdentityKey({ turnId: \"a:b\", ruleId: \"c\" });\n@@ -4,6 +4,7 @@\n   failIdentityKey,\n   FEEDBACK_LIST_LIMIT,\n   latestDecisions,\n+  latestFeedbackRecords,\n   listPendingFails,\n   planFeedbackDecision,\n   resolveFeedbackTarget,\n",
+      "metadata": {
+        "file": "packages/core/test/feedback.test.ts"
+      },
+      "fingerprint": "9781510c1beae9e4cca99d21b422cacafcd6f4b734932d175e5f8541de6abeea"
+    },
+    {
+      "artifact_id": "01a14c97-ec02-748e-84ce-90549dcff1a9",
+      "kind": "tool_summary",
+      "content": "{\"tool\":\"Bash\",\"status\":\"ok\"}",
+      "metadata": {
+        "tool": "Bash",
+        "status": "ok"
+      },
+      "fingerprint": "afdc1d8f687b01fc09ca0c55f0bc830831c32537695d781642f09affc8a81ce7"
+    },
+    {
+      "artifact_id": "01a14c97-ec02-748e-84ce-9055f0b49395",
+      "kind": "tool_summary",
+      "content": "{\"tool\":\"Edit\",\"status\":\"ok\"}",
+      "metadata": {
+        "tool": "Edit",
+        "status": "ok"
+      },
+      "fingerprint": "8e89bcbb6ed462b6bf7b3009af662d814590acde1cfec5e36c6107ba2e70dc76"
+    }
+  ]
+}
