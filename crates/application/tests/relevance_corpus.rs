@@ -21,10 +21,12 @@ const FIXTURES_RELEVANT: &[&str] = &[
     "durable-migration-with-formatting-note.json",
     "durable-course-change.json",
     "notification-with-migration.json",
-    "real-option-pick.json",
     "real-ask-user-question.json",
     "ask-user-answer.json",
 ];
+// `real-option-pick.json` (a choice in free words, "o 1 funciona, mas o 2
+// nao pq ...") is kept out on purpose: no phrase list decides it; it belongs
+// to the evaluation set of the turn triage.
 /// Fixtures that must stay Empty.
 const FIXTURES_TRIVIAL: &[&str] = &[
     "trivial-formatting.json",
