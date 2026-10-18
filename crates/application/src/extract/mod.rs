@@ -20,7 +20,7 @@ pub use connection_test::{
     connection_test_evidence, run_connection_test, ConnectionTestReport, CONNECTION_TEST_CAPTURE_ID,
 };
 pub use fake::FakeCandidateExtractor;
-pub use relevance::{filter_relevant, RelevanceSignal};
+pub use relevance::{filter_relevant, RelevanceSignal, ASK_USER_QUESTION_SOURCE};
 
 use assessment::{capture_not_found, record_assessment};
 use validation::validate_proposal;

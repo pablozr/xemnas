@@ -33,10 +33,17 @@ pub enum WatchOutcome {
     },
 }
 
+/// The stamp last seen of a project and whether it still has to be acted on.
+#[derive(Debug, Clone, Copy)]
+struct Seen {
+    stamp: u64,
+    pending: bool,
+}
+
 /// The stamp last seen per project and whether it still has to be acted on.
 #[derive(Debug, Default)]
 pub struct DocumentWatch {
-    state: HashMap<String, (u64, bool)>,
+    state: HashMap<String, Seen>,
 }
 
 impl DocumentWatch {
@@ -64,14 +71,32 @@ impl DocumentWatch {
         };
         let stamp = documentation_stamp(&root);
         match self.state.get(project_id).copied() {
-            Some((known, true)) if known == stamp => {
+            Some(Seen {
+                stamp: known,
+                pending: true,
+            }) if known == stamp => {
                 let queued = documents.refresh_changed(project_id, PROPOSE_PER_RUN)?;
-                self.state.insert(project_id.to_string(), (stamp, false));
+                self.state.insert(
+                    project_id.to_string(),
+                    Seen {
+                        stamp,
+                        pending: false,
+                    },
+                );
                 Ok(WatchOutcome::Refreshed { queued })
             }
-            Some((known, false)) if known == stamp => Ok(WatchOutcome::Unchanged),
+            Some(Seen {
+                stamp: known,
+                pending: false,
+            }) if known == stamp => Ok(WatchOutcome::Unchanged),
             _ => {
-                self.state.insert(project_id.to_string(), (stamp, true));
+                self.state.insert(
+                    project_id.to_string(),
+                    Seen {
+                        stamp,
+                        pending: true,
+                    },
+                );
                 Ok(WatchOutcome::Settling)
             }
         }

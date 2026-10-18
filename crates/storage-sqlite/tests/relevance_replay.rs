@@ -8,12 +8,12 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use application::extract::{filter_relevant, DecisionEvidence, EvidenceArtifact};
-use application::AppPaths;
+use application::extract::{
+    filter_relevant, truncate_content, DecisionEvidence, EvidenceArtifact, MAX_EVIDENCE_ARTIFACTS,
+    MAX_EVIDENCE_CONTENT_BYTES,
+};
+use application::{AppPaths, DEFAULT_MAX_INPUT_CHARS};
 use rusqlite::{Connection, OpenFlags};
-
-/// Longest artifact the provider sends, in characters.
-const SENT_CHARS_PER_ARTIFACT: usize = 8192;
 
 #[derive(Default)]
 struct Tally {
@@ -88,7 +88,7 @@ fn relevance_replay() {
     let mut artifacts = connection
         .prepare(
             "SELECT artifact_id, kind, content, metadata FROM capture_artifacts
-             WHERE capture_id = ?1 ORDER BY artifact_id",
+             WHERE capture_id = ?1 ORDER BY artifact_id LIMIT ?2",
         )
         .expect("artifacts");
 
@@ -102,11 +102,12 @@ fn relevance_replay() {
             session_id: None,
             observed_at: None,
             artifacts: artifacts
-                .query_map([&capture_id], |row| {
+                .query_map((&capture_id, MAX_EVIDENCE_ARTIFACTS as i64), |row| {
+                    let content: String = row.get(2)?;
                     Ok(EvidenceArtifact {
                         artifact_id: row.get(0)?,
                         kind: row.get(1)?,
-                        content: row.get(2)?,
+                        content: truncate_content(&content, MAX_EVIDENCE_CONTENT_BYTES),
                         metadata: row.get(3)?,
                     })
                 })
@@ -132,11 +133,9 @@ fn relevance_replay() {
             .artifacts
             .iter()
             .map(|artifact| {
-                artifact
-                    .content
+                application::external::limited_text(&artifact.content, DEFAULT_MAX_INPUT_CHARS)
                     .chars()
                     .count()
-                    .min(SENT_CHARS_PER_ARTIFACT)
             })
             .sum();
         for tally in &mut tallies {

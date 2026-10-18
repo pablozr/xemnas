@@ -8,9 +8,9 @@ mod support;
 use application::documents::watch::{DocumentWatch, WatchOutcome};
 use application::documents::{Documents, PROPOSE_PER_RUN};
 use application::projects::{ProjectRecord, ProjectRepository};
-use rusqlite::Connection;
 use std::path::PathBuf;
 use std::time::Instant;
+use support::{count, raw};
 
 /// Idle passes simulated, one per 60 s of the real reconciler.
 const IDLE_TICKS: usize = 60;
@@ -31,16 +31,6 @@ fn adr_text(note: &str) -> String {
     format!(
         "# Usar SQLite\n\n## Decisão\nGuardar tudo em SQLite, em crates/core/src/lib.rs. {note}\n"
     )
-}
-
-fn raw(test: &support::TestStore) -> Connection {
-    Connection::open(test.root.join("app.db")).expect("raw")
-}
-
-fn count(test: &support::TestStore, sql: &str) -> i64 {
-    raw(test)
-        .query_row(sql, [], |row| row.get(0))
-        .expect("count")
 }
 
 fn analysis_jobs(test: &support::TestStore) -> i64 {

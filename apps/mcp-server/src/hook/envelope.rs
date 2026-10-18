@@ -4,6 +4,7 @@
 //! limits as its `config.ts`. Every content is stripped of injected context
 //! blocks, redacted and truncated on a UTF-8 boundary before it is kept.
 
+use application::extract::ASK_USER_QUESTION_SOURCE;
 use application::{
     artifact_fingerprint, ArtifactKind, CaptureEnvelope, CaptureSource, ProjectRef, SourceArtifact,
 };
@@ -14,9 +15,6 @@ use super::worktree::Worktrees;
 
 /// Maximum UTF-8 bytes of one artifact content.
 pub const MAX_ARTIFACT_BYTES: usize = 64 * 1024;
-
-/// `metadata.source` of a `user_text` that is the answer to an `AskUserQuestion`.
-const ASK_USER_QUESTION_SOURCE: &str = "ask_user_question";
 
 /// Maximum artifacts per envelope.
 pub const MAX_ARTIFACTS: usize = 64;

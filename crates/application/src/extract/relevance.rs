@@ -6,6 +6,9 @@ use serde_json::json;
 
 use super::{DecisionEvidence, EvidenceArtifact};
 
+/// Metadata source the adapter gives to the answer of an `AskUserQuestion`.
+pub const ASK_USER_QUESTION_SOURCE: &str = "ask_user_question";
+
 /// A durable engineering choice worth proposing for human confirmation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RelevanceSignal {
@@ -164,17 +167,14 @@ fn has_structural_strong(evidence: &DecisionEvidence) -> bool {
         }
         let mut current_is_test = false;
         for line in artifact.content.lines() {
-            if let Some(rest) = line.strip_prefix("diff --git ") {
-                let token = rest.split_whitespace().next().unwrap_or("");
-                let path = token.strip_prefix("a/").unwrap_or(token);
+            if let Some(path) = diff_header_path(line) {
                 current_is_test = is_test_path(path);
                 continue;
             }
-            let trimmed = line.trim_start();
-            let Some(rest) = trimmed.strip_prefix('+') else {
+            let Some(rest) = added_line(line) else {
                 continue;
             };
-            if current_is_test || rest.starts_with("++") {
+            if current_is_test {
                 continue;
             }
             let content = rest.trim();
@@ -193,14 +193,29 @@ fn has_structural_strong(evidence: &DecisionEvidence) -> bool {
     false
 }
 
+/// The first path of a `diff --git` header line, without the `a/` prefix.
+fn diff_header_path(line: &str) -> Option<&str> {
+    let token = line
+        .strip_prefix("diff --git ")?
+        .split_whitespace()
+        .next()
+        .unwrap_or("");
+    Some(token.strip_prefix("a/").unwrap_or(token))
+}
+
+/// The text of an added diff line (not a `+++` header).
+fn added_line(line: &str) -> Option<&str> {
+    line.trim_start()
+        .strip_prefix('+')
+        .filter(|rest| !rest.starts_with("++"))
+}
+
 /// Returns `true` when the artifact adds a dependency in a manifest.
 fn artifact_has_dependency_addition(artifact: &EvidenceArtifact) -> bool {
     let mut current_manifest = false;
     let mut current_is_test = false;
     for line in artifact.content.lines() {
-        if let Some(rest) = line.strip_prefix("diff --git ") {
-            let token = rest.split_whitespace().next().unwrap_or("");
-            let path = token.strip_prefix("a/").unwrap_or(token);
+        if let Some(path) = diff_header_path(line) {
             let lower = path.to_ascii_lowercase();
             current_is_test = is_test_path(path);
             current_manifest = lower.ends_with("cargo.toml") || lower.ends_with("package.json");
@@ -209,13 +224,9 @@ fn artifact_has_dependency_addition(artifact: &EvidenceArtifact) -> bool {
         if !current_manifest || current_is_test {
             continue;
         }
-        let trimmed = line.trim_start();
-        let Some(rest) = trimmed.strip_prefix('+') else {
+        let Some(rest) = added_line(line) else {
             continue;
         };
-        if rest.starts_with("++") {
-            continue;
-        }
         let addition = rest.trim();
         if addition.is_empty() || is_comment_prefix(addition) {
             continue;
@@ -442,18 +453,12 @@ fn normative_document_edited(evidence: &DecisionEvidence) -> bool {
         .any(|artifact| {
             let mut normative = false;
             for line in artifact.content.lines() {
-                if let Some(rest) = line.strip_prefix("diff --git ") {
-                    let token = rest.split_whitespace().next().unwrap_or("");
-                    normative = is_normative_path(token.strip_prefix("a/").unwrap_or(token));
+                if let Some(path) = diff_header_path(line) {
+                    normative = is_normative_path(path);
                     continue;
                 }
-                if !normative {
-                    continue;
-                }
-                if let Some(added) = line.strip_prefix('+') {
-                    if !added.starts_with("++") && !added.trim().is_empty() {
-                        return true;
-                    }
+                if normative && added_line(line).is_some_and(|added| !added.trim().is_empty()) {
+                    return true;
                 }
             }
             false
@@ -628,9 +633,6 @@ fn contains_any_phrase(text: &str, phrases: &[&str]) -> bool {
 fn is_word_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_'
 }
-
-/// Metadata source the adapter gives to the answer of an `AskUserQuestion`.
-const ASK_USER_QUESTION_SOURCE: &str = "ask_user_question";
 
 /// Matched as whole words on the user's text, folded to lowercase ASCII.
 const COURSE_CHANGE: &[&str] = &[

@@ -276,7 +276,8 @@ where
     ///
     /// `project_not_found`, `folder_unavailable` or `storage`.
     pub fn index(&self, project_id: &str) -> Result<DocumentIndex, DocumentError> {
-        let (index, _) = self.reindex(project_id)?;
+        let previous = self.store.project_documents(project_id)?;
+        let (index, _) = self.reindex(project_id, previous)?;
         self.prepare_map(project_id);
         Ok(index)
     }
@@ -294,17 +295,17 @@ where
     }
 
     /// Reads the folder again and replaces the index, without preparing the
-    /// map. Returns the index and the paths that are new or whose content
-    /// changed.
-    fn reindex(&self, project_id: &str) -> Result<(DocumentIndex, Vec<String>), DocumentError> {
-        let project = ProjectRepository::get(&self.store, project_id)
-            .map_err(|error| DocumentError::Storage(error.to_string()))?
-            .ok_or(DocumentError::ProjectNotFound)?;
-        let root = PathBuf::from(&project.location);
+    /// map. `previous` is the stored index. Returns the index and the paths
+    /// that are new or whose content changed.
+    fn reindex(
+        &self,
+        project_id: &str,
+        previous: Vec<ProjectDocument>,
+    ) -> Result<(DocumentIndex, Vec<String>), DocumentError> {
+        let root = self.location(project_id)?;
         if !root.is_dir() {
             return Err(DocumentError::FolderUnavailable);
         }
-        let previous = self.store.project_documents(project_id)?;
         let (found, truncated) = scan(&root);
         let now = crate::clock::now_rfc3339();
         let documents: Vec<ProjectDocument> = found
@@ -338,7 +339,9 @@ where
             .iter()
             .filter(|old| !documents.iter().any(|document| document.path == old.path))
             .count();
-        self.store.replace_documents(project_id, &documents)?;
+        if !changed.is_empty() || removed > 0 {
+            self.store.replace_documents(project_id, &documents)?;
+        }
         let index = DocumentIndex {
             total: documents.len(),
             changed: changed.len(),
@@ -377,10 +380,11 @@ where
     ///
     /// `project_not_found`, `folder_unavailable` or `storage`.
     pub fn refresh_changed(&self, project_id: &str, limit: usize) -> Result<usize, DocumentError> {
-        if self.store.project_documents(project_id)?.is_empty() {
+        let previous = self.store.project_documents(project_id)?;
+        if previous.is_empty() {
             return Ok(0);
         }
-        let (index, changed) = self.reindex(project_id)?;
+        let (index, changed) = self.reindex(project_id, previous)?;
         if changed.is_empty() {
             if index.removed > 0 {
                 self.prepare_map(project_id);
@@ -454,11 +458,8 @@ where
         only: Option<&[String]>,
         automatic: bool,
     ) -> Result<usize, DocumentError> {
-        let project = ProjectRepository::get(&self.store, project_id)
-            .map_err(|error| DocumentError::Storage(error.to_string()))?
-            .ok_or(DocumentError::ProjectNotFound)?;
+        let root = self.location(project_id)?;
         self.prepare_map(project_id);
-        let root = PathBuf::from(&project.location);
         // What would be queued: new or changed documents that have central
         // parts, with only those parts. The rest never reaches Revisão.
         let mut candidates: Vec<(ProjectDocument, digest::Digest)> = Vec::new();
@@ -522,7 +523,7 @@ where
             }
             let key = document_capture_key(project_id, &document);
             match self.store.insert_capture(&document_capture(
-                &project.location,
+                &root.to_string_lossy(),
                 &key,
                 &document,
                 digest,
@@ -544,13 +545,23 @@ pub fn is_archived_path(path: &str) -> bool {
     let mut segments: Vec<&str> = normalized.split('/').collect();
     segments.pop();
     segments.iter().any(|segment| {
-        let segment = segment.to_ascii_lowercase();
-        matches!(
-            segment.as_str(),
-            "archive" | "archives" | "archived" | "arquivo" | "arquivados" | "arquivadas"
-        ) || ["archive-", "archive_", "archived-", "archived_"]
-            .iter()
-            .any(|prefix| segment.starts_with(prefix))
+        [
+            "archive",
+            "archives",
+            "archived",
+            "arquivo",
+            "arquivados",
+            "arquivadas",
+        ]
+        .iter()
+        .any(|name| segment.eq_ignore_ascii_case(name))
+            || ["archive-", "archive_", "archived-", "archived_"]
+                .iter()
+                .any(|prefix| {
+                    segment
+                        .get(..prefix.len())
+                        .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+                })
     })
 }
 
@@ -633,12 +644,12 @@ pub fn scan(root: &Path) -> (Vec<(String, PathBuf)>, bool) {
 }
 
 /// Size and modification time of a file, as the folder listing reports them.
-type FileStamp = Option<(u64, std::time::SystemTime)>;
+pub(crate) type FileStamp = Option<(u64, std::time::SystemTime)>;
 
 /// A documentation file found by the walk: relative path, absolute path and stamp.
 type FoundDocument = (String, PathBuf, FileStamp);
 
-fn file_stamp(metadata: &std::fs::Metadata) -> FileStamp {
+pub(crate) fn file_stamp(metadata: &std::fs::Metadata) -> FileStamp {
     Some((metadata.len(), metadata.modified().ok()?))
 }
 

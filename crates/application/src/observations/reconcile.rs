@@ -3,12 +3,11 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
-use std::time::SystemTime;
 
 use super::{ObservationStore, ROOT_MANIFESTS};
 use crate::projects::ProjectRepository;
 
-type Stamp = Vec<(String, Option<(u64, SystemTime)>)>;
+type Stamp = Vec<(String, crate::documents::FileStamp)>;
 
 /// Remembers, in memory, the (size, mtime) of each project's manifests.
 ///
@@ -46,7 +45,7 @@ impl ReconcileGate {
             .map(|path| {
                 let metadata = std::fs::metadata(root.join(&path))
                     .ok()
-                    .and_then(|m| Some((m.len(), m.modified().ok()?)));
+                    .and_then(|m| crate::documents::file_stamp(&m));
                 (path, metadata)
             })
             .collect();
