@@ -22,6 +22,9 @@
 
 ---
 
+<p align="center"><b>A local desktop app that turns the decisions your AI coding agents make into a
+versioned, evidence-backed project memory, and feeds that memory back to the agent as context.</b></p>
+
 Coding agents make dozens of decisions per session, and almost all of them get
 lost in the chat history. **xemnas** follows that work, proposes the decisions that
 showed up in it together with the evidence behind them, and keeps the ones you
@@ -41,18 +44,24 @@ settled instead of deciding it again.
 
 - **Review with evidence.** Each candidate comes with the suggested choice, the rationale and
   the conversation or diff excerpts it came from. Evidence is shown before the AI's reasoning.
-  You confirm, adjust, defer or reject it, with undo.
+  You confirm, adjust, defer or reject it, with undo. When a candidate contradicts another item,
+  the review shows both sides of the conflict and lets you keep one or both.
 - **Automatic mode, when you want it.** A Manual | Automatic switch, like an agent's permission
   mode. In automatic mode free local rules settle the obvious cases and the AI reviews the rest
   in small batches, with hard limits on calls. Everything it did lands in a "Done on its own"
   ledger, and anything it was unsure about stays in your queue, marked as such.
 - **Context back to the agent.** This is the core: decisions and rules in force are injected
   into the agent's context inside a token budget, and a read-only MCP server answers when the
-  agent asks.
+  agent asks. Rules are scoped: a rule reaches a task only when it matches the task, is tied to a
+  component the task touches, or is marked global.
 - **Versioned decisions.** Revising creates a new version and keeps the previous one; every
   decision is searchable, carries its provenance and exports to Markdown or JSON.
 - **Decisions that relate.** Mark what supersedes, depends on or conflicts with what; a
   superseded decision leaves the agent's context but stays in history.
+- **Project map.** Components and technologies of the project, the files each one covers and the
+  decisions and rules tied to them, as a list, a graph, a file lens and a timeline. Links come
+  from affirmative mentions and from signals checked in the repository (cited files, declared
+  dependencies, defined symbols), and every link records who confirmed it.
 - **Overview, architecture and flows.** The AI writes a short overview of the project from what
   you confirmed, every sentence citing its sources. One click turns the architecture and the
   main flows into a self-contained HTML page: a map you can explore and a guided, step-by-step
@@ -62,7 +71,11 @@ settled instead of deciding it again.
 - **Honest operations.** A connection test for the OpenCode integration and a diagnostics page
   with latency, losses and retryable jobs, exported without any content.
 - **Local by default.** SQLite on your machine and an offline extractor. An external AI provider
-  only runs after a preview of what leaves the machine and your explicit consent.
+  (any OpenAI-compatible API, including a local model, a ChatGPT account, OpenCode Zen/Go, or
+  the local Claude Code CLI, experimental) only runs after a preview of what leaves the machine
+  and your explicit consent.
+- **Ten languages.** The interface ships in English (default), Portuguese, Spanish, French,
+  German, Italian, Japanese, Chinese, Korean and Russian.
 - **Native app.** Rust + [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui),
   the UI framework behind Zed. No Electron, no browser.
 
@@ -70,20 +83,23 @@ settled instead of deciding it again.
 
 ```mermaid
 flowchart LR
-    A["OpenCode session"] -->|"adapter: redacted capture"| B["xemnas (local)"]
+    A["OpenCode / Claude Code session"] -->|"plugin or hooks: redacted capture"| B["xemnas (local)"]
     B --> C["Candidates + evidence"]
     C -->|"you confirm"| D[("Versioned decisions")]
     D -->|"Context Pack · MCP"| A
 ```
 
-1. **Capture.** The OpenCode plugin sends the session to the app's local API (loopback only),
-   with secrets masked before anything is stored. If the app is closed, it waits in a file outbox.
-2. **Extraction.** A background job proposes candidates. The default extractor is offline; an
-   OpenAI-compatible provider is optional.
+1. **Capture.** The OpenCode plugin or the Claude Code hooks send the session to the app's local
+   API (loopback only), with secrets masked before anything is stored. If the app is closed, it
+   waits in a file outbox.
+2. **Extraction.** A background job proposes candidates. A local filter, with no AI, only sends a
+   capture on when it shows a durable choice. The default extractor is offline; an external AI
+   provider is optional.
 3. **Review.** In manual mode nothing becomes a decision without you. In automatic mode the AI
    settles candidates and suggested links in batches, and every action is logged and reviewable.
-4. **Context.** Decisions in force go back to the agent through compact injection (enabled per
-   project) or an MCP query.
+4. **Context.** Decisions in force go back to the agent through compact injection (Off, Measure
+   or Inject, per project), through what the map ties to the files just edited (OpenCode), or
+   through an MCP query.
 
 <table>
   <tr>
@@ -96,7 +112,8 @@ flowchart LR
   </tr>
 </table>
 
-> The interface is currently in Portuguese (pt-BR).
+> Screenshots show the Portuguese (pt-BR) interface; the app starts in English and the language
+> can be changed in Settings.
 
 ## Getting started
 
@@ -153,6 +170,7 @@ A modular Rust monolith whose layering is enforced by an architecture test.
 | `apps/desktop-gpui` | Desktop app (GPUI) and composition root |
 | `apps/mcp-server` | Read-only MCP server |
 | `adapters/opencode` | TypeScript plugin for OpenCode |
+| `tests/architecture` | Test that enforces the layering between crates |
 
 ## Documentation
 
