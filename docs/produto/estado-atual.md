@@ -27,7 +27,8 @@ sugestões derivadas (o que a tela Mapa já fazia ao abrir). As sugestões de IA
 chamada ao provedor, e os vínculos vão antes do resto; um projeto de dezenas de decisões custa
 algumas chamadas por tipo em vez de uma por decisão. Uma análise de documento que falhou
 volta para a fila na próxima importação do arquivo, ou quando o app propõe documentos de novo
-(até 3 execuções no total por versão), e "Reprocessar" vale sempre. O motivo de uma falha
+(até 3 execuções no total por versão), e "Reprocessar" vale sempre. Documentos em pastas de arquivo (`archive`, `archive-*`, `arquivados`...) entram no índice, mas
+nunca são propostos à Revisão; só "Importar documento…" os aceita. O motivo de uma falha
 (só a mensagem do erro, limpa e com até 200 caracteres) fica guardado e aparece em
 Configurações → Diagnóstico, na lista de capturas.
 

@@ -342,7 +342,7 @@ where
     ///
     /// `project_not_found` or `storage`.
     pub fn propose(&self, project_id: &str, limit: usize) -> Result<usize, DocumentError> {
-        self.propose_matching(project_id, limit, None)
+        self.propose_matching(project_id, limit, None, true)
     }
 
     /// Imports one documentation file from the project folder or from a git
@@ -397,7 +397,8 @@ where
             documents.push(document.clone());
             self.store.replace_documents(project_id, &documents)?;
         }
-        let queued = self.propose_matching(project_id, 1, Some(&relative))? > 0;
+        let queued =
+            self.propose_matching(project_id, 1, Some(std::slice::from_ref(&relative)), false)? > 0;
         Ok(ImportedDocument { document, queued })
     }
 
@@ -405,7 +406,8 @@ where
         &self,
         project_id: &str,
         limit: usize,
-        only: Option<&str>,
+        only: Option<&[String]>,
+        automatic: bool,
     ) -> Result<usize, DocumentError> {
         let project = ProjectRepository::get(&self.store, project_id)
             .map_err(|error| DocumentError::Storage(error.to_string()))?
@@ -417,7 +419,12 @@ where
         let mut candidates: Vec<(ProjectDocument, digest::Digest)> = Vec::new();
         let mut requeued = 0;
         for document in self.list(project_id)? {
-            if only.is_some_and(|path| path != document.path) {
+            if only.is_some_and(|paths| !paths.contains(&document.path)) {
+                continue;
+            }
+            // Archived material is history, not the project's current rules.
+            // A file the person imported by hand is still taken.
+            if automatic && is_archived_path(&document.path) {
                 continue;
             }
             let key = document_capture_key(project_id, &document);
@@ -429,7 +436,7 @@ where
             {
                 // Queued before. Only a failed analysis runs again: always
                 // when the person asked for this very file, else a few times.
-                let cap = only.is_none().then_some(MAX_AUTOMATIC_ATTEMPTS);
+                let cap = automatic.then_some(MAX_AUTOMATIC_ATTEMPTS);
                 if requeued < limit && self.store.requeue_failed_analysis(&key, cap)? {
                     requeued += 1;
                 }
@@ -482,6 +489,24 @@ where
         }
         Ok(queued)
     }
+}
+
+/// Whether a document sits in an archive folder (`archive`, `arquivados`,
+/// `archive-2026-10-14`...). Only folder segments count: a file named
+/// `archive.md` is an ordinary document.
+pub fn is_archived_path(path: &str) -> bool {
+    let normalized = domain::entities::normalize_path(path);
+    let mut segments: Vec<&str> = normalized.split('/').collect();
+    segments.pop();
+    segments.iter().any(|segment| {
+        let segment = segment.to_ascii_lowercase();
+        matches!(
+            segment.as_str(),
+            "archive" | "archives" | "archived" | "arquivo" | "arquivados" | "arquivadas"
+        ) || ["archive-", "archive_", "archived-", "archived_"]
+            .iter()
+            .any(|prefix| segment.starts_with(prefix))
+    })
 }
 
 /// One version of a document: project, path and content fingerprint.
@@ -862,6 +887,25 @@ mod tests {
         assert!(!is_documentation_path("requirements.txt"));
         assert!(!is_documentation_path("crates/core/src/lib.rs"));
         assert!(!is_documentation_path("docs/build.rs"));
+    }
+
+    #[test]
+    fn archive_folders_are_archived_and_archive_files_are_not() {
+        for path in [
+            "docs/tasks/archive-opencode-v2-2026-10-14/x.md",
+            "docs/archive/a.md",
+            "docs/arquivados/b.md",
+            "Docs\\Archived_old\\c.md",
+        ] {
+            assert!(is_archived_path(path), "{path}");
+        }
+        for path in [
+            "docs/archive.md",
+            "docs/arquitetura/x.md",
+            "docs/archiver-design.md",
+        ] {
+            assert!(!is_archived_path(path), "{path}");
+        }
     }
 
     #[test]

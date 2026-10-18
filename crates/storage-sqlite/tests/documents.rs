@@ -423,3 +423,28 @@ fn documents_are_queued_for_analysis_adrs_and_specs_before_guides() {
         ]
     );
 }
+
+#[test]
+fn archived_documents_are_indexed_but_never_proposed() {
+    let test = support::open("documents-archived", &[]);
+    let repo = test.root.join("repo");
+    for dir in ["docs/adr", "docs/archive-x"] {
+        std::fs::create_dir_all(repo.join(dir)).expect("docs");
+    }
+    let body = "# Titulo\n\n## Decisão\nDecidimos guardar tudo em SQLite em vez de um servidor, \
+                em crates/storage-sqlite/src/store.rs.\n";
+    for path in ["docs/adr/0001-sqlite.md", "docs/archive-x/0002-antigo.md"] {
+        std::fs::write(repo.join(path), body).expect("doc");
+    }
+    test.store
+        .insert(&ProjectRecord::new(
+            "docs-p".into(),
+            repo.to_string_lossy().replace('\\', "/"),
+            "2026-01-01T00:00:00Z".into(),
+        ))
+        .expect("project");
+    let documents = Documents::new(test.store.clone());
+    assert_eq!(documents.index("docs-p").expect("index").total, 2);
+    assert_eq!(documents.list("docs-p").expect("list").len(), 2);
+    assert_eq!(documents.propose("docs-p", 10).expect("propose"), 1);
+}
