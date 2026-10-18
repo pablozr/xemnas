@@ -48,17 +48,24 @@ const SYSTEM_REMINDER_CLOSE: &str = "</system-reminder>";
 /// request, so they get no context and record nothing. Reminder blocks at the
 /// start are skipped: what follows them, if anything, is the user's.
 pub(crate) fn is_harness_prompt(prompt: &str) -> bool {
-    let mut rest = prompt.trim_start();
-    while let Some(after) = rest.strip_prefix(SYSTEM_REMINDER_OPEN) {
-        let Some(end) = after.find(SYSTEM_REMINDER_CLOSE) else {
-            return true;
-        };
-        rest = after[end + SYSTEM_REMINDER_CLOSE.len()..].trim_start();
-    }
+    let rest = strip_leading_reminders(prompt);
     rest.is_empty()
         || HARNESS_PROMPT_PREFIXES
             .iter()
             .any(|prefix| rest.starts_with(prefix))
+}
+
+/// `prompt` without the `<system-reminder>` blocks at its start; an unclosed
+/// block swallows the rest.
+pub(crate) fn strip_leading_reminders(prompt: &str) -> &str {
+    let mut rest = prompt.trim_start();
+    while let Some(after) = rest.strip_prefix(SYSTEM_REMINDER_OPEN) {
+        let Some(end) = after.find(SYSTEM_REMINDER_CLOSE) else {
+            return "";
+        };
+        rest = after[end + SYSTEM_REMINDER_CLOSE.len()..].trim_start();
+    }
+    rest
 }
 
 /// Kind of item a compact line cites.

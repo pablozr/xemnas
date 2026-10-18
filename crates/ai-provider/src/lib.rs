@@ -293,6 +293,34 @@ impl CandidateExtractor for ProviderExtractor {
             Backend::ClaudeCode(extractor) => extractor.extract_with(input, signals, background),
         })
     }
+
+    fn triage_authorized(
+        &self,
+        input: &application::extract::TriageInput,
+        authorization: &dyn application::external::Authorization,
+    ) -> Result<Option<application::extract::TriageVerdict>, ExtractError> {
+        application::extract::ask_triage(input, |system, user, name, schema| {
+            application::overview::StructuredModel::complete_authorized(
+                self,
+                system,
+                user,
+                name,
+                schema,
+                authorization,
+            )
+        })
+        .map(Some)
+    }
+
+    fn triage(
+        &self,
+        input: &application::extract::TriageInput,
+    ) -> Result<Option<application::extract::TriageVerdict>, ExtractError> {
+        application::extract::ask_triage(input, |system, user, name, schema| {
+            application::overview::StructuredModel::complete(self, system, user, name, schema)
+        })
+        .map(Some)
+    }
 }
 
 impl application::overview::StructuredModel for ProviderExtractor {

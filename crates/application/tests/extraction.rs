@@ -2,6 +2,7 @@
 //! trivial fixtures yield none, reprocessing never duplicates, and an extractor
 //! failure writes nothing.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
@@ -11,7 +12,8 @@ use application::extract::{
     record_skipped_assessment, run_connection_test, run_extraction, AssessmentOutcome,
     AssessmentRecord, AssessmentStore, CandidateExtractor, CandidateKind, CandidateProposal,
     DecisionCandidateRecord, DecisionEvidence, EvidenceArtifact, ExtractError, ExtractionStore,
-    FakeCandidateExtractor, ProviderSetupError, RelevanceSignal, RunContext,
+    FakeCandidateExtractor, ProviderSetupError, RelevanceSignal, RunContext, TriageInput,
+    TriageKind, TriageRecord, TriageVerdict,
 };
 use integration_contracts::capture::CaptureEnvelope;
 
@@ -19,7 +21,6 @@ const DURABLE: &[&str] = &[
     "durable-migration.json",
     "durable-dependency.json",
     "durable-migration-with-formatting-note.json",
-    "durable-course-change.json",
 ];
 const TRIVIAL: &[&str] = &["trivial-formatting.json", "trivial-test-explained.json"];
 const TRIVIAL_INCIDENTAL: &[&str] = &[
@@ -93,6 +94,7 @@ struct FakeStore {
     evidence: Mutex<HashMap<String, DecisionEvidence>>,
     records: Mutex<Vec<DecisionCandidateRecord>>,
     assessments: Mutex<Vec<AssessmentRecord>>,
+    triages: Mutex<Vec<TriageRecord>>,
 }
 
 impl FakeStore {
@@ -115,6 +117,13 @@ impl FakeStore {
 
     fn assessments(&self) -> Vec<AssessmentRecord> {
         self.assessments
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn triages(&self) -> Vec<TriageRecord> {
+        self.triages
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
@@ -162,6 +171,14 @@ impl AssessmentStore for FakeStore {
             .push(row.clone());
         Ok(())
     }
+
+    fn record_triage(&self, row: &TriageRecord) -> Result<(), ExtractError> {
+        self.triages
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(row.clone());
+        Ok(())
+    }
 }
 
 struct FailingExtractor;
@@ -204,12 +221,13 @@ fn durable_fixtures_produce_pending_candidates() {
 }
 
 #[test]
-fn a_course_change_by_the_user_reaches_the_extractor_despite_a_test_only_diff() {
+fn triage_a_course_change_by_the_user_reaches_the_extractor_despite_a_test_only_diff() {
     let evidence = evidence("durable-course-change.json");
     let store = FakeStore::with(evidence.clone());
+    let extractor = Triaging::says(true, TriageKind::CourseChange);
     let report = run_extraction(
         &store,
-        &FakeCandidateExtractor,
+        &extractor,
         &evidence.capture_id,
         &RunContext::for_tests(),
     )
@@ -312,7 +330,7 @@ fn a_trivial_marker_does_not_discard_a_real_ddl_change() {
 }
 
 #[test]
-fn conversation_with_a_durable_choice_is_extracted() {
+fn triage_conversation_with_a_durable_choice_is_extracted() {
     let evidence = conversation_evidence(&[
         (
             "user_text",
@@ -328,7 +346,7 @@ fn conversation_with_a_durable_choice_is_extracted() {
     let store = FakeStore::with(evidence.clone());
     let report = run_extraction(
         &store,
-        &FakeCandidateExtractor,
+        &Triaging::says(true, TriageKind::Rejection),
         &evidence.capture_id,
         &RunContext::for_tests(),
     )
@@ -339,15 +357,10 @@ fn conversation_with_a_durable_choice_is_extracted() {
         "a conversation with a durable choice must reach the extractor"
     );
     assert!(report.inserted >= 1, "the candidate must be inserted");
-    assert!(
-        report.signals.contains(&RelevanceSignal::PublicContract),
-        "the persistence/schema choice must be signaled"
-    );
-    assert!(
-        report
-            .signals
-            .contains(&RelevanceSignal::RejectsAlternative),
-        "the rejected alternative must be signaled"
+    assert_eq!(
+        report.signals,
+        vec![RelevanceSignal::RejectsAlternative],
+        "the triage names the only signal"
     );
 
     let records = store.records();
@@ -1043,4 +1056,147 @@ fn implementation_details_are_never_persisted() {
     assert_eq!(record.kind, "decision");
     assert!((record.significance - 0.9).abs() < f64::EPSILON);
     assert_eq!(record.criteria, "[\"data_or_contract\"]");
+}
+
+/// An extractor with a scripted triage verdict that counts its calls.
+struct Triaging {
+    verdict: Result<Option<TriageVerdict>, ExtractError>,
+    triaged: Cell<usize>,
+    extracted: Cell<usize>,
+}
+
+impl Triaging {
+    fn new(verdict: Result<Option<TriageVerdict>, ExtractError>) -> Self {
+        Self {
+            verdict,
+            triaged: Cell::new(0),
+            extracted: Cell::new(0),
+        }
+    }
+
+    fn says(decision: bool, kind: TriageKind) -> Self {
+        Self::new(Ok(Some(TriageVerdict { decision, kind })))
+    }
+}
+
+impl CandidateExtractor for Triaging {
+    fn extract(
+        &self,
+        input: &DecisionEvidence,
+        signals: &[RelevanceSignal],
+    ) -> Result<Vec<CandidateProposal>, ExtractError> {
+        self.extracted.set(self.extracted.get() + 1);
+        Ok(vec![valid_proposal(input, signals)])
+    }
+
+    fn triage(&self, _input: &TriageInput) -> Result<Option<TriageVerdict>, ExtractError> {
+        self.triaged.set(self.triaged.get() + 1);
+        self.verdict.clone()
+    }
+}
+
+fn run_with(
+    name: &str,
+    extractor: &impl CandidateExtractor,
+) -> (
+    FakeStore,
+    Result<application::extract::ExtractionReport, ExtractError>,
+) {
+    let evidence = evidence(name);
+    let store = FakeStore::with(evidence.clone());
+    let result = run_extraction(
+        &store,
+        extractor,
+        &evidence.capture_id,
+        &RunContext::for_tests(),
+    );
+    (store, result)
+}
+
+#[test]
+fn triage_structure_goes_straight_to_the_extractor() {
+    let extractor = Triaging::says(false, TriageKind::None);
+    let (store, result) = run_with("durable-migration.json", &extractor);
+    result.expect("extraction runs");
+    assert_eq!(extractor.triaged.get(), 0);
+    assert_eq!(extractor.extracted.get(), 1);
+    assert!(store.triages().is_empty());
+}
+
+#[test]
+fn triage_never_sees_what_the_harness_wrote() {
+    for name in ["real-compact.json", "real-task-notification.json"] {
+        let extractor = Triaging::says(true, TriageKind::Choice);
+        let (store, result) = run_with(name, &extractor);
+        result.expect("extraction runs");
+        assert_eq!(extractor.triaged.get(), 0, "{name}");
+        assert_eq!(extractor.extracted.get(), 0, "{name}");
+        assert_eq!(store.assessments()[0].outcome, AssessmentOutcome::Empty);
+        assert!(store.triages().is_empty(), "{name}");
+    }
+}
+
+#[test]
+fn triage_a_choice_in_free_words_reaches_the_extractor_and_is_recorded() {
+    let extractor = Triaging::says(true, TriageKind::Choice);
+    let (store, result) = run_with("real-option-pick.json", &extractor);
+    let report = result.expect("extraction runs");
+    assert_eq!(extractor.triaged.get(), 1);
+    assert_eq!(extractor.extracted.get(), 1);
+    assert_eq!(report.signals, vec![RelevanceSignal::UserPicksOption]);
+    let rows = store.triages();
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].passed);
+    assert_eq!(rows[0].kind.as_deref(), Some("choice"));
+    assert!(rows[0].error_code.is_none());
+    assert!(
+        (1..=2_800).contains(&rows[0].input_chars),
+        "{}",
+        rows[0].input_chars
+    );
+    assert_eq!(store.assessments()[0].outcome, AssessmentOutcome::Ok);
+}
+
+#[test]
+fn triage_a_routine_turn_ends_empty_and_costs_one_row() {
+    let extractor = Triaging::says(false, TriageKind::None);
+    let (store, result) = run_with("real-merge-push.json", &extractor);
+    result.expect("extraction runs");
+    assert_eq!(extractor.triaged.get(), 1);
+    assert_eq!(extractor.extracted.get(), 0);
+    assert_eq!(store.assessments()[0].outcome, AssessmentOutcome::Empty);
+    let rows = store.triages();
+    assert_eq!(rows.len(), 1);
+    assert!(!rows[0].passed);
+    assert_eq!(rows[0].kind.as_deref(), Some("none"));
+}
+
+#[test]
+fn triage_without_a_triaging_extractor_ends_empty() {
+    let (store, result) = run_with("real-option-pick.json", &FakeCandidateExtractor);
+    result.expect("extraction runs");
+    assert_eq!(store.assessments()[0].outcome, AssessmentOutcome::Empty);
+    assert!(store.triages().is_empty());
+}
+
+#[test]
+fn triage_failures_defer_or_fail_closed_and_visibly() {
+    let deferred = Triaging::new(Err(ExtractError::Unavailable { attempts: 1 }));
+    let (store, result) = run_with("real-option-pick.json", &deferred);
+    assert!(result.expect_err("deferred").is_deferred());
+    assert!(store.assessments().is_empty());
+    assert!(store.triages().is_empty());
+
+    let unreadable = Triaging::new(Err(ExtractError::Validation("triagem ilegivel".into())));
+    let (store, result) = run_with("real-option-pick.json", &unreadable);
+    assert!(result.is_err());
+    assert_eq!(unreadable.extracted.get(), 0);
+    let assessment = &store.assessments()[0];
+    assert_eq!(assessment.outcome, AssessmentOutcome::Failed);
+    assert_eq!(assessment.error_code.as_deref(), Some("validation"));
+    let rows = store.triages();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].error_code.as_deref(), Some("validation"));
+    assert!(!rows[0].passed);
+    println!("gate triage plumbing cases=6");
 }

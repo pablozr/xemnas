@@ -70,6 +70,13 @@ impl<
         self.extractor
             .extract_authorized(input, signals, background, &self.authorization())
     }
+    fn triage(
+        &self,
+        input: &crate::extract::TriageInput,
+    ) -> Result<Option<crate::extract::TriageVerdict>, crate::extract::ExtractError> {
+        self.extractor
+            .triage_authorized(input, &self.authorization())
+    }
 }
 
 impl<
