@@ -15,6 +15,9 @@ use super::worktree::Worktrees;
 /// Maximum UTF-8 bytes of one artifact content.
 pub const MAX_ARTIFACT_BYTES: usize = 64 * 1024;
 
+/// `metadata.source` of a `user_text` that is the answer to an `AskUserQuestion`.
+const ASK_USER_QUESTION_SOURCE: &str = "ask_user_question";
+
 /// Maximum artifacts per envelope.
 pub const MAX_ARTIFACTS: usize = 64;
 
@@ -49,6 +52,17 @@ pub fn build_envelope(
         cleaned(&turn.user_text, MAX_ARTIFACT_BYTES),
         Map::new(),
     );
+    // The user's choice among options the assistant offered is their word,
+    // even though the transcript carries it as a tool result.
+    for answer in &turn.answers {
+        let mut metadata = Map::new();
+        metadata.insert("source".to_string(), json!(ASK_USER_QUESTION_SOURCE));
+        keep(
+            ArtifactKind::UserText,
+            cleaned(answer, MAX_ARTIFACT_BYTES),
+            metadata,
+        );
+    }
     keep(
         ArtifactKind::AssistantText,
         cleaned(&turn.assistant_texts.join("\n"), MAX_ARTIFACT_BYTES),
@@ -273,6 +287,21 @@ mod tests {
         assert_eq!(envelope.source.adapter, "claude-code");
         assert_eq!(envelope.source.message_id, "p1");
         assert!(envelope.idempotency_key.starts_with("claude-code:s1:p1:"));
+    }
+
+    #[test]
+    fn an_answer_to_a_question_is_a_user_text_with_its_source() {
+        let mut asked = turn();
+        asked.answers = vec!["question: Qual?\nanswer: A".to_string()];
+        let envelope = build(&asked).expect("envelope");
+        assert_eq!(
+            kinds(&envelope)[..3],
+            ["user_text", "user_text", "assistant_text"]
+        );
+        let answer = &envelope.artifacts[1];
+        assert_eq!(answer.content, "question: Qual?\nanswer: A");
+        assert_eq!(answer.metadata["source"], json!("ask_user_question"));
+        assert!(envelope.artifacts[0].metadata.is_empty());
     }
 
     #[test]

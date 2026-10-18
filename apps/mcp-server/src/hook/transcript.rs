@@ -20,6 +20,9 @@ const FILE_TOOLS: [&str; 5] = ["Edit", "Write", "MultiEdit", "NotebookEdit", "Re
 /// Echoes of slash commands, which are not user prompts.
 const COMMAND_PREFIXES: [&str; 3] = ["<command-name>", "<local-command-", "<command-message>"];
 
+/// Longest answer to an `AskUserQuestion` kept, in characters.
+const MAX_ANSWER_CHARS: usize = 2_000;
+
 /// Longest prompt (chars, trimmed) of a trivial turn: "ok", "pode seguir", a quick question.
 pub const TRIVIAL_PROMPT_CHARS: usize = 80;
 
@@ -61,6 +64,9 @@ pub struct Turn {
     pub tools: Vec<ToolCall>,
     /// File changes, in order.
     pub edits: Vec<FileEdit>,
+    /// What the user answered to the questions the assistant asked with
+    /// `AskUserQuestion`, one entry per question: where they chose.
+    pub answers: Vec<String>,
 }
 
 impl Turn {
@@ -76,6 +82,7 @@ impl Turn {
     /// Appends `other`'s prompt and answer after this turn's, separated by a
     /// blank line. The identity (uuid, offset) stays this turn's.
     pub fn fold(&mut self, other: &Turn) {
+        self.answers.extend(other.answers.iter().cloned());
         if !other.user_text.trim().is_empty() {
             if !self.user_text.trim().is_empty() {
                 self.user_text.push_str("\n\n");
@@ -235,6 +242,53 @@ fn add_results(turn: &mut Turn, entry: &Value) {
     if let Some(edit) = edit_of(&entry["toolUseResult"]) {
         turn.edits.push(edit);
     }
+    turn.answers.extend(answers_of(&entry["toolUseResult"]));
+}
+
+/// The answers in the `toolUseResult` of an `AskUserQuestion`: `answers` maps
+/// each question to the label (or free text) the user picked and `questions`
+/// carries the options. Each becomes the question, the choice with its
+/// description and the options left out, so the extractor sees what was
+/// weighed.
+fn answers_of(result: &Value) -> Vec<String> {
+    let Some(answers) = result["answers"].as_object() else {
+        return Vec::new();
+    };
+    let questions = result["questions"].as_array();
+    let mut entries = Vec::new();
+    for (question, answer) in answers {
+        let Some(answer) = answer.as_str().filter(|answer| !answer.trim().is_empty()) else {
+            continue;
+        };
+        let options: &[Value] = questions
+            .into_iter()
+            .flatten()
+            .find(|candidate| candidate["question"].as_str() == Some(question))
+            .and_then(|candidate| candidate["options"].as_array())
+            .map_or(&[], Vec::as_slice);
+        let chosen = options
+            .iter()
+            .find(|option| option["label"].as_str() == Some(answer));
+        let mut entry = format!("question: {question}\nanswer: {answer}");
+        if let Some(description) = chosen
+            .and_then(|option| option["description"].as_str())
+            .filter(|description| !description.is_empty())
+        {
+            entry.push_str(" \u{2014} ");
+            entry.push_str(description);
+        }
+        let left: Vec<&str> = options
+            .iter()
+            .filter_map(|option| option["label"].as_str())
+            .filter(|label| *label != answer)
+            .collect();
+        if !left.is_empty() {
+            entry.push_str("\nnot chosen: ");
+            entry.push_str(&left.join("; "));
+        }
+        entries.push(entry.chars().take(MAX_ANSWER_CHARS).collect());
+    }
+    entries
 }
 
 /// The change in a `toolUseResult`: its `structuredPatch`, or for a `Write`
@@ -348,6 +402,54 @@ mod tests {
             assistant_texts: vec![answer.to_string()],
             ..Turn::default()
         }
+    }
+
+    #[test]
+    fn the_answer_to_an_ask_user_question_is_read_from_the_tool_result() {
+        let path = std::env::temp_dir().join(format!("xemnas-ask-{}.jsonl", std::process::id()));
+        let lines = [
+            json!({ "type": "user", "uuid": "p1", "message": { "content": "planeja" } }),
+            json!({ "type": "assistant", "message": { "content": [
+                { "type": "tool_use", "id": "q1", "name": "AskUserQuestion", "input": {} }
+            ] } }),
+            json!({ "type": "user", "uuid": "r1", "message": { "content": [
+                { "type": "tool_result", "tool_use_id": "q1", "content": "Your questions have been answered" }
+            ] }, "toolUseResult": {
+                "questions": [{ "question": "Qual cache?", "header": "Cache", "multiSelect": false,
+                    "options": [
+                        { "label": "Redis", "description": "rapido, exige servico" },
+                        { "label": "Memoria", "description": "simples" },
+                        { "label": "Disco", "description": "lento" }
+                    ] }],
+                "answers": { "Qual cache?": "Redis" }
+            } }),
+        ];
+        let text: Vec<String> = lines.iter().map(Value::to_string).collect();
+        std::fs::write(&path, text.join("\n") + "\n").expect("write");
+
+        let scan = scan(&path, 0, 8).expect("scan");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(scan.turns.len(), 1);
+        assert_eq!(
+            scan.turns[0].answers,
+            ["question: Qual cache?\nanswer: Redis \u{2014} rapido, exige servico\nnot chosen: Memoria; Disco"]
+        );
+        let mut folded = turn("a", "b");
+        folded.fold(&scan.turns[0]);
+        assert_eq!(folded.answers.len(), 1);
+    }
+
+    #[test]
+    fn a_free_text_answer_has_no_option_to_describe() {
+        let result = json!({
+            "questions": [{ "question": "Qual?", "options": [{ "label": "A", "description": "d" }] }],
+            "answers": { "Qual?": "outra coisa", "Vazia?": " " }
+        });
+        assert_eq!(
+            answers_of(&result),
+            ["question: Qual?\nanswer: outra coisa\nnot chosen: A"]
+        );
+        assert!(answers_of(&json!({ "filePath": "a.rs" })).is_empty());
     }
 
     #[test]
