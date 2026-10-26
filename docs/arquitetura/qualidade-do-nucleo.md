@@ -24,7 +24,9 @@ Control bloqueia o hash (o comportamento é o mesmo; só o hash muda) e imprime 
 | Seleção de contexto, calibração | `storage-sqlite/tests/context_corpus.rs` (`calibration_v5_quality_gate`), corpus v5: 30 famílias escritas às cegas, 8 negativas de mesmo vocabulário | as mesmas | precisão ≥ 0,41; cobertura ≥ 0,43; contaminados ≤ 15 de 24; p95 ≤ 20 ms; aqui se ajusta, o v4 continua selado | 0,41 / 0,43 / 15 de 24; com a política de injeção de regras: 0,41 (0,4133) / 0,43 / 15 de 24 (a política antiga daria 0,02 / 0,43 / 24 de 24 com as 15 regras sem escopo); sem a convenção sem escopo como global (07/10/2026): 0,41 (0,4133) / 0,43 (0,4306) / 15 de 24, igual |
 | Seleção de contexto em escala | `storage-sqlite/tests/context_scale.rs` (`rule_ranking_scales_to_a_large_project`, ignorado no `cargo test`): 2.120 regras sobre 60 componentes, 20 deles com 100 regras ligadas; 300 tarefas que tocam um componente grande pelo arquivo | p95 de `build_pack` | p95 ≤ 100 ms | antes (07/10/2026, sem o ranqueamento; o grafo e as claims carregados mais de uma vez por pacote): p50 83 ms, p95 138 ms; com uma carga do grafo por pacote e no máximo `MAX_TIED_RULES` (3) regras ligadas: p50 28 ms, p95 32 ms no `core-quality.py` (39 a 46 / 61 a 83 ms com a máquina carregada). Não medido: onde vai o resto do tempo (busca FTS e carga do snapshot) |
 | Ligações por menção | `application/src/graph/mention.rs` (`mention_quality_gate`, `mention_matching_scales_to_a_large_project`) | precisão e cobertura em textos rotulados, incluindo o corpus de pacotes com apelidos derivados (com negativos de mesmo vocabulário) e casos de negação (en e pt), listas coordenadas, pseudo-gatilhos e nome dentro de outro caminho; tempo para 2.000 decisões × 60 partes | precisão ≥ 0,95; cobertura afirmada ≥ 0,95; cobertura com o juiz = 1,0; duvidosas ≤ 6; ≤ 3 s | 0,956 (43/45); 1,0; 0,9 s (07/10/2026, com negação, lista e segmento de caminho; antes 0,90 (27/30); 1,0; 1,1 s); 09/10/2026, com palavras de polaridade de es/fr/de/it e o "no" do português: o léxico só decide o inequívoco em en/pt e qualquer outro gatilho levanta dúvida (não afirmada, vai ao juiz). Antes, com o léxico decidindo: 0,889 (48/54); 1,0; 0,5 s. Depois: 0,958 (46/48); 0,958 afirmada e 1,0 com o juiz; 6 duvidosas (2 certas); 0,5 s |
-| Filtro de relevância | `application/tests/relevance_corpus.rs` (`relevance_quality_gate`, `relevance_filter_latency`), 34 casos inline + 24 fixtures de `tests/fixtures/extraction` | cobertura das capturas que devem chegar ao extrator, passagens falsas (chamadas de IA desperdiçadas) e tempo de `filter_relevant` para 2.000 capturas | cobertura ≥ 1,0; passagens falsas = 0; ≤ 800 ms | 14/10/2026, antes de a mudança de rumo do usuário contar como sinal: 0,235 (4/17); 0 de 23; 191 ms. Depois: 1,000 (18/18); 0 de 23; 219 ms. Verbos operacionais soltos ("prioriza", "abandon") viram pista, com 2 negativos novos: 0 de 25; 226 ms. Pistas só somam dentro de uma mensagem, com 1 negativo novo (duas mensagens com uma pista cada): 0 de 26; 214 ms. Mensagem do harness (`<task-notification>`, `<system-reminder>`, `/compact`) deixa de contar como fala do usuário, com 1 negativo inline, 7 fixtures reais (JevGuard e cloudrs, caminhos e e-mails mascarados) e 1 positiva sintética (harness em `user_text` não veta o diff de migração). Antes: 1 passagem falsa em 27 (a notificação com frase de rumo). Depois: 1,000 (19/19); 0 de 34; 327 ms. Escolha do usuário entre opções (`user_picks_option`) e edição de documento normativo, que furam os vetos: antes, com os 4 positivos e 1 negativo novos: 0,826 (19/23); 0 de 35; 227 ms. Depois: 1,000 (23/23); 0 de 35; 326 ms. Replay sobre a cópia do banco (81 capturas `Empty`, `relevance_replay`): passam 1 → 7 (a 1 já chegava ao modelo), 8.144 → 31.350 caracteres de artefatos (≈ 7,8 mil tokens, +5,8 mil) em 7 chamadas (+6). A regra de ordinal em palavras livres saiu (a escolha falada fica para a triagem do turno; `real-option-pick.json` deixa o portão): 1,000 (22/22); 0 de 35; 262 ms; replay 6 de 81, 26.993 caracteres (≈ 6,7 mil tokens) |
+| Relevância (estrutura e triagem do turno) | `application/tests/relevance_corpus.rs` (`relevance_quality_gate`, `relevance_filter_latency`), 64 capturas rotuladas: casos inline de `fixtures/relevance_cases.rs` + fixtures de `tests/fixtures/extraction` | cobertura, passagens falsas por estrutura, harness triado, chamadas de triagem e caracteres por chamada, tempo de `assess_relevance` para 2.000 capturas | cobertura ≥ 1,0; falsas = 0; harness = 0; triagens ≤ 50; ≤ 2.800 caracteres por chamada; ≤ 800 ms | 14/10/2026, antes de a mudança de rumo do usuário contar como sinal: 0,235 (4/17); 0 de 23; 191 ms. Depois: 1,000 (18/18); 0 de 23; 219 ms. Verbos operacionais soltos ("prioriza", "abandon") viram pista, com 2 negativos novos: 0 de 25; 226 ms. Pistas só somam dentro de uma mensagem, com 1 negativo novo (duas mensagens com uma pista cada): 0 de 26; 214 ms. Mensagem do harness (`<task-notification>`, `<system-reminder>`, `/compact`) deixa de contar como fala do usuário, com 1 negativo inline, 7 fixtures reais (JevGuard e cloudrs, caminhos e e-mails mascarados) e 1 positiva sintética (harness em `user_text` não veta o diff de migração). Antes: 1 passagem falsa em 27 (a notificação com frase de rumo). Depois: 1,000 (19/19); 0 de 34; 327 ms. Escolha do usuário entre opções (`user_picks_option`) e edição de documento normativo, que furam os vetos: antes, com os 4 positivos e 1 negativo novos: 0,826 (19/23); 0 de 35; 227 ms. Depois: 1,000 (23/23); 0 de 35; 326 ms. Replay sobre a cópia do banco (81 capturas `Empty`, `relevance_replay`): passam 1 → 7 (a 1 já chegava ao modelo), 8.144 → 31.350 caracteres de artefatos (≈ 7,8 mil tokens, +5,8 mil) em 7 chamadas (+6). A regra de ordinal em palavras livres saiu (a escolha falada fica para a triagem do turno; `real-option-pick.json` deixa o portão): 1,000 (22/22); 0 de 35; 262 ms; replay 6 de 81, 26.993 caracteres (≈ 6,7 mil tokens). 18/10/2026, estrutura decide e a fala vai à triagem do turno (d3efa58): 1,000 (29/29); 0 de 35; harness 0; 50 de 64 triadas; máx. 1.318 caracteres por chamada (33.233 no total); 198 ms. Replay (26/10, 116 capturas de 07 a 18/10): pass 10, triage 68 (≈ 21,3 mil tokens), empty 38, 3 em risco |
+| Triagem do turno (encanamento) | `application/tests/extraction.rs` (`triage_*`; entrada `turn triage` do `core-quality.py`) e `ai-provider/tests/extractor.rs` (`triage_sends_the_prompt_and_only_the_turn_text`) | estrutura vai direto; harness nunca chega; escolha em palavras livres chega e grava a linha; turno rotineiro termina vazio com uma linha; offline termina vazio; falhas adiam ou fecham com código | todos passam | 8/8 em `cargo test -p application --test extraction triage_` |
+| Triagem do turno, acerto ao vivo | `ai-provider/tests/triage_live.rs` (ignorado; `XEMNAS_LIVE_TRIAGE=1`) | decisões reconhecidas e não-decisões barradas, chamadas, caracteres | relatório; o piso vem depois da primeira rodada | não medido: exige a autorização do usuário (50 chamadas, ≈ 33 mil caracteres) |
 | Entrega de contexto (injeção) | `storage-sqlite/tests/injection_corpus.rs` (`injection_quality_gate`, `injection_latency_gate`): reproduz o dogfood do JevGuard e roda o `prepare` real com SQLite: decisão, regra global e um `package.json` raiz com 4 observações; sessão de 7 turnos (pedido de cache, duas `<task-notification>`, pedidos sem relação com o manifest, um que cita o `vitest`, um que cita o `package.json`); 50 sessões para o tempo | `filler` (bloco sem nada do que o turno pedia), `harness` (bloco ou linha de `context_injections` para prompt sintético), cobertura do que cada turno pedia, média de tokens por bloco e p95 de `prepare` | filler = 0; harness = 0; cobertura = 4/4; média ≤ 75 tokens; p95 ≤ 20 ms | antes (14/10/2026): filler 3, harness 1, cobertura 2/4, média 217 tokens (4 blocos, 870 tokens); p95 3,1 ms. Depois: 0, 0, 4/4, média 79 tokens (3 blocos, 237 tokens); p95 2,2 a 2,6 ms. Qualificadores como texto simples na linha compacta (14/10/2026): média 74 tokens (3 blocos, 223 tokens). Portão de densidade `compact_density_gate` (pack no formato do dogfood, 16 decisões e 53 regras, qualificadores com id de artefato): antes 2 itens de 478 caracteres nos 300 tokens, depois 3 itens de 350 caracteres; piso ≥ 3 itens e ≤ 360 caracteres por item; nenhuma linha leva `artifact_id`, `qualifiers:` nem id de artefato |
 | Reconciliação de observações | `storage-sqlite/tests/observation_reconcile.rs` (`reconcile_idle_gate`, `reconcile_tick_latency_gate`): projeto parado com `package.json` real em disco, 60 voltas do reconciliador (uma por minuto), depois manifest reescrito e `Cargo.toml` novo; 64 projetos com 3 manifests e 50 voltas para o custo | jobs `refresh_observations` e geração criados em voltas sem mudança, refresh por manifest alterado, p95 da volta sobre 64 projetos | voltas paradas depois da primeira = 0 jobs e 0 geração; manifest alterado = exatamente 1 refresh; p95 ≤ 100 ms | antes (14/10/2026, banco real): 120 jobs por hora com 2 projetos parados (60 de 60 voltas agendavam, inclusive em horas sem uso). Depois: `gate reconcile idle_ticks=60 jobs=1 generation_delta=1` (só a primeira volta depois de abrir o app agenda; as outras 59 agendam 0); `latency reconcile_tick p50=13,6 ms p95=20,0 ms` para 64 projetos |
 | Vigia de documentos | `storage-sqlite/tests/document_watch.rs` (`document_watch_gate`, `document_watch_tick_latency_gate`): projeto com ADR central já indexado, 60 voltas paradas, depois ADR editado, 3 edições em 3 voltas, ADR novo, edição em pasta `archive-*` e projeto nunca indexado; 64 projetos com 40 documentos e 50 voltas para o custo | jobs `analyze_document` e recibos criados em voltas sem mudança, jobs por edição, rajada, arquivo novo, arquivado e projeto sem índice, p95 da volta sobre 64 projetos | voltas paradas = 0 jobs e 0 recibos; ADR editado = exatamente 1 job (depois de 1 volta de espera); 3 edições seguidas = 1; arquivado e não indexado = 0; p95 ≤ 500 ms | antes (17/10/2026): documento editado, inclusive por subagente, só chegava à Revisão se alguém atualizasse o overview. Depois: `gate document_watch idle_ticks=60 jobs=0 edited_jobs=1 burst_jobs=1 new_jobs=1 archived_jobs=0 unindexed_jobs=0`; `latency document_watch_tick p50=60,5 ms p95=72,2 ms` para 64 projetos de 40 documentos (2.560 arquivos listados, nenhum aberto; em 4 execuções, p95 de 72 a 221 ms: a listagem depende do sistema de arquivos e oscila, por isso o teto de 500 ms); a volta de assentamento (reler a pasta e calcular o hash dos 2.560 arquivos) leva ≈ 485 ms nos 64, e só roda depois de uma mudança |
@@ -137,47 +139,73 @@ Medido na execução ponta a ponta sobre um projeto real
 ([operação](../operacao/operacao-e-referencia.md#execução-ponta-a-ponta-sobre-um-projeto-real)):
 antes, 5 de 30 documentos falharam com `qualificador sem citação literal verificável`.
 
-## Filtro de relevância
+## Relevância: estrutura e triagem do turno
 
-`filter_relevant` (`extract/relevance.rs`) decide, sem IA, se uma captura vai ao extrator:
-sem sinal de escolha durável, ela termina `Empty` e não custa chamada. Antes de procurar
-sinais ele aplica vetos (diff só de teste, marcador trivial como `lint` ou `rename`, falta
-de linguagem de escolha quando não há diff).
+`assess_relevance` (`extract/relevance.rs`) decide o destino de cada captura: `Pass`,
+`Triage` ou `Empty`.
 
-Regra do `changes_course`: só a fala do usuário (`user_text`) conta. Uma frase firme
-(`COURSE_CHANGE`: "de lado", "a partir de agora", "adia", "from now on") ou duas pistas
-distintas na mesma mensagem do usuário (`COURSE_CHANGE_HINTS`: "prioriza", "por enquanto",
-"seguir pra", "foca em", "troca pra") bastam; pistas de mensagens diferentes não se somam. O texto é comparado como palavra inteira, com acentos dobrados e sem correção de
-digitação. A regra fura os vetos de diff só de teste, de marcador trivial e de falta de
-linguagem de escolha, e nesse caso o único sinal é `changes_course`, para que termos
-incidentais do assistente não virem rótulos.
+- **`Pass`, só por estrutura** (`filter_relevant`): DDL ou segurança em linha adicionada de
+  código de produção; dependência nova; edição com linha adicionada em documento normativo
+  (ADR, spec, `AGENTS.md`, `CLAUDE.md`, fora de pasta de arquivo); `AskUserQuestion`
+  respondida; ou documento. Vai direto ao extrator, sem IA no caminho.
+- **`Triage`**: o usuário falou e nada estrutural aconteceu. A triagem do turno
+  (`extract/triage.rs`) é uma chamada mínima: `TRIAGE_PROMPT` e um schema estrito
+  `{decision, kind}` com `kind` em `choice|rejection|priority|course_change|none`. Leva no
+  máximo `TRIAGE_USER_CHARS` (1.500) caracteres da fala, sem lembretes do harness nem bloco de
+  contexto, e os últimos `TRIAGE_ASSISTANT_CHARS` (600) do assistente. Fala com menos de 3
+  caracteres alfanuméricos (`MIN_SPEECH_ALNUM`) não chama. Um veredito positivo vira o único
+  sinal do extrator (`choice` → `user_picks_option`, `rejection` → `rejects_alternative`,
+  `priority` e `course_change` → `changes_course`); o negativo termina `Empty`.
+- **`Empty`**: o resto, inclusive um turno com documento e sem estrutura.
+- Com o extrator offline, o que iria à triagem termina `Empty`.
 
-Mensagem do harness não é fala do usuário: o filtro usa `injection::is_harness_prompt`, a mesma
+Falhas: 429 ou timeout adiam o job; outra falha fecha a avaliação como `Failed`, com o código
+gravado.
+
+Sem listas de frases. Os exemplos antigos ("de lado", "a partir de agora", "adia", "o 1
+funciona, mas o 2 não pq") viraram casos do conjunto
+`application/tests/fixtures/relevance_cases.rs`, compartilhado pelo portão, pelos testes
+`triage_*` e pelo teste ao vivo.
+
+Mensagem do harness não é fala do usuário: a triagem usa `injection::is_harness_prompt`, a mesma
 fonte do hook de contexto (`<task-notification>`, `<command-name>`, `<command-message>`,
 `<local-command-`, `<user-prompt-submit-hook>`, `<system-reminder>…</system-reminder>` no início), e também
-ignora o `/comando` solto (uma barra e uma palavra). Isso vale só para os sinais de fala do
-usuário; diff, documentos e sinais estruturais continuam iguais.
+ignora o `/comando` solto (uma barra e uma palavra). O portão exige `harness_triaged = 0`
+(`NEVER_TRIAGED`). Diff, documentos e sinais estruturais continuam iguais.
 
-Regra do `user_picks_option` (sinal forte, fura os vetos como o `changes_course`): vale quando (a) um
-`tool_summary` de `AskUserQuestion` terminou `ok`; (b) um `user_text` tem `metadata.source =
-"ask_user_question"` (a resposta que o adaptador lê do transcript). Só estrutura: a escolha
-feita em palavras livres ("o 1 funciona, mas o 2 não pq…") não é decidida por lista de frases;
-fica para a triagem do turno, e `real-option-pick.json` fica fora do portão como caso de
-avaliação dela. Documento normativo (ADR, spec,
-`AGENTS.md`, `CLAUDE.md`, fora de pasta de arquivo) com linha adicionada no `diff_hunk` vale como
-`conditions_future_work` e também fura os vetos: o relatório do assistente ("`pnpm lint`") não o
-descarta mais.
+Registro: cada chamada vira uma linha em `turn_triages` (migração 0052): `kind`, `passed`,
+modelo, caracteres enviados e `error_code`, nunca o texto.
 
-Lacunas: a decisão no fim do turno anterior do assistente; o caso sem rótulo ("faz o outro");
-listas numeradas do usuário como plano; edições feitas por subagentes, que o hook Stop não vê
-(só o transcript principal) e por isso só chegam pelo vigia de documentos. Falso positivo
-conhecido: "o 1 e o 2 não compilam, mas o 3 sim".
+Replay (`storage-sqlite/tests/relevance_replay.rs`, ignorado, `XEMNAS_REPLAY_DB`, recusa o
+banco vivo, sem IA). Sobre uma cópia do banco real, com 116 capturas de 07 a 18/10: pass 10,
+triage 68 (≈ 85 mil caracteres, ≈ 21,3 mil tokens de entrada), empty 38. Ficam 3 em risco: 2
+ainda vão à triagem; 1 é um `<task-notification>` de subagente, texto do harness por design
+(b417bf9).
 
-Lacuna conhecida: "pode ser" e outras confirmações curtas ficam fora, porque a decisão
-está no turno anterior; pegá-las exigiria passar todo "ok/sim" e ler o texto do assistente.
+Teste ao vivo (`ai-provider/tests/triage_live.rs`). Só roda com autorização do usuário:
+`#[ignore]` mais `XEMNAS_LIVE_TRIAGE=1`, com o perfil vivo.
+
+```powershell
+$env:XEMNAS_LIVE_TRIAGE = "1"
+cargo test --locked -p ai-provider --test triage_live -- --ignored --nocapture
+```
+
+Custo por rodada: 50 chamadas, ≈ 33,2 mil caracteres (≈ 8,3 mil tokens). A saída traz
+`recognized` (decisões rotuladas reconhecidas), `barred` (não-decisões barradas), chamadas,
+caracteres e erros por código; só nomes de caso e números, nunca a fala. Um 429 para a rodada
+e o resultado sai parcial. Não medido ainda: o piso vem depois da primeira rodada autorizada.
+
+Lacunas: a decisão no fim do turno anterior do assistente; "pode ser", "ok" e outras
+confirmações curtas, porque a decisão está no turno anterior (pegá-las exigiria passar todo
+"ok/sim" e ler o texto do assistente); edições feitas por subagentes, que o hook Stop não vê
+(só o transcript principal) e por isso só chegam pelo vigia de documentos.
 
 Caso real de 13/10: 18 de 27 capturas de um projeto saíram `Empty`; o extrator achou
 candidatos em 3 de 9 sem ruído. Uma delas era a fala "vamos deixar o v2 de lado" num turno
-que só mexeu em testes. Medido no portão: cobertura 0,235 → 1,000, passagens falsas 0 → 0
-e 191 → 219 ms para 2.000 capturas. Não medido: se o extrator, com o prompt atual, propõe a
-mudança de rumo como decisão (exige chamar o provedor).
+que só mexeu em testes. Não medido: se o extrator, com o prompt atual, propõe a mudança de
+rumo como decisão (exige chamar o provedor).
+
+### Pendências (decisão do usuário)
+
+Não implementadas: limite diário de triagens; modelo mais barato só para a triagem; coluna
+"Triagens" em `tools/dogfood-report.py`.

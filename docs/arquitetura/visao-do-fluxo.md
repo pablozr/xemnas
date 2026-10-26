@@ -7,7 +7,7 @@ número que a mede. O detalhe fica no documento citado; em caso de divergência,
 
 ```mermaid
 flowchart LR
-    A[Captura<br/>hooks e plugin] --> B[Filtro de relevância<br/>sem IA]
+    A[Captura<br/>hooks e plugin] --> B[Relevância<br/>estrutura ou triagem]
     B -- sem sinal --> X[Empty<br/>custo zero]
     B -- com sinal --> C[Extrator<br/>IA]
     C --> D[Revisão<br/>manual ou juiz IA]
@@ -28,7 +28,7 @@ flowchart LR
 | Etapa | O que faz | IA | Código | Regra | Medida |
 | --- | --- | --- | --- | --- | --- |
 | Captura | O `hook stop` do Claude Code e o plugin do OpenCode mandam o turno à API local; com o app fechado, à outbox. Segredos mascarados no adapter e no motor. | não | `apps/mcp-server/src/hook/`, `crates/application/src/captures.rs` | [contexto-e-agentes](contexto-e-agentes.md#hooks-do-claude-code) | dogfood: capturas, perdas |
-| Filtro de relevância | Decide se a captura vai ao extrator: vetos (diff só de teste, marcador trivial) e sinais de escolha durável; a mudança de rumo dita pelo usuário, a resposta a uma AskUserQuestion (`user_picks_option`) e a edição de ADR, spec, `AGENTS.md` ou `CLAUDE.md` furam os vetos; mensagens do harness (`<task-notification>`, `<system-reminder>`, `/compact`) não contam como fala do usuário. Sem sinal, termina `Empty`. | não | `crates/application/src/extract/relevance.rs` (`filter_relevant`) | [qualidade-do-nucleo](qualidade-do-nucleo.md#filtro-de-relevância) | portão `relevance filter`; dogfood: capturas × candidatos |
+| Relevância e triagem do turno | Estrutura (DDL, segurança, dependência, ADR/spec/`AGENTS.md`/`CLAUDE.md` editado, resposta a AskUserQuestion, documento) manda a captura ao extrator. Fala do usuário sem estrutura vai a uma triagem mínima de IA (`{decision, kind}`); só um sim chega ao extrator. Mensagens do harness não contam como fala. O resto termina `Empty`. | só na triagem | `crates/application/src/extract/relevance.rs` (`assess_relevance`) e `extract/triage.rs` | [qualidade-do-nucleo](qualidade-do-nucleo.md#relevância-estrutura-e-triagem-do-turno) | portões `relevance filter` e `turn triage`; replay; `turn_triages` |
 | Extrator | Lê a captura e propõe candidatos (decisão ou regra) com evidência literal, relevância, ressalvas (qualificadores) e componentes do mapa. | sim | `crates/application/src/extract/`, job `analyze_capture` | [ADR-0006](adr/0006-tipo-e-relevancia-dos-candidatos.md), [ADR-0010](adr/0010-qualificadores-e-fronteira-de-envio.md) | dogfood: candidatos, latência |
 | Revisão | Manual (padrão) ou automática: regras locais tiram repetições e um juiz de IA decide o resto em lote; o duvidoso volta para a pessoa. | só no automático | `crates/application/src/auto_approval.rs` | [ADR-0012](adr/0012-modo-automatico-e-autoridade.md) | portão `automatic review`; dogfood: confirmados, ruído, desfeitos |
 | Decisões, regras e mapa | O confirmado vira decisão versionada ou regra (claim); vínculos com componentes nascem de menção afirmativa e de sinais do repositório. | em lote, para vínculos, relações, regras e termos | `crates/application/src/graph/`, `claims` | [ADR-0014](adr/0014-regras-com-escopo-por-componente.md), [ADR-0016](adr/0016-vinculos-por-estrutura-e-mencao-afirmativa.md) | portões de vínculos |
@@ -41,17 +41,19 @@ flowchart LR
 
 ## Onde a IA custa
 
-Só quatro etapas chamam o provedor: extrator, juiz da revisão automática, sugestões em lote
-depois de uma adoção e roteador. Todas rodam em segundo plano, nunca no caminho do pedido do
-agente. O que corta custo antes delas: o filtro de relevância (captura sem sinal não chama
-IA), os lotes de até 10 decisões e o roteador só ver itens ambíguos.
+Cinco etapas chamam o provedor: a triagem do turno (uma chamada pequena, até 2.800 caracteres, só
+para fala sem estrutura), o extrator, o juiz da revisão automática, sugestões em lote depois de
+uma adoção e o roteador. Todas rodam em segundo plano, nunca no caminho do pedido do agente. O que
+corta custo: a estrutura decide sem IA e a triagem evita o extrator inteiro em turnos rotineiros;
+além disso, os lotes de até 10 decisões e o roteador só ver itens ambíguos. No replay sobre o
+banco real, 68 de 116 capturas (07 a 18/10) iriam à triagem, ≈ 21,3 mil tokens de entrada no total.
 
 ## Como ler o dogfood
 
 `python tools/dogfood-report.py` dá a tabela diária ([dogfood-log](../operacao/dogfood-log.md)).
 Um sintoma aponta para a etapa:
 
-- Muitas capturas e poucos candidatos: filtro de relevância.
+- Muitas capturas e poucos candidatos: relevância e triagem (`turn_triages`: chamadas, `passed`, `error_code`).
 - Ruído alto ou muitos desfeitos: extrator ou juiz da revisão.
 - Muitos omitidos por injeção: linha compacta e orçamento.
 - MCP em zero: o agente não pede mais contexto; a injeção é o único canal.
