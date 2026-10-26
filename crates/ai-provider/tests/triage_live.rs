@@ -20,6 +20,9 @@ use application::extract::{assess_relevance, triage_input_chars, CandidateExtrac
 use application::paths::AppPaths;
 use application::profile::{AiSettings, FileProfileStore};
 
+/// Calls after which a round where every call failed stops, sparing the rest.
+const FAIL_FAST_CALLS: usize = 3;
+
 #[test]
 #[ignore = "calls the live provider; requires explicit user authorization"]
 fn live_turn_triage_accuracy() {
@@ -87,10 +90,20 @@ fn live_turn_triage_accuracy() {
             }
             Ok(None) => panic!("the live provider must triage"),
             Err(error) => {
-                *errors.entry(error.code()).or_default() += 1;
-                println!("triage error: {name} code={}", error.code());
+                let seen = errors.entry(error.code()).or_default();
+                *seen += 1;
+                // The first message of each code names the cause; later ones repeat it.
+                if *seen == 1 {
+                    println!("triage error: {name} code={} message={error}", error.code());
+                } else {
+                    println!("triage error: {name} code={}", error.code());
+                }
                 if error.is_deferred() {
                     println!("provider paused; stopping");
+                    break;
+                }
+                if calls == FAIL_FAST_CALLS && errors.values().sum::<usize>() == calls {
+                    println!("the first {calls} calls failed; stopping");
                     break;
                 }
             }
@@ -106,4 +119,8 @@ fn live_turn_triage_accuracy() {
         barred as f64 / non_decisions.max(1) as f64,
     );
     assert!(calls > 0, "the evaluation set sends nothing to the triage");
+    assert!(
+        errors.values().sum::<usize>() < calls,
+        "every triage call failed: {errors:?}"
+    );
 }
