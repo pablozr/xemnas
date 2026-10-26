@@ -23,7 +23,7 @@ use application::profile::{AiSettings, FileProfileStore};
 /// Calls after which a round where every call failed stops, sparing the rest.
 const FAIL_FAST_CALLS: usize = 3;
 /// Share of the labelled non-decisions the triage must bar.
-const BARRED_FLOOR: f64 = 0.86;
+const BARRED_FLOOR: f64 = 0.96;
 
 #[test]
 #[ignore = "calls the live provider; requires explicit user authorization"]
@@ -125,7 +125,7 @@ fn live_turn_triage_accuracy() {
         errors.values().sum::<usize>() < calls,
         "every triage call failed: {errors:?}"
     );
-    // Floors of the first authorized round (2026-10-26, sonnet): 21/21 and 25/29.
+    // Floors of the authorized round of 2026-10-26 (sonnet, durable defined): 21/21, 28/29.
     assert_eq!(
         recognized, decisions,
         "the triage missed a labelled decision"
