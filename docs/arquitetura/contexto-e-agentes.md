@@ -122,6 +122,11 @@ imprimem nada em caso de erro (no máximo uma linha sanitizada no stderr).
     "vamos de X?" / "pode" ficar junto da proposta.
   - **Retenção do mais novo:** o grupo mais recente só sai quando existe um turno não
     trivial depois; uma captura enviada nunca é reenviada com mais conteúdo.
+  - **Resposta a `AskUserQuestion`:** o transcript guarda a escolha do usuário no `toolUseResult`
+    do `tool_result` (`answers` e as opções em `questions`). Cada resposta vira um `user_text` com
+    `metadata.source = "ask_user_question"` (pergunta, escolha com a descrição e as opções
+    deixadas de lado, até 2.000 caracteres), logo depois da fala do usuário; o filtro de
+    relevância a conta como `user_picks_option`.
   - **Ponto de retomada:** `<dados>/adapter/claude-code/<sessão>.json`.
 - **`hook session-end`** (`SessionEnd`): igual ao `stop`, mas envia tudo, inclusive o
   grupo retido.

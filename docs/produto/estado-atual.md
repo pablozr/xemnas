@@ -17,7 +17,7 @@ fechado, a captura espera numa outbox de arquivos e entra quando o app abre.
 
 **Análise.** Um job em segundo plano lê a captura e propõe candidatos: decisões e regras
 (uma regra vira claim). Detalhes de implementação são descartados. Cada candidato traz
-relevância, evidências e, quando há, ressalvas de alcance. O extrator padrão é offline. Uma captura só chega ao extrator quando um filtro local, sem IA, acha sinal de escolha durável; uma mudança de rumo dita pelo usuário (frases firmes como deixar algo de lado, adiar ou "a partir de agora" contam sozinhas; as mais leves, como priorizar, trocar ou focar, contam quando duas aparecem na mesma mensagem) conta como sinal mesmo num turno que só mexeu em testes. Fatos
+relevância, evidências e, quando há, ressalvas de alcance. O extrator padrão é offline. Uma captura chega direto ao extrator só por estrutura: migração ou segurança, dependência nova, edição de ADR, especificação, `AGENTS.md` ou `CLAUDE.md`, a resposta a uma pergunta do assistente (AskUserQuestion) ou um documento. Quando o usuário falou e nada disso aconteceu, uma triagem mínima de IA (só a fala e o fim da resposta do assistente) decide se há uma decisão durável, como uma escolha, uma alternativa recusada, uma prioridade ou uma mudança de rumo, inclusive num turno que só mexeu em testes; só então o extrator roda. Com o extrator offline, esses turnos ficam de fora. Mensagens do próprio Claude Code (notificações de subagente, `<system-reminder>`, `/compact`) não contam como fala do usuário. Fatos
 de manifests (`Cargo.toml`, `package.json`) viram observações descritivas locais, que nunca
 entram na fila de revisão. Documentação do projeto (README, ADRs, `docs/`) é indexada e pode
 gerar candidatos. O mapa do projeto existe desde a primeira análise: ao registrar o projeto
@@ -27,7 +27,8 @@ sugestões derivadas (o que a tela Mapa já fazia ao abrir). As sugestões de IA
 chamada ao provedor, e os vínculos vão antes do resto; um projeto de dezenas de decisões custa
 algumas chamadas por tipo em vez de uma por decisão. Uma análise de documento que falhou
 volta para a fila na próxima importação do arquivo, ou quando o app propõe documentos de novo
-(até 3 execuções no total por versão), e "Reprocessar" vale sempre. O motivo de uma falha
+(até 3 execuções no total por versão), e "Reprocessar" vale sempre. Documentos em pastas de arquivo (`archive`, `archive-*`, `arquivados`...) entram no índice, mas
+nunca são propostos à Revisão; só "Importar documento…" os aceita. Com o provedor ligado, um documento central editado (inclusive por um subagente) chega à Revisão em 1 a 2 minutos, sem atualizar o overview: o app confere a cada minuto, sem abrir arquivo, se algum documento do projeto mudou, espera uma volta e enfileira só os que mudaram; um projeto parado custa 0 jobs, e projeto nunca indexado fica de fora. O motivo de uma falha
 (só a mensagem do erro, limpa e com até 200 caracteres) fica guardado e aparece em
 Configurações → Diagnóstico, na lista de capturas.
 

@@ -4,7 +4,7 @@
 use application::captures::{
     CaptureCheckpointRecord, CaptureReceiptRecord, CaptureRepository, CaptureWrite,
 };
-use application::extract::{AssessmentOutcome, AssessmentRecord, AssessmentStore};
+use application::extract::{AssessmentOutcome, AssessmentRecord, AssessmentStore, TriageRecord};
 use application::jobs::{JobRecord, JobState, ANALYZE_CAPTURE_KIND};
 use application::projects::{ProjectRecord, ProjectRepository};
 use rusqlite::Connection;
@@ -261,5 +261,41 @@ fn deleting_a_capture_cascades_its_assessments() {
         "deleting a capture must cascade its assessments"
     );
 
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn turn_triages_are_recorded_with_their_cost_and_no_text() {
+    let root = temporary_directory("triage");
+    let store = SqliteStore::open(root.join("app.db")).expect("open store");
+    let row = |id: &str, kind: Option<&str>, passed: bool, chars: i64, error: Option<&str>| {
+        TriageRecord {
+            id: id.to_string(),
+            capture_id: "capture-1".to_string(),
+            job_id: None,
+            model: Some("model-1".to_string()),
+            called_at: "2026-01-01T00:00:00Z".to_string(),
+            kind: kind.map(str::to_string),
+            passed,
+            input_chars: chars,
+            error_code: error.map(str::to_string),
+        }
+    };
+    store
+        .record_triage(&row("t1", Some("choice"), true, 900, None))
+        .expect("first");
+    store
+        .record_triage(&row("t2", None, false, 600, Some("validation")))
+        .expect("second");
+
+    let connection = Connection::open(root.join("app.db")).expect("open raw connection");
+    let (calls, passed, chars): (i64, i64, i64) = connection
+        .query_row(
+            "SELECT COUNT(*), SUM(passed), SUM(input_chars) FROM turn_triages",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .expect("totals");
+    assert_eq!((calls, passed, chars), (2, 1, 1_500));
     let _ = std::fs::remove_dir_all(&root);
 }

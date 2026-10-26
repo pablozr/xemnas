@@ -10,6 +10,7 @@ use application::extract::{DecisionCandidateRecord, ExtractionStore};
 use application::inbox::{CandidateEdits, Inbox};
 use application::jobs::{JobRecord, JobState, ANALYZE_CAPTURE_KIND};
 use application::projects::{ProjectRecord, ProjectRepository};
+use rusqlite::Connection;
 use storage_sqlite::SqliteStore;
 
 /// A fresh store in a unique temporary directory.
@@ -248,4 +249,16 @@ pub fn batched_answer(answer: &str) -> String {
     };
     entry.insert("id".into(), "1".into());
     serde_json::json!({ "decisions": [entry] }).to_string()
+}
+
+/// A second connection to the test database, for checks outside the store.
+pub fn raw(test: &TestStore) -> Connection {
+    Connection::open(test.root.join("app.db")).expect("raw")
+}
+
+/// The single integer a `SELECT COUNT(*)`-like query returns.
+pub fn count(test: &TestStore, sql: &str) -> i64 {
+    raw(test)
+        .query_row(sql, [], |row| row.get(0))
+        .expect("count")
 }

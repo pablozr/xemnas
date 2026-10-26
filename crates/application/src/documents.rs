@@ -61,6 +61,7 @@ const MAX_HEADINGS: usize = 12;
 const EXCERPT_CHARS: usize = 600;
 
 mod digest;
+pub mod watch;
 
 pub use digest::{digest as digest_document, Digest, Verdict, DIGEST_CHARS};
 
@@ -275,14 +276,36 @@ where
     ///
     /// `project_not_found`, `folder_unavailable` or `storage`.
     pub fn index(&self, project_id: &str) -> Result<DocumentIndex, DocumentError> {
+        let previous = self.store.project_documents(project_id)?;
+        let (index, _) = self.reindex(project_id, previous)?;
+        self.prepare_map(project_id);
+        Ok(index)
+    }
+
+    /// The project's folder, as registered.
+    ///
+    /// # Errors
+    ///
+    /// `project_not_found` or `storage`.
+    pub fn location(&self, project_id: &str) -> Result<PathBuf, DocumentError> {
         let project = ProjectRepository::get(&self.store, project_id)
             .map_err(|error| DocumentError::Storage(error.to_string()))?
             .ok_or(DocumentError::ProjectNotFound)?;
-        let root = PathBuf::from(&project.location);
+        Ok(PathBuf::from(project.location))
+    }
+
+    /// Reads the folder again and replaces the index, without preparing the
+    /// map. `previous` is the stored index. Returns the index and the paths
+    /// that are new or whose content changed.
+    fn reindex(
+        &self,
+        project_id: &str,
+        previous: Vec<ProjectDocument>,
+    ) -> Result<(DocumentIndex, Vec<String>), DocumentError> {
+        let root = self.location(project_id)?;
         if !root.is_dir() {
             return Err(DocumentError::FolderUnavailable);
         }
-        let previous = self.store.project_documents(project_id)?;
         let (found, truncated) = scan(&root);
         let now = crate::clock::now_rfc3339();
         let documents: Vec<ProjectDocument> = found
@@ -303,26 +326,29 @@ where
             .collect();
         let mut documents = documents;
         documents.extend(imported);
-        let changed = documents
+        let changed: Vec<String> = documents
             .iter()
             .filter(|document| {
                 !previous
                     .iter()
                     .any(|old| old.path == document.path && old.fingerprint == document.fingerprint)
             })
-            .count();
+            .map(|document| document.path.clone())
+            .collect();
         let removed = previous
             .iter()
             .filter(|old| !documents.iter().any(|document| document.path == old.path))
             .count();
-        self.store.replace_documents(project_id, &documents)?;
-        self.prepare_map(project_id);
-        Ok(DocumentIndex {
+        if !changed.is_empty() || removed > 0 {
+            self.store.replace_documents(project_id, &documents)?;
+        }
+        let index = DocumentIndex {
             total: documents.len(),
-            changed,
+            changed: changed.len(),
             removed,
             truncated,
-        })
+        };
+        Ok((index, changed))
     }
 }
 
@@ -342,7 +368,30 @@ where
     ///
     /// `project_not_found` or `storage`.
     pub fn propose(&self, project_id: &str, limit: usize) -> Result<usize, DocumentError> {
-        self.propose_matching(project_id, limit, None)
+        self.propose_matching(project_id, limit, None, true)
+    }
+
+    /// Reads the folder of an already indexed project again and queues, like
+    /// [`Self::propose`], only the documents whose content changed since the
+    /// last read (new files included), never the backlog. A project that was
+    /// never indexed is left alone. Returns how many were queued.
+    ///
+    /// # Errors
+    ///
+    /// `project_not_found`, `folder_unavailable` or `storage`.
+    pub fn refresh_changed(&self, project_id: &str, limit: usize) -> Result<usize, DocumentError> {
+        let previous = self.store.project_documents(project_id)?;
+        if previous.is_empty() {
+            return Ok(0);
+        }
+        let (index, changed) = self.reindex(project_id, previous)?;
+        if changed.is_empty() {
+            if index.removed > 0 {
+                self.prepare_map(project_id);
+            }
+            return Ok(0);
+        }
+        self.propose_matching(project_id, limit, Some(&changed), true)
     }
 
     /// Imports one documentation file from the project folder or from a git
@@ -397,7 +446,8 @@ where
             documents.push(document.clone());
             self.store.replace_documents(project_id, &documents)?;
         }
-        let queued = self.propose_matching(project_id, 1, Some(&relative))? > 0;
+        let queued =
+            self.propose_matching(project_id, 1, Some(std::slice::from_ref(&relative)), false)? > 0;
         Ok(ImportedDocument { document, queued })
     }
 
@@ -405,19 +455,22 @@ where
         &self,
         project_id: &str,
         limit: usize,
-        only: Option<&str>,
+        only: Option<&[String]>,
+        automatic: bool,
     ) -> Result<usize, DocumentError> {
-        let project = ProjectRepository::get(&self.store, project_id)
-            .map_err(|error| DocumentError::Storage(error.to_string()))?
-            .ok_or(DocumentError::ProjectNotFound)?;
+        let root = self.location(project_id)?;
         self.prepare_map(project_id);
-        let root = PathBuf::from(&project.location);
         // What would be queued: new or changed documents that have central
         // parts, with only those parts. The rest never reaches Revisão.
         let mut candidates: Vec<(ProjectDocument, digest::Digest)> = Vec::new();
         let mut requeued = 0;
         for document in self.list(project_id)? {
-            if only.is_some_and(|path| path != document.path) {
+            if only.is_some_and(|paths| !paths.contains(&document.path)) {
+                continue;
+            }
+            // Archived material is history, not the project's current rules.
+            // A file the person imported by hand is still taken.
+            if automatic && is_archived_path(&document.path) {
                 continue;
             }
             let key = document_capture_key(project_id, &document);
@@ -429,7 +482,7 @@ where
             {
                 // Queued before. Only a failed analysis runs again: always
                 // when the person asked for this very file, else a few times.
-                let cap = only.is_none().then_some(MAX_AUTOMATIC_ATTEMPTS);
+                let cap = automatic.then_some(MAX_AUTOMATIC_ATTEMPTS);
                 if requeued < limit && self.store.requeue_failed_analysis(&key, cap)? {
                     requeued += 1;
                 }
@@ -470,7 +523,7 @@ where
             }
             let key = document_capture_key(project_id, &document);
             match self.store.insert_capture(&document_capture(
-                &project.location,
+                &root.to_string_lossy(),
                 &key,
                 &document,
                 digest,
@@ -482,6 +535,34 @@ where
         }
         Ok(queued)
     }
+}
+
+/// Whether a document sits in an archive folder (`archive`, `arquivados`,
+/// `archive-2026-10-14`...). Only folder segments count: a file named
+/// `archive.md` is an ordinary document.
+pub fn is_archived_path(path: &str) -> bool {
+    let normalized = domain::entities::normalize_path(path);
+    let mut segments: Vec<&str> = normalized.split('/').collect();
+    segments.pop();
+    segments.iter().any(|segment| {
+        [
+            "archive",
+            "archives",
+            "archived",
+            "arquivo",
+            "arquivados",
+            "arquivadas",
+        ]
+        .iter()
+        .any(|name| segment.eq_ignore_ascii_case(name))
+            || ["archive-", "archive_", "archived-", "archived_"]
+                .iter()
+                .any(|prefix| {
+                    segment
+                        .get(..prefix.len())
+                        .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+                })
+    })
 }
 
 /// One version of a document: project, path and content fingerprint.
@@ -554,11 +635,54 @@ fn capture_error(error: CaptureError) -> DocumentError {
 /// Documentation files under `root`: root files first, then documentation
 /// folders, in a stable order.
 pub fn scan(root: &Path) -> (Vec<(String, PathBuf)>, bool) {
-    let mut found = Vec::new();
+    let (found, truncated) = scan_stamped(root);
+    let found = found
+        .into_iter()
+        .map(|(relative, path, _)| (relative, path))
+        .collect();
+    (found, truncated)
+}
+
+/// Size and modification time of a file, as the folder listing reports them.
+pub(crate) type FileStamp = Option<(u64, std::time::SystemTime)>;
+
+/// A documentation file found by the walk: relative path, absolute path and stamp.
+type FoundDocument = (String, PathBuf, FileStamp);
+
+pub(crate) fn file_stamp(metadata: &std::fs::Metadata) -> FileStamp {
+    Some((metadata.len(), metadata.modified().ok()?))
+}
+
+/// A cheap digest of the documentation files under `root`: path, size and
+/// modification time of each, without opening any of them. It changes when a
+/// document is created, edited, renamed or removed (an edit that keeps the
+/// size within the same filesystem timestamp tick can escape it). Documents
+/// imported from outside the folder are not part of it.
+pub fn documentation_stamp(root: &Path) -> u64 {
+    let (found, _) = scan_stamped(root);
+    let mut hash = Fnv::new();
+    for (relative, _, stamp) in found {
+        hash.write(relative.as_bytes());
+        if let Some((len, modified)) = stamp {
+            let since_epoch = modified
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default();
+            hash.write(&len.to_le_bytes());
+            hash.write(&since_epoch.as_nanos().to_le_bytes());
+        }
+        hash.write(&[0]);
+    }
+    hash.finish()
+}
+
+fn scan_stamped(root: &Path) -> (Vec<FoundDocument>, bool) {
+    let mut found: Vec<FoundDocument> = Vec::new();
     for name in ROOT_DOCS {
         let path = root.join(name);
-        if path.is_file() {
-            found.push((name.to_string(), path));
+        if let Ok(metadata) = std::fs::metadata(&path) {
+            if metadata.is_file() {
+                found.push((name.to_string(), path, file_stamp(&metadata)));
+            }
         }
     }
     let mut truncated = false;
@@ -580,7 +704,7 @@ fn walk(
     folder: &Path,
     relative: &str,
     depth: usize,
-    found: &mut Vec<(String, PathBuf)>,
+    found: &mut Vec<FoundDocument>,
     truncated: &mut bool,
 ) {
     if depth > MAX_DEPTH || found.len() >= MAX_DOCUMENTS {
@@ -610,7 +734,11 @@ fn walk(
                 *truncated = true;
                 return;
             }
-            found.push((child, entry.path()));
+            let stamp = entry
+                .metadata()
+                .ok()
+                .and_then(|metadata| file_stamp(&metadata));
+            found.push((child, entry.path(), stamp));
         }
     }
 }
@@ -839,14 +967,31 @@ pub fn document_ref(path: &str) -> String {
     fingerprint(path.as_bytes())[..8].to_string()
 }
 
+/// FNV-1a 64, fed in pieces.
+struct Fnv(u64);
+
+impl Fnv {
+    fn new() -> Self {
+        Self(0xcbf2_9ce4_8422_2325)
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 ^= u64::from(*byte);
+            self.0 = self.0.wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
 /// FNV-1a 64 of the bytes, hex.
 fn fingerprint(bytes: &[u8]) -> String {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0100_0000_01b3);
-    }
-    format!("{hash:016x}")
+    let mut hash = Fnv::new();
+    hash.write(bytes);
+    format!("{:016x}", hash.finish())
 }
 
 #[cfg(test)]
@@ -862,6 +1007,25 @@ mod tests {
         assert!(!is_documentation_path("requirements.txt"));
         assert!(!is_documentation_path("crates/core/src/lib.rs"));
         assert!(!is_documentation_path("docs/build.rs"));
+    }
+
+    #[test]
+    fn archive_folders_are_archived_and_archive_files_are_not() {
+        for path in [
+            "docs/tasks/archive-opencode-v2-2026-10-14/x.md",
+            "docs/archive/a.md",
+            "docs/arquivados/b.md",
+            "Docs\\Archived_old\\c.md",
+        ] {
+            assert!(is_archived_path(path), "{path}");
+        }
+        for path in [
+            "docs/archive.md",
+            "docs/arquitetura/x.md",
+            "docs/archiver-design.md",
+        ] {
+            assert!(!is_archived_path(path), "{path}");
+        }
     }
 
     #[test]

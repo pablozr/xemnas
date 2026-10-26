@@ -31,16 +31,41 @@ const OPEN_TAG: &str =
 const CLOSE_TAG: &str = "</xemnas-context>";
 
 /// Openings of user messages the harness writes itself.
-const HARNESS_PROMPT_PREFIXES: &[&str] = &["<task-notification>"];
+const HARNESS_PROMPT_PREFIXES: &[&str] = &[
+    "<task-notification>",
+    "<command-name>",
+    "<command-message>",
+    "<local-command-",
+    "<user-prompt-submit-hook>",
+];
+
+const SYSTEM_REMINDER_OPEN: &str = "<system-reminder>";
+const SYSTEM_REMINDER_CLOSE: &str = "</system-reminder>";
 
 /// Whether `prompt` is a synthetic message and not something the user typed.
-/// Claude Code delivers the end of a background subagent as a user message;
-/// it carries no request, so it gets no context and records nothing.
+/// Claude Code delivers the end of a background subagent, a slash command and
+/// its output, and `<system-reminder>` blocks as user messages; they carry no
+/// request, so they get no context and record nothing. Reminder blocks at the
+/// start are skipped: what follows them, if anything, is the user's.
 pub(crate) fn is_harness_prompt(prompt: &str) -> bool {
-    let prompt = prompt.trim_start();
-    HARNESS_PROMPT_PREFIXES
-        .iter()
-        .any(|prefix| prompt.starts_with(prefix))
+    let rest = strip_leading_reminders(prompt);
+    rest.is_empty()
+        || HARNESS_PROMPT_PREFIXES
+            .iter()
+            .any(|prefix| rest.starts_with(prefix))
+}
+
+/// `prompt` without the `<system-reminder>` blocks at its start; an unclosed
+/// block swallows the rest.
+pub(crate) fn strip_leading_reminders(prompt: &str) -> &str {
+    let mut rest = prompt.trim_start();
+    while let Some(after) = rest.strip_prefix(SYSTEM_REMINDER_OPEN) {
+        let Some(end) = after.find(SYSTEM_REMINDER_CLOSE) else {
+            return "";
+        };
+        rest = after[end + SYSTEM_REMINDER_CLOSE.len()..].trim_start();
+    }
+    rest
 }
 
 /// Kind of item a compact line cites.
@@ -1237,6 +1262,17 @@ mod tests {
             "  <task-notification><status>completed</status></task-notification>"
         ));
         assert!(!is_harness_prompt("veja <task-notification>"));
+        assert!(is_harness_prompt("<command-name>/compact</command-name>"));
+        assert!(is_harness_prompt(
+            "<local-command-stdout>ok</local-command-stdout>"
+        ));
+        assert!(is_harness_prompt("<system-reminder>x</system-reminder>"));
+        assert!(is_harness_prompt(
+            "<system-reminder>x</system-reminder>\n<task-notification>y</task-notification>"
+        ));
+        assert!(!is_harness_prompt(
+            "<system-reminder>x</system-reminder>\nusa redis"
+        ));
         assert!(!is_harness_prompt("cache"));
     }
 

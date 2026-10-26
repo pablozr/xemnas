@@ -4,7 +4,11 @@ use std::collections::BTreeSet;
 
 use serde_json::json;
 
+use super::triage::{TriageInput, MIN_SPEECH_ALNUM, TRIAGE_ASSISTANT_CHARS, TRIAGE_USER_CHARS};
 use super::{DecisionEvidence, EvidenceArtifact};
+
+/// Metadata source the adapter gives to the answer of an `AskUserQuestion`.
+pub const ASK_USER_QUESTION_SOURCE: &str = "ask_user_question";
 
 /// A durable engineering choice worth proposing for human confirmation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -41,8 +45,13 @@ pub enum RelevanceSignal {
     DelegatedToAgent,
     /// Rests on an unproven assumption.
     UnprovenAssumption,
-    /// The user changes the course of the work: drops, postpones, prioritizes or switches it.
+    /// The user changes the course of the work: drops, postpones, prioritizes or
+    /// switches it. Comes from the turn triage.
     ChangesCourse,
+    /// The user picks one of the options put in front of them: an answer to a
+    /// question the assistant asked (structure) or a choice in free words (the
+    /// turn triage).
+    UserPicksOption,
 }
 
 impl RelevanceSignal {
@@ -66,6 +75,7 @@ impl RelevanceSignal {
             Self::DelegatedToAgent => "delegated_to_agent",
             Self::UnprovenAssumption => "unproven_assumption",
             Self::ChangesCourse => "changes_course",
+            Self::UserPicksOption => "user_picks_option",
         }
     }
 
@@ -83,6 +93,7 @@ impl RelevanceSignal {
                 | Self::ConditionsFutureWork
                 | Self::MaterialBlastRadius
                 | Self::ChangesCourse
+                | Self::UserPicksOption
         )
     }
 }
@@ -108,65 +119,35 @@ fn documents(evidence: &DecisionEvidence) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Returns `true` when the capture is one of the §6 exclusions.
-fn is_trivially_excluded(evidence: &DecisionEvidence, text: &str) -> bool {
-    // A written document is read whole; the extractor decides what in it
-    // was decided.
-    if !documents(evidence).is_empty() {
-        return false;
+/// The signals the structure of the capture states by itself, whatever the
+/// words around it say: DDL or security in an added production line (tests and
+/// comments do not count), a dependency, an edit to a normative document, or a
+/// choice recorded through the tool that asks the user.
+fn structural_signals(evidence: &DecisionEvidence) -> BTreeSet<RelevanceSignal> {
+    let mut found = BTreeSet::new();
+    if normative_document_edited(evidence) {
+        found.insert(RelevanceSignal::ConditionsFutureWork);
     }
-    if has_structural_strong(evidence) {
-        return false;
+    if user_picks_option(evidence) {
+        found.insert(RelevanceSignal::UserPicksOption);
     }
-    if !has_diff_hunk(evidence) {
-        // A decision can be recorded in the conversation before (or without)
-        // any code change (MVP-SPEC AD-08). Without a diff, only explicit
-        // choice language lets the capture through: bare mentions of
-        // contract or security nouns are facts, not choices.
-        return !contains_any_phrase(text, CHOICE_LANGUAGE)
-            || TRIVIAL_MARKERS.iter().any(|marker| text.contains(marker));
-    }
-    if TRIVIAL_MARKERS.iter().any(|marker| text.contains(marker)) {
-        return true;
-    }
-    let files = diff_files(evidence);
-    if !files.is_empty() && files.iter().all(|path| is_test_path(path)) {
-        return true;
-    }
-    is_comment_only_diff(evidence)
-}
-
-/// Returns `true` when the evidence carries at least one `diff_hunk` artifact.
-fn has_diff_hunk(evidence: &DecisionEvidence) -> bool {
-    evidence
-        .artifacts
-        .iter()
-        .any(|artifact| artifact.kind == "diff_hunk")
-}
-
-/// Returns `true` when a production `diff_hunk` carries a strong structural
-/// signal.
-fn has_structural_strong(evidence: &DecisionEvidence) -> bool {
     for artifact in &evidence.artifacts {
         if artifact.kind != "diff_hunk" {
             continue;
         }
         if artifact_has_dependency_addition(artifact) {
-            return true;
+            found.insert(RelevanceSignal::DependencyAdded);
         }
         let mut current_is_test = false;
         for line in artifact.content.lines() {
-            if let Some(rest) = line.strip_prefix("diff --git ") {
-                let token = rest.split_whitespace().next().unwrap_or("");
-                let path = token.strip_prefix("a/").unwrap_or(token);
+            if let Some(path) = diff_header_path(line) {
                 current_is_test = is_test_path(path);
                 continue;
             }
-            let trimmed = line.trim_start();
-            let Some(rest) = trimmed.strip_prefix('+') else {
+            let Some(rest) = added_line(line) else {
                 continue;
             };
-            if current_is_test || rest.starts_with("++") {
+            if current_is_test {
                 continue;
             }
             let content = rest.trim();
@@ -175,14 +156,31 @@ fn has_structural_strong(evidence: &DecisionEvidence) -> bool {
             }
             let lower = content.to_ascii_lowercase();
             if contains_any_phrase(&lower, STRUCTURAL_DDL_PHRASES) {
-                return true;
+                found.insert(RelevanceSignal::PublicContract);
             }
             if contains_any_token(&lower, SECURITY_PRIVACY_TOKENS) {
-                return true;
+                found.insert(RelevanceSignal::SecurityPrivacy);
             }
         }
     }
-    false
+    found
+}
+
+/// The first path of a `diff --git` header line, without the `a/` prefix.
+fn diff_header_path(line: &str) -> Option<&str> {
+    let token = line
+        .strip_prefix("diff --git ")?
+        .split_whitespace()
+        .next()
+        .unwrap_or("");
+    Some(token.strip_prefix("a/").unwrap_or(token))
+}
+
+/// The text of an added diff line (not a `+++` header).
+fn added_line(line: &str) -> Option<&str> {
+    line.trim_start()
+        .strip_prefix('+')
+        .filter(|rest| !rest.starts_with("++"))
 }
 
 /// Returns `true` when the artifact adds a dependency in a manifest.
@@ -190,9 +188,7 @@ fn artifact_has_dependency_addition(artifact: &EvidenceArtifact) -> bool {
     let mut current_manifest = false;
     let mut current_is_test = false;
     for line in artifact.content.lines() {
-        if let Some(rest) = line.strip_prefix("diff --git ") {
-            let token = rest.split_whitespace().next().unwrap_or("");
-            let path = token.strip_prefix("a/").unwrap_or(token);
+        if let Some(path) = diff_header_path(line) {
             let lower = path.to_ascii_lowercase();
             current_is_test = is_test_path(path);
             current_manifest = lower.ends_with("cargo.toml") || lower.ends_with("package.json");
@@ -201,13 +197,9 @@ fn artifact_has_dependency_addition(artifact: &EvidenceArtifact) -> bool {
         if !current_manifest || current_is_test {
             continue;
         }
-        let trimmed = line.trim_start();
-        let Some(rest) = trimmed.strip_prefix('+') else {
+        let Some(rest) = added_line(line) else {
             continue;
         };
-        if rest.starts_with("++") {
-            continue;
-        }
         let addition = rest.trim();
         if addition.is_empty() || is_comment_prefix(addition) {
             continue;
@@ -231,35 +223,6 @@ fn is_test_path(path: &str) -> bool {
         || file.contains(".spec.")
 }
 
-/// Returns `true` when every added/removed diff line is a comment.
-fn is_comment_only_diff(evidence: &DecisionEvidence) -> bool {
-    let mut saw_comment = false;
-    for artifact in &evidence.artifacts {
-        for line in artifact.content.lines() {
-            let trimmed = line.trim_start();
-            if trimmed.starts_with("+++") || trimmed.starts_with("---") {
-                continue;
-            }
-            let Some(rest) = trimmed
-                .strip_prefix('+')
-                .or_else(|| trimmed.strip_prefix('-'))
-            else {
-                continue;
-            };
-            let content = rest.trim_start();
-            if content.is_empty() {
-                continue;
-            }
-            if is_comment_prefix(content) {
-                saw_comment = true;
-            } else {
-                return false;
-            }
-        }
-    }
-    saw_comment
-}
-
 /// Returns `true` for the common comment prefixes.
 fn is_comment_prefix(content: &str) -> bool {
     content.starts_with("//")
@@ -270,31 +233,99 @@ fn is_comment_prefix(content: &str) -> bool {
         || content.starts_with("--")
 }
 
-/// Returns the relevance signals that pass the §6 filter, or an empty list.
-pub fn filter_relevant(evidence: &DecisionEvidence) -> Vec<RelevanceSignal> {
-    let text = aggregate_text(evidence);
-    let changes_course = user_changes_course(evidence);
+/// What the relevance step decides for a capture.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Relevance {
+    /// Structure alone sends the capture to the extractor with these signals.
+    Pass(Vec<RelevanceSignal>),
+    /// The user spoke and nothing structural happened: the turn triage decides.
+    Triage(TriageInput),
+    /// Nothing durable to look at.
+    Empty,
+}
 
-    if is_trivially_excluded(evidence, &text) {
-        // The user's words decide; what the turn touched does not veto them.
-        return if changes_course {
-            vec![RelevanceSignal::ChangesCourse]
-        } else {
-            Vec::new()
-        };
+/// Decides how a capture goes on: straight to the extractor, to the turn
+/// triage, or nowhere.
+pub fn assess_relevance(evidence: &DecisionEvidence) -> Relevance {
+    let signals = filter_relevant(evidence);
+    if !signals.is_empty() {
+        return Relevance::Pass(signals);
     }
+    // A written document is read whole or not at all; the triage is for speech.
+    if !documents(evidence).is_empty() {
+        return Relevance::Empty;
+    }
+    triage_input(evidence).map_or(Relevance::Empty, Relevance::Triage)
+}
 
-    let mut detected = BTreeSet::new();
+/// What the turn triage reads, or `None` when the user said nothing worth a
+/// call: the speech of the turn (without the harness's reminders and the
+/// project context delivered to the user) and the end of the assistant's text.
+pub fn triage_input(evidence: &DecisionEvidence) -> Option<TriageInput> {
+    let speech: Vec<&str> = evidence
+        .artifacts
+        .iter()
+        .filter(|artifact| is_user_speech(artifact))
+        .map(|artifact| crate::injection::strip_leading_reminders(&artifact.content))
+        .collect();
+    let speech: Vec<String> = speech
+        .into_iter()
+        .map(|text| {
+            crate::injection::strip_context_blocks(text)
+                .trim()
+                .to_string()
+        })
+        .filter(|text| text.chars().filter(|c| c.is_alphanumeric()).count() >= MIN_SPEECH_ALNUM)
+        .collect();
+    if speech.is_empty() {
+        return None;
+    }
+    let report: Vec<&str> = evidence
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.kind == "assistant_text")
+        .map(|artifact| artifact.content.as_str())
+        .collect();
+    let report = crate::external::protected_text(&report.join("\n"));
+    let skip = report
+        .chars()
+        .count()
+        .saturating_sub(TRIAGE_ASSISTANT_CHARS);
+    Some(TriageInput {
+        user: crate::external::limited_text(&speech.join("\n---\n"), TRIAGE_USER_CHARS),
+        assistant_tail: report.chars().skip(skip).collect(),
+    })
+}
+
+/// Returns the signals of a capture that goes straight to the extractor, or an
+/// empty list. Structure decides (see [`structural_signals`]); the label lists
+/// below only add the signals the extractor and the validation work with. A
+/// document is the exception: it passes with one strong label or two moderate
+/// ones.
+pub fn filter_relevant(evidence: &DecisionEvidence) -> Vec<RelevanceSignal> {
+    let mut detected = structural_signals(evidence);
+    let documents = documents(evidence);
+    if detected.is_empty() && documents.is_empty() {
+        return Vec::new();
+    }
+    let structural = !detected.is_empty();
+    let text = aggregate_text(evidence);
 
     // Documentation states intent meant to last; ADRs and specifications
     // record choices that condition the work after them.
-    for (_, kind) in documents(evidence) {
+    for (_, kind) in documents {
         detected.insert(RelevanceSignal::ValidityMonths);
         if matches!(kind.as_str(), "adr" | "spec") {
             detected.insert(RelevanceSignal::ConditionsFutureWork);
         }
     }
 
+    LABELS_BY_PHRASE
+        .iter()
+        .filter(|(_, phrases)| contains_any_phrase(&text, phrases))
+        .for_each(|(signal, _)| {
+            detected.insert(*signal);
+        });
     if contains_any_token(&text, PUBLIC_CONTRACT_TOKENS) {
         detected.insert(RelevanceSignal::PublicContract);
     }
@@ -307,94 +338,98 @@ pub fn filter_relevant(evidence: &DecisionEvidence) -> Vec<RelevanceSignal> {
     if top_level_dirs(evidence).len() >= 2 {
         detected.insert(RelevanceSignal::CrossesBoundaries);
     }
-    if contains_any_phrase(&text, HARD_TO_REVERT) {
-        detected.insert(RelevanceSignal::HardToRevert);
-    }
-    if contains_any_phrase(&text, REJECTS_ALTERNATIVE) {
-        detected.insert(RelevanceSignal::RejectsAlternative);
-    }
-    if contains_any_phrase(&text, CONDITIONS_FUTURE_WORK) {
-        detected.insert(RelevanceSignal::ConditionsFutureWork);
-    }
-    if contains_any_phrase(&text, MATERIAL_BLAST_RADIUS) {
-        detected.insert(RelevanceSignal::MaterialBlastRadius);
-    }
-    if contains_any_phrase(&text, ALTERNATIVES_COMPARED) {
-        detected.insert(RelevanceSignal::AlternativesCompared);
-    }
-    if contains_any_phrase(&text, EXPLICIT_TRADEOFF) {
-        detected.insert(RelevanceSignal::ExplicitTradeoff);
-    }
-    if contains_any_phrase(&text, DISAGREEMENT_UNCERTAINTY) {
-        detected.insert(RelevanceSignal::DisagreementUncertainty);
-    }
-    if contains_any_phrase(&text, RELEVANT_COST) {
-        detected.insert(RelevanceSignal::RelevantCost);
-    }
-    if contains_any_phrase(&text, VALIDITY_MONTHS) {
-        detected.insert(RelevanceSignal::ValidityMonths);
-    }
-    if contains_any_phrase(&text, MAINTENANCE_ONBOARDING) {
-        detected.insert(RelevanceSignal::MaintenanceOnboarding);
-    }
-    if contains_any_phrase(&text, DELEGATED_TO_AGENT) {
-        detected.insert(RelevanceSignal::DelegatedToAgent);
-    }
-    if contains_any_phrase(&text, UNPROVEN_ASSUMPTION) {
-        detected.insert(RelevanceSignal::UnprovenAssumption);
-    }
-
-    if changes_course {
-        detected.insert(RelevanceSignal::ChangesCourse);
-    }
 
     let strong = detected.iter().filter(|signal| signal.is_strong()).count();
     let moderate = detected.len() - strong;
-    if strong == 0 && moderate < 2 {
+    if !structural && strong == 0 && moderate < 2 {
         return Vec::new();
     }
     detected.into_iter().collect()
 }
 
-/// Returns `true` when the user's own words change the course of the work.
-/// Only `user_text` counts, because the decision lives there; what the turn
-/// touched (test-only diff, trivial markers) does not veto it. A firm phrase
-/// counts from any message; hints must be two distinct ones inside the same
-/// message, so "foca no teste X" and, later, "troca pra nextest" do not add up.
-fn user_changes_course(evidence: &DecisionEvidence) -> bool {
+/// Whether the user chose among options: the tool that asks them ran or the
+/// adapter recorded their answer. Structure only; a choice made in free words
+/// is left to the turn triage, not to phrase lists. A choice is
+/// where the decision lives, so, like a course change, the diff does not veto it.
+fn user_picks_option(evidence: &DecisionEvidence) -> bool {
     evidence
         .artifacts
         .iter()
-        .filter(|artifact| artifact.kind == "user_text")
-        .any(|artifact| {
-            let text = plain_words(&artifact.content);
-            contains_any_token(&text, COURSE_CHANGE)
-                || COURSE_CHANGE_HINTS
-                    .iter()
-                    .filter(|phrase| contains_token(&text, phrase))
-                    .take(2)
-                    .count()
-                    == 2
+        .any(|artifact| match artifact.kind.as_str() {
+            "tool_summary" => is_ask_user_question(artifact),
+            "user_text" => answers_a_question(artifact),
+            _ => false,
         })
 }
 
-/// One message folded, with typographic apostrophes made plain and whitespace
-/// runs collapsed so phrases match across line breaks inside the message.
-fn plain_words(content: &str) -> String {
-    let mut text = String::with_capacity(content.len());
-    let mut space = false;
-    for ch in crate::terms::fold(content).chars() {
-        if ch.is_whitespace() {
-            space = true;
-            continue;
-        }
-        if space && !text.is_empty() {
-            text.push(' ');
-        }
-        space = false;
-        text.push(if ch == '\u{2019}' { '\'' } else { ch });
+/// A finished `AskUserQuestion` call; the tool name is in the content (or, for
+/// older captures, the metadata).
+fn is_ask_user_question(artifact: &EvidenceArtifact) -> bool {
+    [&artifact.content, &artifact.metadata]
+        .into_iter()
+        .filter(|source| source.contains("AskUserQuestion"))
+        .any(|source| {
+            let value: serde_json::Value = serde_json::from_str(source).unwrap_or_default();
+            value["tool"] == "AskUserQuestion" && value["status"] == "ok"
+        })
+}
+
+/// The adapter writes the answer to a question as `user_text` with this source.
+fn answers_a_question(artifact: &EvidenceArtifact) -> bool {
+    artifact.metadata.contains(ASK_USER_QUESTION_SOURCE)
+        && serde_json::from_str::<serde_json::Value>(&artifact.metadata)
+            .is_ok_and(|value| value["source"] == ASK_USER_QUESTION_SOURCE)
+}
+
+/// Whether the diff adds a line to a normative document: an ADR, a
+/// specification, `AGENTS.md` or `CLAUDE.md`, outside an archive folder.
+fn normative_document_edited(evidence: &DecisionEvidence) -> bool {
+    evidence
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.kind == "diff_hunk")
+        .any(|artifact| {
+            let mut normative = false;
+            for line in artifact.content.lines() {
+                if let Some(path) = diff_header_path(line) {
+                    normative = is_normative_path(path);
+                    continue;
+                }
+                if normative && added_line(line).is_some_and(|added| !added.trim().is_empty()) {
+                    return true;
+                }
+            }
+            false
+        })
+}
+
+fn is_normative_path(path: &str) -> bool {
+    use crate::documents::{classify, is_archived_path, is_documentation_path, DocumentKind};
+    if !is_documentation_path(path) || is_archived_path(path) {
+        return false;
     }
-    text
+    let file = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
+    matches!(file.as_str(), "agents.md" | "claude.md")
+        || matches!(classify(path), DocumentKind::Adr | DocumentKind::Spec)
+}
+
+/// Whether the artifact is something the user said: not a message the harness
+/// wrote (task notification, command echo, `<system-reminder>`) and not a bare
+/// `/command`, which names an action and states no choice.
+fn is_user_speech(artifact: &EvidenceArtifact) -> bool {
+    artifact.kind == "user_text"
+        && !crate::injection::is_harness_prompt(&artifact.content)
+        && !is_bare_command(&artifact.content)
+}
+
+/// `/compact`, `/clear`: a slash and one word, nothing else.
+fn is_bare_command(content: &str) -> bool {
+    content.trim().strip_prefix('/').is_some_and(|word| {
+        !word.is_empty()
+            && word
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'_' | b'-'))
+    })
 }
 
 /// Lowercased concatenation of kinds, contents and metadata, in artifact order.
@@ -518,144 +553,6 @@ fn is_word_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_'
 }
 
-/// Matched as whole words on the user's text, folded to lowercase ASCII.
-const COURSE_CHANGE: &[&str] = &[
-    "de lado",
-    "deixa pra depois",
-    "deixa para depois",
-    "deixar pra depois",
-    "deixar para depois",
-    "fica pra depois",
-    "fica para depois",
-    "nao vamos mais",
-    "nao vou mais",
-    "nunca mais",
-    "vamos parar de",
-    "para de usar",
-    "parar de usar",
-    "desiste de",
-    "desistir de",
-    "desistimos",
-    "abandona",
-    "abandonar",
-    "abandonamos",
-    "adia",
-    "adiar",
-    "adiamos",
-    "adiado",
-    "adiada",
-    "engaveta",
-    "engavetar",
-    "a partir de agora",
-    "de agora em diante",
-    "daqui pra frente",
-    "daqui para frente",
-    "daqui em diante",
-    "from now on",
-    "going forward",
-    "let's drop",
-    "lets drop",
-    "let's park",
-    "lets park",
-    "on hold",
-    "postpone",
-    "postponed",
-    "deprioritize",
-    "we no longer",
-    "we'll no longer",
-    "stop using",
-    "let's go with",
-    "lets go with",
-    "drop support for",
-];
-
-/// Common alone in operational requests ("prioriza os testes que falharam");
-/// two distinct ones make a course change. No entry may contain another as
-/// whole words.
-const COURSE_CHANGE_HINTS: &[&str] = &[
-    "prioriza",
-    "priorizar",
-    "priorizamos",
-    "prioritize",
-    "abandon",
-    "por enquanto",
-    "por ora",
-    "seguir pra",
-    "seguir para",
-    "segue pra",
-    "segue para",
-    "focar em",
-    "focar no",
-    "focar na",
-    "foca em",
-    "foca no",
-    "foca na",
-    "esquece o",
-    "esquece a",
-    "esquece esse",
-    "esquece essa",
-    "troca pra",
-    "troca para",
-    "trocar pra",
-    "trocar para",
-    "muda pra",
-    "muda para",
-    "mudar pra",
-    "mudar para",
-    "em vez de",
-    "ao inves de",
-    "no lugar de",
-    "for now",
-    "switch to",
-    "move on to",
-    "focus on",
-    "instead of",
-    "rather than",
-];
-
-const TRIVIAL_MARKERS: &[&str] = &[
-    "formatting",
-    "format only",
-    "reformat",
-    "whitespace",
-    "lint",
-    "renamed",
-    "renaming",
-    "rename",
-    "comment only",
-    "comment-only",
-    "no behavior change",
-    "no behavioural change",
-    "sem mudanca de comportamento",
-    "sem mudança de comportamento",
-];
-
-/// Explicit choice language that lets a conversation-only capture (no diff)
-/// reach the signal detection. Matched on lowercased text, accents kept.
-const CHOICE_LANGUAGE: &[&str] = &[
-    "decid",
-    "decisão",
-    "decisao",
-    "optamos",
-    "optei",
-    "escolhemos",
-    "escolhi",
-    "vamos usar",
-    "vamos manter",
-    "em vez de",
-    "ao invés de",
-    "ao inves de",
-    "rejeitamos",
-    "instead of",
-    "rather than",
-    "we chose",
-    "we will use",
-    "we'll use",
-    "going with",
-    "trade-off",
-    "tradeoff",
-];
-
 /// DDL/migration phrases counted only on a non-comment `+` line of a
 /// production `diff_hunk`; a `.sql` path alone is never enough.
 const STRUCTURAL_DDL_PHRASES: &[&str] = &[
@@ -700,6 +597,32 @@ const SECURITY_PRIVACY_TOKENS: &[&str] = &[
     "encryption",
     "lgpd",
     "gdpr",
+];
+
+/// Labels the extractor and the validation work with, added to a capture that
+/// already passed by structure. They never decide whether it passes.
+const LABELS_BY_PHRASE: &[(RelevanceSignal, &[&str])] = &[
+    (RelevanceSignal::HardToRevert, HARD_TO_REVERT),
+    (RelevanceSignal::RejectsAlternative, REJECTS_ALTERNATIVE),
+    (
+        RelevanceSignal::ConditionsFutureWork,
+        CONDITIONS_FUTURE_WORK,
+    ),
+    (RelevanceSignal::MaterialBlastRadius, MATERIAL_BLAST_RADIUS),
+    (RelevanceSignal::AlternativesCompared, ALTERNATIVES_COMPARED),
+    (RelevanceSignal::ExplicitTradeoff, EXPLICIT_TRADEOFF),
+    (
+        RelevanceSignal::DisagreementUncertainty,
+        DISAGREEMENT_UNCERTAINTY,
+    ),
+    (RelevanceSignal::RelevantCost, RELEVANT_COST),
+    (RelevanceSignal::ValidityMonths, VALIDITY_MONTHS),
+    (
+        RelevanceSignal::MaintenanceOnboarding,
+        MAINTENANCE_ONBOARDING,
+    ),
+    (RelevanceSignal::DelegatedToAgent, DELEGATED_TO_AGENT),
+    (RelevanceSignal::UnprovenAssumption, UNPROVEN_ASSUMPTION),
 ];
 
 const HARD_TO_REVERT: &[&str] = &[
@@ -836,8 +759,8 @@ mod tests {
         }
     }
 
-    fn said(text: &str) -> Vec<RelevanceSignal> {
-        filter_relevant(&evidence(vec![artifact("a0", "user_text", text)]))
+    fn said(text: &str) -> Relevance {
+        assess_relevance(&evidence(vec![artifact("a0", "user_text", text)]))
     }
 
     fn test_diff() -> EvidenceArtifact {
@@ -849,8 +772,8 @@ mod tests {
     }
 
     #[test]
-    fn the_users_course_change_passes_despite_a_test_only_diff() {
-        let signals = filter_relevant(&evidence(vec![
+    fn the_users_words_with_a_test_only_diff_go_to_the_triage() {
+        let relevance = assess_relevance(&evidence(vec![
             artifact("a0", "user_text", REAL_USER),
             artifact("a1", "assistant_text", REAL_ASSISTANT),
             artifact(
@@ -860,34 +783,22 @@ mod tests {
             ),
             artifact("a3", "tool_summary", "{\"status\":\"ok\",\"tool\":\"Bash\"}"),
         ]));
-        assert_eq!(signals, vec![RelevanceSignal::ChangesCourse]);
+        let Relevance::Triage(input) = relevance else {
+            panic!("{relevance:?}");
+        };
+        assert_eq!(input.user, REAL_USER);
+        assert!(input.assistant_tail.contains("suite passa"));
     }
 
     #[test]
-    fn a_course_change_needs_one_firm_phrase_or_two_hints() {
-        assert!(said("pode seguir para o proximo passo").is_empty());
-        assert!(said("esquece o redis por enquanto").contains(&RelevanceSignal::ChangesCourse));
-        assert!(said("Deixa isso DE LADO").contains(&RelevanceSignal::ChangesCourse));
+    fn only_the_users_words_reach_the_triage() {
+        let relevance =
+            assess_relevance(&evidence(vec![artifact("a1", "assistant_text", REAL_USER)]));
+        assert_eq!(relevance, Relevance::Empty);
     }
 
     #[test]
-    fn only_the_users_words_change_the_course() {
-        let signals = filter_relevant(&evidence(vec![
-            artifact("a0", "user_text", "e agora?"),
-            artifact("a1", "assistant_text", REAL_USER),
-        ]));
-        assert!(signals.is_empty());
-    }
-
-    #[test]
-    fn phrases_are_whole_words_without_accents() {
-        assert!(said("não vamos mais usar X").contains(&RelevanceSignal::ChangesCourse));
-        assert!(said("adianta rodar de novo?").is_empty());
-        assert!(said("let\u{2019}s park the API").contains(&RelevanceSignal::ChangesCourse));
-    }
-
-    #[test]
-    fn trivial_requests_stay_empty() {
+    fn trivial_requests_never_pass_but_are_left_to_the_triage() {
         for text in [
             "roda os testes",
             "pode ser",
@@ -896,48 +807,122 @@ mod tests {
             "atualiza o README",
         ] {
             let user = artifact("a0", "user_text", text);
-            assert!(said(text).is_empty(), "{text}");
+            assert!(matches!(said(text), Relevance::Triage(_)), "{text}");
+            let with_diff = evidence(vec![user, test_diff()]);
+            assert!(filter_relevant(&with_diff).is_empty(), "{text} with a diff");
+            assert!(matches!(assess_relevance(&with_diff), Relevance::Triage(_)));
+        }
+    }
+
+    #[test]
+    fn harness_messages_and_bare_commands_are_not_the_users_words() {
+        for text in [
+            "<task-notification><summary>deixei o v2 de lado a partir de agora</summary></task-notification>",
+            "<command-name>/compact</command-name> a partir de agora",
+            "<system-reminder>a partir de agora</system-reminder>",
+            "/compact",
+            "/superpowers:plan",
+        ] {
+            assert_eq!(said(text), Relevance::Empty, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_reminder_at_the_start_is_not_sent_to_the_triage() {
+        let relevance = said("<system-reminder>x</system-reminder>\na partir de agora usa redis");
+        let Relevance::Triage(input) = relevance else {
+            panic!("{relevance:?}");
+        };
+        assert_eq!(input.user, "a partir de agora usa redis");
+    }
+
+    #[test]
+    fn the_context_delivered_to_the_user_is_not_sent_to_the_triage() {
+        let text = "vamos de redis\n<xemnas-context>D:abc segredo</xemnas-context>";
+        let Relevance::Triage(input) = said(text) else {
+            panic!("not a triage");
+        };
+        assert!(!input.user.contains("xemnas-context"), "{}", input.user);
+    }
+
+    #[test]
+    fn a_speech_without_words_is_not_worth_a_call() {
+        for text in ["ok", "2", "  ?! "] {
+            assert_eq!(said(text), Relevance::Empty, "{text}");
+        }
+    }
+
+    #[test]
+    fn the_triage_reads_a_bounded_speech_and_report() {
+        let long = "a".repeat(3_000);
+        let relevance = assess_relevance(&evidence(vec![
+            artifact("a0", "user_text", &long),
+            artifact("a1", "assistant_text", &"b".repeat(2_000)),
+        ]));
+        let Relevance::Triage(input) = relevance else {
+            panic!("{relevance:?}");
+        };
+        assert_eq!(input.user.chars().count(), TRIAGE_USER_CHARS);
+        assert_eq!(input.assistant_tail.chars().count(), TRIAGE_ASSISTANT_CHARS);
+    }
+
+    fn tool(status: &str) -> EvidenceArtifact {
+        artifact(
+            "t0",
+            "tool_summary",
+            &format!("{{\"tool\":\"AskUserQuestion\",\"status\":\"{status}\"}}"),
+        )
+    }
+
+    #[test]
+    fn a_finished_question_to_the_user_is_a_choice_even_beside_a_lint_report() {
+        let assistant = artifact("a1", "assistant_text", "`pnpm lint`: sem correcoes");
+        let ok = filter_relevant(&evidence(vec![assistant.clone(), tool("ok"), test_diff()]));
+        assert_eq!(ok, vec![RelevanceSignal::UserPicksOption]);
+        let failed = filter_relevant(&evidence(vec![assistant, tool("error"), test_diff()]));
+        assert!(failed.is_empty());
+    }
+
+    #[test]
+    fn the_recorded_answer_to_a_question_is_a_choice() {
+        let mut answer = artifact("a0", "user_text", "question: x\nanswer: Redis");
+        answer.metadata = "{\"source\":\"ask_user_question\"}".to_string();
+        assert!(filter_relevant(&evidence(vec![answer, test_diff()]))
+            .contains(&RelevanceSignal::UserPicksOption));
+    }
+
+    fn edit_of(path: &str) -> Vec<EvidenceArtifact> {
+        vec![
+            artifact("a0", "assistant_text", "`pnpm lint`: sem correcoes"),
+            artifact(
+                "d0",
+                "diff_hunk",
+                &format!(
+                    "diff --git a/{path} b/{path}\n@@ -1,2 +1,3 @@\n+Decidimos usar SQLite.\n"
+                ),
+            ),
+        ]
+    }
+
+    #[test]
+    fn editing_a_normative_document_passes_beside_a_lint_report() {
+        for path in [
+            "docs/adr/0014-x.md",
+            "specs/capture.md",
+            "AGENTS.md",
+            "sub/CLAUDE.md",
+        ] {
+            let signals = filter_relevant(&evidence(edit_of(path)));
             assert!(
-                filter_relevant(&evidence(vec![user, test_diff()])).is_empty(),
-                "{text} with a test diff"
+                signals.contains(&RelevanceSignal::ConditionsFutureWork),
+                "{path}"
             );
         }
-    }
-
-    #[test]
-    fn course_phrases_are_folded_ascii_and_hints_never_nest() {
-        for phrase in COURSE_CHANGE.iter().chain(COURSE_CHANGE_HINTS) {
-            assert_eq!(
-                crate::terms::fold(phrase),
-                *phrase,
-                "{phrase} is not folded"
+        for path in ["docs/archive/adr/0001.md", "docs/guia.md", "src/lib.rs"] {
+            assert!(
+                filter_relevant(&evidence(edit_of(path))).is_empty(),
+                "{path}"
             );
-            assert!(phrase.is_ascii(), "{phrase} is not ASCII");
         }
-        for a in COURSE_CHANGE_HINTS {
-            for b in COURSE_CHANGE_HINTS {
-                assert!(a == b || !contains_token(a, b), "{a} contains {b}");
-            }
-        }
-    }
-
-    #[test]
-    fn a_hint_repeated_across_messages_counts_once() {
-        let evidence = evidence(vec![
-            artifact("a0", "user_text", "por enquanto roda os testes"),
-            artifact("a1", "user_text", "por enquanto so isso"),
-        ]);
-        assert!(filter_relevant(&evidence).is_empty());
-    }
-
-    #[test]
-    fn hints_in_different_messages_do_not_add_up() {
-        let apart = evidence(vec![
-            artifact("a0", "user_text", "foca no teste que falhou"),
-            artifact("a1", "user_text", "troca pra cargo nextest"),
-        ]);
-        assert!(filter_relevant(&apart).is_empty());
-        let together = said("foca no cache e troca pra nextest");
-        assert!(together.contains(&RelevanceSignal::ChangesCourse));
     }
 }

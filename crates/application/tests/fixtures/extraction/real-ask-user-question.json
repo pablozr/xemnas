@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "capture_id": "01a14c91-d74b-70ed-99a3-8712e83a1630",
+  "idempotency_key": "claude-code:real:01a14c91-d74b",
+  "source": {
+    "adapter": "claude-code",
+    "adapter_version": "0.0.0",
+    "session_id": "session-real",
+    "message_id": "msg-01a14c91-d74b"
+  },
+  "project": {
+    "canonical_path": "C:/synthetic/projects/jevguard"
+  },
+  "observed_at": "2026-10-18T01:13:08Z",
+  "artifacts": [
+    {
+      "artifact_id": "01a14c91-d74a-72ae-b567-66fe15b7e5b3",
+      "kind": "user_text",
+      "content": "Depois disso, na ordem:\n1. Distribuição do plugin do Claude Code (marketplace), para não precisar mais do --plugin-dir nem do npm ci à mão.\n2. Compactar a rotação do feedback.jsonl, para não perder respostas antigas acima de cerca de 5000. vamos planejar essa parte",
+      "metadata": {},
+      "fingerprint": "d5d2860249806108f7c572f0bf7365ea9867cdbdedb07bf2d01228e1bf636191"
+    },
+    {
+      "artifact_id": "01a14c91-d74b-70ed-99a3-8706e2974d57",
+      "kind": "assistant_text",
+      "content": "Vou chamar o planejador para os dois itens, na ordem que você pediu. Por enquanto é só plano, nada de execução.\nO planejador está trabalhando nos dois planos, na ordem que você pediu:\n\n1. **Distribuição pelo marketplace do Claude Code.** O plano vai dizer onde fica o `marketplace.json`, de onde o plugin é baixado, como o keyring nativo é instalado sem `npm ci` à mão, e como versionar e testar.\n2. **Compactação do `feedback.jsonl`.** Hoje o limite está em `DEFAULT_FEEDBACK_MAX_RECORDS = 5000`, em `packages/node-infra/src/feedback/local.ts`. O plano vai propor um resumo que preserve o que a calibração por regra usa, gravado de forma segura no disco, com testes no limite exato.\n\nAssim que ele terminar, mostro os dois planos e as decisões que ficam com você, como onde publicar e como instalar o keyring. Nada vai ser executado antes do seu ok, porque o item 1 provavelmente envolve git remoto.\nOs dois planos estão prontos. Antes de executar, dois pontos mudam o que você pediu.\n\n**Antes de começar**\n- **A alteração no keyring que ainda não foi commitada (`keyring-store.ts` + teste) não bloqueia nada**, mas deveria ser commitada antes de gerar a primeira release. Sem ela, um usuário que ainda não rodou `jevguard login` recebe `STORE_READ_FAILURE` no lugar de `MISSING_CREDENTIAL`. O resultado continua `UNAVAILABLE`; só o código de erro fica enganoso.\n- **A premissa do item 2 está só em parte certa.** Pelo SPEC §7.12, a calibração só conta respostas cujo `{turnId, ruleId}` ainda é um FAIL no histórico. O histórico guarda no máximo 2000 revisões, então as respostas antigas que se perdem hoje quase sempre já não contavam. Somar tudo num agregado por regra sem essa identidade quebraria o contrato: o dado seria ignorado ou contaria em dobro.\n\n**Item 1: distribuição pelo marketplace**\n- **Objetivo:** instalar com `/plugin marketplace add dev/JevGuard` e `/plugin install jevguard@jevguard`, sem `--plugin-dir` e sem `npm ci` à mão.\n- **Catálogo:** `.claude-plugin/marketplace.json` versionado no `main`. O plugin seria baixado de um pacote npm com versão exata (`@devrrr/jevguard-claude-code`), então o artefato gerado continua fora do git.\n- **Keyring:** o Claude Code já instala sozinho as dependências listadas no lockfile, com `--ignore-scripts` e hash sha512, como o ADR 0014 já decidiu. Para isso o `package-lock.json` vira `npm-shrinkwrap.json`, porque o npm exclui o `package-lock.json` de pacotes publicados. O hook continua sem rede.\n- **Passos:** completar os manifestos, adicionar testes de contrato para o artefato e o catálogo (incluindo que a versão bate nos três lugares), criar o script `claude-artifact:publish:check` com dry-run e atualizar `configuration.md`, `security.md` e o README.\n- **Release:** a cada versão, primeiro `npm publish` e só depois `git push` do catálogo. Os dois passos são remotos e esperam o seu ok.\n\n**Item 2: compactação do `feedback.jsonl`**\n- **Objetivo:** ao passar de 1 MiB, o arquivo é compactado sem perda. Fica uma linha por `{turnId, ruleId}`, com a última decisão. Só se sobrarem mais de 5000 identidades distintas é que as mais antigas saem.\n- **Formato:** igual ao de hoje, então arquivos antigos e novos continuam compatíveis. A gravação vai para um arquivo temporário e depois é renomeada. Se o arquivo só tiver linhas ilegíveis, ele não é tocado.\n- **Testes:** limites exatos em 5000 e 5001, prova de que a calibração, a lista de pendentes e o resultado de `planFeedbackDecision` ficam idênticos antes e depois, e um teste de regressão do defeito atual.\n\nPreciso de três decisões suas:\nDecidido: o plugin sai pelo npm, o feedback é compactado sem perda, e agora executo o item 2 e os passos locais do item 1, sem publish e sem push. Vou passar o plano completo ao executor.\nO executor já está trabalhando, na ordem: primeiro a compactação do `feedback.jsonl`, depois o item 1 até os registros locais. Ele não pode publicar no npm, dar push, criar tag nem mexer na sua alteração do keyring.\n\nQuando ele terminar, rodo o `/simplificar`, porque é código sério, e confiro format, lint, typecheck, test e o dry-run do publish. Depois te mostro o resultado de cada comando.\n\nAntes da primeira release, commite à parte a correção do keyring.\nO executor terminou e passou nos testes: format, lint, typecheck, test, dry-run com os 9 arquivos e `claude plugin validate`. Agora 4 revisores estão olhando o diff, e reaproveitamento e altitude rodam no Opus porque é código de persistência. Quando eles voltarem, aplico os achados de risco baixo e rodo a verificação de novo.\nJá voltaram 2 dos 4 revisores. Estou esperando os de reaproveitamento e altitude, para juntar tudo antes de aplicar.",
+      "metadata": {},
+      "fingerprint": "ca2da61627b735bfa9b117cd4df9f0c3aa49ab8894b70759714c82f19d132952"
+    },
+    {
+      "artifact_id": "01a14c91-d74b-70ed-99a3-8707f7283cb5",
+      "kind": "tool_summary",
+      "content": "{\"tool\":\"Bash\",\"status\":\"ok\"}",
+      "metadata": {
+        "tool": "Bash",
+        "status": "ok"
+      },
+      "fingerprint": "afdc1d8f687b01fc09ca0c55f0bc830831c32537695d781642f09affc8a81ce7"
+    },
+    {
+      "artifact_id": "01a14c91-d74b-70ed-99a3-87080e4805b2",
+      "kind": "tool_summary",
+      "content": "{\"tool\":\"Agent\",\"status\":\"ok\"}",
+      "metadata": {
+        "tool": "Agent",
+        "status": "ok"
+      },
+      "fingerprint": "4c95ea8f2520b13b35558e0c753762b3141d1b08a4fd524bd0fecf9afa26c0d8"
+    },
+    {
+      "artifact_id": "01a14c91-d74b-70ed-99a3-87091671fdbe",
+      "kind": "tool_summary",
+      "content": "{\"tool\":\"AskUserQuestion\",\"status\":\"ok\"}",
+      "metadata": {
+        "tool": "AskUserQuestion",
+        "status": "ok"
+      },
+      "fingerprint": "e436148a88db8c35ce7d828e81d03ad523f50184104c0a680cd6476b0ccc185f"
+    },
+    {
+      "artifact_id": "01a14c91-d74b-70ed-99a3-870bc002d6bb",
+      "kind": "tool_summary",
+      "content": "{\"tool\":\"Skill\",\"status\":\"ok\"}",
+      "metadata": {
+        "tool": "Skill",
+        "status": "ok"
+      },
+      "fingerprint": "3bd9ae005e9c2123adbce8713cfc7f3b7bf7e2e7bd642700f251fe9e68df1b20"
+    }
+  ]
+}

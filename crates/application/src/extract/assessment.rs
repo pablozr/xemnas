@@ -138,6 +138,33 @@ pub trait AssessmentStore {
     }
     /// Inserts one assessment row.
     fn record_assessment(&self, row: &AssessmentRecord) -> Result<(), ExtractError>;
+    /// Inserts one turn triage row. Stores without the table ignore it.
+    fn record_triage(&self, _row: &TriageRecord) -> Result<(), ExtractError> {
+        Ok(())
+    }
+}
+
+/// One call of the turn triage; it keeps the cost, never the conversation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TriageRecord {
+    /// Row identifier (UUID v7).
+    pub id: String,
+    /// Capture the turn belongs to.
+    pub capture_id: String,
+    /// Job that triggered the run, when any.
+    pub job_id: Option<String>,
+    /// Model asked, when an external provider ran.
+    pub model: Option<String>,
+    /// When the call was made (RFC 3339).
+    pub called_at: String,
+    /// The kind of decision the model named, or `None` when the call failed.
+    pub kind: Option<String>,
+    /// Whether the verdict sent the turn on to the extractor.
+    pub passed: bool,
+    /// Characters sent: instructions plus content.
+    pub input_chars: i64,
+    /// Short stable code of the error, when the call failed.
+    pub error_code: Option<String>,
 }
 
 /// Provenance context for one extraction run.
