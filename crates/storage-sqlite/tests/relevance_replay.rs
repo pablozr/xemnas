@@ -1,6 +1,8 @@
-//! Replays the relevance filter over a read-only copy of a real database: how
-//! many captures the extractor judged empty would reach it today, and at what
-//! input cost. Manual (`#[ignore]`), never against the live database.
+//! Replays the relevance step over a read-only copy of a real database: how many
+//! analyzed captures would go straight to the extractor, to the turn triage or
+//! nowhere today, at what input cost, and which captures that once produced
+//! candidates would no longer reach the extractor by structure alone. Makes no
+//! AI call. Manual (`#[ignore]`), never against the live database.
 //!
 //!     XEMNAS_REPLAY_DB=<copy of app.db> cargo test --locked -p storage-sqlite \
 //!         --test relevance_replay -- --ignored --nocapture
@@ -9,28 +11,41 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use application::extract::{
-    filter_relevant, truncate_content, DecisionEvidence, EvidenceArtifact, MAX_EVIDENCE_ARTIFACTS,
-    MAX_EVIDENCE_CONTENT_BYTES,
+    assess_relevance, triage_input_chars, truncate_content, DecisionEvidence, EvidenceArtifact,
+    Relevance, MAX_EVIDENCE_ARTIFACTS, MAX_EVIDENCE_CONTENT_BYTES,
 };
 use application::{AppPaths, DEFAULT_MAX_INPUT_CHARS};
 use rusqlite::{Connection, OpenFlags};
 
 #[derive(Default)]
 struct Tally {
+    captures: usize,
+    pass: usize,
+    triage: usize,
     empty: usize,
-    pass_now: usize,
-    input_chars: usize,
+    triage_input_chars: usize,
+    extractor_input_chars: usize,
+    now_triage: usize,
+    now_empty: usize,
 }
 
 impl Tally {
     fn line(&self, scope: &str) -> String {
         format!(
-            "replay relevance {scope} empty={} pass_now={} calls={} input_chars={} est_tokens={}",
+            "replay relevance {scope} captures={} pass={} triage={} empty={} \
+             triage_input_chars={} triage_est_tokens={} extractor_input_chars={} \
+             extractor_est_tokens={} at_risk={} now_triage={} now_empty={}",
+            self.captures,
+            self.pass,
+            self.triage,
             self.empty,
-            self.pass_now,
-            self.pass_now,
-            self.input_chars,
-            self.input_chars / 4
+            self.triage_input_chars,
+            self.triage_input_chars / 4,
+            self.extractor_input_chars,
+            self.extractor_input_chars / 4,
+            self.now_triage + self.now_empty,
+            self.now_triage,
+            self.now_empty,
         )
     }
 }
@@ -69,18 +84,21 @@ fn relevance_replay() {
     refuse_live_database(&path);
     let connection = open_read_only(&path);
 
+    // Every analyzed capture, with what its latest assessment produced.
     let mut captures = connection
         .prepare(
-            "SELECT r.capture_id, r.canonical_path FROM capture_receipts r
+            "SELECT r.capture_id, r.canonical_path,
+                    (SELECT a.candidates FROM assessments a WHERE a.capture_id = r.capture_id
+                     ORDER BY a.finished_at DESC, a.rowid DESC LIMIT 1)
+             FROM capture_receipts r
              WHERE EXISTS (SELECT 1 FROM jobs j WHERE j.kind = 'analyze_capture'
                            AND j.payload = r.capture_id)
-               AND (SELECT a.outcome FROM assessments a WHERE a.capture_id = r.capture_id
-                    ORDER BY a.finished_at DESC, a.rowid DESC LIMIT 1) = 'empty'
+               AND EXISTS (SELECT 1 FROM assessments a WHERE a.capture_id = r.capture_id)
              ORDER BY r.capture_id",
         )
         .expect("captures");
-    let rows: Vec<(String, String)> = captures
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+    let rows: Vec<(String, String, i64)> = captures
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
         .expect("rows")
         .map(|row| row.expect("row"))
         .collect();
@@ -94,7 +112,7 @@ fn relevance_replay() {
 
     let mut total = Tally::default();
     let mut per_project: BTreeMap<String, Tally> = BTreeMap::new();
-    for (capture_id, canonical_path) in rows {
+    for (capture_id, canonical_path, candidates) in rows {
         let evidence = DecisionEvidence {
             capture_id: capture_id.clone(),
             project_id: canonical_path.clone(),
@@ -121,15 +139,8 @@ fn relevance_replay() {
             .next()
             .unwrap_or("?")
             .to_string();
-        let signals = filter_relevant(&evidence);
-        let mut tallies = [&mut total, per_project.entry(project).or_default()];
-        for tally in &mut tallies {
-            tally.empty += 1;
-        }
-        if signals.is_empty() {
-            continue;
-        }
-        let chars: usize = evidence
+        let relevance = assess_relevance(&evidence);
+        let extractor_chars: usize = evidence
             .artifacts
             .iter()
             .map(|artifact| {
@@ -138,16 +149,37 @@ fn relevance_replay() {
                     .count()
             })
             .sum();
+        let at_risk = candidates > 0 && !matches!(relevance, Relevance::Pass(_));
+        let mut tallies = [&mut total, per_project.entry(project).or_default()];
         for tally in &mut tallies {
-            tally.pass_now += 1;
-            tally.input_chars += chars;
+            tally.captures += 1;
+            match &relevance {
+                Relevance::Pass(_) => {
+                    tally.pass += 1;
+                    tally.extractor_input_chars += extractor_chars;
+                }
+                Relevance::Triage(input) => {
+                    tally.triage += 1;
+                    tally.triage_input_chars += triage_input_chars(input);
+                    tally.now_triage += usize::from(at_risk);
+                }
+                Relevance::Empty => {
+                    tally.empty += 1;
+                    tally.now_empty += usize::from(at_risk);
+                }
+            }
         }
-        let names: Vec<&str> = signals.iter().map(|signal| signal.as_str()).collect();
-        println!(
-            "replay pass {} signals={}",
-            &capture_id[..capture_id.len().min(13)],
-            names.join(",")
-        );
+        if at_risk {
+            let now = if matches!(relevance, Relevance::Triage(_)) {
+                "triage"
+            } else {
+                "empty"
+            };
+            println!(
+                "replay risk {} was_candidates={candidates} now={now}",
+                &capture_id[..capture_id.len().min(13)]
+            );
+        }
     }
     for (project, tally) in &per_project {
         println!("{}", tally.line(&format!("project={project}")));
