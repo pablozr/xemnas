@@ -18,9 +18,10 @@ use storage_sqlite::{SqliteStore, StorageError};
 use std::sync::Arc;
 use xemnas_desktop::app::{
     ActivitySource, AdjustItem, CaptureStatus, ConfirmItem, FocusSearch, GoContext, GoDecisions,
-    GoMap, GoOverview, GoReview, NextItem, PaletteClose, PaletteDown, PaletteRun, PaletteUp,
-    PrevItem, RejectItem, SaveEditor, Shell, SnoozeItem, TabNext, TabPrev, ToggleFocusMode,
-    TogglePalette,
+    GoMap, GoOverview, GoReview, NextItem, OpenProof, PaletteClose, PaletteDown, PaletteRun,
+    PaletteUp, PrevItem, RejectItem, ReviewAccepted, ReviewClose, ReviewEffect, ReviewNextSource,
+    ReviewPrevSource, ReviewToday, SaveEditor, Shell, SnoozeItem, TabNext, TabPrev,
+    ToggleFocusMode, TogglePalette, ToggleQueue,
 };
 use xemnas_desktop::screens::settings::SettingsServices;
 use xemnas_desktop::startup_error::StartupError;
@@ -834,6 +835,14 @@ fn run_shell_mode(
             KeyBinding::new("r", RejectItem, Some("xemnas && !SearchField")),
             KeyBinding::new("s", SnoozeItem, Some("xemnas && !SearchField")),
             KeyBinding::new("a", AdjustItem, Some("xemnas && !SearchField")),
+            KeyBinding::new("tab", ToggleQueue, Some("ReviewHome")),
+            KeyBinding::new("enter", OpenProof, Some("ReviewHome")),
+            KeyBinding::new("e", ReviewEffect, Some("xemnas && !SearchField")),
+            KeyBinding::new("l", ReviewAccepted, Some("xemnas && !SearchField")),
+            KeyBinding::new("d", ReviewToday, Some("xemnas && !SearchField")),
+            KeyBinding::new("escape", ReviewClose, Some("xemnas && !SearchField")),
+            KeyBinding::new("left", ReviewPrevSource, Some("xemnas && !SearchField")),
+            KeyBinding::new("right", ReviewNextSource, Some("xemnas && !SearchField")),
             KeyBinding::new("ctrl-enter", SaveEditor, Some("Editor")),
             KeyBinding::new("ctrl-1", GoReview, Some("xemnas")),
             KeyBinding::new("ctrl-2", GoDecisions, Some("xemnas")),

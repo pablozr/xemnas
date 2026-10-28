@@ -24,7 +24,7 @@ use crate::palette::{self, PaletteItem};
 use crate::screens::assistant::{AssistantGo, AssistantScreen, AssistantToggled, Briefing};
 use crate::screens::context::{ContextScreen, ContextServices, ContextStores, OpenDecision};
 use crate::screens::decisions::DecisionsScreen;
-use crate::screens::inbox::{InboxScreen, OpenDiagnostics};
+use crate::screens::inbox::{InboxScreen, OpenDecisions, OpenDiagnostics, ReviewView};
 use crate::screens::map::OpenSuggestions;
 use crate::screens::map::{MapScreen, MapServices};
 use crate::screens::overview::OverviewScreen;
@@ -69,6 +69,22 @@ actions!(
         AdjustItem,
         /// Submits the open editor with its primary action.
         SaveEditor,
+        /// Opens the proof of the candidate being read.
+        OpenProof,
+        /// Opens or closes the queue over the ticket.
+        ToggleQueue,
+        /// Opens what changes if the candidate is confirmed.
+        ReviewEffect,
+        /// Opens what the AI accepted.
+        ReviewAccepted,
+        /// Opens Decisões from the empty queue.
+        ReviewToday,
+        /// Closes the proof, the effect or the queue.
+        ReviewClose,
+        /// Shows the previous source of the proof.
+        ReviewPrevSource,
+        /// Shows the next source of the proof.
+        ReviewNextSource,
         /// Opens Revisão.
         GoReview,
         /// Opens Decisões.
@@ -260,6 +276,7 @@ pub struct Shell<
     _inbox_subscription: Option<Subscription>,
     _inbox_opens: Option<Subscription>,
     _inbox_diagnostics: Option<Subscription>,
+    _inbox_today: Option<Subscription>,
     projects: Option<Entity<ProjectsScreen<R>>>,
     /// Why there is no database, when the app started without one.
     startup_error: Option<StartupError>,
@@ -466,6 +483,11 @@ impl<
                 shell.open_settings_at(SettingsSection::Diagnostics, cx)
             })
         });
+        let inbox_today = inbox.as_ref().map(|screen| {
+            cx.subscribe(screen, |shell, _, _: &OpenDecisions, cx| {
+                shell.show_decisions(cx)
+            })
+        });
         let decisions = decisions.map(|(decisions, export, relations, graph)| {
             cx.new(|cx| DecisionsScreen::new(cx, decisions, export, relations, graph))
         });
@@ -503,6 +525,7 @@ impl<
             _inbox_subscription: inbox_subscription,
             _inbox_opens: inbox_opens,
             _inbox_diagnostics: inbox_diagnostics,
+            _inbox_today: inbox_today,
             projects: screen,
             inbox,
             decisions,
@@ -1586,6 +1609,28 @@ impl<
         }
     }
 
+    /// Changes what Revisão shows from a key; the key goes on when it has
+    /// nothing to do there.
+    fn on_review_view(&mut self, view: ReviewView, window: &mut Window, cx: &mut Context<Self>) {
+        let handled = self.destination == Destination::Review
+            && self.inbox.as_ref().is_some_and(|screen| {
+                screen.update(cx, |screen, cx| screen.run_view(view, window, cx))
+            });
+        if !handled {
+            cx.propagate();
+        }
+    }
+
+    /// Opens Decisões from the empty queue.
+    fn show_decisions(&mut self, cx: &mut Context<Self>) {
+        self.retire_context_surface(cx);
+        self.destination = Destination::Decisions;
+        if let Some(decisions) = &self.decisions {
+            decisions.update(cx, |screen, cx| screen.refresh(cx));
+        }
+        cx.notify();
+    }
+
     /// Cancels review work before replacing the visible Contexto surface.
     fn retire_context_surface(&mut self, cx: &mut Context<Self>) {
         if context_surface_visible(self.destination, self.settings_open) {
@@ -2598,6 +2643,24 @@ impl<
             .on_action(
                 cx.listener(|this, _: &ConfirmItem, window, cx| this.on_review_key(3, window, cx)),
             )
+            .on_action(cx.listener(|this, _: &ReviewEffect, window, cx| {
+                this.on_review_view(ReviewView::Effect, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ReviewAccepted, window, cx| {
+                this.on_review_view(ReviewView::Accepted, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ReviewToday, window, cx| {
+                this.on_review_view(ReviewView::Today, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ReviewClose, window, cx| {
+                this.on_review_view(ReviewView::Close, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ReviewPrevSource, window, cx| {
+                this.on_review_view(ReviewView::PrevSource, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ReviewNextSource, window, cx| {
+                this.on_review_view(ReviewView::NextSource, window, cx)
+            }))
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 if event.keystroke.key == "escape" && this.project_panel.is_open() {
                     this.close_project_panel(window, cx);
