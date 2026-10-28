@@ -334,6 +334,9 @@ pub struct Shell<
     /// Where the assistant asked to go; followed on the next render, which
     /// has the window the switch needs.
     pending_go: Option<String>,
+    /// Whether the review surface should take the keyboard on the next paint
+    /// (a project was picked while Revisão is open).
+    focus_review: bool,
 }
 
 impl<
@@ -403,6 +406,7 @@ impl<
                         )
                     });
                 }
+                shell.focus_review = shell.destination == Destination::Review;
                 if let Some(inbox) = &shell.inbox {
                     inbox.update(cx, |inbox, cx| {
                         inbox.set_project(
@@ -569,6 +573,7 @@ impl<
             _assistant_subscription: assistant_subscription,
             _assistant_toggled: assistant_toggled,
             pending_go: None,
+            focus_review: false,
             startup_error,
             startup_notice: None,
         }
@@ -1662,7 +1667,10 @@ impl<
                     search.set_context(t::filter_candidates(), cx)
                 });
                 if let Some(screen) = &self.inbox {
-                    screen.update(cx, |screen, cx| screen.refresh(cx));
+                    screen.update(cx, |screen, cx| {
+                        screen.refresh(cx);
+                        screen.focus_surface(window, cx);
+                    });
                 }
                 let ties = self.review_tab == ReviewTab::Ties;
                 if let Some(screen) = &self.map {
@@ -2211,6 +2219,11 @@ impl<
         }
         self.theme = Theme::current(cx);
         let theme = self.theme;
+        if std::mem::take(&mut self.focus_review) {
+            if let Some(screen) = &self.inbox {
+                screen.update(cx, |screen, cx| screen.focus_surface(window, cx));
+            }
+        }
         if let Some(route) = self.pending_go.take() {
             self.settings_open = false;
             self.go_route(&route, window, cx);
