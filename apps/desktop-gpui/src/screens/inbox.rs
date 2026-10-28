@@ -1063,9 +1063,13 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                             this.decided += 1;
                         }
                         if confirmed_notice(notice) {
-                            for field in [&this.night, &this.night_full] {
-                                field.update(cx, |field, cx| field.shoot(cx));
-                            }
+                            // Only the scene on screen shoots; the other is not mounted.
+                            let field = if this.rows.is_empty() {
+                                &this.night_full
+                            } else {
+                                &this.night
+                            };
+                            field.update(cx, |field, cx| field.shoot(cx));
                         }
                         this.page(false, cx);
                     }
@@ -2640,8 +2644,6 @@ fn section(theme: Theme, label: &'static str, content: &str) -> Div {
         )
 }
 
-/// Whether a notice tells that the person decided a candidate (and did not
-/// resume or undo one).
 /// Whether a notice tells that a candidate was confirmed.
 fn confirmed_notice(notice: &'static str) -> bool {
     [
@@ -2653,16 +2655,10 @@ fn confirmed_notice(notice: &'static str) -> bool {
     .contains(&notice)
 }
 
+/// Whether a notice tells that the person decided a candidate (and did not
+/// resume or undo one).
 fn counts_as_decision(notice: &'static str) -> bool {
-    [
-        t::notice_confirmed_linked(),
-        t::notice_confirmed(),
-        t::notice_edits_confirmed_linked(),
-        t::notice_edits_confirmed(),
-        t::notice_rejected(),
-        t::notice_snoozed(),
-    ]
-    .contains(&notice)
+    confirmed_notice(notice) || [t::notice_rejected(), t::notice_snoozed()].contains(&notice)
 }
 
 fn project_label(location: &str) -> &str {

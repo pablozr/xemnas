@@ -938,13 +938,13 @@ impl Render for NightField {
                         )
                     })
                     .collect::<Vec<_>>();
-                div()
-                    .h(px(CELL_HEIGHT))
-                    .flex_none()
-                    .whitespace_nowrap()
-                    .child(
-                        StyledText::new(SharedString::from(line.text)).with_highlights(highlights),
-                    )
+                let row = div().h(px(CELL_HEIGHT)).flex_none().whitespace_nowrap();
+                if highlights.is_empty() {
+                    return row;
+                }
+                row.child(
+                    StyledText::new(SharedString::from(line.text)).with_highlights(highlights),
+                )
             }))
     }
 }

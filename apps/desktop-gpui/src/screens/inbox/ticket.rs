@@ -77,7 +77,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> EventEmitter<OpenDec
 {
 }
 
-/// Words of `text` as parts of a sentence: a path or a quoted word is a chip.
+/// Whether a word is a chip: a path or a quoted word.
 fn is_chip(word: &str) -> bool {
     let trimmed = word.trim_matches(|c: char| ",.;:!?()".contains(c));
     if trimmed.len() < 2 {
@@ -122,7 +122,7 @@ fn one_sentence(text: &str) -> String {
     format!("{cut}…")
 }
 
-/// "{level} · {n} sources" for the stub.
+/// Confidence band of a value: high, medium or low.
 fn confidence_level(value: f64) -> &'static str {
     if value >= 0.75 {
         tt::confidence_high()
@@ -606,15 +606,11 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join(" · ");
-        let id = summary
+        let id: String = summary
             .id
             .chars()
-            .rev()
-            .take(4)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect::<String>();
+            .skip(summary.id.chars().count().saturating_sub(4))
+            .collect();
         let caption = |text: &'static str| {
             text_style(div(), TypeScale::META)
                 .text_color(colors.text_muted())
