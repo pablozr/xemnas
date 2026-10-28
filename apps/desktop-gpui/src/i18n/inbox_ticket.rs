@@ -27,12 +27,14 @@ strings! {
     queue_overlay_aria { en: "Review queue", pt: "Fila de revisão", es: "Cola de revisión",
         fr: "File de revue", de: "Prüfwarteschlange", it: "Coda di revisione",
         ja: "レビューキュー", zh: "审阅队列", ko: "검토 대기열", ru: "Очередь проверки" }
-    /// Caption under the old value of the ticket.
-    before { en: "before", pt: "antes", es: "antes", fr: "avant", de: "vorher",
-        it: "prima", ja: "変更前", zh: "之前", ko: "이전", ru: "было" }
-    /// Caption under the new value of the ticket.
-    now { en: "now", pt: "agora", es: "ahora", fr: "maintenant", de: "jetzt",
-        it: "ora", ja: "変更後", zh: "现在", ko: "현재", ru: "стало" }
+    /// Caption above the proposed value when there is no earlier one.
+    new_decision { en: "NEW DECISION", pt: "NOVA DECISÃO", es: "NUEVA DECISIÓN",
+        fr: "NOUVELLE DÉCISION", de: "NEUE ENTSCHEIDUNG", it: "NUOVA DECISIONE",
+        ja: "新しい決定", zh: "新决定", ko: "새 결정", ru: "НОВОЕ РЕШЕНИЕ" }
+    /// Caption above the number in the stub.
+    confidence_label { en: "CONFIDENCE", pt: "CONFIANÇA", es: "CONFIANZA",
+        fr: "CONFIANCE", de: "SICHERHEIT", it: "FIDUCIA", ja: "確信度", zh: "置信度",
+        ko: "신뢰도", ru: "УВЕРЕННОСТЬ" }
     /// Ticket field: how far the choice reaches.
     field_scope { en: "SCOPE", pt: "ESCOPO", es: "ALCANCE", fr: "PORTÉE", de: "BEREICH",
         it: "AMBITO", ja: "範囲", zh: "范围", ko: "범위", ru: "ОБЛАСТЬ" }
@@ -43,12 +45,6 @@ strings! {
     field_applies { en: "APPLIES TO", pt: "VALE PARA", es: "VALE PARA", fr: "VAUT POUR",
         de: "GILT FÜR", it: "VALE PER", ja: "対象", zh: "适用于", ko: "적용 대상",
         ru: "ПРИМЕНЯЕТСЯ К" }
-    /// Ticket field: what it replaces.
-    field_replaces { en: "REPLACES", pt: "SUBSTITUI", es: "SUSTITUYE", fr: "REMPLACE",
-        de: "ERSETZT", it: "SOSTITUISCE", ja: "置換", zh: "替换", ko: "대체", ru: "ЗАМЕНЯЕТ" }
-    /// Nothing known for a ticket field.
-    field_none { en: "—", pt: "—", es: "—", fr: "—", de: "—", it: "—", ja: "—", zh: "—",
-        ko: "—", ru: "—" }
     /// Confidence level in the stub.
     confidence_high { en: "high", pt: "alta", es: "alta", fr: "élevée", de: "hoch",
         it: "alta", ja: "高", zh: "高", ko: "높음", ru: "высокая" }

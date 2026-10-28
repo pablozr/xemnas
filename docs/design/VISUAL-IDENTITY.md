@@ -426,11 +426,13 @@ Direção aprovada em `Shared/design/xemnas/revisao-direcao.md`; paleta Quiet Gl
 sem mudanças. Código em `screens/inbox/ticket.rs` e `ui/night_field.rs`.
 
 - **Uma decisão por tela.** Cartão de 760 × 296, raio 16, fundo `canvas_raised`: à
-  esquerda ID e origem, a pergunta, ANTES → AGORA em Bricolage (46/32/22 conforme o
-  tamanho do texto), quatro campos quietos (escopo, onde, vale para, substitui); picote
-  tracejado com dois recortes de 18 px; canhoto com a confiança em Bricolage 52, medidor
-  de 10 blocos e "alta · N fontes". O modelo não tem o valor anterior nem o que a
-  decisão substitui: ANTES e SUBSTITUI mostram "—" até existirem.
+  esquerda ID (mono 11) e origem (Inter 12), a pergunta, o valor proposto em Bricolage
+  34/600 (até 2 linhas) sob "NOVA DECISÃO", e só os campos que o modelo tem (escopo,
+  onde = arquivo do capture em mono 13, vale para); picote tracejado com dois recortes
+  de 18 px; canhoto com o rótulo "CONFIANÇA", o número em Bricolage 52 com "%" a 55%,
+  medidor de 10 blocos 8 × 10 e "alta · N fontes". O modelo não tem o valor anterior,
+  a linha do arquivo nem o que a decisão substitui: ANTES → AGORA e SUBSTITUI ficam
+  fora até existirem, e campo sem dado some em vez de mostrar "—".
 - **Linha de progresso** acima do cartão: `Manual | Automático` (28 px), no Automático
   "A IA aceitou N seguras" com `L`, dez traços (aceitas pela IA em verde a 30%, as suas
   em lavanda) e "x de y para você"; `Tab` abre a fila **em sobreposição** (não há mais
@@ -439,8 +441,8 @@ sem mudanças. Código em `screens/inbox/ticket.rs` e `ui/night_field.rs`.
 - **Motivo numa frase** de 17 px com chips para arquivos e citações. `↵` abre a prova
   (fontes, "por que", `←/→` troca de fonte, `Esc` fecha); `E` abre "o que muda se
   confirmar" (a leitura completa, com grupo, mapa, conflito e ressalvas).
-- **Pílula flutuante** Rejeitar R, Adiar S, Ajustar A, Confirmar C (a única lavanda), a
-  40 px da base, com "A seguir · …" acima.
+- **Pílula flutuante** Rejeitar R, Depois S, Ajustar A, Confirmar C (a única lavanda; as letras
+  são texto 11 sem caixa), a 40 px da base, com "A seguir · …" acima.
 - **Fila zerada:** "Fila zerada." em Bricolage 46, o resumo do dia e os atalhos `D`
   (Decisões) e `L` (o que a IA aceitou), sobre o Noturno em tela cheia.
 - **Noturno** (`ui::night_field::NightField`): paisagem ASCII viva (estrelas, lua,
@@ -448,7 +450,10 @@ sem mudanças. Código em `screens/inbox/ticket.rs` e `ui/night_field.rs`.
   reflexo, penhasco e o Nº I pescando, vagalumes, estrela cadente a cada decisão
   confirmada). Só texto e cor: linhas de `StyledText::with_highlights` com runs por
   (tom, alfa em 16 níveis), atrás do conteúdo e sem mouse; relógio compartilhado
-  (`motion::clock`, ~15 Hz, pausa sem foco); movimento reduzido mostra um quadro fixo.
+  (`motion::clock`, ~12 Hz, pausa sem foco); movimento reduzido mostra um quadro fixo.
+  A faixa do Bilhete ocupa o espaço entre "ver a prova" (24 px abaixo) e o colofão:
+  o layout mede o vão e a cena se ajusta (colunas até 198, linhas até 40, bordas de
+  16 colunas esmaecidas) com um único vão retangular atrás de "A seguir" e da pílula.
   O motor é puro (`render(&Scene, t, shooting)`) e testado; trocar a cena não mexe
   no resto. Colofão em mono com versão, commit (`build.rs`) e licença.
 
@@ -737,9 +742,9 @@ em `docs/arquitetura/desempenho-e-escala.md`. No visual, isso vira:
   Sem escala: `div` não tem transform; o deslocamento usa `relative().top()`
   para não mover os vizinhos.
 - Movimento contínuo (o sinal do grafo) nunca usa
-  `with_animation` em repetição: pede a fase a `motion::clock` (30 ou 15 Hz,
+  `with_animation` em repetição: pede a fase a `motion::clock` (30 ou 12 Hz,
   com lease de 300 ms), que estaciona quando nada visível pede. Movimento
-  reduzido devolve fase parada. Movimento grande e lento a 15 Hz anda aos
+  reduzido devolve fase parada. Movimento grande e lento a 12 Hz anda aos
   degraus: para o mascote, respirações curtas na taxa cheia, com repouso
   entre elas, em vez de um flutuar contínuo.
 - Popovers (paleta, painel do projeto, painel do assistente) guardam o

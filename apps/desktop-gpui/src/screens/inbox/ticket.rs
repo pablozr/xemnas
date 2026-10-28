@@ -4,12 +4,15 @@
 //! it opens over the ticket. The proof (sources) and the effect (the full
 //! reading) replace the ticket while open.
 
-use gpui::FontWeight;
+use std::cell::Cell;
+
+use gpui::{canvas, App, FontWeight};
 
 use super::*;
 use crate::app::{OpenProof, ToggleQueue};
 use crate::i18n::inbox_ticket as tt;
 use crate::ui::material::{elevation, Elevation};
+use crate::ui::night_field::strip_dims;
 use crate::ui::theme::code_style;
 use crate::ui::tokens::TypeToken;
 
@@ -29,13 +32,37 @@ const PILL_BOTTOM: f32 = 40.0;
 const REASON_CHARS: usize = 220;
 /// Height of the colophon line at the bottom.
 const COLOPHON_HEIGHT: f32 = 28.0;
+/// Gap between the "see the proof" line and the night under it.
+const NIGHT_GAP: f32 = 24.0;
+/// Columns and rows of the strip before the room for it is measured.
+const NIGHT_FIRST: (usize, usize) = (198, 18);
+/// Widest the "next" line gets: the width of the quiet hole behind it.
+const NEXT_WIDTH: f32 = 440.0;
+/// Blocks of the confidence meter.
+const METER_BLOCKS: usize = 10;
+/// The "%" of the stub, relative to the number.
+const PERCENT_SCALE: f32 = 0.55;
 
 /// The ticket's own tokens: Bricolage sizes of the mockup.
 const BIG_VALUE: TypeToken = TypeToken::new(46.0, 52.0, 500.0);
+/// The proposed value when nothing came before it.
+const NEW_VALUE: TypeToken = TypeToken::new(34.0, 40.0, 600.0);
 const MID_VALUE: TypeToken = TypeToken::new(32.0, 38.0, 500.0);
 const SMALL_VALUE: TypeToken = TypeToken::new(22.0, 28.0, 500.0);
 const STUB_VALUE: TypeToken = TypeToken::new(52.0, 58.0, 500.0);
 const REASON: TypeToken = TypeToken::new(17.0, 26.0, 400.0);
+/// Small captions above a value (11 / 500).
+const CAPTION: TypeToken = TypeToken::new(11.0, 16.0, 500.0);
+/// The file where the choice lives (mono 13).
+const WHERE_FILE: TypeToken = TypeToken::new(13.0, 19.0, 400.0);
+
+/// What the ticket knows of the room under it: the grid that fits it as the
+/// layout last measured it, and the one the last frame was drawn with.
+#[derive(Default)]
+pub(super) struct NightSlot {
+    measured: Cell<(usize, usize)>,
+    drawn: Cell<(usize, usize)>,
+}
 
 /// What fills the screen for the selected candidate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -133,13 +160,24 @@ fn confidence_level(value: f64) -> &'static str {
     }
 }
 
-/// The type token for a value of `len` characters, so a long choice still fits.
+/// The type token for a value of `len` characters, so a long choice still fits
+/// in two lines.
 fn value_token(len: usize) -> TypeToken {
-    match len {
-        0..=14 => BIG_VALUE,
-        15..=30 => MID_VALUE,
-        _ => SMALL_VALUE,
+    if len <= 40 {
+        NEW_VALUE
+    } else {
+        SMALL_VALUE
     }
+}
+
+/// The file a candidate touched, without its folders: where the choice lives.
+fn where_file(detail: &CandidateDetail) -> Option<String> {
+    detail
+        .diff_summary
+        .files
+        .first()
+        .and_then(|path| path.rsplit(['/', '\\']).find(|name| !name.is_empty()))
+        .map(str::to_owned)
 }
 
 impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
@@ -276,9 +314,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                     cx.propagate();
                 }
             }))
-            .when(empty || ticket, |surface| {
-                surface.child(self.night(empty, cx))
-            })
+            .when(empty, |surface| surface.child(self.night(cx)))
             .child(content)
             .when(empty || ticket, |surface| {
                 surface.child(self.colophon(theme, empty))
@@ -287,6 +323,11 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                 surface.child(self.queue_overlay(theme, visible, cx))
             })
             .into_any_element()
+    }
+
+    /// Puts the keyboard on the review surface, so Tab and Enter reach it.
+    pub fn focus_surface(&self, window: &mut Window, cx: &mut App) {
+        window.focus(&self.root_focus, cx);
     }
 
     /// The selected candidate, when the search still shows it.
@@ -334,13 +375,13 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
         (ai.min(total), (ai + self.decided).min(total), total)
     }
 
-    /// The night under the ticket (a strip) or over the whole empty queue,
-    /// behind everything and deaf to the mouse.
-    fn night(&self, full: bool, cx: &mut Context<Self>) -> AnyElement {
+    /// The night over the whole empty queue, behind everything and deaf to
+    /// the mouse.
+    fn night(&self, cx: &mut Context<Self>) -> AnyElement {
         let (_, done, total) = self.cycle();
-        let field = if full { &self.night_full } else { &self.night };
-        field.update(cx, |field, _| field.set_today(done, total));
-        let (width, height) = field.read(cx).size();
+        self.night_full
+            .update(cx, |field, _| field.set_today(done, total));
+        let (width, height) = self.night_full.read(cx).size();
         div()
             .absolute()
             .left_0()
@@ -351,8 +392,70 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             .flex()
             .justify_center()
             .overflow_hidden()
-            .child(div().w(px(width)).flex_none().child(field.clone()))
+            .child(
+                div()
+                    .w(px(width))
+                    .flex_none()
+                    .child(self.night_full.clone()),
+            )
             .into_any_element()
+    }
+
+    /// The night under the ticket: the room between the "see the proof" line
+    /// (24 px below it) and the colophon, with a strip as tall as fits in it,
+    /// resting on the bottom. The room is measured while painting; when the
+    /// grid that fits changes, the screen repaints once with it.
+    fn night_strip(&self, cx: &mut Context<Self>) -> Div {
+        let (_, done, total) = self.cycle();
+        let measured = self.night_slot.measured.get();
+        let (columns, rows) = if measured == (0, 0) {
+            NIGHT_FIRST
+        } else {
+            measured
+        };
+        self.night_slot.drawn.set((columns, rows));
+        let slot = self.night_slot.clone();
+        let screen = cx.entity_id();
+        let measure = canvas(
+            move |bounds, _, cx| {
+                let size = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+                let fits = strip_dims(size.0, size.1);
+                if fits != slot.measured.replace(fits) && fits != slot.drawn.get() {
+                    cx.defer(move |cx| cx.notify(screen));
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full();
+        let room = div()
+            .relative()
+            .w_full()
+            .flex_1()
+            .min_h(px(0.0))
+            .mt(px(NIGHT_GAP))
+            .mb(px(COLOPHON_HEIGHT))
+            .overflow_hidden()
+            .child(measure);
+        if rows == 0 {
+            return room;
+        }
+        self.night.update(cx, |field, _| {
+            field.set_today(done, total);
+            field.set_size(columns, rows);
+        });
+        let (width, height) = self.night.read(cx).size();
+        room.child(
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .bottom_0()
+                .h(px(height))
+                .flex()
+                .justify_center()
+                .child(div().w(px(width)).flex_none().child(self.night.clone())),
+        )
     }
 
     /// The colophon in mono: the build on the left, what the night is on the
@@ -421,22 +524,32 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                 .text_color(colors.text_muted())
                 .child(text)
         };
-        let hint = |key: &'static str, label: &'static str| {
-            div()
-                .flex_none()
-                .flex()
-                .items_center()
-                .gap(px(SpacingScale::S1))
-                .child(kbd(colors.text_muted(), key))
-                .child(muted(label.to_owned()))
-        };
+        let mode = self.mode_track(theme, cx);
+        let see_accepted = automatic.then(|| {
+            self.view_hint(
+                theme,
+                "progress-accepted",
+                "L",
+                tt::see(),
+                ReviewView::Accepted,
+                cx,
+            )
+        });
+        let queue = self.view_hint(
+            theme,
+            "progress-queue",
+            "Tab",
+            tt::queue_hint(),
+            ReviewView::Queue,
+            cx,
+        );
         div()
             .w_full()
             .h(px(28.0))
             .flex()
             .items_center()
             .gap(px(SpacingScale::S4))
-            .children(self.mode_track(theme, cx))
+            .children(mode)
             .when(automatic, |row| {
                 row.child(
                     text_style(div(), TypeScale::LABEL)
@@ -454,7 +567,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                         )
                         .child(tt::ai_accepted_after()),
                 )
-                .child(hint("L", tt::see()))
+                .children(see_accepted)
             })
             .when(!automatic && self.status.is_some(), |row| {
                 row.child(muted(tt::you_decide_all().to_owned()))
@@ -466,7 +579,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                 tt::position(position, mine.max(1))
             }))
             .child(div().flex_1())
-            .child(hint("Tab", tt::queue_hint()))
+            .child(queue)
     }
 
     /// The ticket: the card, the reason in one sentence and the hints.
@@ -514,19 +627,30 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             .gap(px(SpacingScale::S5))
             .child(self.progress_row(theme, cx))
             .child(self.card(theme, detail))
-            .child(self.reason_flow(theme, &one_sentence(&detail.rationale)))
+            .child(self.reason_flow(
+                theme,
+                &one_sentence(&detail.rationale),
+                where_file(detail).as_deref(),
+            ))
             .child(hints);
         div()
             .size_full()
             .flex()
             .flex_col()
-            .items_center()
-            .px(px(SpacingScale::S8))
-            .pt(px(56.0))
-            .child(fade_in(
-                column,
-                ElementId::Name(format!("ticket-{}", detail.summary.id).into()),
-            ))
+            .child(
+                div()
+                    .w_full()
+                    .flex_none()
+                    .flex()
+                    .justify_center()
+                    .px(px(SpacingScale::S8))
+                    .pt(px(56.0))
+                    .child(fade_in(
+                        column,
+                        ElementId::Name(format!("ticket-{}", detail.summary.id).into()),
+                    )),
+            )
+            .child(self.night_strip(cx))
             .child(self.action_pill(theme, next, cx))
             .into_any_element()
     }
@@ -561,9 +685,23 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             .child(label)
     }
 
-    /// The reason in a sentence of words and chips (files and quotes).
-    fn reason_flow(&self, theme: &Theme, sentence: &str) -> Div {
+    /// The reason in a sentence of words and chips (files and quotes). A
+    /// sentence with no chip of its own ends with the file of the capture,
+    /// when there is one.
+    fn reason_flow(&self, theme: &Theme, sentence: &str, file: Option<&str>) -> Div {
         let colors = theme.colors;
+        let chip = |word: String| {
+            code_style(div(), TypeScale::CODE)
+                .flex_none()
+                .px(px(6.0))
+                .rounded(px(5.0))
+                .bg(colors.glass_fill_medium())
+                .text_color(colors.text_primary())
+                .child(word)
+        };
+        let words: Vec<&str> = sentence.split_whitespace().collect();
+        let own_chip = words.iter().any(|word| is_chip(word));
+        let closing = file.filter(|_| !own_chip && !words.is_empty());
         code_style(
             div()
                 .w_full()
@@ -577,22 +715,20 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
         .text_color(colors.text_secondary())
         .gap_x(px(REASON.size * 0.27))
         .gap_y(px(4.0))
-        .children(sentence.split_whitespace().map(|word| {
+        .children(words.into_iter().map(|word| {
             if is_chip(word) {
-                code_style(div(), TypeScale::CODE)
-                    .flex_none()
-                    .px(px(6.0))
-                    .rounded(px(5.0))
-                    .bg(colors.glass_fill_medium())
-                    .text_color(colors.text_primary())
-                    .child(word.to_owned())
+                chip(word.to_owned())
             } else {
                 div().flex_none().child(word.to_owned())
             }
         }))
+        .children(closing.map(|name| chip(name.to_owned())))
     }
 
     /// The ticket card: the left side reads, the stub says how sure it is.
+    /// Nothing is shown that the model does not have: with no earlier value
+    /// the choice stands alone under "new decision", and a field with no data
+    /// is left out.
     fn card(&self, theme: &Theme, detail: &CandidateDetail) -> Div {
         let colors = theme.colors;
         let summary = &detail.summary;
@@ -612,16 +748,8 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             .skip(summary.id.chars().count().saturating_sub(4))
             .collect();
         let caption = |text: &'static str| {
-            text_style(div(), TypeScale::META)
-                .text_color(colors.text_muted())
-                .child(text)
-        };
-        let big = |text: String, color: gpui::Rgba| {
-            text_style(div(), token)
-                .font_family(Theme::font_display())
-                .text_color(color)
-                .max_h(px(token.line_height * 2.0))
-                .overflow_hidden()
+            text_style(div(), CAPTION)
+                .text_color(colors.text_disabled())
                 .child(text)
         };
         let scope = detail
@@ -629,23 +757,23 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             .iter()
             .find(|item| item.kind == application::qualifiers::QualifierKind::Scope)
             .map(|item| item.text.clone());
-        let field = |label: &'static str, value: Option<String>| {
+        let field = |label: &'static str, value: String, mono: bool| {
+            let text = if mono {
+                code_style(div(), WHERE_FILE)
+            } else {
+                text_style(div(), TypeScale::BODY_SMALL)
+            };
             div()
                 .flex_1()
                 .min_w(px(0.0))
                 .flex()
                 .flex_col()
                 .gap(px(2.0))
+                .child(caption(label))
                 .child(
-                    text_style(div(), TypeScale::META)
-                        .text_color(colors.text_disabled())
-                        .child(label),
-                )
-                .child(
-                    text_style(div(), TypeScale::BODY_SMALL)
-                        .text_color(colors.text_secondary())
+                    text.text_color(colors.text_secondary())
                         .truncate()
-                        .child(value.unwrap_or_else(|| tt::field_none().to_owned())),
+                        .child(value),
                 )
         };
         let kind = if summary.kind == CandidateKind::Rule {
@@ -662,10 +790,23 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             .flex_col()
             .gap(px(SpacingScale::S3))
             .child(
-                code_style(div(), TypeScale::META)
-                    .text_color(colors.text_muted())
-                    .truncate()
-                    .child(format!("{id}  {origin}")),
+                div()
+                    .flex()
+                    .items_baseline()
+                    .gap(px(SpacingScale::S2))
+                    .child(
+                        code_style(div(), TypeScale::META)
+                            .flex_none()
+                            .text_color(colors.text_disabled())
+                            .child(id),
+                    )
+                    .child(
+                        text_style(div(), TypeScale::LABEL)
+                            .min_w(px(0.0))
+                            .truncate()
+                            .text_color(colors.text_muted())
+                            .child(origin),
+                    ),
             )
             .children(self.left_for_you(&summary.id).map(|entry| {
                 div()
@@ -697,31 +838,15 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             .child(
                 div()
                     .flex()
-                    .items_end()
-                    .gap(px(SpacingScale::S5))
+                    .flex_col()
+                    .child(caption(tt::new_decision()))
                     .child(
-                        div()
-                            .flex_none()
-                            .flex()
-                            .flex_col()
-                            .child(big(tt::field_none().to_owned(), colors.text_disabled()))
-                            .child(caption(tt::before())),
-                    )
-                    .child(
-                        text_style(div(), MID_VALUE)
-                            .flex_none()
-                            .pb(px(SpacingScale::S5))
-                            .text_color(colors.text_muted())
-                            .child("→"),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .flex()
-                            .flex_col()
-                            .child(big(value.clone(), colors.text_primary()))
-                            .child(caption(tt::now())),
+                        text_style(div(), token)
+                            .font_family(Theme::font_display())
+                            .text_color(colors.text_primary())
+                            .max_h(px(token.line_height * 2.0))
+                            .overflow_hidden()
+                            .child(value.clone()),
                     ),
             )
             .child(div().flex_1())
@@ -729,13 +854,9 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                 div()
                     .flex()
                     .gap(px(SpacingScale::S4))
-                    .child(field(tt::field_scope(), scope))
-                    .child(field(
-                        tt::field_where(),
-                        Some(project_label(&summary.project_location).to_owned()),
-                    ))
-                    .child(field(tt::field_applies(), Some(kind.to_owned())))
-                    .child(field(tt::field_replaces(), None)),
+                    .children(where_file(detail).map(|file| field(tt::field_where(), file, true)))
+                    .children(scope.map(|scope| field(tt::field_scope(), scope, false)))
+                    .child(field(tt::field_applies(), kind.to_owned(), false)),
             );
         let filled = (summary.confidence * 10.0).round().clamp(0.0, 10.0) as usize;
         let stub = div()
@@ -746,24 +867,38 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             .flex_col()
             .items_center()
             .justify_center()
-            .gap(px(SpacingScale::S3))
+            .gap(px(SpacingScale::S2))
+            .child(caption(tt::confidence_label()))
             .child(
                 text_style(div(), STUB_VALUE)
                     .font_family(Theme::font_display())
+                    .flex()
+                    .items_baseline()
                     .text_color(colors.text_primary())
-                    .child(format!("{}%", (summary.confidence * 100.0).round() as i32)),
+                    .child((summary.confidence * 100.0).round().to_string())
+                    .child(
+                        div()
+                            .text_size(px(STUB_VALUE.size * PERCENT_SCALE))
+                            .text_color(colors.text_muted())
+                            .child("%"),
+                    ),
             )
-            .child(div().flex().gap(px(3.0)).children((0..10).map(|index| {
+            .child(
                 div()
-                    .w(px(10.0))
-                    .h(px(6.0))
-                    .rounded(px(2.0))
-                    .bg(if index < filled {
-                        colors.accent_default()
-                    } else {
-                        colors.glass_fill_strong()
-                    })
-            })))
+                    .flex()
+                    .gap(px(3.0))
+                    .children((0..METER_BLOCKS).map(|index| {
+                        div()
+                            .w(px(8.0))
+                            .h(px(10.0))
+                            .rounded(px(2.0))
+                            .bg(if index < filled {
+                                colors.accent_emphasis()
+                            } else {
+                                colors.surface()
+                            })
+                    })),
+            )
             .child(
                 text_style(div(), TypeScale::META)
                     .text_color(colors.text_muted())
@@ -885,10 +1020,16 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                             },
                         ))
                         .child(labels[index])
-                        .child(kbd(
-                            button_foreground(theme, kind, !self.busy),
-                            ["R", "S", "A", "C"][index],
-                        ))
+                        .child(
+                            text_style(div(), TypeScale::META)
+                                .flex_none()
+                                .text_color(if index == 3 && !self.busy {
+                                    colors.accent_subtle()
+                                } else {
+                                    colors.text_disabled()
+                                })
+                                .child(["R", "S", "A", "C"][index]),
+                        )
                 }),
             );
         div()
@@ -902,7 +1043,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             .gap(px(SpacingScale::S3))
             .children(next.map(|question| {
                 text_style(div(), TypeScale::LABEL)
-                    .max_w(px(TICKET_WIDTH))
+                    .max_w(px(NEXT_WIDTH))
                     .truncate()
                     .text_color(colors.text_muted())
                     .child(tt::next_up(&question))
@@ -965,7 +1106,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                         .flex_col()
                         .gap(px(SpacingScale::S2))
                         .child(section_label(theme, tt::proof_why()))
-                        .child(self.reason_flow(theme, &why)),
+                        .child(self.reason_flow(theme, &why, where_file(detail).as_deref())),
                 )
             })
             .child(
@@ -1115,8 +1256,8 @@ mod tests {
 
     #[test]
     fn long_choices_use_smaller_values() {
-        assert_eq!(value_token(5), BIG_VALUE);
-        assert_eq!(value_token(20), MID_VALUE);
+        assert_eq!(value_token(5), NEW_VALUE);
+        assert_eq!(value_token(40), NEW_VALUE);
         assert_eq!(value_token(80), SMALL_VALUE);
     }
 }
