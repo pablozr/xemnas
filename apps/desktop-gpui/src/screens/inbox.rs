@@ -37,6 +37,7 @@ use crate::i18n::inbox as t;
 use crate::ui::controls::{action_button, button_foreground, ButtonKind};
 use crate::ui::glass::focus_ring;
 use crate::ui::icons::{icon, IconName};
+use crate::ui::night_field::{NightField, Scene};
 use crate::ui::patterns::{
     action_footer, count_chip, error_banner, fade_in, hover_tint, kbd, mark_selected, meter,
     panel_title, reading_title, section_header, section_label, skeleton_list, status_pill, tag,
@@ -196,6 +197,9 @@ pub struct InboxScreen<S: InboxStore + ReviewExceptionStore + Send + 'static> {
     decided: usize,
     /// Focus of the screen itself, so Tab can open the queue from it.
     root_focus: FocusHandle,
+    /// The night behind the ticket, and the one behind the empty queue.
+    night: Entity<NightField>,
+    night_full: Entity<NightField>,
 }
 
 /// Confirmations in a row, each within `STREAK_GAP`, that read as a reflex.
@@ -664,6 +668,8 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             queue_open: false,
             decided: 0,
             root_focus: cx.focus_handle(),
+            night: cx.new(|_| NightField::new(Scene::strip())),
+            night_full: cx.new(|_| NightField::new(Scene::full())),
         }
     }
 
@@ -1055,6 +1061,11 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                         this.note_confirmation(notice);
                         if counts_as_decision(notice) {
                             this.decided += 1;
+                        }
+                        if confirmed_notice(notice) {
+                            for field in [&this.night, &this.night_full] {
+                                field.update(cx, |field, cx| field.shoot(cx));
+                            }
                         }
                         this.page(false, cx);
                     }
@@ -2631,6 +2642,17 @@ fn section(theme: Theme, label: &'static str, content: &str) -> Div {
 
 /// Whether a notice tells that the person decided a candidate (and did not
 /// resume or undo one).
+/// Whether a notice tells that a candidate was confirmed.
+fn confirmed_notice(notice: &'static str) -> bool {
+    [
+        t::notice_confirmed_linked(),
+        t::notice_confirmed(),
+        t::notice_edits_confirmed_linked(),
+        t::notice_edits_confirmed(),
+    ]
+    .contains(&notice)
+}
+
 fn counts_as_decision(notice: &'static str) -> bool {
     [
         t::notice_confirmed_linked(),

@@ -27,6 +27,8 @@ const DASHES: usize = 10;
 const PILL_BOTTOM: f32 = 40.0;
 /// Characters of the reason kept on the ticket.
 const REASON_CHARS: usize = 220;
+/// Height of the colophon line at the bottom.
+const COLOPHON_HEIGHT: f32 = 28.0;
 
 /// The ticket's own tokens: Bricolage sizes of the mockup.
 const BIG_VALUE: TypeToken = TypeToken::new(46.0, 52.0, 500.0);
@@ -229,6 +231,15 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let home = self.root_focus.is_focused(window);
+        let empty = self.detail_visible().is_none()
+            && self.loaded
+            && self.rows.is_empty()
+            && !self.busy
+            && self.editor.is_none();
+        let ticket = self.editor.is_none()
+            && self.detail_visible().is_some()
+            && !self.conflict_open()
+            && self.pane == Pane::Ticket;
         let content = if let Some(editor) = self.editor.as_ref().filter(|_| {
             self.detail
                 .as_ref()
@@ -265,7 +276,13 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                     cx.propagate();
                 }
             }))
+            .when(empty || ticket, |surface| {
+                surface.child(self.night(empty, cx))
+            })
             .child(content)
+            .when(empty || ticket, |surface| {
+                surface.child(self.colophon(theme, empty))
+            })
             .when(self.queue_open, |surface| {
                 surface.child(self.queue_overlay(theme, visible, cx))
             })
@@ -309,13 +326,69 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             .into_any_element()
     }
 
+    /// The day's cycle as (accepted by the AI, done, total), at most
+    /// `DASHES` long: the dashes and the stars of the night share it.
+    fn cycle(&self) -> (usize, usize, usize) {
+        let ai = self.accepted_by_ai();
+        let total = (ai + self.decided + self.rows.len()).clamp(2, DASHES);
+        (ai.min(total), (ai + self.decided).min(total), total)
+    }
+
+    /// The night under the ticket (a strip) or over the whole empty queue,
+    /// behind everything and deaf to the mouse.
+    fn night(&self, full: bool, cx: &mut Context<Self>) -> AnyElement {
+        let (_, done, total) = self.cycle();
+        let field = if full { &self.night_full } else { &self.night };
+        field.update(cx, |field, _| field.set_today(done, total));
+        let (width, height) = field.read(cx).size();
+        div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .bottom(px(COLOPHON_HEIGHT))
+            .h(px(height))
+            .w_full()
+            .flex()
+            .justify_center()
+            .overflow_hidden()
+            .child(div().w(px(width)).flex_none().child(field.clone()))
+            .into_any_element()
+    }
+
+    /// The colophon in mono: the build on the left, what the night is on the
+    /// right.
+    fn colophon(&self, theme: &Theme, closed: bool) -> Div {
+        let colors = theme.colors;
+        code_style(
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .bottom_0()
+                .h(px(COLOPHON_HEIGHT))
+                .px(px(SpacingScale::S6))
+                .flex()
+                .items_center()
+                .justify_between()
+                .text_color(colors.text_disabled()),
+            TypeScale::META,
+        )
+        .child(tt::colophon_build(
+            env!("CARGO_PKG_VERSION"),
+            env!("XEMNAS_COMMIT"),
+            env!("CARGO_PKG_LICENSE"),
+        ))
+        .child(if closed {
+            tt::colophon_closed()
+        } else {
+            tt::colophon_night()
+        })
+    }
+
     /// Dashes of the cycle: the AI's accepted ones (green, faint), what the
     /// person decided, the one being read and what is left.
     fn dashes(&self, theme: &Theme) -> Div {
-        let ai = self.accepted_by_ai();
-        let total = (ai + self.decided + self.rows.len()).clamp(1, DASHES);
-        let ai = ai.min(total);
-        let done = (ai + self.decided).min(total);
+        let (ai, done, total) = self.cycle();
         let colors = theme.colors;
         div()
             .flex()
