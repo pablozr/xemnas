@@ -44,6 +44,8 @@ const HOLE_FADE: f64 = 3.0;
 const STILL_TIME: f64 = 9.0;
 /// How long a shooting star lasts after it is fired, in seconds.
 const SHOOTING_SECONDS: f64 = 1.6;
+/// How much of its alpha the quiet grey keeps, so the ridges stay a whisper.
+const GROUND_STRENGTH: f32 = 0.7;
 /// Levels the alpha is quantized to.
 const ALPHA_LEVELS: f32 = 16.0;
 
@@ -953,8 +955,13 @@ impl NightField {
             Tone::Accent => theme.colors.accent_emphasis().into(),
             Tone::Warn => theme.colors.status_warning().into(),
         };
+        let strength = if tone == Tone::Ground {
+            GROUND_STRENGTH
+        } else {
+            1.0
+        };
         Hsla {
-            a: f32::from(step) / ALPHA_LEVELS,
+            a: f32::from(step) / ALPHA_LEVELS * strength,
             ..base
         }
     }
