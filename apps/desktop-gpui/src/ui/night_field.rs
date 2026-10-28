@@ -26,6 +26,20 @@ use crate::ui::theme::Theme;
 pub const CELL_WIDTH: f32 = 7.2;
 /// Line height of the strip, in pixels.
 pub const CELL_HEIGHT: f32 = 13.0;
+/// Columns and rows of the reference strip.
+const STRIP_WIDTH: usize = 198;
+const STRIP_HEIGHT: usize = 18;
+/// The smallest grid worth drawing.
+const MIN_COLUMNS: usize = 40;
+const MIN_ROWS: usize = 8;
+/// Rows of the tallest strip: past it the room is left empty above.
+const MAX_ROWS: usize = 40;
+/// Rows of the quiet hole behind the action pill and the "next" line.
+const ACTIONS_HOLE_ROWS: usize = 8;
+/// Half the width of that hole, in columns: half the pill plus two.
+const ACTIONS_HOLE_HALF: f64 = 30.0;
+/// Columns over which the hole's edge fades back to the scene.
+const HOLE_FADE: f64 = 3.0;
 /// A fixed instant for reduced motion: the moon high, the fisher awake.
 const STILL_TIME: f64 = 9.0;
 /// How long a shooting star lasts after it is fired, in seconds.
@@ -110,28 +124,53 @@ pub struct Scene {
 }
 
 impl Scene {
-    /// The strip between the ticket and the bottom of the review.
+    /// The strip between the ticket and the bottom of the review, at the
+    /// size of the design reference.
     pub fn strip() -> Self {
+        Self::strip_sized(STRIP_WIDTH, STRIP_HEIGHT)
+    }
+
+    /// The strip over `width` columns and `height` rows: the reference scene
+    /// (198 × 18) with its parts spread over the room there is, so a taller
+    /// or narrower window still gets a whole night with its edges faded.
+    pub fn strip_sized(width: usize, height: usize) -> Self {
+        let (width, height) = (width.max(MIN_COLUMNS), height.max(MIN_ROWS));
+        let (w, h) = (width as f64, height as f64);
+        let (across, down) = (w / STRIP_WIDTH as f64, h / STRIP_HEIGHT as f64);
         Self {
-            width: 198,
-            height: 18,
-            water: 5,
-            moon: (30.0, 5.0, 3.6),
-            stars: 110,
+            width,
+            height,
+            water: ((5.0 * down).round() as usize).clamp(2, height / 2),
+            moon: (30.0 * across, 5.0 * down, (3.6 * down).min(8.0)),
+            stars: (110.0 * across * down).round() as usize,
             done: 0,
             total: 10,
-            arc: (118.0, 7.0, 22.0),
-            mountains: (8.0, 5.0),
+            arc: (118.0 * across, 7.0 * down, 22.0 * across),
+            mountains: (8.0 * down, 5.0 * down),
             parallax: (0.25, 0.6),
             wind: 1.2,
-            birds: 2.0,
-            cliff: (166.0, 4.0),
-            flies: 5,
-            shoot: (40.0, 0.0),
-            edge: 14.0,
-            scale: 1.0,
-            holes: vec![(66.0, 134.0, 10.0, 17.0)],
+            birds: 2.0 * down,
+            cliff: (166.0 * across, 4.0 * down),
+            flies: (5.0 * down).round() as usize,
+            shoot: (40.0 * across, 0.0),
+            edge: 16.0,
+            scale: down,
+            holes: vec![Self::actions_hole(width, height)],
         }
+    }
+
+    /// One rectangle that stays quiet behind the "next" line and the action
+    /// pill: from a row above the line to the base of the pill, and as wide
+    /// as the pill plus two columns each side. Centred, hugging the bottom.
+    fn actions_hole(width: usize, height: usize) -> (f64, f64, f64, f64) {
+        let middle = width as f64 / 2.0;
+        let rows = ACTIONS_HOLE_ROWS.min(height) as f64;
+        (
+            middle - ACTIONS_HOLE_HALF,
+            middle + ACTIONS_HOLE_HALF,
+            height as f64 - rows,
+            height as f64 - 1.0,
+        )
     }
 
     /// The whole screen, behind the empty queue.
@@ -156,6 +195,18 @@ impl Scene {
             scale: 2.6,
             holes: vec![(72.0, 128.0, 23.0, 34.0)],
         }
+    }
+}
+
+/// The grid that fits a box of `width` by `height` pixels: columns, then
+/// rows. Zero rows mean the box is too small for a night worth drawing.
+pub fn strip_dims(width: f32, height: f32) -> (usize, usize) {
+    let columns = ((width / CELL_WIDTH).floor().max(0.0) as usize).min(STRIP_WIDTH);
+    let rows = ((height / CELL_HEIGHT).floor().max(0.0) as usize).min(MAX_ROWS);
+    if columns < MIN_COLUMNS || rows < MIN_ROWS {
+        (columns, 0)
+    } else {
+        (columns, rows)
     }
 }
 
@@ -795,19 +846,15 @@ fn mask(grid: &mut Grid, scene: &Scene) {
             let mut m = (xf.min((w - 1 - x) as f64) / scene.edge).min(1.0);
             m *= ((yf + 1.0) / 3.0).min(1.0);
             for &(x0, x1, y0, y1) in &scene.holes {
-                if yf >= y0 && yf <= y1 && xf > x0 - 8.0 && xf < x1 + 8.0 {
+                if yf > y0 - HOLE_FADE && yf <= y1 && xf > x0 - HOLE_FADE && xf < x1 + HOLE_FADE {
                     let dx = if xf < x0 {
-                        (x0 - xf) / 8.0
+                        (x0 - xf) / HOLE_FADE
                     } else if xf > x1 {
-                        (xf - x1) / 8.0
+                        (xf - x1) / HOLE_FADE
                     } else {
                         0.0
                     };
-                    let dy = if yf < y0 + 2.0 {
-                        (y0 + 2.0 - yf) / 3.0
-                    } else {
-                        0.0
-                    };
+                    let dy = if yf < y0 { (y0 - yf) / HOLE_FADE } else { 0.0 };
                     m *= (0.10 + 0.90 * dx.max(dy)).min(1.0);
                 }
             }
@@ -868,6 +915,17 @@ impl NightField {
     pub fn set_today(&mut self, done: usize, total: usize) {
         self.scene.done = done;
         self.scene.total = total;
+    }
+
+    /// Fits the strip to `width` columns by `height` rows (a no-op when it
+    /// already has them). The parent is repainting, so this does not notify.
+    pub fn set_size(&mut self, width: usize, height: usize) {
+        if (self.scene.width, self.scene.height) == (width, height) {
+            return;
+        }
+        let (done, total) = (self.scene.done, self.scene.total);
+        self.scene = Scene::strip_sized(width, height);
+        self.set_today(done, total);
     }
 
     /// Fires a shooting star (a confirmed decision).
@@ -1004,15 +1062,68 @@ mod tests {
 
     #[test]
     fn the_hole_behind_the_actions_is_quiet() {
-        let scene = Scene::strip();
-        let cells = render(&scene, 5.0, None);
-        let loudest = |x0: usize, x1: usize| {
-            (12..scene.height)
-                .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+        for (width, height) in [(198, 18), (198, 30), (120, 12)] {
+            let scene = Scene::strip_sized(width, height);
+            let cells = render(&scene, 5.0, None);
+            let (x0, x1, y0, _) = scene.holes[0];
+            let loudest = (y0 as usize..scene.height)
+                .flat_map(|y| (x0 as usize + 2..x1 as usize - 1).map(move |x| (x, y)))
                 .map(|(x, y)| cells[y * scene.width + x].alpha)
-                .fold(0.0_f32, f32::max)
-        };
-        assert!(loudest(68, 132) < 0.1, "{}", loudest(68, 132));
+                .fold(0.0_f32, f32::max);
+            assert!(loudest < 0.1, "{width}x{height}: {loudest}");
+            assert_eq!(scene.holes.len(), 1);
+        }
+    }
+
+    #[test]
+    fn the_ridges_stay_faint() {
+        let scene = Scene::strip();
+        let loudest = render(&scene, 5.0, None)
+            .iter()
+            .filter(|cell| cell.tone == Tone::Ground)
+            .map(|cell| cell.alpha)
+            .fold(0.0_f32, f32::max);
+        assert!(loudest <= 0.7, "{loudest}");
+    }
+
+    #[test]
+    fn both_edges_fade_at_every_size() {
+        for (width, height) in [(198, 18), (110, 30), (60, 10)] {
+            let scene = Scene::strip_sized(width, height);
+            let cells = render(&scene, 5.0, None);
+            for y in 0..scene.height {
+                let strongest = |range: Range<usize>| {
+                    range
+                        .map(|x| cells[y * scene.width + x].alpha)
+                        .fold(0.0_f32, f32::max)
+                };
+                // One column in, the fade leaves a cell at most 1/edge of its alpha.
+                let limit = 2.0 / scene.edge as f32;
+                assert!(
+                    strongest(0..2) <= limit,
+                    "{width}x{height} row {y}: {}",
+                    strongest(0..2)
+                );
+                assert!(
+                    strongest(scene.width - 2..scene.width) <= limit,
+                    "{width}x{height} row {y}: {}",
+                    strongest(scene.width - 2..scene.width)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_strip_fits_the_room_it_is_given() {
+        assert_eq!(strip_dims(2000.0, 600.0), (STRIP_WIDTH, MAX_ROWS));
+        assert_eq!(strip_dims(1000.0, 234.0), (138, 18));
+        assert_eq!(strip_dims(1000.0, 60.0).1, 0);
+        assert_eq!(strip_dims(200.0, 300.0).1, 0);
+        let mut field = NightField::new(Scene::strip());
+        field.set_today(3, 7);
+        field.set_size(120, 24);
+        assert_eq!((field.scene.width, field.scene.height), (120, 24));
+        assert_eq!((field.scene.done, field.scene.total), (3, 7));
     }
 
     #[test]

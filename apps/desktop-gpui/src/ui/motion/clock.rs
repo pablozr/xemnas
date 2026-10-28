@@ -5,7 +5,7 @@
 //! for as long as it is mounted; the mascot is always mounted, so the window
 //! never went idle. Zeron measured the same pattern pinning a window at the
 //! display rate (36% CPU). Here a view asks for the phase of a loop and takes
-//! a short lease; one timer notifies the leased views at 30 or 15 Hz, and
+//! a short lease; one timer notifies the leased views at 30 or 12 Hz, and
 //! parks when no lease is renewed (the view was hidden or closed). Reduced
 //! motion returns a still phase and schedules nothing.
 //!
@@ -19,6 +19,9 @@ use gpui::{App, EntityId, Global};
 
 /// One tick of the clock (~30 Hz).
 const TICK: Duration = Duration::from_millis(33);
+/// How early a view may be notified when its turn is a hair away, so a
+/// 12 Hz view lands on the closest tick instead of a whole tick late.
+const SLACK: Duration = Duration::from_millis(8);
 /// How long a view stays driven after its last paint asked for a phase.
 const LEASE: Duration = Duration::from_millis(300);
 
@@ -27,28 +30,29 @@ const LEASE: Duration = Duration::from_millis(300);
 pub enum Rate {
     /// ~30 Hz: thin lines and text, where steps would show.
     Smooth,
-    /// ~15 Hz: slow, large motion (a float of a few pixels).
+    /// ~12 Hz (83 ms): slow, large motion (the night's ASCII frames).
     Calm,
 }
 
 impl Rate {
-    fn stride(self) -> u64 {
+    fn interval(self) -> Duration {
         match self {
-            Self::Smooth => 1,
-            Self::Calm => 2,
+            Self::Smooth => Duration::ZERO,
+            Self::Calm => Duration::from_millis(83),
         }
     }
 }
 
 struct Lease {
     until: Instant,
-    stride: u64,
+    interval: Duration,
+    /// When the view is due its next notification.
+    next: Instant,
 }
 
 struct Clock {
     epoch: Instant,
     leases: HashMap<EntityId, Lease>,
-    tick: u64,
     running: bool,
     /// Whether the window has the focus; nothing moves on its own while it
     /// does not (the loops park and nothing is repainted for them).
@@ -62,7 +66,6 @@ impl Default for Clock {
         Self {
             epoch: Instant::now(),
             leases: HashMap::new(),
-            tick: 0,
             running: false,
             active: true,
         }
@@ -113,10 +116,11 @@ fn lease(view: EntityId, rate: Rate, cx: &mut App) {
     let clock = cx.default_global::<Clock>();
     let entry = clock.leases.entry(view).or_insert(Lease {
         until: now,
-        stride: rate.stride(),
+        interval: rate.interval(),
+        next: now,
     });
     entry.until = now + LEASE;
-    entry.stride = rate.stride();
+    entry.interval = rate.interval();
     if clock.running {
         return;
     }
@@ -134,14 +138,13 @@ fn lease(view: EntityId, rate: Rate, cx: &mut App) {
                 clock.running = false;
                 return true;
             }
-            clock.tick = clock.tick.wrapping_add(1);
-            let tick = clock.tick;
-            let due: Vec<EntityId> = clock
-                .leases
-                .iter()
-                .filter(|(_, lease)| tick.is_multiple_of(lease.stride))
-                .map(|(view, _)| *view)
-                .collect();
+            let mut due = Vec::new();
+            for (view, lease) in &mut clock.leases {
+                if now + SLACK >= lease.next {
+                    lease.next = (lease.next + lease.interval).max(now);
+                    due.push(*view);
+                }
+            }
             for view in due {
                 cx.notify(view);
             }
