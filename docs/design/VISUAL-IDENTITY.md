@@ -420,6 +420,38 @@ modelo; os dados novos entram no JSON sem mudar a Rust além do tipo.
   e mostra uma linha explicando isso. Nunca ids internos nem métricas de oportunidade no
   texto.
 
+## Revisão — o Bilhete (uma decisão por tela)
+
+Direção aprovada em `Shared/design/xemnas/revisao-direcao.md`; paleta Quiet Glass
+sem mudanças. Código em `screens/inbox/ticket.rs` e `ui/night_field.rs`.
+
+- **Uma decisão por tela.** Cartão de 760 × 296, raio 16, fundo `canvas_raised`: à
+  esquerda ID e origem, a pergunta, ANTES → AGORA em Bricolage (46/32/22 conforme o
+  tamanho do texto), quatro campos quietos (escopo, onde, vale para, substitui); picote
+  tracejado com dois recortes de 18 px; canhoto com a confiança em Bricolage 52, medidor
+  de 10 blocos e "alta · N fontes". O modelo não tem o valor anterior nem o que a
+  decisão substitui: ANTES e SUBSTITUI mostram "—" até existirem.
+- **Linha de progresso** acima do cartão: `Manual | Automático` (28 px), no Automático
+  "A IA aceitou N seguras" com `L`, dez traços (aceitas pela IA em verde a 30%, as suas
+  em lavanda) e "x de y para você"; `Tab` abre a fila **em sobreposição** (não há mais
+  coluna de fila nem de efeitos).
+- **Tag âmbar** "a IA deixou para você · motivo" no cartão (`left_for_you`).
+- **Motivo numa frase** de 17 px com chips para arquivos e citações. `↵` abre a prova
+  (fontes, "por que", `←/→` troca de fonte, `Esc` fecha); `E` abre "o que muda se
+  confirmar" (a leitura completa, com grupo, mapa, conflito e ressalvas).
+- **Pílula flutuante** Rejeitar R, Adiar S, Ajustar A, Confirmar C (a única lavanda), a
+  40 px da base, com "A seguir · …" acima.
+- **Fila zerada:** "Fila zerada." em Bricolage 46, o resumo do dia e os atalhos `D`
+  (Decisões) e `L` (o que a IA aceitou), sobre o Noturno em tela cheia.
+- **Noturno** (`ui::night_field::NightField`): paisagem ASCII viva (estrelas, lua,
+  nuvens, arco de hoje com uma estrela por decisão, cordilheiras com paralaxe, água com
+  reflexo, penhasco e o Nº I pescando, vagalumes, estrela cadente a cada decisão
+  confirmada). Só texto e cor: linhas de `StyledText::with_highlights` com runs por
+  (tom, alfa em 16 níveis), atrás do conteúdo e sem mouse; relógio compartilhado
+  (`motion::clock`, ~15 Hz, pausa sem foco); movimento reduzido mostra um quadro fixo.
+  O motor é puro (`render(&Scene, t, shooting)`) e testado; trocar a cena não mexe
+  no resto. Colofão em mono com versão, commit (`build.rs`) e licença.
+
 ## Aprovação automática
 
 É um interruptor como o modo de permissão de um agente: **Manual | Automático**, uma

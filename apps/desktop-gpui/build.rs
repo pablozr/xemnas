@@ -21,9 +21,9 @@ fn main() {
         commit.unwrap_or_else(|| "dev".to_owned())
     );
     println!("cargo:rerun-if-env-changed=XEMNAS_COMMIT");
-    // Git's HEAD moves with each commit; the path differs inside a worktree.
+    // The reflog of HEAD grows with each commit; the path differs inside a worktree.
     if let Some(head) = Command::new("git")
-        .args(["rev-parse", "--git-path", "HEAD"])
+        .args(["rev-parse", "--git-path", "logs/HEAD"])
         .output()
         .ok()
         .and_then(|output| String::from_utf8(output.stdout).ok())

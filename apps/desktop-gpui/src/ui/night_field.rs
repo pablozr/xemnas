@@ -130,7 +130,7 @@ impl Scene {
             shoot: (40.0, 0.0),
             edge: 14.0,
             scale: 1.0,
-            holes: vec![(74.0, 126.0, 11.0, 17.0)],
+            holes: vec![(66.0, 134.0, 10.0, 17.0)],
         }
     }
 
@@ -923,7 +923,7 @@ impl Render for NightField {
             .font_weight(FontWeight::NORMAL)
             .text_size(px(12.0))
             .line_height(px(CELL_HEIGHT))
-            .text_color(Hsla::transparent_black())
+            .text_color(theme.colors.text_muted())
             .children(lines(&cells, self.scene.width).into_iter().map(|line| {
                 let highlights = line
                     .runs
@@ -1007,12 +1007,12 @@ mod tests {
         let scene = Scene::strip();
         let cells = render(&scene, 5.0, None);
         let loudest = |x0: usize, x1: usize| {
-            (13..scene.height)
+            (12..scene.height)
                 .flat_map(|y| (x0..x1).map(move |x| (x, y)))
                 .map(|(x, y)| cells[y * scene.width + x].alpha)
                 .fold(0.0_f32, f32::max)
         };
-        assert!(loudest(76, 124) < 0.1, "{}", loudest(76, 124));
+        assert!(loudest(68, 132) < 0.1, "{}", loudest(68, 132));
     }
 
     #[test]
