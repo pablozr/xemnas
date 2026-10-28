@@ -140,7 +140,7 @@ impl Scene {
         Self {
             width,
             height,
-            water: ((5.0 * down).round() as usize).clamp(2, height / 2),
+            water: ((5.0 * down).round() as usize).clamp(2, (height * 3 / 10).max(2)),
             moon: (30.0 * across, 5.0 * down, (3.6 * down).min(8.0)),
             stars: (110.0 * across * down).round() as usize,
             done: 0,
@@ -154,7 +154,7 @@ impl Scene {
             flies: (5.0 * down).round() as usize,
             shoot: (40.0 * across, 0.0),
             edge: 16.0,
-            scale: down,
+            scale: 1.0,
             holes: vec![Self::actions_hole(width, height)],
         }
     }
@@ -843,7 +843,9 @@ fn mask(grid: &mut Grid, scene: &Scene) {
                 continue;
             }
             let (xf, yf) = (x as f64, y as f64);
-            let mut m = (xf.min((w - 1 - x) as f64) / scene.edge).min(1.0);
+            let side = (xf.min((w - 1 - x) as f64) / scene.edge).min(1.0);
+            // Squared, so the fade is felt well inside the edge and not only at it.
+            let mut m = side * side;
             m *= ((yf + 1.0) / 3.0).min(1.0);
             for &(x0, x1, y0, y1) in &scene.holes {
                 if yf > y0 - HOLE_FADE && yf <= y1 && xf > x0 - HOLE_FADE && xf < x1 + HOLE_FADE {
@@ -1073,6 +1075,16 @@ mod tests {
             assert!(loudest < 0.1, "{width}x{height}: {loudest}");
             assert_eq!(scene.holes.len(), 1);
         }
+    }
+
+    #[test]
+    fn the_strip_is_as_light_as_the_reference() {
+        let scene = Scene::strip();
+        let cells = render(&scene, 5.0, None);
+        let lit = cells.iter().filter(|cell| cell.alpha > 0.25).count();
+        let share = lit as f64 / cells.len() as f64;
+        eprintln!("lit share: {share:.4}");
+        assert!(share < 0.2, "{share}");
     }
 
     #[test]

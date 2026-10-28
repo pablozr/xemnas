@@ -16,11 +16,21 @@ fn main() {
                 .ok()
                 .map(|c| c.trim().to_owned())
         });
-    println!(
-        "cargo:rustc-env=XEMNAS_COMMIT={}",
-        commit.unwrap_or_else(|| "dev".to_owned())
-    );
+    // Uncommitted changes mark the hash, so a binary never passes for a commit it is not.
+    let dirty = Command::new("git")
+        .args(["status", "--porcelain", "--untracked-files=no"])
+        .output()
+        .ok()
+        .is_some_and(|output| output.status.success() && !output.stdout.is_empty());
+    let commit = commit.unwrap_or_else(|| "dev".to_owned());
+    let commit = if dirty && std::env::var("XEMNAS_COMMIT").is_err() {
+        format!("{commit}-dirty")
+    } else {
+        commit
+    };
+    println!("cargo:rustc-env=XEMNAS_COMMIT={commit}");
     println!("cargo:rerun-if-env-changed=XEMNAS_COMMIT");
+    println!("cargo:rerun-if-changed=src");
     // The reflog of HEAD grows with each commit; the path differs inside a worktree.
     if let Some(head) = Command::new("git")
         .args(["rev-parse", "--git-path", "logs/HEAD"])

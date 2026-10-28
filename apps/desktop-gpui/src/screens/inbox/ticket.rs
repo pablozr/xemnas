@@ -48,7 +48,7 @@ const BIG_VALUE: TypeToken = TypeToken::new(46.0, 52.0, 500.0);
 /// The proposed value when nothing came before it.
 const NEW_VALUE: TypeToken = TypeToken::new(34.0, 40.0, 600.0);
 const MID_VALUE: TypeToken = TypeToken::new(32.0, 38.0, 500.0);
-const SMALL_VALUE: TypeToken = TypeToken::new(22.0, 28.0, 500.0);
+const SMALL_VALUE: TypeToken = TypeToken::new(28.0, 34.0, 600.0);
 const STUB_VALUE: TypeToken = TypeToken::new(52.0, 58.0, 500.0);
 const REASON: TypeToken = TypeToken::new(17.0, 26.0, 400.0);
 /// Small captions above a value (11 / 500).
@@ -160,10 +160,13 @@ fn confidence_level(value: f64) -> &'static str {
     }
 }
 
+/// Characters a choice may have and still be set at the full size.
+const FULL_VALUE_CHARS: usize = 60;
+
 /// The type token for a value of `len` characters, so a long choice still fits
-/// in two lines.
+/// in three lines.
 fn value_token(len: usize) -> TypeToken {
-    if len <= 40 {
+    if len <= FULL_VALUE_CHARS {
         NEW_VALUE
     } else {
         SMALL_VALUE
@@ -702,6 +705,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
         let words: Vec<&str> = sentence.split_whitespace().collect();
         let own_chip = words.iter().any(|word| is_chip(word));
         let closing = file.filter(|_| !own_chip && !words.is_empty());
+        let last = words.len().saturating_sub(1);
         code_style(
             div()
                 .w_full()
@@ -715,14 +719,24 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
         .text_color(colors.text_secondary())
         .gap_x(px(REASON.size * 0.27))
         .gap_y(px(4.0))
-        .children(words.into_iter().map(|word| {
-            if is_chip(word) {
+        .children(words.into_iter().enumerate().map(|(index, word)| {
+            let piece = if is_chip(word) {
                 chip(word.to_owned())
             } else {
                 div().flex_none().child(word.to_owned())
+            };
+            match closing {
+                // The file of the capture stays with the last word: it never wraps alone.
+                Some(name) if index == last => div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap_x(px(REASON.size * 0.27))
+                    .child(piece)
+                    .child(chip(name.to_owned())),
+                _ => piece,
             }
         }))
-        .children(closing.map(|name| chip(name.to_owned())))
     }
 
     /// The ticket card: the left side reads, the stub says how sure it is.
@@ -844,7 +858,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                         text_style(div(), token)
                             .font_family(Theme::font_display())
                             .text_color(colors.text_primary())
-                            .max_h(px(token.line_height * 2.0))
+                            .max_h(px(token.line_height * 3.0))
                             .overflow_hidden()
                             .child(value.clone()),
                     ),
@@ -1257,7 +1271,8 @@ mod tests {
     #[test]
     fn long_choices_use_smaller_values() {
         assert_eq!(value_token(5), NEW_VALUE);
-        assert_eq!(value_token(40), NEW_VALUE);
+        assert_eq!(value_token(52), NEW_VALUE);
+        assert_eq!(value_token(60), NEW_VALUE);
         assert_eq!(value_token(80), SMALL_VALUE);
     }
 }
