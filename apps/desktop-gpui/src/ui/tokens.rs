@@ -791,6 +791,9 @@ impl ControlSize {
     pub const SM: f32 = 28.0;
     /// `control.md` = 32: tabs, toolbar buttons, fields and review actions.
     pub const MD: f32 = 32.0;
+    /// `control.row` = 56: a dense list row, the question over one line of
+    /// meta (the review queue).
+    pub const ROW: f32 = 56.0;
 }
 
 /// Corner radii (`radius.control` … `radius.round`).

@@ -437,6 +437,11 @@ sem mudanças. Código em `screens/inbox/ticket.rs` e `ui/night_field.rs`.
   "A IA aceitou N seguras" com `L`, dez traços (aceitas pela IA em verde a 30%, as suas
   em lavanda) e "x de y para você"; `Tab` abre a fila **em sobreposição** (não há mais
   coluna de fila nem de efeitos).
+- **Linha densa da fila** (`ControlSize::ROW` = 56 px): ícone de 12 px numa coluna de
+  16 (sem círculo), a pergunta em uma linha (13/500, truncada) e, 2 px abaixo, uma
+  linha de meta (escolha truncada à esquerda; data, estado e "para você" à direita). A
+  meta é `text_muted` e sobe para `text_secondary` na linha selecionada. A seleção tem
+  pelo menos 1,5:1 sobre o rail nas cinco paletas.
 - **Tag âmbar** "a IA deixou para você · motivo" no cartão (`left_for_you`).
 - **Motivo numa frase** de 17 px com chips para arquivos e citações. `↵` abre a prova
   (fontes, "por que", `←/→` troca de fonte, `Esc` fecha); `E` abre "o que muda se

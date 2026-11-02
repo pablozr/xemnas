@@ -44,11 +44,11 @@ use crate::ui::night_field::{NightField, Scene};
 use crate::ui::patterns::{
     action_footer, count_chip, error_banner, fade_in, hover_tint, kbd, mark_selected, meter,
     panel_title, reading_title, section_header, section_label, skeleton_list, status_pill, tag,
-    toast_with, track_hover, word_wrapped, READING_WIDTH, TOAST_DURATION,
+    toast_with, track_hover, READING_WIDTH, TOAST_DURATION,
 };
 use crate::ui::search_field::SearchField;
 use crate::ui::theme::{text_style, Theme};
-use crate::ui::tokens::{SpacingScale, TypeScale};
+use crate::ui::tokens::{ControlSize, SpacingScale, TypeScale};
 use crate::ui::tooltip::tooltip;
 use crate::ui::visits;
 use chrono::Local;
@@ -1485,19 +1485,27 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
         let hover_key = id.clone();
         let hovered = self.hovered.as_deref() == Some(row.id.as_str());
         let rule = row.kind == CandidateKind::Rule;
+        // The meta line lifts one step on the selected row, which sits on a
+        // lighter plate.
+        let meta = if selected {
+            theme.colors.text_secondary()
+        } else {
+            theme.colors.text_muted()
+        };
         // A rule is blue, as on the timeline; a decision not yet confirmed
         // stays neutral.
         let tone = if rule {
             theme.colors.status_info()
         } else {
-            theme.colors.text_muted()
+            meta
         };
         let element = div()
             .id((ElementId::from("candidate"), row.id.clone()))
             .relative()
+            .h(px(ControlSize::ROW))
             .px(px(SpacingScale::S4))
-            .py(px(SpacingScale::S3))
             .flex()
+            .items_center()
             .gap(px(SpacingScale::S3))
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                 if track_hover(&mut this.hovered, hover_key.clone(), *hovered) {
@@ -1531,67 +1539,59 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                     cx.stop_propagation();
                 }
             }))
-            .child(
-                div()
-                    .size(px(22.0))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_full()
-                    .bg(crate::ui::tokens::tint(tone, 0.14))
-                    .child(icon(
-                        if rule {
-                            IconName::Shield
-                        } else {
-                            IconName::Decision
-                        },
-                        12.0,
-                        tone,
-                    )),
-            )
+            .child(div().w(px(16.0)).flex_none().child(icon(
+                if rule {
+                    IconName::Shield
+                } else {
+                    IconName::Decision
+                },
+                12.0,
+                tone,
+            )))
             .child(
                 div()
                     .flex_1()
                     .min_w(px(0.0))
                     .flex()
                     .flex_col()
-                    .gap(px(SpacingScale::S1))
+                    // The spec's 2 px between the question and the meta line;
+                    // the spacing scale starts at 4.
+                    .gap(px(2.0))
                     .child(
-                        div()
+                        text_style(div(), TypeScale::ROW_TITLE)
+                            .truncate()
+                            .text_color(theme.colors.text_primary())
+                            .child(row.question.clone()),
+                    )
+                    .child(
+                        text_style(div(), TypeScale::META)
                             .flex()
                             .items_center()
-                            .justify_between()
                             .gap(px(SpacingScale::S2))
+                            .text_color(meta)
                             .child(
-                                text_style(div(), TypeScale::META)
-                                    .text_color(theme.colors.text_muted())
-                                    .child(relative(&row.received_at)),
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .truncate()
+                                    .child(row.choice.clone()),
                             )
                             .child(
                                 div()
+                                    .flex_none()
                                     .flex()
                                     .items_center()
                                     .gap(px(SpacingScale::S2))
+                                    .child(relative(&row.received_at))
                                     .when(row.status != CandidateStatus::Pending, |line| {
                                         line.child(status_badge(row.status, theme))
                                     })
                                     .children(self.left_for_you(&row.id).map(|_| {
-                                        text_style(div(), TypeScale::META)
+                                        div()
                                             .text_color(theme.colors.status_info())
                                             .child(t::left_for_you_tag())
                                     })),
                             ),
-                    )
-                    .child(
-                        word_wrapped(&row.question, TypeScale::ROW_TITLE, Some(2))
-                            .text_color(theme.colors.text_primary()),
-                    )
-                    .child(
-                        text_style(div(), TypeScale::BODY_SMALL)
-                            .text_color(theme.colors.text_muted())
-                            .line_clamp(2)
-                            .child(row.choice.clone()),
                     ),
             );
         let mut element = mark_selected(element, &theme, selected);
