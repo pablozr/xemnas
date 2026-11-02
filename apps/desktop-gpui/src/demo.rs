@@ -62,6 +62,10 @@ fn demo_failed_assessment(
 pub(crate) fn store() -> Result<SqliteStore, Box<dyn std::error::Error>> {
     let store = SqliteStore::open(":memory:")?;
     let long_evidence = std::env::args().any(|arg| arg == "--long-evidence");
+    // Capture aid: `XEMNAS_DEMO_EMPTY_REVIEW=1` leaves the sample project's
+    // queue empty (its captures and confirmed decisions stay), so the empty
+    // Revisão and its capture state can be captured.
+    let empty_review = std::env::var_os("XEMNAS_DEMO_EMPTY_REVIEW").is_some();
     let samples = [
         ("Como garantir uma única decisão por captura?", "Confirmar candidatos em uma transação com validação de versão.", "A validação impede decisões duplicadas quando duas revisões acontecem ao mesmo tempo.", "transaction.begin();\nvalidate_version(candidate);\npersist_decision(candidate);\ntransaction.commit();"),
         ("Onde armazenar credenciais do provedor?", "Guardar a chave no cofre de credenciais do sistema.", "A chave fica fora do arquivo de configuração e dos logs.", "let secret = keystore.get(profile_id)?;\nprovider.configure(secret);"),
@@ -201,8 +205,11 @@ pub(crate) fn store() -> Result<SqliteStore, Box<dyn std::error::Error>> {
                 significance: 1.0,
                 criteria: "[]".to_string(),
             };
-            store.insert_candidates(&[candidate.clone()])?;
-            if project == "demo-xemnas" && index == 1 {
+            let pending = !(empty_review && project == "demo-xemnas");
+            if pending {
+                store.insert_candidates(&[candidate.clone()])?;
+            }
+            if pending && project == "demo-xemnas" && index == 1 {
                 let mut rule = candidate.clone();
                 rule.id = "demo-rule-candidate".into();
                 rule.dedup_hash = "demo-rule-candidate".into();
@@ -212,10 +219,10 @@ pub(crate) fn store() -> Result<SqliteStore, Box<dyn std::error::Error>> {
                     "Nunca registrar credenciais em arquivos de configuração ou logs.".into();
                 store.insert_candidates(&[rule])?;
             }
-            if index == 0 && std::env::var_os("XEMNAS_DEMO_CALIBRATION").is_some() {
+            if pending && index == 0 && std::env::var_os("XEMNAS_DEMO_CALIBRATION").is_some() {
                 seed_decided(&store, &candidate)?;
             }
-            if index == 0 && project == "demo-xemnas" {
+            if pending && index == 0 && project == "demo-xemnas" {
                 if let Ok(state) = std::env::var("XEMNAS_DEMO_APPROVAL") {
                     seed_approval(&store, &candidate, &state)?;
                 }

@@ -221,6 +221,9 @@ pub struct InboxScreen<S: InboxStore + ReviewExceptionStore + Send + 'static> {
     pane: ticket::Pane,
     /// Whether the queue is open over the ticket (the queue is not a column).
     queue_open: bool,
+    /// The demo route `review:queue` asked for the queue open: each page that
+    /// loads keeps it open instead of closing it over the first candidate.
+    queue_route: bool,
     /// Candidates decided by the person since this screen opened.
     decided: usize,
     /// Focus of the screen itself, so Tab can open the queue from it.
@@ -437,6 +440,13 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             )
             .child(chips)
             .into_any_element()
+    }
+
+    /// Opens the queue over the ticket and keeps it open as pages load (the
+    /// demo route `review:queue`, to capture the list without a key press).
+    pub fn open_queue(&mut self) {
+        self.queue_open = true;
+        self.queue_route = true;
     }
 
     /// Installs the capture read behind the empty queue's activity line.
@@ -696,6 +706,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             streak: Vec::new(),
             pane: ticket::Pane::Ticket,
             queue_open: false,
+            queue_route: false,
             decided: 0,
             root_focus: cx.focus_handle(),
             night: cx.new(|_| NightField::new(Scene::strip())),
@@ -1039,7 +1050,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                                 .or_else(|| this.rows.first().map(|row| row.id.clone()));
                             this.selected = None;
                             if let Some(id) = next {
-                                this.queue_open = false;
+                                this.queue_open = this.queue_route;
                                 this.select(id, cx);
                             }
                         }

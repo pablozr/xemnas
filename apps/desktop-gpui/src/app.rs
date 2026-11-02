@@ -834,6 +834,13 @@ impl<
             self.open_settings_at(section, cx);
             return;
         }
+        if route == "review:queue" {
+            self.switch_to(Destination::Review, window, cx);
+            if let Some(inbox) = &self.inbox {
+                inbox.update(cx, |screen, _| screen.open_queue());
+            }
+            return;
+        }
         if matches!(route, "map:suggestions" | "review:ties") {
             self.review_tab = ReviewTab::Ties;
             self.switch_to(Destination::Review, window, cx);

@@ -9,10 +9,12 @@
     (PW_RENDERFULLCONTENT). Nothing on screen is covered and no input is
     sent, so it is safe while the machine is in use.
 
-    Routes: overview, overview:flow0, review, decisions, context, map,
-    map:timeline, map:suggestions, map:file, map:entity:<name>,
+    Routes: overview, overview:flow0, review, review:queue, decisions,
+    context, map, map:timeline, map:suggestions, map:file, map:entity:<name>,
     settings:<section> (ai, opencode, diagnostics, appearance, language).
     -Language picks the interface language (default en).
+    XEMNAS_DEMO_CAPTURE=listening|unavailable sets the capture state and
+    XEMNAS_DEMO_EMPTY_REVIEW=1 empties the sample project's queue.
 
 .EXAMPLE
     powershell -File tools\capture-background.ps1 -Route map:timeline -Name timeline

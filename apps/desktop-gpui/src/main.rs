@@ -98,7 +98,7 @@ fn main() {
                 Arc::new(ai_provider::ChatGptSession::default()),
             ),
             true,
-            CaptureStatus::Demo,
+            demo_capture_status(),
             None,
         );
         return;
@@ -1090,6 +1090,17 @@ fn demo_startup_error() -> Option<StartupError> {
         "migration" => Some(StartupError::Migration { detail }),
         "open" => Some(StartupError::CannotOpen { detail }),
         _ => None,
+    }
+}
+
+/// Capture aid for the demo only: `XEMNAS_DEMO_CAPTURE=listening|unavailable`
+/// shows the capture states of Revisão and of the project bar without a
+/// real local API; anything else keeps the demo state.
+fn demo_capture_status() -> CaptureStatus {
+    match std::env::var("XEMNAS_DEMO_CAPTURE").as_deref() {
+        Ok("listening") => CaptureStatus::Listening,
+        Ok("unavailable") => CaptureStatus::Unavailable,
+        _ => CaptureStatus::Demo,
     }
 }
 
