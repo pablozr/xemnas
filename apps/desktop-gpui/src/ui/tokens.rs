@@ -82,7 +82,7 @@ const QUIET_GLASS: Palette = Palette {
     floating_glass: Tone(0x181E2A, 0.94),
     surface: Tone::solid(0x181E2A),
     surface_hover: Tone::solid(0x202634),
-    selection: Tone::solid(0x1C1A28),
+    selection: Tone::solid(0x342F45),
     glass_surface_lavender: Tone::solid(0x1C1A28),
     glass_edge_lavender: Tone::solid(0x514A63),
     hairline_divider: Tone(0xCDC7DC, 0.10),
@@ -110,7 +110,7 @@ const CHARCOAL: Palette = Palette {
     floating_glass: Tone(0x26262C, 0.95),
     surface: Tone::solid(0x26262C),
     surface_hover: Tone::solid(0x302B39),
-    selection: Tone::solid(0x302B39),
+    selection: Tone::solid(0x3E3849),
     glass_surface_lavender: Tone::solid(0x26262C),
     glass_edge_lavender: Tone::solid(0x49434F),
     hairline_divider: Tone::solid(0x35353D),
@@ -139,7 +139,7 @@ const ORGANIZATION: Palette = Palette {
     floating_glass: Tone(0x16161B, 0.95),
     surface: Tone::solid(0x16161B),
     surface_hover: Tone::solid(0x1E1E25),
-    selection: Tone::solid(0x1C1D23),
+    selection: Tone::solid(0x303138),
     glass_surface_lavender: Tone::solid(0x1C1D23),
     glass_edge_lavender: Tone::solid(0x4D5260),
     hairline_divider: Tone(0xD4D8E2, 0.09),
@@ -167,7 +167,7 @@ const MOSS: Palette = Palette {
     floating_glass: Tone(0x18201C, 0.95),
     surface: Tone::solid(0x18201C),
     surface_hover: Tone::solid(0x202A25),
-    selection: Tone::solid(0x1B2620),
+    selection: Tone::solid(0x2B3731),
     glass_surface_lavender: Tone::solid(0x1B2620),
     glass_edge_lavender: Tone::solid(0x4A5E52),
     hairline_divider: Tone(0xC9D8CF, 0.10),
@@ -195,7 +195,7 @@ const MIDNIGHT: Palette = Palette {
     floating_glass: Tone(0x141C2E, 0.95),
     surface: Tone::solid(0x141C2E),
     surface_hover: Tone::solid(0x1B2539),
-    selection: Tone::solid(0x16233A),
+    selection: Tone::solid(0x233350),
     glass_surface_lavender: Tone::solid(0x16233A),
     glass_edge_lavender: Tone::solid(0x3F5776),
     hairline_divider: Tone(0xC4D2E6, 0.10),
@@ -925,6 +925,32 @@ mod tests {
             assert!((a - b).abs() < 1e-6, "{got:?} != {expected:?}");
         }
         assert_eq!(super::mix(canvas, warning, 0.0), canvas);
+    }
+
+    /// The selected row reads at a glance against its neighbours on the rail
+    /// (1.5:1) and keeps its text legible.
+    #[test]
+    fn selection_stands_out_and_keeps_text_legible() {
+        for (name, colors) in [
+            ("quiet_glass", ColorTokens::quiet_glass()),
+            ("charcoal", ColorTokens::charcoal()),
+            ("organization", ColorTokens::organization()),
+            ("moss", ColorTokens::moss()),
+            ("midnight", ColorTokens::midnight()),
+        ] {
+            let selection = opaque(colors.selection());
+            let rail = contrast_ratio(selection, opaque(colors.rail()));
+            assert!(rail >= 1.5, "{name}: selection / rail {rail:.2}");
+            for (text, color) in [
+                ("primary", colors.text_primary()),
+                ("secondary", colors.text_secondary()),
+            ] {
+                let ratio = contrast_ratio(composite_over(color, colors.selection()), selection);
+                assert!(ratio >= 4.5, "{name}: text {text} / selection {ratio:.2}");
+            }
+        }
+        let charcoal = ColorTokens::charcoal();
+        assert_ne!(charcoal.selection(), charcoal.surface_hover());
     }
 
     /// The R/S/A/C letters of the review pill: C on the lavender Confirm and
