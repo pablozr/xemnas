@@ -11,6 +11,11 @@
 //! star per decision), birds, two parallax ridgelines with mist, water with
 //! the reflection, the cliff with its grass, the fisher (Nº I), fireflies and
 //! the shooting star. Masks fade the edges and open holes behind the texts.
+//!
+//! v4 (design `noturno-v4/referencias.md`): the ridges are a line, not a fill
+//! (glyphs picked by where the line crosses the cell), the far one fainter
+//! than the near one, the moonlit crests lavender instead of brighter, and the
+//! land keeps the reference's size so a taller window only adds sky.
 
 use std::ops::Range;
 
@@ -45,7 +50,7 @@ const STILL_TIME: f64 = 9.0;
 /// How long a shooting star lasts after it is fired, in seconds.
 const SHOOTING_SECONDS: f64 = 1.6;
 /// How much of its alpha the quiet grey keeps, so the ridges stay a whisper.
-const GROUND_STRENGTH: f32 = 0.7;
+const GROUND_STRENGTH: f32 = 0.5;
 /// Levels the alpha is quantized to.
 const ALPHA_LEVELS: f32 = 16.0;
 
@@ -139,21 +144,23 @@ impl Scene {
         let (width, height) = (width.max(MIN_COLUMNS), height.max(MIN_ROWS));
         let (w, h) = (width as f64, height as f64);
         let (across, down) = (w / STRIP_WIDTH as f64, h / STRIP_HEIGHT as f64);
+        // The land keeps the reference's size: a taller strip only adds sky.
+        let ground = down.min(1.0);
         Self {
             width,
             height,
-            water: ((5.0 * down).round() as usize).clamp(2, (height * 3 / 10).max(2)),
-            moon: (30.0 * across, 5.0 * down, (3.6 * down).min(8.0)),
-            stars: (110.0 * across * down).round() as usize,
+            water: ((5.0 * ground).round() as usize).clamp(2, (height * 3 / 10).max(2)),
+            moon: (30.0 * across, 5.0 * down, (3.6 * ground).min(8.0)),
+            stars: (80.0 * across * down).round() as usize,
             done: 0,
             total: 10,
             arc: (118.0 * across, 7.0 * down, 22.0 * across),
-            mountains: (8.0 * down, 5.0 * down),
+            mountains: (8.0 * ground, 5.0 * ground),
             parallax: (0.25, 0.6),
             wind: 1.2,
             birds: 2.0 * down,
-            cliff: (166.0 * across, 4.0 * down),
-            flies: (5.0 * down).round() as usize,
+            cliff: (166.0 * across, 4.0 * ground),
+            flies: (5.0 * ground).round() as usize,
             shoot: (40.0 * across, 0.0),
             edge: 16.0,
             scale: 1.0,
@@ -286,6 +293,8 @@ struct Ridge {
     edge: f64,
     fill: f64,
     lit: f64,
+    /// Alpha of the crest where the moon catches it (lavender).
+    moonlit: f64,
 }
 
 fn ridge_height(x: f64, s: f64, amp: f64, base: f64, scale: f64) -> f64 {
@@ -332,9 +341,10 @@ pub fn render(scene: &Scene, t: f64, shooting: Option<f64>) -> Vec<Cell> {
         scene.mountains.0,
         hz,
         &Ridge {
-            edge: 0.32,
-            fill: 0.06,
-            lit: 0.24,
+            edge: 0.30,
+            fill: 0.0,
+            lit: 0.16,
+            moonlit: 0.16,
         },
     );
     let mist_top = (hz - scene.mountains.1 * 0.9).floor() as i64;
@@ -343,9 +353,9 @@ pub fn render(scene: &Scene, t: f64, shooting: Option<f64>) -> Vec<Cell> {
             let xf = x as f64;
             let v = ((xf - t * scene.wind * 0.6) * 0.06 + y as f64 * 0.8).sin()
                 + ((xf + t * scene.wind * 0.3) * 0.023 - y as f64 * 0.5).sin();
-            if v > 1.25 && grid.get(x, y).ch == ' ' {
+            if v > 1.45 && grid.get(x, y).ch == ' ' {
                 let ch = if v > 1.6 { '~' } else { '-' };
-                grid.set(xf, y as f64, ch, 0.06 + (v - 1.25) * 0.10, Tone::Ground);
+                grid.set(xf, y as f64, ch, 0.06 + (v - 1.45) * 0.10, Tone::Ground);
             }
         }
     }
@@ -357,9 +367,10 @@ pub fn render(scene: &Scene, t: f64, shooting: Option<f64>) -> Vec<Cell> {
         scene.mountains.1,
         hz + 0.4,
         &Ridge {
-            edge: 0.52,
-            fill: 0.08,
-            lit: 0.44,
+            edge: 0.62,
+            fill: 0.0,
+            lit: 0.30,
+            moonlit: 0.30,
         },
     );
 
@@ -378,7 +389,7 @@ pub fn render(scene: &Scene, t: f64, shooting: Option<f64>) -> Vec<Cell> {
                 } else {
                     '-'
                 };
-                alpha = f64::from(source.alpha) * 0.38 * (1.0 - k * 0.6);
+                alpha = f64::from(source.alpha) * 0.26 * (1.0 - k * 0.6);
                 tone = source.tone;
             }
             let n = (xf * 0.17 + t * 0.9 + yf * 2.3).sin()
@@ -388,15 +399,12 @@ pub fn render(scene: &Scene, t: f64, shooting: Option<f64>) -> Vec<Cell> {
             let path = 1.4 + k * mr * 2.4;
             let dx = (xf - mx).abs();
             if dx < path && n > -0.7 {
-                ch = if n > 0.5 { '=' } else { '-' };
-                alpha = alpha.max((0.5 - k * 0.25) * (1.0 - dx / path * 0.6));
+                ch = if n > 0.9 { '=' } else { '-' };
+                alpha = alpha.max((0.4 - k * 0.2) * (1.0 - dx / path * 0.6));
                 tone = Tone::Accent;
-            } else if n > 1.15 && alpha < 0.1 {
+            } else if n > 1.3 && alpha < 0.1 {
                 ch = '~';
-                alpha = 0.11 + 0.07 * (1.0 - k);
-            } else if n > 0.7 && alpha < 0.06 {
-                ch = '-';
-                alpha = 0.07;
+                alpha = 0.10 + 0.06 * (1.0 - k);
             }
             if alpha > 0.0 {
                 grid.set(xf, yf, ch, alpha, tone);
@@ -489,7 +497,7 @@ fn moon(grid: &mut Grid, scene: &Scene, t: f64) {
                     xf,
                     yf,
                     ramp(" .:+*#%@", v * 7.0, 1, 7),
-                    0.34 + v * 0.6,
+                    0.30 + v * 0.55,
                     Tone::Accent,
                 );
             } else if d < 1.0 {
@@ -519,7 +527,7 @@ fn clouds(grid: &mut Grid, scene: &Scene, t: f64, hz: f64) {
             let v = (u * 0.035 + yf * 0.9 / s).sin() * (u * 0.083 - yf * 0.4 / s + 1.7).sin()
                 + 0.45 * (u * 0.19 + yf * 1.3 / s).sin()
                 - 0.18 * (yf - hz * 0.28).abs() / s;
-            if v < 0.74 {
+            if v < 0.84 {
                 continue;
             }
             let near = ((xf - mx) / 1.8).hypot(yf - my) / mr;
@@ -534,7 +542,7 @@ fn clouds(grid: &mut Grid, scene: &Scene, t: f64, hz: f64) {
             if lit > 0.05 {
                 grid.set(xf, yf, ch, 0.10 + lit * 0.30, Tone::Accent);
             } else {
-                grid.set(xf, yf, ch, 0.07 + (v - 0.74) * 0.14, Tone::Ground);
+                grid.set(xf, yf, ch, 0.07 + (v - 0.84) * 0.14, Tone::Ground);
             }
         }
         y += 1;
@@ -612,22 +620,46 @@ fn ridgeline(
         } else {
             '_'
         };
+        // A gentle crest picks the glyph whose stroke sits where the line
+        // passes inside the cell: through the middle `-`, near the top `¯`,
+        // or low in the row above `_`.
+        let above = top as f64 - m;
+        let crest = if edge != '_' {
+            edge
+        } else if above < 0.25 {
+            '-'
+        } else if above < 0.6 {
+            '¯'
+        } else {
+            '_'
+        };
         for y in top..hz as i64 {
             if y <= top.max(neighbour - 1) {
-                let ch = if edge == '_' && y > top { '|' } else { edge };
-                grid.set(
-                    x as f64,
-                    y as f64,
-                    ch,
-                    paint.edge * (0.6 + 0.4 * lit),
-                    Tone::Ground,
-                );
+                let on_crest = y == top;
+                let (ch, row) = if on_crest {
+                    (crest, if crest == '_' { y - 1 } else { y })
+                } else {
+                    (if edge == '_' { '|' } else { edge }, y)
+                };
+                // The slopes facing the moon catch its light: the crest turns
+                // lavender instead of brighter, so it reads without more ink.
+                if on_crest && lit > 0.8 {
+                    grid.set(x as f64, row as f64, ch, paint.moonlit, Tone::Accent);
+                } else {
+                    grid.set(
+                        x as f64,
+                        row as f64,
+                        ch,
+                        paint.edge * (0.8 + 0.2 * lit),
+                        Tone::Ground,
+                    );
+                }
                 continue;
             }
             let depth = (y as f64 - m) / (amp * 0.55);
             let v = lit * (-depth * 1.4).exp();
             let noise = ((x * 7 + y * 11) % 5) as f64 / 5.0;
-            if v + noise * 0.18 < 0.12 {
+            if v + noise * 0.18 < 0.24 {
                 grid.set(x as f64, y as f64, ' ', 0.0, Tone::Ground);
                 continue;
             }
@@ -656,13 +688,13 @@ fn cliff(grid: &mut Grid, scene: &Scene, t: f64, hz: f64, top: f64) {
                 grid.set(xf, yf, '\\', 0.42, Tone::Ground);
                 continue;
             }
-            let v = clamp(1.0 - (xf - edge) / (14.0 * s));
+            let v = clamp(1.0 - (xf - edge) / (10.0 * s));
             let noise = (((xf * 12.9898 + yf * 78.233).sin() * 43758.5453) % 1.0 + 1.0) % 1.0;
             grid.set(
                 xf,
                 yf,
                 ramp(" .:-=", v * 3.0 + noise, 0, 4),
-                0.10 + v * 0.22,
+                0.05 + v * 0.18,
                 Tone::Ground,
             );
         }
@@ -1103,6 +1135,38 @@ mod tests {
             .map(|cell| cell.alpha)
             .fold(0.0_f32, f32::max);
         assert!(loudest <= 0.7, "{loudest}");
+    }
+
+    #[test]
+    fn a_taller_strip_only_adds_sky() {
+        let scene = Scene::strip_sized(198, 30);
+        let reference = Scene::strip();
+        assert_eq!(scene.mountains, reference.mountains);
+        assert_eq!(scene.water, reference.water);
+        assert_eq!(scene.cliff.1, reference.cliff.1);
+        let cells = render(&scene, 5.0, None);
+        let hz = scene.height - scene.water;
+        let sky = hz - scene.mountains.0.ceil() as usize - 2;
+        let land = (0..sky)
+            .flat_map(|y| (0..(scene.cliff.0 - 12.0) as usize).map(move |x| (x, y)))
+            .map(|(x, y)| cells[y * scene.width + x])
+            .filter(|cell| cell.visible() && r"/\_¯|".contains(cell.ch))
+            .count();
+        assert_eq!(land, 0);
+    }
+
+    #[test]
+    fn the_strip_does_not_get_darker_when_taller() {
+        let ink = |height| {
+            let scene = Scene::strip_sized(198, height);
+            let cells = render(&scene, 5.0, None);
+            cells
+                .iter()
+                .map(|cell| f64::from(level(cell.alpha)))
+                .sum::<f64>()
+                / cells.len() as f64
+        };
+        assert!(ink(30) <= ink(18), "{} > {}", ink(30), ink(18));
     }
 
     #[test]
