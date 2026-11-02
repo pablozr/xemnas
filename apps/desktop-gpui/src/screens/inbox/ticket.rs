@@ -33,7 +33,7 @@ const REASON_CHARS: usize = 220;
 /// Height of the colophon line at the bottom.
 const COLOPHON_HEIGHT: f32 = 28.0;
 /// Gap between the "see the proof" line and the night under it.
-const NIGHT_GAP: f32 = 24.0;
+const NIGHT_GAP: f32 = 20.0;
 /// Columns and rows of the strip before the room for it is measured.
 const NIGHT_FIRST: (usize, usize) = (198, 18);
 /// Widest the "next" line gets: the width of the quiet hole behind it.
@@ -410,7 +410,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
     }
 
     /// The night under the ticket: the room between the "see the proof" line
-    /// (24 px below it) and the colophon, with a strip as tall as fits in it,
+    /// (20 px below it) and the colophon, with a strip as tall as fits in it,
     /// resting on the bottom. The room is measured while painting; when the
     /// grid that fits changes, the screen repaints once with it.
     fn night_strip(&self, cx: &mut Context<Self>) -> Div {
