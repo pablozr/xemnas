@@ -1039,10 +1039,12 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                         .child(
                             text_style(div(), TypeScale::META)
                                 .flex_none()
-                                .text_color(if index == 3 && !self.busy {
-                                    colors.accent_subtle()
-                                } else {
+                                .text_color(if self.busy {
                                     colors.text_disabled()
+                                } else if index == 3 {
+                                    colors.accent_on_emphasis()
+                                } else {
+                                    colors.text_muted()
                                 })
                                 .child(["R", "S", "A", "C"][index]),
                         )

@@ -927,6 +927,27 @@ mod tests {
         assert_eq!(super::mix(canvas, warning, 0.0), canvas);
     }
 
+    /// The R/S/A/C letters of the review pill: C on the lavender Confirm and
+    /// the others on the pill's surface.
+    #[test]
+    fn shortcut_letters_meet_wcag_aa() {
+        for colors in [
+            ColorTokens::quiet_glass(),
+            ColorTokens::charcoal(),
+            ColorTokens::organization(),
+            ColorTokens::moss(),
+            ColorTokens::midnight(),
+        ] {
+            let canvas = colors.canvas();
+            let confirm = composite_over(colors.accent_emphasis(), canvas);
+            let letter_c = contrast_ratio(opaque(colors.accent_on_emphasis()), confirm);
+            assert!(letter_c >= 4.5, "C on Confirm: {letter_c:.2}");
+            let surface = composite_over(colors.surface(), canvas);
+            let others = contrast_ratio(composite_over(colors.text_muted(), canvas), surface);
+            assert!(others >= 4.5, "R/S/A on the pill: {others:.2}");
+        }
+    }
+
     #[test]
     fn rendered_text_surfaces_meet_wcag_aa() {
         for colors in [
