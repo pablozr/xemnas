@@ -30,10 +30,12 @@ mod conflict;
 mod ticket;
 pub use ticket::{OpenDecisions, ReviewView};
 
+use super::capture_health::{self, CaptureView};
 use super::context::OpenDecision;
 use super::evidence;
 use super::format::{relative, short_date};
 use super::review_editor::{EditorEvent, ReviewEditor};
+use crate::app::CaptureStatus;
 use crate::i18n::inbox as t;
 use crate::ui::controls::{action_button, button_foreground, ButtonKind};
 use crate::ui::glass::focus_ring;
@@ -49,6 +51,7 @@ use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{SpacingScale, TypeScale};
 use crate::ui::tooltip::tooltip;
 use crate::ui::visits;
+use chrono::Local;
 
 /// What a person can take back from the last action.
 #[derive(Clone)]
@@ -188,6 +191,8 @@ pub struct InboxScreen<S: InboxStore + ReviewExceptionStore + Send + 'static> {
     progress_read: Option<ProgressRead>,
     progress: Vec<CaptureProgress>,
     progress_busy: bool,
+    /// Whether captures can reach the app, as the shell knows it.
+    capture: Option<CaptureStatus>,
     /// The previous visit to the project, read once to build the briefing.
     since_visit: Option<String>,
     /// What changed since that visit, shown as one quiet line.
@@ -454,6 +459,18 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
         self.progress_read = Some(read);
     }
 
+    /// Whether captures can reach the app, for the empty queue's capture state.
+    pub fn set_capture(&mut self, status: CaptureStatus) {
+        self.capture = Some(status);
+    }
+
+    /// The capture state of the project from the captures last read; nothing
+    /// until the shell says whether captures can arrive.
+    pub(crate) fn capture_view(&self) -> Option<CaptureView> {
+        self.capture
+            .map(|status| capture_health::capture_view(status, &self.progress, Local::now()))
+    }
+
     fn poll_progress(&mut self, cx: &mut Context<Self>) {
         if self.progress_busy {
             return;
@@ -676,6 +693,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             generation: 0,
             progress_read: None,
             progress: Vec::new(),
+            capture: None,
             progress_busy: false,
             search: None,
             total: None,
@@ -2011,7 +2029,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
     /// parts, and the way to the list that lives in Diagnostics. Nothing when
     /// no capture was read.
     fn activity_line(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let summary = capture_summary(&self.progress);
+        let summary = capture_summary_without_failed(&self.progress);
         if summary.is_empty() {
             return None;
         }
@@ -2570,10 +2588,24 @@ fn dot_joined(parts: Vec<String>) -> String {
 
 /// One line over the loaded captures: only the non-zero parts.
 pub(crate) fn capture_summary(captures: &[CaptureProgress]) -> String {
+    summary_of(captures, true)
+}
+
+/// The same line without the failures, for the empty queue, where the capture
+/// state shows them on a line of their own.
+fn capture_summary_without_failed(captures: &[CaptureProgress]) -> String {
+    summary_of(captures, false)
+}
+
+fn summary_of(captures: &[CaptureProgress], include_failed: bool) -> String {
     let count = |keep: fn(&CaptureProgress) -> bool| captures.iter().filter(|c| keep(c)).count();
     let waiting = count(|c| matches!(c.state, CaptureState::Queued | CaptureState::Running));
     let analysed = count(|c| c.state == CaptureState::Completed);
-    let failed = count(|c| c.state == CaptureState::Failed);
+    let failed = if include_failed {
+        count(|c| c.state == CaptureState::Failed)
+    } else {
+        0
+    };
     let proposals: usize = captures.iter().map(|c| c.candidates.pending).sum();
     let parts = [
         (waiting, t::capture_waiting as fn(usize) -> String),

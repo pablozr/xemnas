@@ -32,7 +32,9 @@ nunca são propostos à Revisão; só "Importar documento…" os aceita. Com o p
 (só a mensagem do erro, limpa e com até 200 caracteres) fica guardado e aparece em
 Configurações → Diagnóstico, na lista de capturas.
 
-**Revisão.** Duas formas, por instalação.
+**Revisão.** Com a fila vazia, a tela diz se a captura do projeto está ativa (e quando chegou
+a última), aguardando a primeira sessão, parada ou sem chegar nada há 24 h ou mais, e quantas
+análises falharam, com o caminho para o Diagnóstico. Duas formas, por instalação.
 - *Manual* (padrão): nada vira decisão sem você. Você confirma, ajusta, adia ou rejeita, com
   desfazer. Ao confirmar, a tela mostra os vínculos com o mapa e você escolhe quais valem.
 - *Automático*: regras locais descartam repetições (de perguntas registradas e de regras já em vigor ou do mesmo lote) e um juiz de IA decide o resto em lote.

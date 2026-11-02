@@ -5,6 +5,7 @@
 //! (for example [`projects`]) instead of in [`crate::ui`].
 
 pub mod assistant;
+pub(crate) mod capture_health;
 pub mod context;
 mod decision_editor;
 pub mod decisions;

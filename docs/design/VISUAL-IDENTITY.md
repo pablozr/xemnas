@@ -444,7 +444,17 @@ sem mudanças. Código em `screens/inbox/ticket.rs` e `ui/night_field.rs`.
 - **Pílula flutuante** Rejeitar R, Depois S, Ajustar A, Confirmar C (a única lavanda; as letras
   são texto 11 sem caixa), a 40 px da base, com "A seguir · …" acima.
 - **Fila zerada:** "Fila zerada." em Bricolage 46, o resumo do dia e os atalhos `D`
-  (Decisões) e `L` (o que a IA aceitou), sobre o Noturno em tela cheia.
+  (Decisões) e `L` (o que a IA aceitou), sobre o Noturno em tela cheia. Num dia sem
+  decisão o título é "Nada aguardando revisão.", sem resumo; `D` só aparece com alguma
+  decisão no dia e `L` só quando a IA aceitou algo.
+- **Estado da captura** (Revisão vazia, `screens/capture_health.rs`): quando a captura
+  chega, uma linha discreta de até 520 px, com ponto de 8 px (verde para ativa ou
+  aguardando a primeira sessão, azul na demo) e texto 13 secundário. Quando a captura
+  para ou nada chega há 24 h, um cartão de aviso de 520 px com borda âmbar a 28%, título
+  13/500, corpo recuado 16 px e "Ver diagnóstico". O fundo do cartão é **opaco** (o
+  canvas com âmbar a 8%, `tokens::mix`) para o Noturno não passar por trás. Análises que
+  falharam somam uma linha vermelha com o número e "Ver diagnóstico", exceto com a
+  captura parada ou na demo.
 - **Noturno** (`ui::night_field::NightField`): paisagem ASCII viva (estrelas, lua,
   nuvens, arco de hoje com uma estrela por decisão, cordilheiras com paralaxe, água com
   reflexo, penhasco e o Nº I pescando, vagalumes, estrela cadente a cada decisão

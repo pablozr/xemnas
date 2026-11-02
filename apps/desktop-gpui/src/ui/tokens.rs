@@ -218,6 +218,18 @@ pub fn tint(color: Rgba, alpha: f32) -> Rgba {
     Rgba { a: alpha, ..color }
 }
 
+/// `over` at `alpha` already composited onto `base`, as one opaque color: a
+/// tinted background that hides what is drawn behind it.
+pub fn mix(base: Rgba, over: Rgba, alpha: f32) -> Rgba {
+    let blend = |b: f32, o: f32| o * alpha + b * (1.0 - alpha);
+    Rgba {
+        r: blend(base.r, over.r),
+        g: blend(base.g, over.g),
+        b: blend(base.b, over.b),
+        a: 1.0,
+    }
+}
+
 /// Color tokens from the Quiet Glass design system.
 ///
 /// Palette-specific values live in one [`Palette`] table per theme; the
@@ -895,6 +907,24 @@ mod tests {
 
     fn opaque(color: Rgba) -> Opaque {
         (color.r as f64, color.g as f64, color.b as f64)
+    }
+
+    #[test]
+    fn mix_is_the_tint_composited_and_opaque() {
+        let colors = ColorTokens::quiet_glass();
+        let (canvas, warning) = (colors.canvas(), colors.status_warning());
+        let mixed = super::mix(canvas, warning, 0.08);
+        assert_eq!(mixed.a, 1.0);
+        let expected = composite_over(super::tint(warning, 0.08), canvas);
+        let got = opaque(mixed);
+        for (a, b) in [
+            (got.0, expected.0),
+            (got.1, expected.1),
+            (got.2, expected.2),
+        ] {
+            assert!((a - b).abs() < 1e-6, "{got:?} != {expected:?}");
+        }
+        assert_eq!(super::mix(canvas, warning, 0.0), canvas);
     }
 
     #[test]

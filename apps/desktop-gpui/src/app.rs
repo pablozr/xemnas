@@ -588,6 +588,9 @@ impl<
         cx: &mut Context<Self>,
     ) {
         self.capture = Some(capture);
+        if let Some(inbox) = &self.inbox {
+            inbox.update(cx, |inbox, _| inbox.set_capture(capture));
+        }
         let Some(source) = source else {
             return;
         };
