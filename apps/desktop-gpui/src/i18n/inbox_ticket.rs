@@ -106,28 +106,28 @@ strings! {
         es: "lo que aceptó la IA", fr: "ce que l’IA a accepté", de: "was die KI übernommen hat",
         it: "cosa ha accettato l’IA", ja: "AI が承認したもの", zh: "AI 接受的内容",
         ko: "AI가 수락한 항목", ru: "что принял ИИ" }
-    /// Right side of the colophon under the night scene.
-    colophon_night { en: "night · every star in the arc is a decision from today · made with GPUI",
-        pt: "noturno · cada estrela do arco é uma decisão de hoje · feito com GPUI",
-        es: "nocturno · cada estrella del arco es una decisión de hoy · hecho con GPUI",
-        fr: "nocturne · chaque étoile de l’arc est une décision du jour · fait avec GPUI",
-        de: "Nachtbild · jeder Stern im Bogen ist eine Entscheidung von heute · gemacht mit GPUI",
-        it: "notturno · ogni stella dell’arco è una decisione di oggi · fatto con GPUI",
-        ja: "夜景 · 弧の星は今日の決定ひとつずつ · GPUI で制作",
-        zh: "夜景 · 弧线上的每颗星都是今天的一个决定 · 使用 GPUI 制作",
-        ko: "야경 · 호의 별 하나가 오늘의 결정 하나 · GPUI로 제작",
-        ru: "ночь · каждая звезда дуги — решение за сегодня · сделано на GPUI" }
-    /// Right side of the colophon when the queue is cleared.
-    colophon_closed { en: "night · the arc closed: ten stars, ten decisions · made with GPUI",
-        pt: "noturno · o arco fechou: dez estrelas, dez decisões · feito com GPUI",
-        es: "nocturno · el arco se cerró: diez estrellas, diez decisiones · hecho con GPUI",
-        fr: "nocturne · l’arc est fermé : dix étoiles, dix décisions · fait avec GPUI",
-        de: "Nachtbild · der Bogen ist geschlossen: zehn Sterne, zehn Entscheidungen · gemacht mit GPUI",
-        it: "notturno · l’arco si è chiuso: dieci stelle, dieci decisioni · fatto con GPUI",
-        ja: "夜景 · 弧が閉じました: 星十個、決定十件 · GPUI で制作",
-        zh: "夜景 · 弧线已闭合：十颗星，十个决定 · 使用 GPUI 制作",
-        ko: "야경 · 호가 닫혔어요: 별 열 개, 결정 열 개 · GPUI로 제작",
-        ru: "ночь · дуга замкнулась: десять звёзд, десять решений · сделано на GPUI" }
+    /// Right side of the colophon under the night scene: one koi per decision waiting.
+    colophon_night { en: "night · every koi is a decision waiting for you · made with GPUI",
+        pt: "noturno · cada carpa é uma decisão esperando você · feito com GPUI",
+        es: "nocturno · cada carpa es una decisión que te espera · hecho con GPUI",
+        fr: "nocturne · chaque carpe est une décision qui vous attend · fait avec GPUI",
+        de: "Nachtbild · jeder Koi ist eine Entscheidung, die auf dich wartet · gemacht mit GPUI",
+        it: "notturno · ogni carpa è una decisione che ti aspetta · fatto con GPUI",
+        ja: "夜景 · 鯉の一匹一匹があなたを待つ決定 · GPUI で制作",
+        zh: "夜景 · 每条锦鲤都是一个等你处理的决定 · 使用 GPUI 制作",
+        ko: "야경 · 잉어 한 마리가 당신을 기다리는 결정 하나 · GPUI로 제작",
+        ru: "ночь · каждый карп — решение, которое ждёт вас · сделано на GPUI" }
+    /// Right side of the colophon when the queue is cleared: the lake is calm.
+    colophon_closed { en: "night · a calm lake: no decision waiting · made with GPUI",
+        pt: "noturno · lago calmo: nenhuma decisão esperando · feito com GPUI",
+        es: "nocturno · lago en calma: ninguna decisión esperando · hecho con GPUI",
+        fr: "nocturne · lac calme : aucune décision en attente · fait avec GPUI",
+        de: "Nachtbild · stiller See: keine Entscheidung wartet · gemacht mit GPUI",
+        it: "notturno · lago calmo: nessuna decisione in attesa · fatto con GPUI",
+        ja: "夜景 · 静かな湖: 待っている決定はありません · GPUI で制作",
+        zh: "夜景 · 湖面平静：没有等待的决定 · 使用 GPUI 制作",
+        ko: "야경 · 고요한 호수: 기다리는 결정 없음 · GPUI로 제작",
+        ru: "ночь · тихое озеро: решений не ждёт · сделано на GPUI" }
 }
 
 formats! {
