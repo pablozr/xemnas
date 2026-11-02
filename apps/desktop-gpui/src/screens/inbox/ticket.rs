@@ -12,7 +12,7 @@ use super::*;
 use crate::app::{OpenProof, ToggleQueue};
 use crate::i18n::inbox_ticket as tt;
 use crate::ui::material::{elevation, Elevation};
-use crate::ui::night_field::strip_dims;
+use crate::ui::night_field::{strip_dims, Clearings};
 use crate::ui::theme::code_style;
 use crate::ui::tokens::TypeToken;
 
@@ -62,6 +62,9 @@ const WHERE_FILE: TypeToken = TypeToken::new(13.0, 19.0, 400.0);
 pub(super) struct NightSlot {
     measured: Cell<(usize, usize)>,
     drawn: Cell<(usize, usize)>,
+    /// Where "next" (0) and the pill (1) were last painted, in the window:
+    /// the lake keeps them clear.
+    clearings: Clearings,
 }
 
 /// What fills the screen for the selected candidate.
@@ -381,9 +384,11 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
     /// The night over the whole empty queue, behind everything and deaf to
     /// the mouse.
     fn night(&self, cx: &mut Context<Self>) -> AnyElement {
-        let (_, done, total) = self.cycle();
-        self.night_full
-            .update(cx, |field, _| field.set_today(done, total));
+        let clearings = self.night_slot.clearings.clone();
+        self.night_full.update(cx, |field, _| {
+            field.set_waiting(0);
+            field.set_clearings(&clearings);
+        });
         let (width, height) = self.night_full.read(cx).size();
         div()
             .absolute()
@@ -409,7 +414,6 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
     /// resting on the bottom. The room is measured while painting; when the
     /// grid that fits changes, the screen repaints once with it.
     fn night_strip(&self, cx: &mut Context<Self>) -> Div {
-        let (_, done, total) = self.cycle();
         let measured = self.night_slot.measured.get();
         let (columns, rows) = if measured == (0, 0) {
             NIGHT_FIRST
@@ -443,8 +447,11 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
         if rows == 0 {
             return room;
         }
+        let waiting = self.rows.len();
+        let clearings = self.night_slot.clearings.clone();
         self.night.update(cx, |field, _| {
-            field.set_today(done, total);
+            field.set_waiting(waiting);
+            field.set_clearings(&clearings);
             field.set_size(columns, rows);
         });
         let (width, height) = self.night.read(cx).size();
@@ -1046,6 +1053,26 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                         )
                 }),
             );
+        let screen = cx.entity_id();
+        // The lake reads these while it paints, in the same frame: the
+        // prepaint of the whole tree runs before any paint.
+        let measure = |slot: usize| {
+            let clearings = self.night_slot.clearings.clone();
+            canvas(
+                move |bounds, _, cx| {
+                    let before = clearings.borrow_mut()[slot].replace(bounds);
+                    if before != Some(bounds) {
+                        cx.defer(move |cx| cx.notify(screen));
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .size_full()
+        };
+        if next.is_none() {
+            self.night_slot.clearings.borrow_mut()[0] = None;
+        }
         div()
             .absolute()
             .left_0()
@@ -1057,12 +1084,14 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             .gap(px(SpacingScale::S3))
             .children(next.map(|question| {
                 text_style(div(), TypeScale::LABEL)
+                    .relative()
                     .max_w(px(NEXT_WIDTH))
                     .truncate()
                     .text_color(colors.text_muted())
                     .child(tt::next_up(&question))
+                    .child(measure(0))
             }))
-            .child(pill)
+            .child(pill.relative().child(measure(1)))
     }
 
     /// The proof: where the choice came from, read in the sources.
