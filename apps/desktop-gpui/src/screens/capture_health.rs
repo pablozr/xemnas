@@ -8,6 +8,7 @@ use chrono::{DateTime, Local};
 
 use super::format::{local, relative};
 use crate::app::CaptureStatus;
+use crate::i18n::inbox_ticket as tt;
 
 /// A listening capture with nothing new for this long reads as stalled.
 pub(crate) const STALE_AFTER: chrono::Duration = chrono::Duration::hours(24);
@@ -78,6 +79,22 @@ impl CaptureView {
     pub(crate) fn last_relative(&self) -> String {
         self.last.as_deref().map(relative).unwrap_or_default()
     }
+
+    /// Title and body of a capture that stopped or where nothing arrives,
+    /// shared by the empty queue's card and the project bar's pill.
+    pub(crate) fn warning(&self) -> Option<(String, &'static str)> {
+        match self.health {
+            CaptureHealth::Stopped => Some((
+                tt::capture_stopped_title().to_owned(),
+                tt::capture_stopped_body(),
+            )),
+            CaptureHealth::Stale => Some((
+                tt::capture_stale_title(&self.last_relative()),
+                tt::capture_stale_body(),
+            )),
+            _ => None,
+        }
+    }
 }
 
 /// The pill in the project bar: only when something needs a look.
@@ -105,9 +122,9 @@ pub(crate) fn pill_kind(view: &CaptureView) -> Option<PillKind> {
     }
 }
 
-/// A failed job, or a finished one whose assessment failed (the same rule as
-/// the capture pill in Diagnostics).
-fn analysis_failed(capture: &CaptureProgress) -> bool {
+/// A failed job, or a finished one whose assessment failed (also the rule of
+/// the capture pill in Diagnostics, `inbox::capture_pill`).
+pub(crate) fn analysis_failed(capture: &CaptureProgress) -> bool {
     capture.state == CaptureState::Failed
         || (capture.state == CaptureState::Completed && capture.reason == AssessmentReason::Failed)
 }

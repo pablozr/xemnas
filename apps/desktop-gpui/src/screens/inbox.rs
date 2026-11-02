@@ -1,7 +1,7 @@
 //! Native review surface backed by the Inbox application port.
 //! Storage runs in the background; technical failures never reach the view.
 
-use application::capture_progress::{AssessmentReason, CaptureProgress, CaptureState};
+use application::capture_progress::{CaptureProgress, CaptureState};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -193,6 +193,8 @@ pub struct InboxScreen<S: InboxStore + ReviewExceptionStore + Send + 'static> {
     progress_busy: bool,
     /// Whether captures can reach the app, as the shell knows it.
     capture: Option<CaptureStatus>,
+    /// `capture` read against `progress` ([`Self::refresh_capture_view`]).
+    capture_view: Option<CaptureView>,
     /// The previous visit to the project, read once to build the briefing.
     since_visit: Option<String>,
     /// What changed since that visit, shown as one quiet line.
@@ -462,13 +464,21 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
     /// Whether captures can reach the app, for the empty queue's capture state.
     pub fn set_capture(&mut self, status: CaptureStatus) {
         self.capture = Some(status);
+        self.refresh_capture_view();
     }
 
     /// The capture state of the project from the captures last read; nothing
     /// until the shell says whether captures can arrive.
     pub(crate) fn capture_view(&self) -> Option<CaptureView> {
-        self.capture
-            .map(|status| capture_health::capture_view(status, &self.progress, Local::now()))
+        self.capture_view.clone()
+    }
+
+    /// Recomputes the capture state when the status or the captures change,
+    /// not on every frame; "nothing arrives" (24 h) is re-read on each poll.
+    fn refresh_capture_view(&mut self) {
+        self.capture_view = self
+            .capture
+            .map(|status| capture_health::capture_view(status, &self.progress, Local::now()));
     }
 
     fn poll_progress(&mut self, cx: &mut Context<Self>) {
@@ -495,6 +505,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                 if let Ok(rows) = result {
                     this.progress = rows;
                 }
+                this.refresh_capture_view();
                 cx.notify();
             });
         })
@@ -694,6 +705,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             progress_read: None,
             progress: Vec::new(),
             capture: None,
+            capture_view: None,
             progress_busy: false,
             search: None,
             total: None,
@@ -764,6 +776,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
         self.project_id = project_id;
         self.generation += 1;
         self.progress.clear();
+        self.refresh_capture_view();
         self.poll_progress(cx);
         self.briefing = None;
         self.briefing_hidden = false;
@@ -2029,7 +2042,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
     /// parts, and the way to the list that lives in Diagnostics. Nothing when
     /// no capture was read.
     fn activity_line(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let summary = capture_summary_without_failed(&self.progress);
+        let summary = summary_of(&self.progress, false);
         if summary.is_empty() {
             return None;
         }
@@ -2567,8 +2580,7 @@ fn selected_change(
 /// Pill colour and label of a capture's state.
 pub(crate) fn capture_pill(theme: &Theme, capture: &CaptureProgress) -> (gpui::Rgba, &'static str) {
     let colors = &theme.colors;
-    let failed =
-        capture.state == CaptureState::Completed && capture.reason == AssessmentReason::Failed;
+    let failed = capture_health::analysis_failed(capture);
     match capture.state {
         CaptureState::Queued => (colors.status_info(), t::capture_state_queued()),
         CaptureState::Running => (colors.accent_default(), t::capture_state_running()),
@@ -2591,17 +2603,13 @@ pub(crate) fn capture_summary(captures: &[CaptureProgress]) -> String {
     summary_of(captures, true)
 }
 
-/// The same line without the failures, for the empty queue, where the capture
-/// state shows them on a line of their own.
-fn capture_summary_without_failed(captures: &[CaptureProgress]) -> String {
-    summary_of(captures, false)
-}
-
-fn summary_of(captures: &[CaptureProgress], include_failed: bool) -> String {
+/// The summary line; `with_failed` is off on the empty queue, where the
+/// capture state shows failures on a line of their own.
+fn summary_of(captures: &[CaptureProgress], with_failed: bool) -> String {
     let count = |keep: fn(&CaptureProgress) -> bool| captures.iter().filter(|c| keep(c)).count();
     let waiting = count(|c| matches!(c.state, CaptureState::Queued | CaptureState::Running));
     let analysed = count(|c| c.state == CaptureState::Completed);
-    let failed = if include_failed {
+    let failed = if with_failed {
         count(|c| c.state == CaptureState::Failed)
     } else {
         0
@@ -2758,6 +2766,7 @@ fn failure_copy(error: &InboxError) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use application::capture_progress::AssessmentReason;
 
     #[test]
     fn reading_member_evidence_does_not_replace_confirmation_snapshot() {

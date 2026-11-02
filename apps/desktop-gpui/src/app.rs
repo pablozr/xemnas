@@ -724,36 +724,32 @@ impl<
         let theme = self.theme;
         let view = self.inbox.as_ref()?.read(cx).capture_view()?;
         let kind = pill_kind(&view)?;
-        let (color, fill, label, title, body) = match kind {
+        let (color, fill, label) = match kind {
             PillKind::Stale => (
                 theme.colors.status_warning(),
                 0.12,
                 tt::capture_pill_stale().to_owned(),
-                tt::capture_stale_title(&view.last_relative()),
-                tt::capture_stale_body().to_owned(),
             ),
             PillKind::Stopped => (
                 theme.colors.status_warning(),
                 0.12,
                 tt::capture_pill_stopped().to_owned(),
-                tt::capture_stopped_title().to_owned(),
-                tt::capture_stopped_body().to_owned(),
             ),
-            PillKind::Failed => {
-                let failed = tt::capture_not_analysed(view.failed);
-                (
-                    theme.colors.status_danger(),
-                    0.10,
-                    tt::capture_pill_failed(view.failed),
-                    failed.clone(),
-                    failed,
-                )
-            }
+            PillKind::Failed => (
+                theme.colors.status_danger(),
+                0.10,
+                tt::capture_pill_failed(view.failed),
+            ),
         };
-        let hint = if kind != PillKind::Failed && view.failed > 0 {
-            format!("{body}\n{}", tt::capture_not_analysed(view.failed))
-        } else {
-            body
+        let failed = (view.failed > 0).then(|| tt::capture_not_analysed(view.failed));
+        // Stale and stopped carry their own copy; failures alone say only that.
+        let (title, hint) = match (view.warning(), failed) {
+            (Some((title, body)), Some(failed)) => (title, format!("{body}\n{failed}")),
+            (Some((title, body)), None) => (title, body.to_owned()),
+            (None, failed) => {
+                let failed = failed.unwrap_or_default();
+                (failed.clone(), failed)
+            }
         };
         Some(
             text_style(div(), TypeScale::LABEL)

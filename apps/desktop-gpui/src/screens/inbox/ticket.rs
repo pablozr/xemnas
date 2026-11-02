@@ -1202,14 +1202,14 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
         let parts = empty_parts(ai, you, view.as_ref());
         let capture = self.capture_block(theme, view.as_ref(), parts, cx);
         let mut shortcut =
-            |id: &'static str, key: &'static str, label: &'static str, view: ReviewView| {
-                self.view_hint(theme, id, key, label, view, cx)
+            |id: &'static str, key: &'static str, label: &'static str, target: ReviewView| {
+                self.view_hint(theme, id, key, label, target, cx)
             };
-        let shortcuts = (parts.shortcut_d || parts.shortcut_l).then(|| {
+        let shortcuts = (parts.decided || parts.accepted).then(|| {
             div()
                 .flex()
                 .gap(px(SpacingScale::S6))
-                .when(parts.shortcut_d, |row| {
+                .when(parts.decided, |row| {
                     row.child(shortcut(
                         "zero-today",
                         "D",
@@ -1217,7 +1217,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                         ReviewView::Today,
                     ))
                 })
-                .when(parts.shortcut_l, |row| {
+                .when(parts.accepted, |row| {
                     row.child(shortcut(
                         "zero-accepted",
                         "L",
@@ -1237,13 +1237,13 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                 text_style(div(), BIG_VALUE)
                     .font_family(Theme::font_display())
                     .text_color(colors.text_primary())
-                    .child(if parts.celebrate {
+                    .child(if parts.decided {
                         tt::zero_title()
                     } else {
                         tt::empty_title_sentence()
                     }),
             )
-            .when(parts.summary, |column| {
+            .when(parts.decided, |column| {
                 column.child(
                     text_style(div(), TypeScale::BODY)
                         .text_color(colors.text_secondary())
@@ -1269,8 +1269,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
         let view = view?;
         let block = parts.block?;
         let colors = theme.colors;
-        let dot = |color| div().size(px(8.0)).flex_none().rounded_full().bg(color);
-        let last = view.last.as_deref().map(relative).unwrap_or_default();
+        let dot = |color| div().size(px(DOT)).flex_none().rounded_full().bg(color);
         let main = match block {
             BlockKind::Line => {
                 let (color, text) = match view.health {
@@ -1280,7 +1279,10 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                     CaptureHealth::Waiting => {
                         (colors.status_success(), tt::capture_none_title().to_owned())
                     }
-                    _ => (colors.status_success(), tt::capture_ok(&last)),
+                    _ => (
+                        colors.status_success(),
+                        tt::capture_ok(&view.last_relative()),
+                    ),
                 };
                 div()
                     .max_w(px(CAPTURE_WIDTH))
@@ -1307,14 +1309,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                     .into_any_element()
             }
             BlockKind::Warning => {
-                let (title, body) = if view.health == CaptureHealth::Stopped {
-                    (
-                        tt::capture_stopped_title().to_owned(),
-                        tt::capture_stopped_body(),
-                    )
-                } else {
-                    (tt::capture_stale_title(&last), tt::capture_stale_body())
-                };
+                let (title, body) = view.warning()?;
                 let warning = colors.status_warning();
                 div()
                     .w(px(CAPTURE_WIDTH))
@@ -1338,7 +1333,8 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                     )
                     .child(
                         text_style(div(), TypeScale::BODY_SMALL)
-                            .pl(px(16.0))
+                            // Aligned with the title, past the dot and the gap.
+                            .pl(px(DOT + SpacingScale::S2))
                             .text_color(colors.text_secondary())
                             .child(body),
                     )
@@ -1398,6 +1394,9 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
 /// Widest the capture line and card get under the empty queue.
 const CAPTURE_WIDTH: f32 = 520.0;
 
+/// The status dot of the capture line, card and failures.
+const DOT: f32 = 8.0;
+
 /// How the capture shows on the empty queue.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BlockKind {
@@ -1410,11 +1409,11 @@ enum BlockKind {
 /// Which pieces the empty queue shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct EmptyParts {
-    /// "Queue cleared." instead of "Nothing waiting for review.".
-    celebrate: bool,
-    summary: bool,
-    shortcut_d: bool,
-    shortcut_l: bool,
+    /// Something was decided today: "Queue cleared.", the summary and the
+    /// D shortcut, instead of "Nothing waiting for review.".
+    decided: bool,
+    /// The AI accepted something today: the L shortcut.
+    accepted: bool,
     block: Option<BlockKind>,
     /// A line for the captures whose analysis failed.
     failures: bool,
@@ -1425,7 +1424,6 @@ struct EmptyParts {
 /// celebrate, and failures add a line only when the capture is not stopped
 /// nor the demo.
 fn empty_parts(ai: usize, you: usize, view: Option<&CaptureView>) -> EmptyParts {
-    let decided = ai + you > 0;
     let block = view.map(|view| match view.health {
         CaptureHealth::Stale | CaptureHealth::Stopped => BlockKind::Warning,
         CaptureHealth::Active | CaptureHealth::Waiting | CaptureHealth::Demo => BlockKind::Line,
@@ -1438,10 +1436,8 @@ fn empty_parts(ai: usize, you: usize, view: Option<&CaptureView>) -> EmptyParts 
             )
     });
     EmptyParts {
-        celebrate: decided,
-        summary: decided,
-        shortcut_d: decided,
-        shortcut_l: ai > 0,
+        decided: ai + you > 0,
+        accepted: ai > 0,
         block,
         failures,
     }
@@ -1497,10 +1493,8 @@ mod tests {
     #[test]
     fn zero_day_does_not_celebrate() {
         let parts = empty_parts(0, 0, None);
-        assert!(!parts.celebrate);
-        assert!(!parts.summary);
-        assert!(!parts.shortcut_d);
-        assert!(!parts.shortcut_l);
+        assert!(!parts.decided);
+        assert!(!parts.accepted);
         assert_eq!(parts.block, None);
         assert!(!parts.failures);
     }
@@ -1508,10 +1502,9 @@ mod tests {
     #[test]
     fn ai_only_shows_l_and_d() {
         let parts = empty_parts(3, 0, None);
-        assert!(parts.celebrate && parts.summary);
-        assert!(parts.shortcut_d && parts.shortcut_l);
+        assert!(parts.decided && parts.accepted);
         let you_only = empty_parts(0, 2, None);
-        assert!(you_only.shortcut_d && !you_only.shortcut_l);
+        assert!(you_only.decided && !you_only.accepted);
     }
 
     #[test]
