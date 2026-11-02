@@ -6,7 +6,7 @@
 use application::capture_progress::{AssessmentReason, CaptureProgress, CaptureState};
 use chrono::{DateTime, Local};
 
-use super::format::local;
+use super::format::{local, relative};
 use crate::app::CaptureStatus;
 
 /// A listening capture with nothing new for this long reads as stalled.
@@ -70,6 +70,38 @@ pub(crate) fn capture_view(
         health,
         last,
         failed,
+    }
+}
+
+impl CaptureView {
+    /// The last capture as "2 h" or "Sep 29, 2026"; empty with none.
+    pub(crate) fn last_relative(&self) -> String {
+        self.last.as_deref().map(relative).unwrap_or_default()
+    }
+}
+
+/// The pill in the project bar: only when something needs a look.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PillKind {
+    /// Nothing arrives for a day or more.
+    Stale,
+    /// The capture is stopped.
+    Stopped,
+    /// Captures arrive, but some analyses failed.
+    Failed,
+}
+
+/// Which pill the project bar shows, if any: a stalled or stopped capture
+/// wins over failures (one pill at a time); working, waiting and demo
+/// captures show none.
+pub(crate) fn pill_kind(view: &CaptureView) -> Option<PillKind> {
+    match view.health {
+        CaptureHealth::Stale => Some(PillKind::Stale),
+        CaptureHealth::Stopped => Some(PillKind::Stopped),
+        CaptureHealth::Demo => None,
+        CaptureHealth::Active | CaptureHealth::Waiting => {
+            (view.failed > 0).then_some(PillKind::Failed)
+        }
     }
 }
 
@@ -186,6 +218,62 @@ mod tests {
         let view = capture_view(CaptureStatus::Listening, &progress, now());
         assert_eq!(view.failed, 2);
         assert_eq!(view.health, CaptureHealth::Active);
+    }
+
+    fn view(health: CaptureHealth, failed: usize) -> CaptureView {
+        CaptureView {
+            health,
+            last: None,
+            failed,
+        }
+    }
+
+    #[test]
+    fn ok_states_have_no_pill() {
+        for health in [
+            CaptureHealth::Active,
+            CaptureHealth::Waiting,
+            CaptureHealth::Demo,
+        ] {
+            assert_eq!(pill_kind(&view(health, 0)), None, "{health:?}");
+        }
+        assert_eq!(pill_kind(&view(CaptureHealth::Demo, 2)), None);
+    }
+
+    #[test]
+    fn stale_and_stopped_pill_warning() {
+        assert_eq!(
+            pill_kind(&view(CaptureHealth::Stale, 0)),
+            Some(PillKind::Stale)
+        );
+        assert_eq!(
+            pill_kind(&view(CaptureHealth::Stopped, 0)),
+            Some(PillKind::Stopped)
+        );
+    }
+
+    #[test]
+    fn failures_alone_pill_danger() {
+        assert_eq!(
+            pill_kind(&view(CaptureHealth::Active, 1)),
+            Some(PillKind::Failed)
+        );
+        assert_eq!(
+            pill_kind(&view(CaptureHealth::Waiting, 3)),
+            Some(PillKind::Failed)
+        );
+    }
+
+    #[test]
+    fn warning_wins_over_failures() {
+        assert_eq!(
+            pill_kind(&view(CaptureHealth::Stale, 4)),
+            Some(PillKind::Stale)
+        );
+        assert_eq!(
+            pill_kind(&view(CaptureHealth::Stopped, 4)),
+            Some(PillKind::Stopped)
+        );
     }
 
     #[test]

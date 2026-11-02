@@ -713,6 +713,75 @@ impl<
         )
     }
 
+    /// The pill at the right of the project bar: shown only when the capture
+    /// of the project needs a look (stalled, stopped or failed analyses). It
+    /// reads what Review last read, so no new poll runs for it.
+    fn capture_pill(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        use crate::i18n::inbox_ticket as tt;
+        use crate::screens::capture_health::{pill_kind, PillKind};
+        use crate::ui::tokens::tint;
+
+        let theme = self.theme;
+        let view = self.inbox.as_ref()?.read(cx).capture_view()?;
+        let kind = pill_kind(&view)?;
+        let (color, fill, label, title, body) = match kind {
+            PillKind::Stale => (
+                theme.colors.status_warning(),
+                0.12,
+                tt::capture_pill_stale().to_owned(),
+                tt::capture_stale_title(&view.last_relative()),
+                tt::capture_stale_body().to_owned(),
+            ),
+            PillKind::Stopped => (
+                theme.colors.status_warning(),
+                0.12,
+                tt::capture_pill_stopped().to_owned(),
+                tt::capture_stopped_title().to_owned(),
+                tt::capture_stopped_body().to_owned(),
+            ),
+            PillKind::Failed => {
+                let failed = tt::capture_not_analysed(view.failed);
+                (
+                    theme.colors.status_danger(),
+                    0.10,
+                    tt::capture_pill_failed(view.failed),
+                    failed.clone(),
+                    failed,
+                )
+            }
+        };
+        let hint = if kind != PillKind::Failed && view.failed > 0 {
+            format!("{body}\n{}", tt::capture_not_analysed(view.failed))
+        } else {
+            body
+        };
+        Some(
+            text_style(div(), TypeScale::LABEL)
+                .id("capture-pill")
+                .flex_none()
+                .h(px(ControlSize::SM))
+                .px(px(SpacingScale::S3))
+                .flex()
+                .items_center()
+                .gap(px(SpacingScale::S2))
+                .rounded_full()
+                .bg(tint(color, fill))
+                .text_color(color)
+                .role(Role::Button)
+                .aria_label(title)
+                .tooltip(tooltip(hint, None))
+                .cursor_pointer()
+                .hover(|style| style.opacity(0.85))
+                .focus_visible(focus_ring(&theme))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.open_settings_at(SettingsSection::Diagnostics, cx)
+                }))
+                .child(div().size(px(6.0)).flex_none().rounded_full().bg(color))
+                .child(label)
+                .into_any_element(),
+        )
+    }
+
     /// Records that the window has a system material behind it.
     pub fn set_backdrop(&mut self, backdrop: bool) {
         self.backdrop = backdrop;
@@ -2499,6 +2568,8 @@ impl<
                                                 })),
                                         ),
                                 )
+                                .child(div().flex_1())
+                                .children(self.capture_pill(cx))
                                 .children(panel.take().map(|panel| {
                                     deferred(
                                         div()
