@@ -374,7 +374,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
     }
 
     /// The day's cycle as (accepted by the AI, done, total), at most
-    /// `DASHES` long: the dashes and the stars of the night share it.
+    /// `DASHES` long: the dashes share it.
     fn cycle(&self) -> (usize, usize, usize) {
         let ai = self.accepted_by_ai();
         let total = (ai + self.decided + self.rows.len()).clamp(2, DASHES);

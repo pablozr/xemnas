@@ -136,13 +136,7 @@ impl Cell {
         }
     }
 
-    fn tiled(
-        ch: char,
-        glyph: (Rgb, f64),
-        tile: (Rgb, f64),
-        bold: bool,
-        owner: Owner,
-    ) -> Self {
+    fn tiled(ch: char, glyph: (Rgb, f64), tile: (Rgb, f64), bold: bool, owner: Owner) -> Self {
         Self {
             ch,
             glyph: glyph.0,
@@ -332,7 +326,8 @@ fn vnoise(x: f64, y: f64, s: f64) -> f64 {
 }
 
 fn mix(a: Rgb, b: Rgb, k: f64) -> Rgb {
-    let channel = |i: usize| (f64::from(a[i]) + (f64::from(b[i]) - f64::from(a[i])) * k).round() as u8;
+    let channel =
+        |i: usize| (f64::from(a[i]) + (f64::from(b[i]) - f64::from(a[i])) * k).round() as u8;
     [channel(0), channel(1), channel(2)]
 }
 
@@ -527,9 +522,17 @@ impl Carp {
             return None;
         }
         let s = (self.start + self.speed * t).rem_euclid(2.0 * run);
-        let (offset, dir) = if s < run { (s, 1.0) } else { (2.0 * run - s, -1.0) };
+        let (offset, dir) = if s < run {
+            (s, 1.0)
+        } else {
+            (2.0 * run - s, -1.0)
+        };
         let low = left + offset;
-        let head = if dir > 0.0 { low + 1.1 * l } else { low + 0.02 * l };
+        let head = if dir > 0.0 {
+            low + 1.1 * l
+        } else {
+            low + 0.02 * l
+        };
         let y = self.lane + 10.0 * (t * 0.5 + self.bob).sin();
         let bounds = Rect {
             x0: low,
@@ -568,7 +571,10 @@ impl Carp {
                 ));
             }
             let dorsal = (0.20..=0.52).contains(&u)
-                && -h - hh * 0.34 * (PI * (u - 0.20) / 0.32).sin().powf(0.7) * (1.0 - (u - 0.2) * 0.8)
+                && -h
+                    - hh * 0.34
+                        * (PI * (u - 0.20) / 0.32).sin().powf(0.7)
+                        * (1.0 - (u - 0.2) * 0.8)
                     <= v
                 && v < -h;
             let pelvic = (0.24..=0.40).contains(&u)
@@ -613,7 +619,13 @@ impl Carp {
         }
         let a = self.depth;
         if eye {
-            return Some(Cell::tiled('@', (PALE, 0.95 * a), (DARK, 0.95), true, owner));
+            return Some(Cell::tiled(
+                '@',
+                (PALE, 0.95 * a),
+                (DARK, 0.95),
+                true,
+                owner,
+            ));
         }
         if body >= 5 {
             let s = shade / f64::from(body);
@@ -625,7 +637,13 @@ impl Carp {
                 let index = ((1.0 - s) * 6.0 + jitter).trunc().clamp(0.0, 6.0) as usize;
                 (":tSX%8@".as_bytes()[index] as char, (DARK, 0.78))
             };
-            return Some(Cell::tiled(glyph, glyph_colour, (col, (0.22 + 0.58 * s) * a), true, owner));
+            return Some(Cell::tiled(
+                glyph,
+                glyph_colour,
+                (col, (0.22 + 0.58 * s) * a),
+                true,
+                owner,
+            ));
         }
         if body + fin >= 4 {
             let col = colour.unwrap_or(self.colors.0);
@@ -705,11 +723,16 @@ fn mascot_cell(c: usize, r: usize, t: f64) -> Option<Cell> {
     Some(match k {
         'H' | 'h' => {
             let rim = Some(c) == row.find('H') || (r > 0 && MASCOT[r - 1].as_bytes()[c] == b'.');
-            let a = (0.42 + if k == 'h' { 0.12 } else { 0.0 } + if rim { 0.10 } else { 0.0 }) * shade;
+            let a =
+                (0.42 + if k == 'h' { 0.12 } else { 0.0 } + if rim { 0.10 } else { 0.0 }) * shade;
             if rim {
                 Cell::tiled(' ', (PALE, 0.0), (mix(HOOD, LAV, 0.45), a), false, owner)
             } else {
-                let ch = if k == 'h' && (c + r) % 3 == 0 { ':' } else { ' ' };
+                let ch = if k == 'h' && (c + r).is_multiple_of(3) {
+                    ':'
+                } else {
+                    ' '
+                };
                 let lift = if k == 'h' { 0.25 } else { 0.0 };
                 Cell::tiled(ch, (PALE, 0.40), (mix(HOOD, LAV, lift), a), false, owner)
             }
@@ -723,7 +746,13 @@ fn mascot_cell(c: usize, r: usize, t: f64) -> Option<Cell> {
                 Cell::tiled(' ', (DARK, 0.0), (GLOW, glow), false, owner)
             }
         }
-        'W' => Cell::tiled(hair(c, r), (DARK, 0.80), (PALE, 0.80 * shade + 0.1), true, owner),
+        'W' => Cell::tiled(
+            hair(c, r),
+            (DARK, 0.80),
+            (PALE, 0.80 * shade + 0.1),
+            true,
+            owner,
+        ),
         's' => Cell::tiled('|', (PALE, 0.90), (HOOD, 0.30 * shade), true, owner),
         'o' => Cell::tiled('o', (PALE, 0.95), (HOOD, 0.30 * shade), true, owner),
         'z' => Cell::tiled(':', (PALE, 0.55), (HOOD, 0.30 * shade), false, owner),
@@ -740,7 +769,8 @@ fn rig_cell(geo: &Geo, cx: usize, cy: usize) -> Option<Cell> {
     let owner = Owner::Mascot;
     let mut out = None;
     if px >= tip.0.min(hand.0) && px <= tip.0.max(hand.0) {
-        let row = |x: f64| ((tip.1 + (hand.1 - tip.1) * (x - tip.0) / (hand.0 - tip.0)) / ch).floor();
+        let row =
+            |x: f64| ((tip.1 + (hand.1 - tip.1) * (x - tip.0) / (hand.0 - tip.0)) / ch).floor();
         if row(px) == cy as f64 {
             let glyph = if row(px - cw) != cy as f64 { '\\' } else { '-' };
             out = Some(Cell::glyph(glyph, MUTED, 0.55, owner));
@@ -812,7 +842,13 @@ fn surface_cell(cx: usize, cy: usize, geo: &Geo, t: f64) -> Option<Cell> {
     }
     let n = vnoise(px / 16.0 - t * 0.8, 0.0, 4.0);
     if (px - geo.moon.0).abs() < 70.0 && n > 0.5 && hash2(cx as f64, (t * 3.0).floor(), 4.0) > 0.3 {
-        Some(Cell::tiled('=', (DARK, 0.7), (PALE, 0.20 + 0.40 * (n - 0.5)), true, Owner::Ambient))
+        Some(Cell::tiled(
+            '=',
+            (DARK, 0.7),
+            (PALE, 0.20 + 0.40 * (n - 0.5)),
+            true,
+            Owner::Ambient,
+        ))
     } else if n > 0.45 {
         let ch = if n > 0.65 { '~' } else { '-' };
         Some(Cell::glyph(ch, MUTED, 0.28, Owner::Ambient))
@@ -837,9 +873,21 @@ fn cliff_cell(cx: usize, cy: usize, geo: &Geo) -> Option<Cell> {
         ' '
     };
     if (px - edge) < 16.0 || (py - top) < 14.0 {
-        Some(Cell::tiled(ch, (MUTED, 0.20), (ROCK, 0.42 + 0.15 * tex), false, Owner::Ambient))
+        Some(Cell::tiled(
+            ch,
+            (MUTED, 0.20),
+            (ROCK, 0.42 + 0.15 * tex),
+            false,
+            Owner::Ambient,
+        ))
     } else if hash2(cx as f64, cy as f64, 13.0) > 0.55 {
-        Some(Cell::tiled(ch, (MUTED, 0.10), (ROCK, 0.14 + 0.10 * tex), false, Owner::Ambient))
+        Some(Cell::tiled(
+            ch,
+            (MUTED, 0.10),
+            (ROCK, 0.14 + 0.10 * tex),
+            false,
+            Owner::Ambient,
+        ))
     } else {
         None
     }
@@ -864,18 +912,30 @@ fn ambient(grid: &mut Grid, geo: &Geo, t: f64) {
         let r = rng.next();
         let twinkle = 0.5 + 0.5 * (t * (0.6 + r) + r * 20.0).sin();
         let (ch, colour) = if r > 0.92 { ('+', PALE) } else { ('.', MUTED) };
-        grid.set_if_blank(cx, cy, Cell::glyph(ch, colour, 0.12 + 0.30 * twinkle, Owner::Ambient));
+        grid.set_if_blank(
+            cx,
+            cy,
+            Cell::glyph(ch, colour, 0.12 + 0.30 * twinkle, Owner::Ambient),
+        );
     }
     let (w, h, surf) = (geo.width, geo.height, geo.surf);
     let (cw, ch) = (f64::from(CELL_WIDTH), f64::from(CELL_HEIGHT));
     let mut rng = Rng(23);
     for _ in 0..35 {
-        let (dx, dy, phase) = (rng.range(0.0, w), rng.range(surf + 10.0, h), rng.range(0.0, TAU));
+        let (dx, dy, phase) = (
+            rng.range(0.0, w),
+            rng.range(surf + 10.0, h),
+            rng.range(0.0, TAU),
+        );
         let qx = (dx + 4.0 * (t * 0.7 + phase).sin()).rem_euclid(w);
         let qy = surf + 10.0 + (dy - surf - 10.0 - t * 6.0).rem_euclid(h - surf - 10.0);
         let glyph = if phase > 2.0 { '.' } else { '\'' };
         let alpha = 0.22 + 0.12 * (t + phase).sin();
-        grid.set_if_blank((qx / cw) as i64, (qy / ch) as i64, Cell::glyph(glyph, MUTED, alpha, Owner::Ambient));
+        grid.set_if_blank(
+            (qx / cw) as i64,
+            (qy / ch) as i64,
+            Cell::glyph(glyph, MUTED, alpha, Owner::Ambient),
+        );
     }
     let mut rng = Rng(29);
     for _ in 0..5 {
@@ -887,15 +947,27 @@ fn ambient(grid: &mut Grid, geo: &Geo, t: f64) {
             let x = first + 2.0 * k as f64;
             let on = 0.5 + 0.5 * (t * 1.5 + first).sin();
             if hash2(x, (t * 2.0).floor(), first) < 0.85 {
-                grid.set_if_blank(x as i64, row, Cell::glyph('-', MUTED, 0.14 + 0.22 * on, Owner::Ambient));
+                grid.set_if_blank(
+                    x as i64,
+                    row,
+                    Cell::glyph('-', MUTED, 0.14 + 0.22 * on, Owner::Ambient),
+                );
             }
         }
     }
     let last = geo.rows as i64 - 1;
     for cx in 0..geo.cols {
         if hash2(cx as f64, 1.0, 8.0) > 0.6 {
-            let ch = if hash2(cx as f64, 2.0, 8.0) > 0.5 { '.' } else { ',' };
-            grid.set_if_blank(cx as i64, last, Cell::glyph(ch, MUTED, 0.16, Owner::Ambient));
+            let ch = if hash2(cx as f64, 2.0, 8.0) > 0.5 {
+                '.'
+            } else {
+                ','
+            };
+            grid.set_if_blank(
+                cx as i64,
+                last,
+                Cell::glyph(ch, MUTED, 0.16, Owner::Ambient),
+            );
         }
     }
 }
@@ -1029,8 +1101,14 @@ fn build(scene: &Scene, t: f64, keep_out: &[Rect], finish: bool) -> Vec<Cell> {
         }
         let cw = f64::from(CELL_WIDTH);
         let ch = f64::from(CELL_HEIGHT);
-        let (x0, x1) = ((pose.bounds.x0 / cw).floor().max(0.0) as usize, (pose.bounds.x1 / cw).ceil() as usize);
-        let (y0, y1) = ((pose.bounds.y0 / ch).floor().max(0.0) as usize, (pose.bounds.y1 / ch).ceil() as usize);
+        let (x0, x1) = (
+            (pose.bounds.x0 / cw).floor().max(0.0) as usize,
+            (pose.bounds.x1 / cw).ceil() as usize,
+        );
+        let (y0, y1) = (
+            (pose.bounds.y0 / ch).floor().max(0.0) as usize,
+            (pose.bounds.y1 / ch).ceil() as usize,
+        );
         for cy in y0..y1.min(geo.rows) {
             for cx in x0..x1.min(geo.cols) {
                 if let Some(mut cell) = carp.cell(&pose, cx, cy, t) {
@@ -1078,10 +1156,14 @@ fn fade_ambient(grid: &mut Grid, keep_out: &[Rect]) {
 
 // ---------------------------------------------------------------- paint
 
+/// A run: its length in bytes, its colour and level (None for blanks) and
+/// whether it is bold.
+type Run = (usize, Option<(Rgb, u8)>, bool);
+
 /// Runs of one line: colour (None for blanks), alpha level and weight.
 struct Line {
     text: String,
-    runs: Vec<(usize, Option<(Rgb, u8)>, bool)>,
+    runs: Vec<Run>,
 }
 
 fn lines(cells: &[Cell], width: usize) -> Vec<Line> {
@@ -1089,7 +1171,7 @@ fn lines(cells: &[Cell], width: usize) -> Vec<Line> {
         .chunks(width)
         .map(|row| {
             let mut text = String::with_capacity(width);
-            let mut runs: Vec<(usize, Option<(Rgb, u8)>, bool)> = Vec::new();
+            let mut runs: Vec<Run> = Vec::new();
             for cell in row {
                 let (ch, key, bold) = if cell.glyph_visible() {
                     (cell.ch, Some((cell.glyph, level(cell.alpha))), cell.bold)
@@ -1140,7 +1222,9 @@ fn paint_scene(
                     x0: f64::from(f32::from(rect.origin.x - bounds.origin.x)),
                     y0: f64::from(f32::from(rect.origin.y - bounds.origin.y)),
                     x1: f64::from(f32::from(rect.origin.x + rect.size.width - bounds.origin.x)),
-                    y1: f64::from(f32::from(rect.origin.y + rect.size.height - bounds.origin.y)),
+                    y1: f64::from(f32::from(
+                        rect.origin.y + rect.size.height - bounds.origin.y,
+                    )),
                 })
                 .collect()
         }
@@ -1148,11 +1232,11 @@ fn paint_scene(
     let cells = render(scene, t, &keep_out);
     for (index, cell) in cells.iter().enumerate() {
         if let Some((rgb, alpha)) = cell.tile.filter(|_| cell.tile_visible()) {
-            let (cx_, cy_) = ((index % scene.width) as f32, (index / scene.width) as f32);
+            let (col, row) = ((index % scene.width) as f32, (index / scene.width) as f32);
             let origin = bounds.origin
                 + point(
-                    px(cx_ * CELL_WIDTH + TILE_INSET),
-                    px(cy_ * CELL_HEIGHT + TILE_INSET),
+                    px(col * CELL_WIDTH + TILE_INSET),
+                    px(row * CELL_HEIGHT + TILE_INSET),
                 );
             window.paint_quad(quad(
                 Bounds::new(origin, size(px(CELL_WIDTH - 1.0), px(CELL_HEIGHT - 1.0))),
@@ -1230,9 +1314,7 @@ impl NightField {
 
     /// Shares the rectangles of the texts the lake keeps clear.
     pub fn set_clearings(&mut self, clearings: &Clearings) {
-        if !Rc::ptr_eq(&self.clearings, clearings) {
-            self.clearings = clearings.clone();
-        }
+        self.clearings = clearings.clone();
     }
 
     /// Fits the strip to `width` columns by `height` rows (a no-op when it
@@ -1385,7 +1467,10 @@ mod tests {
             for y in 0..height {
                 let first = &cells[y * width];
                 let last = &cells[y * width + width - 1];
-                assert!(first.alpha <= 0.2 && last.alpha <= 0.2, "{width}x{height} row {y}");
+                assert!(
+                    first.alpha <= 0.2 && last.alpha <= 0.2,
+                    "{width}x{height} row {y}"
+                );
                 assert!(first.tile.map_or(0.0, |t| t.1) <= 0.2);
                 assert!(last.tile.map_or(0.0, |t| t.1) <= 0.2);
             }
@@ -1442,7 +1527,11 @@ mod tests {
                         // A koi that dives shows what was behind it: it is gone.
                         let same = after.owner == before.owner;
                         if before.alpha > 0.05 {
-                            entry.push(if same { after.alpha / before.alpha } else { 0.0 });
+                            entry.push(if same {
+                                after.alpha / before.alpha
+                            } else {
+                                0.0
+                            });
                         }
                         if let Some((_, a)) = before.tile.filter(|(_, a)| *a > 0.05) {
                             let b = after.tile.map_or(0.0, |t| t.1);
@@ -1510,7 +1599,10 @@ mod tests {
                     for (index, cell) in render(&scene, t, &keep).iter().enumerate() {
                         let rect = cell_rect(index, width);
                         if keep.iter().any(|k| rect.gap(k, 1.0) == 0.0) {
-                            assert!(!cell.visible(), "{width}x{height} t={t} cell {index} on a text");
+                            assert!(
+                                !cell.visible(),
+                                "{width}x{height} t={t} cell {index} on a text"
+                            );
                         }
                         if cell.owner != Owner::Ambient && cell.visible() {
                             assert!(
