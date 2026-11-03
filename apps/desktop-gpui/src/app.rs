@@ -116,6 +116,8 @@ const TITLE_BAR_HEIGHT: f32 = 40.0;
 const PROJECT_BAR_HEIGHT: f32 = 44.0;
 /// Width of the projects sidebar (`ProjectsScreen::render_sidebar`).
 const SIDEBAR_WIDTH: f32 = 248.0;
+/// Height of the status bar at the foot of the window (mascot dock + status).
+const STATUS_BAR_HEIGHT: f32 = 48.0;
 /// Grain tiles laid over a background: enough for a 4K-wide window.
 const GRAIN_TILES: usize = 16 * 10;
 /// How long the opening mark stays, its fade included.
@@ -640,8 +642,9 @@ impl<
         }
     }
 
-    /// The status line at the foot of the sidebar: whether captures arrive
-    /// and what the extractor is doing. Only real states, never a guess.
+    /// The status line at the right of the status bar: whether captures
+    /// arrive and what the extractor is doing. Only real states, never a
+    /// guess. The label truncates on narrow windows; the tooltip keeps it whole.
     fn status_line(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let theme = self.theme;
         let capture = self.capture?;
@@ -667,18 +670,17 @@ impl<
         Some(
             text_style(div(), TypeScale::META)
                 .id("activity-status")
-                .flex_none()
-                .px(px(SpacingScale::S4))
-                .py(px(SpacingScale::S3))
+                .min_w(px(0.0))
+                .h(px(ControlSize::MD))
+                .px(px(SpacingScale::S2))
                 .flex()
                 .items_center()
                 .gap(px(SpacingScale::S2))
-                .border_t_1()
-                .border_color(theme.colors.hairline_divider())
+                .rounded(theme.radius.control())
                 .text_color(theme.colors.text_muted())
                 .role(Role::Button)
                 .aria_label(t::open_details(label))
-                .tooltip(tooltip(hint, None))
+                .tooltip(tooltip(format!("{label} — {hint}"), None))
                 .when(self.settings.is_some(), |line| {
                     let hover = theme.colors.glass_fill_medium();
                     let section = if summary.failed > 0 {
@@ -693,24 +695,67 @@ impl<
                         )
                 })
                 .child(div().size(px(6.0)).flex_none().rounded_full().bg(dot))
-                .child(div().flex_1().truncate().child(label))
+                .child(div().min_w(px(0.0)).truncate().child(label))
                 .when(working > 0, |line| {
                     line.child(icon(
                         IconName::Activity,
                         12.0,
                         theme.colors.accent_default(),
                     ))
-                    .child(t::extracting(working))
+                    .child(div().flex_none().child(t::extracting(working)))
                 })
                 .when(summary.failed > 0, |line| {
                     line.child(
                         div()
+                            .flex_none()
                             .text_color(theme.colors.status_danger())
                             .child(t::failures(summary.failed)),
                     )
                 })
                 .into_any_element(),
         )
+    }
+
+    /// The 48 px bar at the foot of the window: the mascot dock at the left,
+    /// the status line at the right. It folds away in focus mode the way the
+    /// sidebar does: the outer height slides, the bar inside keeps its height.
+    fn status_bar(&self, status: Option<gpui::AnyElement>, theme: &Theme) -> gpui::AnyElement {
+        let bar = div()
+            .h(px(STATUS_BAR_HEIGHT))
+            .w_full()
+            .px(px(SpacingScale::S3))
+            .flex()
+            .items_center()
+            .gap(px(SpacingScale::S3))
+            .bg(theme.colors.pane())
+            .border_t_1()
+            .border_color(theme.colors.hairline_divider())
+            .child(self.assistant.clone())
+            .child(div().flex_1())
+            .children(status);
+        let (from, to) = if self.focus_mode {
+            (STATUS_BAR_HEIGHT, 0.0)
+        } else {
+            (0.0, STATUS_BAR_HEIGHT)
+        };
+        let outer = div()
+            .id("status-bar")
+            .w_full()
+            .flex_none()
+            .overflow_hidden()
+            .h(px(to))
+            .child(bar);
+        if self.focus_toggles == 0 {
+            outer.into_any_element()
+        } else {
+            outer
+                .with_animation(
+                    ElementId::Name(format!("status-bar-fold-{}", self.focus_toggles).into()),
+                    crate::ui::motion::spec::FOLD.animation(),
+                    move |outer, t| outer.h(px(from + (to - from) * t)),
+                )
+                .into_any_element()
+        }
     }
 
     /// The pill at the right of the project bar: shown only when the capture
@@ -2019,6 +2064,12 @@ impl<
     fn toggle_focus_mode(&mut self, cx: &mut Context<Self>) {
         self.focus_mode = !self.focus_mode;
         self.focus_toggles = self.focus_toggles.wrapping_add(1);
+        // Without the bar its mascot is gone, so the empty queue's lake
+        // shows its own again.
+        let status_bar = !self.focus_mode;
+        if let Some(inbox) = &self.inbox {
+            inbox.update(cx, |inbox, cx| inbox.set_status_bar(status_bar, cx));
+        }
         cx.notify();
     }
 
@@ -2384,14 +2435,8 @@ impl<
             };
             self.assistant
                 .update(cx, |assistant, cx| assistant.set_briefing(briefing, cx));
-            let dock = self.assistant.clone();
-            let footer = div()
-                .flex()
-                .flex_col()
-                .child(dock)
-                .children(status)
-                .into_any_element();
-            let sidebar = projects.update(cx, |screen, cx| screen.render_sidebar(Some(footer), cx));
+            let status_bar = self.status_bar(status, &theme);
+            let sidebar = projects.update(cx, |screen, cx| screen.render_sidebar(None, cx));
             let panel_exit = self.project_panel.exit_progress();
             let tab_frame = self.tab_indicator.frame(
                 TAB_ORDER
@@ -2478,8 +2523,10 @@ impl<
                     )
                     .into_any_element()
             };
-            div()
-                .size_full()
+            let row = div()
+                .flex_1()
+                .min_h(px(0.0))
+                .w_full()
                 .flex()
                 .child(sidebar)
                 .child(
@@ -2619,7 +2666,13 @@ impl<
                                 .into(),
                             ),
                         )),
-                )
+                );
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(row)
+                .child(status_bar)
                 .into_any_element()
         } else {
             match self.startup_error.clone() {
@@ -2665,12 +2718,12 @@ impl<
             .assistant
             .update(cx, |assistant, cx| assistant.render_panel(cx))
             .map(|panel| {
-                // Beside the sidebar, rising from the mascot's corner.
+                // Rising from the mascot's corner, over the status bar.
                 deferred(
                     div()
                         .absolute()
-                        .left(px(SIDEBAR_WIDTH + SpacingScale::S3))
-                        .bottom(px(SpacingScale::S3))
+                        .left(px(SpacingScale::S3))
+                        .bottom(px(STATUS_BAR_HEIGHT + SpacingScale::S2))
                         .child(panel),
                 )
                 .with_priority(2)

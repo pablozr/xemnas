@@ -53,8 +53,8 @@ pub fn resting() -> Arc<Image> {
     BLINK.clone()
 }
 
-/// Side of the mascot on the sidebar.
-const DOCK_SIZE: f32 = 72.0;
+/// Side of the mascot in the 48 px status bar (4 px clear above and below).
+const DOCK_SIZE: f32 = 40.0;
 /// Side of the portrait in the panel header.
 const PORTRAIT_SIZE: f32 = 44.0;
 /// Width and height of the panel.
@@ -337,7 +337,7 @@ impl AssistantScreen {
         }
     }
 
-    /// The mascot docked at the foot of the sidebar.
+    /// The mascot docked at the left of the status bar.
     fn render_dock(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
         let colors = theme.colors;
@@ -349,10 +349,10 @@ impl AssistantScreen {
         div()
             .id("assistant-dock")
             .flex()
+            .flex_none()
             .items_center()
             .gap(px(SpacingScale::S2))
-            .mx(px(SpacingScale::S2))
-            .mb(px(SpacingScale::S1))
+            .py(px(4.0))
             .px(px(SpacingScale::S2))
             .rounded(RadiusScale.surface())
             .cursor_pointer()
@@ -390,11 +390,9 @@ impl AssistantScreen {
             .child(figure)
             .child(
                 div()
-                    .flex_1()
-                    .min_w(px(0.0))
+                    .flex_none()
                     .flex()
                     .flex_col()
-                    .gap(px(2.0))
                     .child(
                         text_style(div(), TypeScale::META)
                             .font_family(Theme::font_mono())
@@ -402,8 +400,8 @@ impl AssistantScreen {
                             .child("Nº I"),
                     )
                     .child(
-                        text_style(div(), TypeScale::LABEL)
-                            .truncate()
+                        text_style(div(), TypeScale::ROW_TITLE)
+                            .whitespace_nowrap()
                             .text_color(if pending {
                                 colors.text_primary()
                             } else {

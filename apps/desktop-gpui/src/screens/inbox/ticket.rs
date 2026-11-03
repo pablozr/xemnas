@@ -387,9 +387,11 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
     /// the mouse.
     fn night(&self, cx: &mut Context<Self>) -> AnyElement {
         let clearings = self.night_slot.clearings.clone();
+        let mascot = !self.status_bar;
         self.night_full.update(cx, |field, _| {
             field.set_waiting(0);
             field.set_clearings(&clearings);
+            field.set_mascot(mascot);
         });
         let (width, height) = self.night_full.read(cx).size();
         div()

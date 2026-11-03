@@ -240,6 +240,9 @@ pub struct InboxScreen<S: InboxStore + ReviewExceptionStore + Send + 'static> {
     night_full: Entity<NightField>,
     /// The room under the ticket, as the layout last measured it.
     night_slot: Rc<ticket::NightSlot>,
+    /// The shell's status bar shows the mascot, so the empty queue's lake
+    /// leaves its own out.
+    status_bar: bool,
 }
 
 /// Confirmations in a row, each within `STREAK_GAP`, that read as a reflex.
@@ -742,6 +745,15 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             night: cx.new(|_| NightField::new(Scene::strip())),
             night_full: cx.new(|_| NightField::new(Scene::full())),
             night_slot: Rc::default(),
+            status_bar: true,
+        }
+    }
+
+    /// Whether the shell's status bar (and its mascot) is showing.
+    pub fn set_status_bar(&mut self, visible: bool, cx: &mut Context<Self>) {
+        if self.status_bar != visible {
+            self.status_bar = visible;
+            cx.notify();
         }
     }
 

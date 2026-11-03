@@ -215,6 +215,9 @@ pub struct Scene {
     pub surface: usize,
     /// Decisions waiting: one koi each, four at most.
     pub waiting: usize,
+    /// Whether the mascot fishes from the cliff. Off while the status bar
+    /// shows its own mascot, so the window never has two.
+    pub mascot: bool,
 }
 
 impl Scene {
@@ -232,6 +235,7 @@ impl Scene {
             height,
             surface: height - WATER_ROWS,
             waiting: 0,
+            mascot: true,
         }
     }
 
@@ -385,6 +389,7 @@ struct Geo {
     surf: f64,
     cliff_x: f64,
     moon: (f64, f64, f64),
+    mascot: bool,
 }
 
 impl Geo {
@@ -398,6 +403,7 @@ impl Geo {
             surf: scene.surface_px(),
             cliff_x: scene.cliff_x(),
             moon: (150.0, scene.surface_px() - 81.0, 46.0),
+            mascot: scene.mascot,
         }
     }
 
@@ -429,7 +435,7 @@ impl Geo {
     }
 
     fn mascot_box(&self) -> Option<Rect> {
-        if self.surface < MASCOT_ROWS {
+        if !self.mascot || self.surface < MASCOT_ROWS {
             return None;
         }
         let (tip, ..) = self.rig();
@@ -1335,9 +1341,17 @@ impl NightField {
         if (self.scene.width, self.scene.height) == (width, height) {
             return;
         }
-        let waiting = self.scene.waiting;
-        self.scene = Scene::strip_sized(width, height);
-        self.scene.waiting = waiting;
+        self.scene = Scene {
+            waiting: self.scene.waiting,
+            mascot: self.scene.mascot,
+            ..Scene::strip_sized(width, height)
+        };
+    }
+
+    /// Shows or hides the mascot on the cliff. The parent is repainting, so
+    /// this does not notify.
+    pub fn set_mascot(&mut self, mascot: bool) {
+        self.scene.mascot = mascot;
     }
 
     /// Width and height in pixels of the whole grid.
@@ -1599,6 +1613,20 @@ mod tests {
                 .filter(|cell| cell.owner == Owner::Mascot && cell.tile_visible())
                 .count();
             assert_eq!(tiles, art, "t={t}");
+        }
+    }
+
+    #[test]
+    fn a_hidden_mascot_leaves_no_cell() {
+        let scene = Scene {
+            mascot: false,
+            ..scene(130, 35, 0)
+        };
+        let keep = scene.default_keep_out();
+        for t in [0.0, 2.4, 17.5] {
+            assert!(render(&scene, t, &keep)
+                .iter()
+                .all(|cell| cell.owner != Owner::Mascot));
         }
     }
 
