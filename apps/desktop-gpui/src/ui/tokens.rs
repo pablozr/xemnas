@@ -734,6 +734,9 @@ pub struct TypeScale;
 impl TypeScale {
     /// `type.display` — 26 / 34, weight 500: the decision title.
     pub const DISPLAY: TypeToken = TypeToken::new(26.0, 34.0, 500.0);
+    /// `type.reading-title` — Inter 24 / 32, weight 600: the decision title
+    /// in Revisão and Decisões (`patterns::reading_title`).
+    pub const READING_TITLE: TypeToken = TypeToken::new(24.0, 32.0, 600.0);
     /// `type.heading-1` — 20 / 28, weight 600: the title of a reading pane.
     pub const HEADING_1: TypeToken = TypeToken::new(20.0, 28.0, 600.0);
     /// `type.heading-2` — 16 / 24, weight 500: a proposed choice, empty states.

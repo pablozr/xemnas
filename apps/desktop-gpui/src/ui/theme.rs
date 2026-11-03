@@ -145,8 +145,9 @@ impl Theme {
     pub fn font_interface() -> SharedString {
         families().interface.clone()
     }
-    /// Display family for reading titles and the wordmark (embedded
-    /// Bricolage Grotesque). Every control, list and paragraph stays on Inter.
+    /// Display family for the wordmark and large display text (embedded
+    /// Bricolage Grotesque). Controls, lists, paragraphs and reading titles
+    /// stay on Inter.
     pub fn font_display() -> SharedString {
         families().display.clone()
     }

@@ -280,13 +280,11 @@ pub fn word_wrapped(text: &str, token: TypeToken, max_lines: Option<usize>) -> D
         .children(words)
 }
 
-/// The title of a reading pane: display face, word-wrapped.
+/// The title of a reading pane: Inter 24/600, word-wrapped.
 pub fn reading_title(text: &str) -> Div {
-    // 500 is a named instance of the variable face; an in-between weight such
-    // as 560 made the text system fall back to the interface family.
-    word_wrapped(text, TypeScale::DISPLAY, None)
-        .font_family(Theme::font_display())
-        .font_weight(gpui::FontWeight::MEDIUM)
+    word_wrapped(text, TypeScale::READING_TITLE, None)
+        .font_family(Theme::font_interface())
+        .font_weight(gpui::FontWeight::SEMIBOLD)
 }
 
 /// The reading column width shared by Revisão, Decisões and the editors.
