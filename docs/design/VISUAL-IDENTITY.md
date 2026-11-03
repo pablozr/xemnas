@@ -124,7 +124,7 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   geram `assets/mascot/sheet.png` (32 quadros de 160 px, 8 × 4, mesmo
   recorte) e `idle`, `blink`, `glow` avulsos para retrato e estados vazios.
   O app só exibe as imagens; não há 3D em tempo real.
-- Fica no pé da lateral, acima da linha de status: figura de 72 px, "Nº I"
+- Fica na barra de status (figura de 40 px); o retrato de 72 px tem "Nº I"
   em mono prata e uma frase real ("5 para revisar", ou o nome), com ponto
   âmbar quando há fila. Respira a cada ~5 s (sobe 3 px e assenta em 2,2 s)
   e fica parado entre uma respiração e outra; pisca e olha para os lados.
@@ -154,10 +154,11 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
 
 ## Projetos — superfície atual
 
-- Lista persistente de projetos de 248 px (linhas de 48 px com nome e caminho) e
-  workspace selecionado ocupando toda a área restante. O nome do projeto na
-  barra abre um painel com as propriedades reais (localização e data) e a
-  remoção secundária; Esc ou clique fora fecha, trocar de projeto também.
+- Sem coluna de projetos: o workspace ocupa a janela toda. O crumb do projeto
+  (ou Ctrl P) abre o seletor, um popover com filtro e linhas de 44 px com nome
+  e caminho; Enter troca de projeto e "⋯" abre o painel com as propriedades
+  reais (localização e data) e a remoção secundária; Esc ou clique fora fecha,
+  trocar de projeto também.
   Não impor um card de largura fixa
   nem criar métricas ou atividade inexistentes.
 - A linha selecionada conserva fundo e indicador lateral sob hover; foco visível
@@ -196,9 +197,10 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
 - A barra da janela (40 px) contém marca, selo de demonstração quando houver,
   tema e controles nativos. Abaixo dela, uma única barra de projeto de 44 px leva
   o nome do projeto como trilha (abre o painel do projeto) e as abas Revisão e
-  Decisões; o caminho fica na lista lateral e no painel. Não há barra de status:
-  o rodapé da lateral mostra só estados reais (captura ativa, indisponível ou
-  demonstração; jobs extraindo; falhas).
+  Decisões; o caminho fica no seletor e no painel. O crumb do projeto abre o
+  seletor (Ctrl P). Embaixo, uma barra de status de 48 px leva o mascote e só
+  estados reais (captura ativa, indisponível ou demonstração; jobs extraindo;
+  falhas).
 - Em Decisões o índice fica à esquerda, como em todo destino. Não há segunda fileira de abas: estado, versão, o acesso ao
   histórico ("Versões") e as ações Exportar/Revisar ficam na linha de metadados
   do documento. Linhas de lista e abas têm hover com mola criticamente amortecida.
@@ -471,6 +473,8 @@ sem mudanças. Código em `screens/inbox/ticket.rs` e `ui/night_field.rs`.
   16 colunas esmaecidas) com um único vão retangular atrás de "A seguir" e da pílula.
   O motor é puro (`render(&Scene, t, shooting)`) e testado; trocar a cena não mexe
   no resto. Colofão em mono com versão, commit (`build.rs`) e licença.
+  O lago da fila vazia mede a largura do painel e usa 96 a 130 colunas
+  (`night_field::full_columns`), para a arte nunca ficar cortada.
 
 ## Aprovação automática
 
@@ -778,8 +782,9 @@ em `docs/arquitetura/desempenho-e-escala.md`. No visual, isso vira:
 - Números de destaque contam até o valor (`count_up`) e todo contador usa
   algarismos de largura fixa (`tabular`, `tnum`), para nada pular quando o
   número muda.
-- Modo foco (Ctrl \, paleta): a lateral se recolhe em 220 ms; a largura de
-  fora desliza e a lateral de dentro mantém a largura, sem refluxo.
+- Modo foco (Ctrl \, paleta): a barra de status se recolhe em 220 ms
+  (`motion::FOLD`); a altura de fora desliza e o conteúdo de dentro mantém a
+  altura, sem refluxo.
 - Abertura: o mascote e o wordmark sobre o fundo do tema por 650 ms, o
   final num fade que sobe 8 px; sem isso com movimento reduzido.
 - Hover de linhas e abas segue a mola de `hover_tint`.

@@ -95,6 +95,8 @@ para a extração e a revisão normais (`Documents::import_file`). Só documenta
 
 **Interface.** App nativo em Rust + GPUI. Telas: Revisão, Decisões, Contexto, Mapa, Visão,
 Projetos e Configurações (IA, OpenCode, Diagnóstico, Aparência, Idioma). Paleta com Ctrl K.
+Não há coluna de projetos: o crumb do projeto (ou Ctrl P) abre um seletor com filtro, e uma
+barra de status embaixo leva o mascote e os estados reais. O modo foco (Ctrl \) recolhe essa barra.
 Dez idiomas, inglês por padrão ([idiomas](../design/idiomas.md)). O painel do assistente
 mostra a fila real e leva à tela certa; ainda não conversa com um modelo.
 
