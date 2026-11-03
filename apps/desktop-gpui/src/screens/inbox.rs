@@ -1133,15 +1133,6 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                         this.undo = this.pending_undo.take();
                         this.note_confirmation(decided);
                         this.decided = decided.count(this.decided);
-                        if decided == Decided::Confirmed {
-                            // Only the scene on screen shoots; the other is not mounted.
-                            let field = if this.rows.is_empty() {
-                                &this.night_full
-                            } else {
-                                &this.night
-                            };
-                            field.update(cx, |field, cx| field.shoot(cx));
-                        }
                         this.page(false, cx);
                     }
                     Outcome::Page(Err(error), _)
