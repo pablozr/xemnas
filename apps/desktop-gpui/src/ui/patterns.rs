@@ -267,6 +267,33 @@ pub fn word_wrapped(text: &str, token: TypeToken, max_lines: Option<usize>) -> D
     let words = text
         .split_whitespace()
         .map(|word| div().flex_none().child(word.to_owned()));
+    word_row(token, max_lines).children(words)
+}
+
+/// Word-wrapped text that ends in `tail` (source numbers, a mark): the last
+/// word and the tail are one unit, so the tail never starts a line alone.
+pub fn word_wrapped_with(text: &str, token: TypeToken, tail: impl IntoElement) -> Div {
+    let (head, last) = split_tail(text);
+    let words = head
+        .into_iter()
+        .map(|word| div().flex_none().child(word.to_owned()));
+    let end = div()
+        .flex_none()
+        .flex()
+        .children(last.map(str::to_owned))
+        .child(tail);
+    word_row(token, None).children(words).child(end)
+}
+
+/// The words of `text` before the last one, and the last one (kept with
+/// whatever follows it).
+pub fn split_tail(text: &str) -> (Vec<&str>, Option<&str>) {
+    let mut words: Vec<&str> = text.split_whitespace().collect();
+    let last = words.pop();
+    (words, last)
+}
+
+fn word_row(token: TypeToken, max_lines: Option<usize>) -> Div {
     text_style(div(), token)
         .w_full()
         .min_w(px(0.0))
@@ -277,7 +304,6 @@ pub fn word_wrapped(text: &str, token: TypeToken, max_lines: Option<usize>) -> D
             text.max_h(px(token.line_height * lines as f32))
                 .overflow_hidden()
         })
-        .children(words)
 }
 
 /// The title of a reading pane: Inter 24/600, word-wrapped.
@@ -1213,6 +1239,15 @@ pub fn ring(theme: &Theme, fraction: f32, side: f32, color: Rgba) -> impl IntoEl
 #[cfg(test)]
 mod form_tests {
     use super::*;
+
+    #[test]
+    fn the_wrap_never_separates_the_last_word_from_its_tail() {
+        let (head, last) = split_tail("O mapa vem das decisões  aceitas.\n");
+        assert_eq!(head, ["O", "mapa", "vem", "das", "decisões"]);
+        assert_eq!(last, Some("aceitas."));
+        assert_eq!(split_tail("única"), (vec![], Some("única")));
+        assert_eq!(split_tail("   "), (vec![], None));
+    }
 
     #[test]
     fn share_is_kept_between_zero_and_one() {
