@@ -1,5 +1,5 @@
-//! Xemnas, the assistant: the mascot that sits at the foot of the sidebar
-//! and the panel it opens.
+//! Xemnas, the assistant: the mascot docked in the status bar and the panel
+//! it opens.
 //!
 //! The mascot is a pre-rendered toon figure (`assets/mascot`, rendered
 //! offline from a signed-distance model) so it reads as 3D without a 3D
@@ -422,7 +422,7 @@ impl AssistantScreen {
             .into_any_element()
     }
 
-    /// The panel, anchored by the shell beside the sidebar.
+    /// The panel, anchored by the shell above the status bar.
     pub fn render_panel(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         self.panel.get()?;
         let exit = self.panel.exit_progress();

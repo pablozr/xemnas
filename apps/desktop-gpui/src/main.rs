@@ -820,61 +820,7 @@ fn run_shell_mode(
     });
     application().run(move |cx: &mut App| {
         xemnas_desktop::fonts::register_embedded(cx);
-        cx.bind_keys([
-            KeyBinding::new("tab", TabNext, None),
-            KeyBinding::new("shift-tab", TabPrev, None),
-            KeyBinding::new("ctrl-k", TogglePalette, Some("xemnas")),
-            KeyBinding::new("ctrl-\\", ToggleFocusMode, Some("xemnas")),
-            KeyBinding::new("ctrl-f", FocusSearch, Some("xemnas")),
-            // Single-key shortcuts never fire while a text field has focus.
-            KeyBinding::new("j", NextItem, Some("xemnas && !SearchField")),
-            KeyBinding::new("down", NextItem, Some("xemnas && !SearchField")),
-            KeyBinding::new("k", PrevItem, Some("xemnas && !SearchField")),
-            KeyBinding::new("up", PrevItem, Some("xemnas && !SearchField")),
-            KeyBinding::new("c", ConfirmItem, Some("xemnas && !SearchField")),
-            KeyBinding::new("r", RejectItem, Some("xemnas && !SearchField")),
-            KeyBinding::new("s", SnoozeItem, Some("xemnas && !SearchField")),
-            KeyBinding::new("a", AdjustItem, Some("xemnas && !SearchField")),
-            KeyBinding::new("tab", ToggleQueue, Some("ReviewHome")),
-            KeyBinding::new("enter", OpenProof, Some("ReviewHome")),
-            KeyBinding::new("e", ReviewEffect, Some("xemnas && !SearchField")),
-            KeyBinding::new("l", ReviewAccepted, Some("xemnas && !SearchField")),
-            KeyBinding::new("d", ReviewToday, Some("xemnas && !SearchField")),
-            KeyBinding::new("escape", ReviewClose, Some("xemnas && !SearchField")),
-            KeyBinding::new("left", ReviewPrevSource, Some("xemnas && !SearchField")),
-            KeyBinding::new("right", ReviewNextSource, Some("xemnas && !SearchField")),
-            KeyBinding::new("ctrl-enter", SaveEditor, Some("Editor")),
-            KeyBinding::new("ctrl-1", GoReview, Some("xemnas")),
-            KeyBinding::new("ctrl-2", GoDecisions, Some("xemnas")),
-            KeyBinding::new("ctrl-3", GoContext, Some("xemnas")),
-            KeyBinding::new("ctrl-4", GoMap, Some("xemnas")),
-            KeyBinding::new("ctrl-0", GoOverview, Some("xemnas")),
-            KeyBinding::new("backspace", Backspace, Some("SearchField")),
-            KeyBinding::new("delete", Delete, Some("SearchField")),
-            KeyBinding::new("left", Left, Some("SearchField")),
-            KeyBinding::new("right", Right, Some("SearchField")),
-            KeyBinding::new("shift-left", SelectLeft, Some("SearchField")),
-            KeyBinding::new("shift-right", SelectRight, Some("SearchField")),
-            KeyBinding::new("ctrl-a", SelectAll, Some("SearchField")),
-            KeyBinding::new("ctrl-v", Paste, Some("SearchField")),
-            KeyBinding::new("ctrl-c", Copy, Some("SearchField")),
-            KeyBinding::new("ctrl-x", Cut, Some("SearchField")),
-            KeyBinding::new("home", Home, Some("SearchField")),
-            KeyBinding::new("end", End, Some("SearchField")),
-            KeyBinding::new("escape", Clear, Some("SearchField")),
-            // Declared after Clear so the palette closes instead of clearing.
-            KeyBinding::new("escape", PaletteClose, Some("Palette > SearchField")),
-            KeyBinding::new("escape", PaletteClose, Some("Palette")),
-            KeyBinding::new("down", PaletteDown, Some("Palette")),
-            KeyBinding::new("up", PaletteUp, Some("Palette")),
-            KeyBinding::new("enter", PaletteRun, Some("Palette")),
-            KeyBinding::new("ctrl-p", ToggleProjectPicker, Some("xemnas")),
-            KeyBinding::new("escape", PickerClose, Some("ProjectPicker > SearchField")),
-            KeyBinding::new("escape", PickerClose, Some("ProjectPicker")),
-            KeyBinding::new("down", PickerDown, Some("ProjectPicker")),
-            KeyBinding::new("up", PickerUp, Some("ProjectPicker")),
-            KeyBinding::new("enter", PickerRun, Some("ProjectPicker")),
-        ]);
+        cx.bind_keys(key_bindings());
 
         let compact = demo && std::env::args().any(|argument| argument == "--compact");
         // Demo-only capture aids: a route to open, the second palette and a
@@ -1253,9 +1199,102 @@ fn start_local_api(
     local_api::ApiServer::start(config)
 }
 
+/// Every shortcut of the shell, in precedence order (later wins among equal
+/// contexts). A function so the tests can resolve keys without a window.
+fn key_bindings() -> Vec<KeyBinding> {
+    vec![
+        KeyBinding::new("tab", TabNext, None),
+        KeyBinding::new("shift-tab", TabPrev, None),
+        KeyBinding::new("ctrl-k", TogglePalette, Some("xemnas")),
+        KeyBinding::new("ctrl-\\", ToggleFocusMode, Some("xemnas")),
+        KeyBinding::new("ctrl-f", FocusSearch, Some("xemnas")),
+        // Single-key shortcuts never fire while a text field has focus.
+        KeyBinding::new("j", NextItem, Some("xemnas && !SearchField")),
+        KeyBinding::new("down", NextItem, Some("xemnas && !SearchField")),
+        KeyBinding::new("k", PrevItem, Some("xemnas && !SearchField")),
+        KeyBinding::new("up", PrevItem, Some("xemnas && !SearchField")),
+        KeyBinding::new("c", ConfirmItem, Some("xemnas && !SearchField")),
+        KeyBinding::new("r", RejectItem, Some("xemnas && !SearchField")),
+        KeyBinding::new("s", SnoozeItem, Some("xemnas && !SearchField")),
+        KeyBinding::new("a", AdjustItem, Some("xemnas && !SearchField")),
+        KeyBinding::new("tab", ToggleQueue, Some("ReviewHome")),
+        KeyBinding::new("enter", OpenProof, Some("ReviewHome")),
+        KeyBinding::new("e", ReviewEffect, Some("xemnas && !SearchField")),
+        KeyBinding::new("l", ReviewAccepted, Some("xemnas && !SearchField")),
+        KeyBinding::new("d", ReviewToday, Some("xemnas && !SearchField")),
+        KeyBinding::new("escape", ReviewClose, Some("xemnas && !SearchField")),
+        KeyBinding::new("left", ReviewPrevSource, Some("xemnas && !SearchField")),
+        KeyBinding::new("right", ReviewNextSource, Some("xemnas && !SearchField")),
+        KeyBinding::new("ctrl-enter", SaveEditor, Some("Editor")),
+        KeyBinding::new("ctrl-1", GoReview, Some("xemnas")),
+        KeyBinding::new("ctrl-2", GoDecisions, Some("xemnas")),
+        KeyBinding::new("ctrl-3", GoContext, Some("xemnas")),
+        KeyBinding::new("ctrl-4", GoMap, Some("xemnas")),
+        KeyBinding::new("ctrl-0", GoOverview, Some("xemnas")),
+        KeyBinding::new("backspace", Backspace, Some("SearchField")),
+        KeyBinding::new("delete", Delete, Some("SearchField")),
+        KeyBinding::new("left", Left, Some("SearchField")),
+        KeyBinding::new("right", Right, Some("SearchField")),
+        KeyBinding::new("shift-left", SelectLeft, Some("SearchField")),
+        KeyBinding::new("shift-right", SelectRight, Some("SearchField")),
+        KeyBinding::new("ctrl-a", SelectAll, Some("SearchField")),
+        KeyBinding::new("ctrl-v", Paste, Some("SearchField")),
+        KeyBinding::new("ctrl-c", Copy, Some("SearchField")),
+        KeyBinding::new("ctrl-x", Cut, Some("SearchField")),
+        KeyBinding::new("home", Home, Some("SearchField")),
+        KeyBinding::new("end", End, Some("SearchField")),
+        KeyBinding::new("escape", Clear, Some("SearchField")),
+        // Declared after Clear so the palette closes instead of clearing.
+        KeyBinding::new("escape", PaletteClose, Some("Palette > SearchField")),
+        KeyBinding::new("escape", PaletteClose, Some("Palette")),
+        KeyBinding::new("down", PaletteDown, Some("Palette")),
+        KeyBinding::new("up", PaletteUp, Some("Palette")),
+        KeyBinding::new("enter", PaletteRun, Some("Palette")),
+        KeyBinding::new("ctrl-p", ToggleProjectPicker, Some("xemnas")),
+        KeyBinding::new("escape", PickerClose, Some("ProjectPicker > SearchField")),
+        KeyBinding::new("escape", PickerClose, Some("ProjectPicker")),
+        KeyBinding::new("down", PickerDown, Some("ProjectPicker")),
+        KeyBinding::new("up", PickerUp, Some("ProjectPicker")),
+        KeyBinding::new("enter", PickerRun, Some("ProjectPicker")),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The action a key fires with focus inside `contexts` (root first).
+    fn fired(keymap: &gpui::Keymap, key: &str, contexts: &[&str]) -> Box<dyn gpui::Action> {
+        let stack: Vec<gpui::KeyContext> = contexts
+            .iter()
+            .map(|context| gpui::KeyContext::parse(context).unwrap())
+            .collect();
+        let (bindings, _) =
+            keymap.bindings_for_input(&[gpui::Keystroke::parse(key).unwrap()], &stack);
+        bindings
+            .first()
+            .unwrap_or_else(|| panic!("{key} fires nothing in {contexts:?}"))
+            .action()
+            .boxed_clone()
+    }
+
+    /// Without the projects column (lote 2, §2.1) the project list, its
+    /// filter, Abrir pasta and the properties live in the crumb's picker and
+    /// the palette, reached from any window width by these keys.
+    #[test]
+    fn project_actions_stay_reachable_without_the_column() {
+        let keymap = gpui::Keymap::new(key_bindings());
+        let shell = ["xemnas"];
+        let picker = ["xemnas", "ProjectPicker"];
+        let filter = ["xemnas", "ProjectPicker", "SearchField"];
+        assert!(fired(&keymap, "ctrl-p", &shell).partial_eq(&ToggleProjectPicker));
+        assert!(fired(&keymap, "ctrl-k", &shell).partial_eq(&TogglePalette));
+        assert!(fired(&keymap, "down", &filter).partial_eq(&PickerDown));
+        assert!(fired(&keymap, "up", &filter).partial_eq(&PickerUp));
+        assert!(fired(&keymap, "enter", &filter).partial_eq(&PickerRun));
+        assert!(fired(&keymap, "escape", &filter).partial_eq(&PickerClose));
+        assert!(fired(&keymap, "escape", &picker).partial_eq(&PickerClose));
+    }
 
     #[test]
     fn window_size_parses_and_respects_the_minimum() {

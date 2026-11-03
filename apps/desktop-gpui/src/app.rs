@@ -99,7 +99,7 @@ actions!(
         GoOverview,
         /// Opens or closes the command palette.
         TogglePalette,
-        /// Hides or shows the projects sidebar (focus mode).
+        /// Hides or shows the status bar (focus mode).
         ToggleFocusMode,
         /// Moves the palette highlight down.
         PaletteDown,
@@ -135,8 +135,6 @@ enum ProjectPopover {
 const TITLE_BAR_HEIGHT: f32 = 40.0;
 /// Height of the project bar that carries the breadcrumb and destinations.
 const PROJECT_BAR_HEIGHT: f32 = 44.0;
-/// Width of the projects sidebar (`ProjectsScreen::render_sidebar`).
-const SIDEBAR_WIDTH: f32 = 248.0;
 /// Height of the status bar at the foot of the window (mascot dock + status).
 const STATUS_BAR_HEIGHT: f32 = 48.0;
 /// Grain tiles laid over a background: enough for a 4K-wide window.
@@ -334,9 +332,9 @@ pub struct Shell<
     project_panel: Popup<ProjectPopover>,
     /// The quick theme menu under the title bar's contrast button.
     theme_menu: Popup<()>,
-    /// Focus mode: the projects sidebar folded away.
+    /// Focus mode: the status bar folded away.
     focus_mode: bool,
-    /// How many times focus mode was toggled: 0 draws the sidebar still
+    /// How many times focus mode was toggled: 0 draws the status bar still
     /// (no slide on launch); each toggle keys a fresh slide.
     focus_toggles: u32,
     /// When the window opened, for the brief opening mark.
@@ -352,7 +350,7 @@ pub struct Shell<
     backdrop: bool,
     /// Demo-only destination to open once projects load (`--open`).
     route: Option<String>,
-    /// Xemnas, the mascot at the foot of the sidebar and its panel.
+    /// Xemnas, the mascot docked in the status bar, and its panel.
     assistant: Entity<AssistantScreen>,
     _assistant_subscription: Subscription,
     _assistant_toggled: Subscription,
@@ -422,7 +420,7 @@ impl<
             cx.subscribe(
                 screen,
                 |shell, projects, _: &ProjectPropertiesRequested, cx| {
-                    projects.update(cx, |projects, cx| projects.picker_dismissed(cx));
+                    projects.update(cx, |projects, _| projects.picker_dismissed());
                     if let Some(popover) = shell.project_panel.open_mut() {
                         *popover = ProjectPopover::Properties;
                     }
@@ -753,8 +751,8 @@ impl<
     }
 
     /// The 48 px bar at the foot of the window: the mascot dock at the left,
-    /// the status line at the right. It folds away in focus mode the way the
-    /// sidebar does: the outer height slides, the bar inside keeps its height.
+    /// the status line at the right. It folds away in focus mode: the outer
+    /// height slides, the bar inside keeps its height.
     fn status_bar(&self, status: Option<gpui::AnyElement>, theme: &Theme) -> gpui::AnyElement {
         let bar = div()
             .h(px(STATUS_BAR_HEIGHT))
@@ -1216,11 +1214,18 @@ impl<
     }
 
     /// Focuses the actual next action rather than an inert path field.
+    /// With a project that is its crumb (the picker); without one, the
+    /// empty state's Abrir pasta.
     pub fn initial_focus(&self, cx: &App) -> FocusHandle {
-        self.projects
-            .as_ref()
-            .map(|screen| screen.read(cx).initial_focus())
-            .unwrap_or_else(|| self.focus.clone())
+        let Some(projects) = &self.projects else {
+            return self.focus.clone();
+        };
+        let projects = projects.read(cx);
+        if projects.selected_project().is_some() {
+            self.project_focus.clone()
+        } else {
+            projects.initial_focus()
+        }
     }
 
     fn on_tab_next(&mut self, _: &TabNext, window: &mut Window, cx: &mut Context<Self>) {
@@ -1298,7 +1303,7 @@ impl<
         if self.project_panel.begin_close() {
             reap(cx, |shell: &mut Self| &mut shell.project_panel);
             if let Some(projects) = &self.projects {
-                projects.update(cx, |projects, cx| projects.picker_dismissed(cx));
+                projects.update(cx, |projects, _| projects.picker_dismissed());
             }
         }
     }
@@ -1431,7 +1436,7 @@ impl<
         items.push(PaletteItem {
             group: t::group_actions(),
             label: if self.focus_mode {
-                t::show_sidebar().to_owned()
+                t::show_status_bar().to_owned()
             } else {
                 t::focus_mode().to_owned()
             },
@@ -1897,8 +1902,8 @@ impl<
         let Some(projects) = self.projects.clone() else {
             return;
         };
-        projects.update(cx, |projects, cx| {
-            projects.picker_dismissed(cx);
+        projects.update(cx, |projects, _| {
+            projects.picker_dismissed();
             projects.show_properties(None);
         });
         self.project_panel.open(ProjectPopover::Properties);
@@ -2301,7 +2306,7 @@ impl<
     }
 
     /// Opens the app-level settings page, or returns to the projects.
-    /// Opens the settings page on `section` (the sidebar status line leads to
+    /// Opens the settings page on `section` (the status bar's line leads to
     /// the integration or to the failures behind its counts).
     fn open_settings_at(&mut self, section: SettingsSection, cx: &mut Context<Self>) {
         if self.settings.is_some() {
@@ -2513,7 +2518,6 @@ impl<
             self.assistant
                 .update(cx, |assistant, cx| assistant.set_briefing(briefing, cx));
             let status_bar = self.status_bar(status, &theme);
-            let sidebar = projects.update(cx, |screen, cx| screen.render_sidebar(None, cx));
             let panel_exit = self.project_panel.exit_progress();
             let tab_frame = self.tab_indicator.frame(
                 TAB_ORDER
@@ -2598,174 +2602,144 @@ impl<
             } else {
                 projects.update(cx, |screen, cx| screen.render_details(cx))
             };
-            // The sidebar folds away in focus mode: the outer width slides,
-            // the sidebar inside keeps its width so nothing reflows mid-way.
-            let (from, to) = if self.focus_mode {
-                (SIDEBAR_WIDTH, 0.0)
-            } else {
-                (0.0, SIDEBAR_WIDTH)
-            };
-            let sidebar = div()
-                .h_full()
-                .flex_none()
-                .overflow_hidden()
-                .w(px(to))
-                .child(div().w(px(SIDEBAR_WIDTH)).h_full().child(sidebar));
-            let sidebar = if self.focus_toggles == 0 {
-                sidebar.into_any_element()
-            } else {
-                sidebar
-                    .with_animation(
-                        ElementId::Name(format!("sidebar-fold-{}", self.focus_toggles).into()),
-                        crate::ui::motion::spec::FOLD.animation(),
-                        move |sidebar, t| sidebar.w(px(from + (to - from) * t)),
-                    )
-                    .into_any_element()
-            };
-            let row = div()
-                .flex_1()
-                .min_h(px(0.0))
-                .w_full()
-                .flex()
-                .child(sidebar)
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .h_full()
-                        .flex()
-                        .flex_col()
-                        .bg(theme.colors.content())
-                        // Over the material the content is a card: margins on
-                        // the free sides, flush against the sidebar, 10 px
-                        // radius, hairline edge and a card shadow (Fluent's
-                        // card pattern; Arc and Zen frame content the same way).
-                        .when(theme.colors.is_glass(), |content| {
-                            content
-                                .mr(px(SpacingScale::S2))
-                                .mb(px(SpacingScale::S2))
-                                .rounded(theme.radius.surface())
-                                .border_1()
-                                .border_color(theme.colors.glass_border_card())
-                                .overflow_hidden()
-                                .shadow(vec![
-                                    BoxShadow::new(
-                                        px(0.0),
-                                        px(8.0),
-                                        theme.colors.shadow_low().into(),
-                                    )
+            // No projects column (lote 2, §2.1): the crumb's picker and the
+            // palette carry the list, so the content spans the window.
+            let row = div().flex_1().min_h(px(0.0)).w_full().flex().child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .bg(theme.colors.content())
+                    // Over the material the content is a card: margins on
+                    // the free sides, 10 px radius, hairline edge and a
+                    // card shadow (Fluent's card pattern; Arc and Zen
+                    // frame content the same way).
+                    .when(theme.colors.is_glass(), |content| {
+                        content
+                            .mx(px(SpacingScale::S2))
+                            .mb(px(SpacingScale::S2))
+                            .rounded(theme.radius.surface())
+                            .border_1()
+                            .border_color(theme.colors.glass_border_card())
+                            .overflow_hidden()
+                            .shadow(vec![
+                                BoxShadow::new(px(0.0), px(8.0), theme.colors.shadow_low().into())
                                     .blur_radius(px(24.0)),
-                                    BoxShadow::new(
-                                        px(0.0),
-                                        px(1.0),
-                                        theme.colors.inset_highlight().alpha(0.06).into(),
-                                    )
-                                    .inset(),
-                                ])
-                        })
-                        // One bar: the project as breadcrumb (it opens the
-                        // project picker), then its destinations.
-                        .children(selected.as_ref().map(|project| {
-                            div()
-                                .relative()
-                                .h(px(PROJECT_BAR_HEIGHT))
-                                .flex_none()
-                                .px(px(SpacingScale::S3))
-                                .flex()
-                                .items_center()
-                                .gap(px(SpacingScale::S1))
-                                .border_b_1()
-                                .border_color(theme.colors.hairline_divider())
-                                .child(self.project_crumb(project.name().to_owned(), cx))
-                                .child(
-                                    text_style(div(), TypeScale::BODY_SMALL)
-                                        .text_color(theme.colors.text_disabled())
-                                        .child("/"),
+                                BoxShadow::new(
+                                    px(0.0),
+                                    px(1.0),
+                                    theme.colors.inset_highlight().alpha(0.06).into(),
                                 )
-                                .child(
-                                    // The selection is one plate behind the
-                                    // row, gliding to the chosen tab.
-                                    div()
-                                        .relative()
-                                        .flex_none()
-                                        .children(tab_frame.map(|frame| {
-                                            div()
-                                                .absolute()
-                                                .top_0()
-                                                .h(px(ControlSize::SM))
-                                                .left(px(frame.left))
-                                                .w(px(frame.width))
-                                                .rounded(theme.radius.control())
-                                                .bg(theme.colors.selection())
-                                        }))
-                                        .child(
-                                            div()
-                                                .on_children_prepainted(measure_tabs)
-                                                .id("project-destinations")
-                                                .flex()
-                                                .gap(px(SpacingScale::S1))
-                                                .role(Role::TabList)
-                                                .children(TAB_ORDER.iter().map(|destination| {
-                                                    self.nav_tab(*destination, cx)
-                                                })),
-                                        ),
-                                )
-                                .child(div().flex_1())
-                                .children(self.capture_pill(cx))
-                                .children(panel.take().map(|panel| {
-                                    deferred(
+                                .inset(),
+                            ])
+                    })
+                    // One bar: the project as breadcrumb (it opens the
+                    // project picker), then its destinations.
+                    .children(selected.as_ref().map(|project| {
+                        div()
+                            .relative()
+                            .h(px(PROJECT_BAR_HEIGHT))
+                            .flex_none()
+                            .px(px(SpacingScale::S3))
+                            .flex()
+                            .items_center()
+                            .gap(px(SpacingScale::S1))
+                            .border_b_1()
+                            .border_color(theme.colors.hairline_divider())
+                            .child(self.project_crumb(project.name().to_owned(), cx))
+                            .child(
+                                text_style(div(), TypeScale::BODY_SMALL)
+                                    .text_color(theme.colors.text_disabled())
+                                    .child("/"),
+                            )
+                            .child(
+                                // The selection is one plate behind the
+                                // row, gliding to the chosen tab.
+                                div()
+                                    .relative()
+                                    .flex_none()
+                                    .children(tab_frame.map(|frame| {
                                         div()
-                                            .id("project-panel")
                                             .absolute()
-                                            .top(px(PROJECT_BAR_HEIGHT - 4.0))
-                                            .left(px(SpacingScale::S3))
-                                            .rounded(theme.radius.surface())
-                                            .border_1()
-                                            .border_color(theme.colors.hairline_divider())
-                                            .bg(theme.colors.floating())
-                                            .shadow(crate::ui::material::elevation(
-                                                &theme,
-                                                crate::ui::material::Elevation::Floating,
-                                            ))
-                                            .occlude()
-                                            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                                                this.dismiss_project_panel(cx);
-                                                cx.notify();
-                                            }))
-                                            .child(match panel_exit {
-                                                None => menu_in(
-                                                    "project-panel-in",
-                                                    -4.0,
-                                                    div().child(panel),
-                                                )
-                                                .into_any_element(),
-                                                Some(t) => menu_out(
-                                                    "project-panel-out",
-                                                    -4.0,
-                                                    t,
-                                                    div().child(panel),
-                                                )
-                                                .into_any_element(),
-                                            }),
-                                    )
-                                    .with_priority(1)
-                                }))
-                        }))
-                        .child(fade_in(
-                            div().flex_1().min_h(px(0.0)).child(content),
-                            ElementId::Name(
-                                format!(
-                                    "content-{:?}-{}",
-                                    self.destination,
-                                    selected
-                                        .as_ref()
-                                        .map(|project| project.id().as_str())
-                                        .unwrap_or("none")
+                                            .top_0()
+                                            .h(px(ControlSize::SM))
+                                            .left(px(frame.left))
+                                            .w(px(frame.width))
+                                            .rounded(theme.radius.control())
+                                            .bg(theme.colors.selection())
+                                    }))
+                                    .child(
+                                        div()
+                                            .on_children_prepainted(measure_tabs)
+                                            .id("project-destinations")
+                                            .flex()
+                                            .gap(px(SpacingScale::S1))
+                                            .role(Role::TabList)
+                                            .children(
+                                                TAB_ORDER.iter().map(|destination| {
+                                                    self.nav_tab(*destination, cx)
+                                                }),
+                                            ),
+                                    ),
+                            )
+                            .child(div().flex_1())
+                            .children(self.capture_pill(cx))
+                            .children(panel.take().map(|panel| {
+                                deferred(
+                                    div()
+                                        .id("project-panel")
+                                        .absolute()
+                                        .top(px(PROJECT_BAR_HEIGHT - 4.0))
+                                        .left(px(SpacingScale::S3))
+                                        .rounded(theme.radius.surface())
+                                        .border_1()
+                                        .border_color(theme.colors.hairline_divider())
+                                        .bg(theme.colors.floating())
+                                        .shadow(crate::ui::material::elevation(
+                                            &theme,
+                                            crate::ui::material::Elevation::Floating,
+                                        ))
+                                        .occlude()
+                                        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                                            this.dismiss_project_panel(cx);
+                                            cx.notify();
+                                        }))
+                                        .child(match panel_exit {
+                                            None => menu_in(
+                                                "project-panel-in",
+                                                -4.0,
+                                                div().child(panel),
+                                            )
+                                            .into_any_element(),
+                                            Some(t) => menu_out(
+                                                "project-panel-out",
+                                                -4.0,
+                                                t,
+                                                div().child(panel),
+                                            )
+                                            .into_any_element(),
+                                        }),
                                 )
-                                .into(),
-                            ),
-                        )),
-                );
+                                .with_priority(1)
+                            }))
+                    }))
+                    .child(fade_in(
+                        div().flex_1().min_h(px(0.0)).child(content),
+                        ElementId::Name(
+                            format!(
+                                "content-{:?}-{}",
+                                self.destination,
+                                selected
+                                    .as_ref()
+                                    .map(|project| project.id().as_str())
+                                    .unwrap_or("none")
+                            )
+                            .into(),
+                        ),
+                    )),
+            );
             div()
                 .size_full()
                 .flex()
@@ -2795,7 +2769,7 @@ impl<
                         .object_fit(gpui::ObjectFit::Cover),
                 )
                 // The frame's tint, once, over the whole image: title bar,
-                // sidebar and the gutter around the content card share it.
+                // status bar and the gutter around the content card share it.
                 .child(div().absolute().inset_0().bg(chrome))
                 // A fine grain over the image (tiled; GPUI has no repeat).
                 .child(
@@ -2835,7 +2809,7 @@ impl<
             .flex()
             .flex_col()
             // Over the material the frame tint is painted once, for the whole
-            // window: title bar, sidebar and the gutter around the content card
+            // window: title bar, status bar and the gutter around the content card
             // are one surface, so no strip shows raw material beside a tinted one.
             .bg(if wallpaper.is_some() {
                 // Under the image: the canvas, never the translucent chrome.

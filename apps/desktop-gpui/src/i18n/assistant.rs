@@ -41,16 +41,16 @@ strings! {
         ja: "Nº I · プロジェクトのアシスタント", zh: "Nº I · 项目助手",
         ko: "Nº I · 프로젝트 어시스턴트", ru: "Nº I · ассистент проекта" }
     /// Greeting when no project is selected.
-    pick_project { en: "Pick a project in the sidebar and I’ll show you what it holds.",
-        pt: "Escolha um projeto na lateral e eu mostro o que ele guarda.",
-        es: "Elige un proyecto en la barra lateral y te muestro lo que guarda.",
-        fr: "Choisissez un projet dans la barre latérale et je vous montre ce qu’il contient.",
-        de: "Wähle links ein Projekt aus, dann zeige ich dir, was darin steckt.",
-        it: "Scegli un progetto nella barra laterale e ti mostro cosa contiene.",
-        ja: "サイドバーでプロジェクトを選ぶと、中身をお見せします。",
-        zh: "在侧边栏选择一个项目，我来告诉你里面有什么。",
-        ko: "사이드바에서 프로젝트를 고르면 안에 뭐가 있는지 보여 드려요.",
-        ru: "Выберите проект в боковой панели, и я покажу, что в нём хранится." }
+    pick_project { en: "Pick a project with Ctrl P and I’ll show you what it holds.",
+        pt: "Escolha um projeto com Ctrl P e eu mostro o que ele guarda.",
+        es: "Elige un proyecto con Ctrl P y te muestro lo que guarda.",
+        fr: "Choisissez un projet avec Ctrl P et je vous montre ce qu’il contient.",
+        de: "Wähle mit Strg P ein Projekt aus, dann zeige ich dir, was darin steckt.",
+        it: "Scegli un progetto con Ctrl P e ti mostro cosa contiene.",
+        ja: "Ctrl P でプロジェクトを選ぶと、中身をお見せします。",
+        zh: "用 Ctrl P 选择一个项目，我来告诉你里面有什么。",
+        ko: "Ctrl P로 프로젝트를 고르면 안에 뭐가 있는지 보여 드려요.",
+        ru: "Выберите проект через Ctrl P, и я покажу, что в нём хранится." }
     /// Panel section label above the places it can take the person.
     take_you_to { en: "I can take you to", pt: "Posso levar você a",
         es: "Puedo llevarte a", fr: "Je peux vous emmener vers", de: "Ich bringe dich gern zu",
