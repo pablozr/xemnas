@@ -58,7 +58,11 @@ const FADE: f64 = 110.0;
 const CLEAR_X: f64 = 150.0;
 const CLEAR_Y: f64 = 40.0;
 /// Distance over which a koi dives in as it nears the clearing.
-const DIVE: f64 = 60.0;
+/// A koi is a big, soft thing: it only keeps a hand's breadth from the texts
+/// and dives whole over `DIVE` px before it reaches that.
+const CARP_CLEAR_X: f64 = 24.0;
+const CARP_CLEAR_Y: f64 = 6.0;
+const DIVE: f64 = 40.0;
 /// A fixed instant for reduced motion.
 const STILL_TIME: f64 = 2.4;
 /// Levels the alpha is quantized to.
@@ -667,7 +671,15 @@ impl Carp {
 /// How much of a koi shows: whole when it is away from the texts, diving
 /// whole as it nears them.
 fn carp_presence(bounds: &Rect, keep_out: &[Rect]) -> f64 {
-    smooth(clearing_gap(bounds, keep_out) / DIVE)
+    smooth(carp_gap(bounds, keep_out) / DIVE)
+}
+
+/// How far a koi is from the texts and their narrow margin.
+fn carp_gap(bounds: &Rect, keep_out: &[Rect]) -> f64 {
+    keep_out
+        .iter()
+        .map(|rect| bounds.gap(&rect.grown(CARP_CLEAR_X, CARP_CLEAR_Y), 1.0))
+        .fold(f64::INFINITY, f64::min)
 }
 
 // ---------------------------------------------------------------- mascot
@@ -778,7 +790,7 @@ fn rig_cell(geo: &Geo, cx: usize, cy: usize) -> Option<Cell> {
     }
     if (px - tip.0).abs() < cw * 0.5 {
         if tip.1 <= py && py < hook.1 {
-            out = Some(Cell::glyph(':', MUTED, 0.30, owner));
+            out = Some(Cell::glyph(':', AMBER, 0.55, owner));
         }
         if (hook.0 / cw).floor() as usize == cx && (hook.1 / ch).floor() as usize == cy {
             out = Some(Cell {
@@ -1150,7 +1162,7 @@ fn fade_ambient(grid: &mut Grid, keep_out: &[Rect]) {
         let edge = ((cx as f64 + 0.5) / EDGE_COLS as f64)
             .min((width as f64 - cx as f64 - 0.5) / EDGE_COLS as f64)
             .min(1.0);
-        cell.scale(keep_factor(px, py, keep_out) * edge);
+        cell.scale(keep_factor(px, py, keep_out) * edge * edge);
     }
 }
 
@@ -1605,8 +1617,13 @@ mod tests {
                             );
                         }
                         if cell.owner != Owner::Ambient && cell.visible() {
+                            let gap = if matches!(cell.owner, Owner::Carp(_)) {
+                                carp_gap(&rect, &keep)
+                            } else {
+                                clearing_gap(&rect, &keep)
+                            };
                             assert!(
-                                clearing_gap(&rect, &keep) > 0.0,
+                                gap > 0.0,
                                 "{width}x{height} t={t} {:?} in the clearing",
                                 cell.owner
                             );
