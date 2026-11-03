@@ -1201,7 +1201,7 @@ fn lines(cells: &[Cell], width: usize) -> Vec<Line> {
         .collect()
 }
 
-fn hsla(rgb: Rgb, alpha: f32) -> Hsla {
+fn tile_color(rgb: Rgb, alpha: f32) -> Hsla {
     Hsla::from(Rgba {
         r: f32::from(rgb[0]) / 255.0,
         g: f32::from(rgb[1]) / 255.0,
@@ -1253,7 +1253,7 @@ fn paint_scene(
             window.paint_quad(quad(
                 Bounds::new(origin, size(px(CELL_WIDTH - 1.0), px(CELL_HEIGHT - 1.0))),
                 px(TILE_RADIUS),
-                hsla(rgb, alpha),
+                tile_color(rgb, alpha),
                 px(0.0),
                 gpui::transparent_black(),
                 gpui::BorderStyle::default(),
@@ -1277,7 +1277,7 @@ fn paint_scene(
                     len,
                     font: face,
                     color: key.map_or(gpui::transparent_black(), |(rgb, step)| {
-                        hsla(rgb, f32::from(step) / ALPHA_LEVELS)
+                        tile_color(rgb, f32::from(step) / ALPHA_LEVELS)
                     }),
                     background_color: None,
                     underline: None,
