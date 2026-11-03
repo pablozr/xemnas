@@ -129,6 +129,64 @@ enum View {
     Form(Option<String>),
 }
 
+/// The map's fixed pages: the header's segmented switch and the palette.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MapPage {
+    /// Blocks or graph of the whole map.
+    Overview,
+    /// What holds for one file.
+    FileLens,
+    /// The project's history.
+    Timeline,
+}
+
+impl MapPage {
+    /// The pages in the order the header shows them.
+    pub const ALL: [MapPage; 3] = [MapPage::Overview, MapPage::FileLens, MapPage::Timeline];
+
+    fn view(self) -> View {
+        match self {
+            MapPage::Overview => View::Overview,
+            MapPage::FileLens => View::File,
+            MapPage::Timeline => View::Timeline,
+        }
+    }
+
+    /// Whether the reading column shows this page.
+    fn shows(self, view: &View) -> bool {
+        *view == self.view()
+    }
+
+    /// The page's name.
+    pub fn label(self) -> &'static str {
+        match self {
+            MapPage::Overview => t::view_overview(),
+            MapPage::FileLens => t::view_file_lens(),
+            MapPage::Timeline => t::view_timeline(),
+        }
+    }
+
+    /// The page's glyph.
+    pub fn glyph(self) -> IconName {
+        match self {
+            MapPage::Overview => IconName::Graph,
+            MapPage::FileLens => IconName::File,
+            MapPage::Timeline => IconName::Clock,
+        }
+    }
+
+    fn id(self) -> &'static str {
+        match self {
+            MapPage::Overview => "map-page-overview",
+            MapPage::FileLens => "map-page-file",
+            MapPage::Timeline => "map-page-timeline",
+        }
+    }
+}
+
+/// Width of the header's search.
+const SEARCH_WIDTH: f32 = 240.0;
+
 /// What a picker links to the open entity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PickKind {
@@ -199,6 +257,9 @@ pub struct MapScreen<S: MapStores> {
     description: Entity<SearchField>,
     path: Entity<SearchField>,
     filter: Entity<SearchField>,
+    /// The header's search: it highlights the blocks and chips whose name
+    /// matches, and dims the rest (it never hides them).
+    search: Entity<SearchField>,
     confirm_retire: bool,
     error: Option<String>,
     notice: Option<String>,
@@ -262,6 +323,20 @@ impl<S: MapStores> MapScreen<S> {
                 .into_iter()
                 .map(|field| cx.subscribe(field, |_, _, _: &SearchChanged, cx| cx.notify()))
                 .collect();
+        let search = cx.new(|cx| {
+            let mut field = SearchField::new(cx);
+            field.set_width(SEARCH_WIDTH);
+            field.set_context(t::search_map(), cx);
+            field
+        });
+        // What the search finds is shown on the overview: typing elsewhere
+        // brings it back.
+        subscriptions.push(cx.subscribe(&search, |this, _, event: &SearchChanged, cx| {
+            if !event.0.trim().is_empty() && !this.embedded && this.view != View::Overview {
+                this.open_view(View::Overview, cx);
+            }
+            cx.notify();
+        }));
         let graph = cx.new(GraphCanvas::new);
         subscriptions.push(cx.subscribe(&graph, |this, _, event: &GraphEvent, cx| {
             this.on_graph(event, cx)
@@ -290,6 +365,7 @@ impl<S: MapStores> MapScreen<S> {
             description,
             path,
             filter,
+            search,
             confirm_retire: false,
             error: None,
             notice: None,
@@ -578,6 +654,24 @@ impl<S: MapStores> MapScreen<S> {
     /// Opens one entity's detail (also used by other destinations).
     pub fn show_entity(&mut self, id: String, cx: &mut Context<Self>) {
         self.open_entity(id, cx);
+    }
+
+    /// Opens one of the map's pages (also from the palette).
+    pub fn show_page(&mut self, page: MapPage, cx: &mut Context<Self>) {
+        self.open_view(page.view(), cx);
+    }
+
+    /// Puts the cursor in the header's search (`Ctrl F`).
+    pub fn focus_search(&self, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&gpui::Focusable::focus_handle(self.search.read(cx), cx), cx);
+    }
+
+    /// Every component and technology, for the palette: id, name and kind.
+    pub fn palette_entities(&self) -> Vec<(String, String, EntityKind)> {
+        self.data
+            .as_ref()
+            .map(|data| palette_entities(&data.map.entities))
+            .unwrap_or_default()
     }
 
     fn open_entity(&mut self, id: String, cx: &mut Context<Self>) {
@@ -1213,6 +1307,76 @@ impl<S: MapStores> MapScreen<S> {
                         t::status_as_of(&short_date(&as_of))
                     }),
             )
+    }
+
+    /// The canvas header: the pages, how much the map holds and since when,
+    /// the search and `+ Novo`. Replaces what the index offered.
+    fn render_header(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Div {
+        let colors = theme.colors;
+        let mut pages = segmented(theme).id("map-pages").role(Role::TabList);
+        for page in MapPage::ALL {
+            let focus = self.focus_for(page.id(), cx);
+            pages = pages.child(
+                segment(
+                    theme,
+                    page.id(),
+                    page.glyph(),
+                    page.label(),
+                    page.shows(&self.view),
+                )
+                .track_focus(&focus)
+                .on_click(cx.listener(move |this, _, _, cx| this.show_page(page, cx)))
+                .on_key_down(cx.listener(
+                    move |this, event: &gpui::KeyDownEvent, _, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                            this.show_page(page, cx);
+                            cx.stop_propagation();
+                        }
+                    },
+                )),
+            );
+        }
+        let subtitle = match self.data.as_ref() {
+            Some(data) if !self.busy => format!(
+                "{} · {}",
+                t::items_count(data.map.entities.len()),
+                t::updated_on(&short_date(&data.map.as_of))
+            ),
+            _ => t::loading().to_owned(),
+        };
+        let new_focus = self.focus_for("map-new", cx);
+        let new_button = action_button(theme, "map-new", ButtonKind::Secondary, true)
+            .aria_label(t::new_item())
+            .track_focus(&new_focus)
+            .tooltip(tooltip(t::new_item(), None))
+            .on_click(cx.listener(|this, _, _, cx| this.open_view(View::Form(None), cx)))
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    this.open_view(View::Form(None), cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .child(icon(IconName::Plus, 13.0, colors.text_secondary()))
+            .child(t::new_short());
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(SpacingScale::S3))
+            .px(px(SpacingScale::S8))
+            .pt(px(SpacingScale::S4))
+            .pb(px(SpacingScale::S2))
+            .child(pages)
+            .child(
+                text_style(div(), TypeScale::META)
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .truncate()
+                    .text_color(colors.text_muted())
+                    .child(subtitle),
+            )
+            .child(self.search.clone())
+            .child(new_button)
     }
 
     /// One row of the index, built when the list asks for it.
@@ -2761,6 +2925,7 @@ impl<S: MapStores> MapScreen<S> {
         };
         let map = Arc::clone(&index.map);
         let last = ix + 1 == self.overview_rows.len();
+        let needle = self.search.read(cx).value().trim().to_lowercase();
         let element = match row {
             OverviewRow::Header => {
                 let switch = self.layout_switch(&theme, cx);
@@ -2799,7 +2964,9 @@ impl<S: MapStores> MapScreen<S> {
                         .get(entity.entity.entity_id.as_str())
                         .map(|parts| parts.iter().map(|&at| &map.entities[at]).collect())
                         .unwrap_or_default();
-                    let block = self.component_block(&theme, entity, &parts, &recent_since, cx);
+                    let block =
+                        self.component_block(&theme, entity, &parts, &recent_since, &needle, cx);
+                    let block = found(&theme, block, name_matches(&entity.entity.name, &needle));
                     line = line.child(div().flex_1().min_w(px(0.0)).flex().child(block.flex_1()));
                 }
                 if pair.len() == 1 {
@@ -2818,8 +2985,8 @@ impl<S: MapStores> MapScreen<S> {
                 {
                     let row = &map.entities[at];
                     let id = row.entity.entity_id.clone();
-                    chips = chips.child(
-                        self.row(
+                    let chip = self
+                        .row(
                             format!("map-tech-{id}"),
                             false,
                             &row.entity.name,
@@ -2828,16 +2995,19 @@ impl<S: MapStores> MapScreen<S> {
                         )
                         .border_1()
                         .border_color(colors.glass_border_card())
-                        .bg(colors.glass_fill_card())
-                        .child(icon(IconName::Cpu, 14.0, colors.text_muted()))
-                        .child(
-                            text_style(div(), TypeScale::ROW_TITLE).child(row.entity.name.clone()),
-                        )
-                        .child(
-                            text_style(div(), TypeScale::META)
-                                .text_color(colors.text_muted())
-                                .child(row.decisions.to_string()),
-                        ),
+                        .bg(colors.glass_fill_card());
+                    chips = chips.child(
+                        found(&theme, chip, name_matches(&row.entity.name, &needle))
+                            .child(icon(IconName::Cpu, 14.0, colors.text_muted()))
+                            .child(
+                                text_style(div(), TypeScale::ROW_TITLE)
+                                    .child(row.entity.name.clone()),
+                            )
+                            .child(
+                                text_style(div(), TypeScale::META)
+                                    .text_color(colors.text_muted())
+                                    .child(row.decisions.to_string()),
+                            ),
                     );
                 }
                 chips.into_any_element()
@@ -2873,6 +3043,7 @@ impl<S: MapStores> MapScreen<S> {
         row: &MapEntity,
         parts: &[&MapEntity],
         recent_since: &str,
+        needle: &str,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let colors = theme.colors;
@@ -2892,8 +3063,8 @@ impl<S: MapStores> MapScreen<S> {
         let mut parts_row = div().flex().flex_wrap().gap(px(SpacingScale::S2));
         for part in parts.iter().take(PART_CHIPS) {
             let part_id = part.entity.entity_id.clone();
-            parts_row = parts_row.child(
-                self.row(
+            let chip = self
+                .row(
                     format!("map-part-{part_id}"),
                     false,
                     &part.entity.name,
@@ -2901,13 +3072,15 @@ impl<S: MapStores> MapScreen<S> {
                     cx,
                 )
                 .border_1()
-                .border_color(colors.hairline_divider())
-                .child(text_style(div(), TypeScale::META).child(part.entity.name.clone()))
-                .child(
-                    text_style(div(), TypeScale::META)
-                        .text_color(colors.text_muted())
-                        .child(part.decisions.to_string()),
-                ),
+                .border_color(colors.hairline_divider());
+            parts_row = parts_row.child(
+                found(theme, chip, name_matches(&part.entity.name, needle))
+                    .child(text_style(div(), TypeScale::META).child(part.entity.name.clone()))
+                    .child(
+                        text_style(div(), TypeScale::META)
+                            .text_color(colors.text_muted())
+                            .child(part.decisions.to_string()),
+                    ),
             );
         }
         // A block shows a handful of parts and counts the rest: the list of
@@ -3259,6 +3432,7 @@ impl<S: MapStores> Render for MapScreen<S> {
         let _probe = crate::ui::perf::Probe::start("map");
         let theme = Theme::current(cx);
         let index = (!self.embedded).then(|| self.render_index(&theme, cx));
+        let header = (!self.embedded).then(|| self.render_header(&theme, cx));
         let body: AnyElement = if self.data.is_none() {
             if self.error.is_some() {
                 empty_panel(
@@ -3309,6 +3483,7 @@ impl<S: MapStores> Render for MapScreen<S> {
                             .role(Role::Alert)
                             .children(retry)
                     }))
+                    .children(header)
                     .child(div().flex_1().min_h(px(0.0)).flex().flex_col().child(body)),
             )
             .children(
@@ -3534,6 +3709,36 @@ fn overview_rows(index: &OverviewIndex) -> Vec<OverviewRow> {
         rows.push(OverviewRow::Conflict);
     }
     rows
+}
+
+/// Whether a name answers the header's search (`needle` already trimmed and
+/// lowercased); `None` while the search is empty.
+fn name_matches(name: &str, needle: &str) -> Option<bool> {
+    (!needle.is_empty()).then(|| name.to_lowercase().contains(needle))
+}
+
+/// A block or chip under the search: what matches gets the accent edge,
+/// the rest steps back; nothing is hidden.
+fn found(theme: &Theme, element: Stateful<Div>, matched: Option<bool>) -> Stateful<Div> {
+    match matched {
+        Some(true) => element.border_color(theme.colors.accent_default()),
+        Some(false) => element.opacity(0.4),
+        None => element,
+    }
+}
+
+/// The palette's entries for the map's entities: id, name and kind.
+fn palette_entities(entities: &[MapEntity]) -> Vec<(String, String, EntityKind)> {
+    entities
+        .iter()
+        .map(|row| {
+            (
+                row.entity.entity_id.clone(),
+                row.entity.name.clone(),
+                row.entity.kind,
+            )
+        })
+        .collect()
 }
 
 fn index_frame(theme: &Theme) -> Div {
@@ -4033,7 +4238,8 @@ fn kind_plural(kind: EntityKind) -> &'static str {
     }
 }
 
-fn kind_icon(kind: EntityKind) -> IconName {
+/// The glyph of a kind of map item.
+pub fn kind_icon(kind: EntityKind) -> IconName {
     match kind {
         EntityKind::Component => IconName::Component,
         EntityKind::Technology => IconName::Cpu,
@@ -4042,9 +4248,59 @@ fn kind_icon(kind: EntityKind) -> IconName {
 
 #[cfg(test)]
 mod tests {
-    use super::{change_failure, weight};
+    use super::{change_failure, name_matches, palette_entities, weight, MapPage, View};
     use application::graph::{EntityRecord, MapEntity};
     use domain::entities::EntityKind;
+
+    fn entity(id: &str, name: &str, kind: EntityKind) -> MapEntity {
+        MapEntity {
+            entity: EntityRecord {
+                entity_id: id.into(),
+                project_id: "p".into(),
+                kind,
+                name: name.into(),
+                key: name.to_lowercase(),
+                description: String::new(),
+                patterns: Vec::new(),
+                aliases: Vec::new(),
+                created_at: "2026-01-01T00:00:00Z".into(),
+                retired_at: None,
+            },
+            decisions: 1,
+            claims: 0,
+            last_activity: None,
+            conflicts: 0,
+        }
+    }
+
+    #[test]
+    fn each_header_page_opens_its_view() {
+        assert_eq!(MapPage::Overview.view(), View::Overview);
+        assert_eq!(MapPage::FileLens.view(), View::File);
+        assert_eq!(MapPage::Timeline.view(), View::Timeline);
+        assert!(MapPage::Timeline.shows(&View::Timeline));
+        assert!(!MapPage::Overview.shows(&View::Entity("e".into())));
+    }
+
+    #[test]
+    fn the_search_highlights_without_hiding() {
+        assert_eq!(name_matches("Jobs", ""), None);
+        assert_eq!(name_matches("Jobs", "job"), Some(true));
+        assert_eq!(name_matches("Rust", "job"), Some(false));
+    }
+
+    #[test]
+    fn every_entity_reaches_the_palette() {
+        let entities = [
+            entity("c1", "jobs", EntityKind::Component),
+            entity("t1", "Rust", EntityKind::Technology),
+        ];
+        let ids: Vec<String> = palette_entities(&entities)
+            .into_iter()
+            .map(|(id, _, _)| id)
+            .collect();
+        assert_eq!(ids, ["c1", "t1"]);
+    }
 
     #[test]
     fn change_failures_never_echo_the_code() {

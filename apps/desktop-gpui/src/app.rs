@@ -26,7 +26,7 @@ use crate::screens::context::{ContextScreen, ContextServices, ContextStores, Ope
 use crate::screens::decisions::DecisionsScreen;
 use crate::screens::inbox::{InboxScreen, OpenDecisions, OpenDiagnostics, ReviewView};
 use crate::screens::map::OpenSuggestions;
-use crate::screens::map::{MapScreen, MapServices};
+use crate::screens::map::{kind_icon, MapPage, MapScreen, MapServices};
 use crate::screens::overview::OverviewScreen;
 use crate::screens::projects::{
     PickerKey, ProjectChanged, ProjectPropertiesRequested, ProjectsScreen,
@@ -185,6 +185,10 @@ enum Command {
     Project(String),
     Candidate(String),
     Decision(String),
+    /// A page of the Mapa (overview, file lens, timeline).
+    MapPage(MapPage),
+    /// A component or technology of the Mapa, by id.
+    MapEntity(String),
     ProjectPanel,
     OpenFolder,
     ToggleTheme,
@@ -192,6 +196,39 @@ enum Command {
     SettingsAt(SettingsSection),
     Assistant,
     FocusMode,
+}
+
+/// Where `Ctrl F` puts the cursor: the Decisões and the Mapa have their own
+/// search; everywhere else it is the Revisão's.
+fn search_target(destination: Destination) -> Destination {
+    match destination {
+        Destination::Decisions | Destination::Map => destination,
+        _ => Destination::Review,
+    }
+}
+
+/// The palette's Mapa group: its pages, then every component and
+/// technology (id, name, kind).
+fn map_palette_items(
+    entities: Vec<(String, String, domain::entities::EntityKind)>,
+) -> Vec<PaletteItem<Command>> {
+    let pages = MapPage::ALL.into_iter().map(|page| PaletteItem {
+        group: t::nav_map(),
+        label: page.label().to_owned(),
+        detail: None,
+        glyph: page.glyph(),
+        shortcut: None,
+        command: Command::MapPage(page),
+    });
+    let entities = entities.into_iter().map(|(id, name, kind)| PaletteItem {
+        group: t::nav_map(),
+        label: name,
+        detail: None,
+        glyph: kind_icon(kind),
+        shortcut: None,
+        command: Command::MapEntity(id),
+    });
+    pages.chain(entities).collect()
 }
 
 fn context_surface_visible(destination: Destination, settings_open: bool) -> bool {
@@ -1245,16 +1282,24 @@ impl<
             window.focus(&self.initial_focus(cx), cx);
             return;
         }
-        if self.destination == Destination::Decisions {
-            if let Some(screen) = &self.decisions {
-                screen.update(cx, |screen, cx| screen.focus_search(window, cx));
+        match search_target(self.destination) {
+            Destination::Decisions => {
+                if let Some(screen) = &self.decisions {
+                    screen.update(cx, |screen, cx| screen.focus_search(window, cx));
+                }
             }
-            return;
+            Destination::Map => {
+                if let Some(screen) = &self.map {
+                    screen.update(cx, |screen, cx| screen.focus_search(window, cx));
+                }
+            }
+            _ => {
+                if self.destination != Destination::Review {
+                    self.switch_to(Destination::Review, window, cx);
+                }
+                window.focus(&self.search.read(cx).focus_handle(cx), cx);
+            }
         }
-        if self.destination != Destination::Review {
-            self.switch_to(Destination::Review, window, cx);
-        }
-        window.focus(&self.search.read(cx).focus_handle(cx), cx);
     }
 
     fn toggle_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1389,6 +1434,9 @@ impl<
                     command: Command::Decision(id),
                 });
             }
+        }
+        if let (true, Some(map)) = (selected.is_some(), &self.map) {
+            items.extend(map_palette_items(map.read(cx).palette_entities()));
         }
         if let Some(projects) = &self.projects {
             for (id, name, location) in projects.read(cx).palette_projects() {
@@ -1560,6 +1608,18 @@ impl<
                 self.switch_to(Destination::Decisions, window, cx);
                 if let Some(decisions) = &self.decisions {
                     decisions.update(cx, |screen, cx| screen.open_decision(id, cx));
+                }
+            }
+            Command::MapPage(page) => {
+                self.switch_to(Destination::Map, window, cx);
+                if let Some(map) = &self.map {
+                    map.update(cx, |screen, cx| screen.show_page(page, cx));
+                }
+            }
+            Command::MapEntity(id) => {
+                self.switch_to(Destination::Map, window, cx);
+                if let Some(map) = &self.map {
+                    map.update(cx, |screen, cx| screen.show_entity(id, cx));
                 }
             }
             Command::ProjectPanel => self.open_project_properties(window, cx),
@@ -2963,5 +3023,38 @@ mod navigation_lifecycle_tests {
         assert!(!context_surface_visible(Destination::Context, true));
         assert!(!context_surface_visible(Destination::Decisions, false));
         assert!(!context_surface_visible(Destination::Map, false));
+    }
+
+    #[test]
+    fn ctrl_f_on_the_map_goes_to_the_map_search() {
+        assert_eq!(search_target(Destination::Map), Destination::Map);
+        assert_eq!(
+            search_target(Destination::Decisions),
+            Destination::Decisions
+        );
+        assert_eq!(search_target(Destination::Context), Destination::Review);
+        assert_eq!(search_target(Destination::Overview), Destination::Review);
+    }
+
+    #[test]
+    fn every_map_entity_and_page_reaches_the_palette() {
+        use domain::entities::EntityKind;
+        let entities = vec![
+            ("c1".to_owned(), "jobs".to_owned(), EntityKind::Component),
+            ("t1".to_owned(), "Rust".to_owned(), EntityKind::Technology),
+        ];
+        let items = map_palette_items(entities.clone());
+        for page in MapPage::ALL {
+            assert!(items
+                .iter()
+                .any(|item| matches!(item.command, Command::MapPage(p) if p == page)));
+        }
+        for (id, name, _) in entities {
+            let item = items
+                .iter()
+                .find(|item| matches!(&item.command, Command::MapEntity(found) if *found == id))
+                .expect("entity in the palette");
+            assert_eq!(item.label, name);
+        }
     }
 }
