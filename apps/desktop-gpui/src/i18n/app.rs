@@ -147,6 +147,11 @@ strings! {
         de: "Projekteigenschaften", it: "Proprietà del progetto",
         ja: "プロジェクトのプロパティ", zh: "项目属性", ko: "프로젝트 속성",
         ru: "Свойства проекта" }
+    /// Tooltip of the project crumb, and its palette item.
+    switch_project { en: "Switch project", pt: "Trocar de projeto",
+        es: "Cambiar de proyecto", fr: "Changer de projet", de: "Projekt wechseln",
+        it: "Cambia progetto", ja: "プロジェクトを切り替え", zh: "切换项目",
+        ko: "프로젝트 전환", ru: "Сменить проект" }
     /// Palette item: open a folder.
     open_folder { en: "Open folder…", pt: "Abrir pasta…", es: "Abrir carpeta…",
         fr: "Ouvrir un dossier…", de: "Ordner öffnen…", it: "Apri cartella…",
@@ -402,13 +407,13 @@ formats! {
         de: "Entscheidungen zu {name}", it: "Decisioni su {name}",
         ja: "{name}に関する決定", zh: "关于 {name} 的决策", ko: "{name}에 대한 결정",
         ru: "Решения о {name}" }
-    /// Accessible name of the project breadcrumb.
-    project_properties_aria(name: &str) {
-        en: "{name}: project properties", pt: "{name}: propriedades do projeto",
-        es: "{name}: propiedades del proyecto", fr: "{name} : propriétés du projet",
-        de: "{name}: Projekteigenschaften", it: "{name}: proprietà del progetto",
-        ja: "{name}：プロジェクトのプロパティ", zh: "{name}：项目属性",
-        ko: "{name}: 프로젝트 속성", ru: "{name}: свойства проекта" }
+    /// Accessible name of the project breadcrumb (it opens the picker).
+    switch_project_aria(name: &str) {
+        en: "{name}: switch project", pt: "{name}: trocar de projeto",
+        es: "{name}: cambiar de proyecto", fr: "{name} : changer de projet",
+        de: "{name}: Projekt wechseln", it: "{name}: cambia progetto",
+        ja: "{name}：プロジェクトを切り替え", zh: "{name}：切换项目",
+        ko: "{name}: 프로젝트 전환", ru: "{name}: сменить проект" }
     /// Palette item: switch the theme.
     use_theme(theme: &str) {
         en: "Use {theme} theme", pt: "Usar tema {theme}", es: "Usar el tema {theme}",

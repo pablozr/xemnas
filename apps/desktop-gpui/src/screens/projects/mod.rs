@@ -17,7 +17,7 @@ use application::projects::{
 use domain::projects::ProjectSummary;
 use gpui::prelude::*;
 use gpui::{
-    div, px, AnyElement, Context, Div, ElementId, Entity, EventEmitter, FocusHandle,
+    div, px, AnyElement, Context, Div, ElementId, Entity, EventEmitter, FocusHandle, Focusable,
     PathPromptOptions, Render, Role, Stateful, Subscription, Window,
 };
 
@@ -35,11 +35,26 @@ use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{SpacingScale, TypeScale};
 use crate::ui::tooltip::tooltip;
 
+mod picker;
+
+pub use picker::PickerKey;
+
+/// Width of the crumb's project picker.
+pub const PICKER_WIDTH: f32 = 360.0;
+/// Tallest the picker grows; the list scrolls inside it.
+const PICKER_MAX_HEIGHT: f32 = 420.0;
+/// Width of the filter field in the sidebar.
+const SIDEBAR_SEARCH_WIDTH: f32 = 208.0;
+use picker::{Picker, PickerOutcome};
+
 /// A purge-impact row: the count, its color and the label for that count.
 type ImpactRow = (i64, gpui::Rgba, fn(usize) -> &'static str);
 
 /// The project currently visible in the workspace, including empty selections.
 pub struct ProjectChanged(pub Option<ProjectSummary>);
+
+/// A picker row's `⋯` asked for that project's properties panel.
+pub struct ProjectPropertiesRequested;
 
 /// What the list area is currently showing.
 enum ListState {
@@ -160,19 +175,32 @@ pub struct ProjectsScreen<R: ProjectRepository + Send + 'static> {
     cancel_focus: FocusHandle,
     /// One focus handle per listed row, kept stable across frames for Tab order.
     row_focus: Vec<(String, FocusHandle)>,
-    /// Filter owned by the persistent project sidebar.
+    /// Filter of the project list (sidebar and picker share it).
     query: String,
     search: Entity<SearchField>,
     _search_subscription: Subscription,
+    /// The keyboard highlight of the crumb's project picker.
+    picker: Picker,
+    /// Where focus goes back when the open picker picks or closes (the crumb).
+    picker_return: Option<FocusHandle>,
+    /// The filter field is in the picker (an entity is painted in one place).
+    picker_open: bool,
+    /// The project whose properties the panel shows, when a picker row's
+    /// `⋯` chose one other than the current project.
+    properties_id: Option<String>,
 }
 
 impl<R: ProjectRepository + Send + 'static> EventEmitter<ProjectChanged> for ProjectsScreen<R> {}
+impl<R: ProjectRepository + Send + 'static> EventEmitter<ProjectPropertiesRequested>
+    for ProjectsScreen<R>
+{
+}
 
 impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
     /// Builds the screen around an already composed `Projects` use case.
     pub fn new(cx: &mut Context<Self>, projects: Projects<R>) -> Self {
         let search = cx.new(SearchField::new);
-        search.update(cx, |search, _| search.set_width(208.0));
+        search.update(cx, |search, _| search.set_width(SIDEBAR_SEARCH_WIDTH));
         let subscription = cx.subscribe(&search, |screen, _, event: &SearchChanged, cx| {
             screen.set_query(&event.0, cx);
         });
@@ -204,6 +232,10 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             query: String::new(),
             search,
             _search_subscription: subscription,
+            picker: Picker::default(),
+            picker_return: None,
+            picker_open: false,
+            properties_id: None,
         }
     }
 
@@ -212,13 +244,15 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
         self.register_focus.clone()
     }
 
-    /// Returns the project visible after applying the sidebar filter.
+    /// The current project. The filter only narrows the list; typing in it
+    /// never switches project (the newest one stands in for no selection).
     pub fn selected_project(&self) -> Option<ProjectSummary> {
-        let visible = self.visible_rows();
-        visible
-            .iter()
+        let ListState::Ready(list) = &self.list else {
+            return None;
+        };
+        list.iter()
             .find(|item| Some(item.id().as_str()) == self.selected_id.as_deref())
-            .or_else(|| visible.first())
+            .or_else(|| list.last())
             .cloned()
     }
 
@@ -237,7 +271,7 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             return;
         }
         self.query = query.to_string();
-        cx.emit(ProjectChanged(self.selected_project()));
+        self.picker = Picker::default();
         cx.notify();
     }
 
@@ -246,19 +280,19 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
         let ListState::Ready(list) = &self.list else {
             return Vec::new();
         };
-        let needle = self.query.trim().to_lowercase();
         list.iter()
             .rev()
             .filter(|summary| {
-                needle.is_empty()
-                    || summary.name().to_lowercase().contains(&needle)
-                    || summary
-                        .location()
-                        .to_string()
-                        .to_lowercase()
-                        .contains(&needle)
+                picker::matches(summary.name(), &summary.location().to_string(), &self.query)
             })
             .cloned()
+            .collect()
+    }
+
+    fn visible_ids(&self) -> Vec<String> {
+        self.visible_rows()
+            .iter()
+            .map(|summary| summary.id().as_str().to_owned())
             .collect()
     }
 
@@ -516,7 +550,11 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
         if self.selected_id.as_deref() != Some(id.as_str()) {
             self.pending_removal = None;
         }
-        if let Some((_, focus)) = self.row_focus.iter().find(|(key, _)| key == &id) {
+        // A pick from the picker hands focus back to the crumb; the row it
+        // came from is about to disappear with the popover.
+        if let Some(focus) = self.picker_return.take() {
+            window.focus(&focus, cx);
+        } else if let Some((_, focus)) = self.row_focus.iter().find(|(key, _)| key == &id) {
             window.focus(focus, cx);
         }
         self.selected_id = Some(id);
@@ -758,7 +796,9 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                             .child(div().flex_1())
                             .child(open),
                     )
-                    .child(self.search.clone())
+                    .when(!self.picker_open, |header| {
+                        header.child(self.search.clone())
+                    })
                     .children(
                         self.inline_error
                             .as_ref()
@@ -810,11 +850,212 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
         self.remove_focus.clone()
     }
 
+    /// Which project the properties panel shows: `None` is the current one.
+    pub fn show_properties(&mut self, id: Option<String>) {
+        self.properties_id = id;
+    }
+
+    /// Readies the picker: an empty filter, the highlight on the current
+    /// project, and the filter field focused. `return_to` gets focus back
+    /// when the picker picks or closes.
+    pub fn open_picker(
+        &mut self,
+        return_to: FocusHandle,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.picker_return = Some(return_to);
+        self.picker_open = true;
+        self.search.update(cx, |search, cx| {
+            search.set_width(PICKER_WIDTH - 2.0 * SpacingScale::S3);
+            search.set_value("", cx);
+        });
+        self.query.clear();
+        let selected = self.selected_project();
+        self.picker = Picker::open(
+            &self.visible_ids(),
+            selected.as_ref().map(|summary| summary.id().as_str()),
+        );
+        window.focus(&self.search.read(cx).focus_handle(cx), cx);
+        cx.notify();
+    }
+
+    /// Applies a key to the open picker. Returns `true` when the picker
+    /// should close (a project was picked, or Esc).
+    pub fn picker_key(
+        &mut self,
+        key: PickerKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        match self.picker.key(key, &self.visible_ids()) {
+            PickerOutcome::Moved => {
+                cx.notify();
+                false
+            }
+            PickerOutcome::Pick(id) => {
+                self.close_picker(cx);
+                self.select(id, window, cx);
+                true
+            }
+            PickerOutcome::Close => {
+                self.close_picker(cx);
+                if let Some(focus) = self.picker_return.take() {
+                    window.focus(&focus, cx);
+                }
+                true
+            }
+        }
+    }
+
+    /// The picker closed some other way (outside click, properties).
+    pub fn picker_dismissed(&mut self, cx: &mut Context<Self>) {
+        self.picker_return = None;
+        self.close_picker(cx);
+    }
+
+    /// Hands the filter field back to the sidebar, at its width.
+    fn close_picker(&mut self, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.picker_open) {
+            self.search
+                .update(cx, |search, _| search.set_width(SIDEBAR_SEARCH_WIDTH));
+        }
+    }
+
+    /// The crumb's popover body: count, filter, the projects (name, path
+    /// truncated at the start, `⋯` for properties) and Abrir pasta. The
+    /// popover frame (width, edge, shadow) belongs to the shell.
+    pub fn render_picker(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::current(cx);
+        let visible = self.visible_rows();
+        let total = match &self.list {
+            ListState::Ready(list) => list.len(),
+            _ => 0,
+        };
+        let selected = self.selected_project();
+        let selected_id = selected.as_ref().map(|item| item.id().as_str());
+        let highlighted = self.picker.highlighted.min(visible.len().saturating_sub(1));
+        let rows: Vec<AnyElement> = visible
+            .iter()
+            .enumerate()
+            .map(|(index, item)| {
+                let id = item.id().as_str().to_string();
+                let more_id = id.clone();
+                let row = self.render_row(&theme, item, selected_id, cx);
+                let row = if index == highlighted {
+                    row.bg(theme.colors.hover_veil())
+                } else {
+                    row.hover(move |style| style.bg(theme.colors.hover_veil()))
+                };
+                row.h(px(44.0))
+                    .px(px(SpacingScale::S3))
+                    .child(
+                        icon_action(
+                            &theme,
+                            (ElementId::from("project-more"), id),
+                            &t::project_more_aria(item.name()),
+                        )
+                        .tooltip(tooltip(t::properties(), None))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.properties_id = Some(more_id.clone());
+                            window.focus(&this.remove_focus, cx);
+                            cx.emit(ProjectPropertiesRequested);
+                            cx.stop_propagation();
+                        }))
+                        .text_color(theme.colors.text_muted())
+                        .child("⋯"),
+                    )
+                    .into_any_element()
+            })
+            .collect();
+        let body: AnyElement = match &self.list {
+            ListState::Error(failure) => error_state(
+                &theme,
+                "picker-error",
+                failure.title,
+                failure.body,
+                failure.recovery,
+            )
+            .into_any_element(),
+            _ => div()
+                .id("project-picker-list")
+                .flex_1()
+                .min_h(px(0.0))
+                .overflow_y_scroll()
+                .py(px(SpacingScale::S1))
+                .children(rows)
+                .into_any_element(),
+        };
+        let open = action_button(&theme, "project-picker-open", ButtonKind::Secondary, true)
+            .aria_label(t::open_folder_aria())
+            .on_click(cx.listener(|this, _, _, cx| this.open_folder(cx)))
+            .child(icon(
+                IconName::FolderPlus,
+                14.0,
+                button_foreground(&theme, ButtonKind::Secondary, true),
+            ))
+            .child(t::open_folder());
+        div()
+            .id("project-picker")
+            .w(px(PICKER_WIDTH))
+            .max_h(px(PICKER_MAX_HEIGHT))
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .flex_none()
+                    .px(px(SpacingScale::S3))
+                    .pt(px(SpacingScale::S3))
+                    .pb(px(SpacingScale::S2))
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S2))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(SpacingScale::S2))
+                            .child(panel_title(&theme, t::projects_title()))
+                            .child(count_chip(
+                                &theme,
+                                if self.query.is_empty() {
+                                    total.to_string()
+                                } else {
+                                    t::filtered_count(visible.len(), total)
+                                },
+                            )),
+                    )
+                    .child(self.search.clone())
+                    .children(
+                        self.inline_error
+                            .as_ref()
+                            .map(|message| inline_alert(&theme, "picker-inline-error", message)),
+                    ),
+            )
+            .child(body)
+            .child(
+                div()
+                    .flex_none()
+                    .p(px(SpacingScale::S3))
+                    .border_t_1()
+                    .border_color(theme.colors.hairline_divider())
+                    .child(open),
+            )
+            .into_any_element()
+    }
+
     /// Properties and the remove action of the selected project, shown in the
     /// panel under the breadcrumb. The panel frame belongs to the shell.
     pub fn render_project_panel(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let theme = Theme::current(cx);
-        let summary = self.selected_project()?;
+        let summary = match (&self.properties_id, &self.list) {
+            (Some(id), ListState::Ready(list)) => list
+                .iter()
+                .find(|item| item.id().as_str() == id)
+                .cloned()
+                .or_else(|| self.selected_project()),
+            _ => self.selected_project(),
+        }?;
         let id = summary.id().as_str().to_string();
         let pending = self.pending_removal.as_deref() == Some(id.as_str());
         let purging = self

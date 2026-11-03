@@ -19,9 +19,9 @@ use std::sync::Arc;
 use xemnas_desktop::app::{
     ActivitySource, AdjustItem, CaptureStatus, ConfirmItem, FocusSearch, GoContext, GoDecisions,
     GoMap, GoOverview, GoReview, NextItem, OpenProof, PaletteClose, PaletteDown, PaletteRun,
-    PaletteUp, PrevItem, RejectItem, ReviewAccepted, ReviewClose, ReviewEffect, ReviewNextSource,
-    ReviewPrevSource, ReviewToday, SaveEditor, Shell, SnoozeItem, TabNext, TabPrev,
-    ToggleFocusMode, TogglePalette, ToggleQueue,
+    PaletteUp, PickerClose, PickerDown, PickerRun, PickerUp, PrevItem, RejectItem, ReviewAccepted,
+    ReviewClose, ReviewEffect, ReviewNextSource, ReviewPrevSource, ReviewToday, SaveEditor, Shell,
+    SnoozeItem, TabNext, TabPrev, ToggleFocusMode, TogglePalette, ToggleProjectPicker, ToggleQueue,
 };
 use xemnas_desktop::screens::settings::SettingsServices;
 use xemnas_desktop::startup_error::StartupError;
@@ -868,6 +868,12 @@ fn run_shell_mode(
             KeyBinding::new("down", PaletteDown, Some("Palette")),
             KeyBinding::new("up", PaletteUp, Some("Palette")),
             KeyBinding::new("enter", PaletteRun, Some("Palette")),
+            KeyBinding::new("ctrl-p", ToggleProjectPicker, Some("xemnas")),
+            KeyBinding::new("escape", PickerClose, Some("ProjectPicker > SearchField")),
+            KeyBinding::new("escape", PickerClose, Some("ProjectPicker")),
+            KeyBinding::new("down", PickerDown, Some("ProjectPicker")),
+            KeyBinding::new("up", PickerUp, Some("ProjectPicker")),
+            KeyBinding::new("enter", PickerRun, Some("ProjectPicker")),
         ]);
 
         let compact = demo && std::env::args().any(|argument| argument == "--compact");

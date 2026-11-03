@@ -28,7 +28,9 @@ use crate::screens::inbox::{InboxScreen, OpenDecisions, OpenDiagnostics, ReviewV
 use crate::screens::map::OpenSuggestions;
 use crate::screens::map::{MapScreen, MapServices};
 use crate::screens::overview::OverviewScreen;
-use crate::screens::projects::{ProjectChanged, ProjectsScreen};
+use crate::screens::projects::{
+    PickerKey, ProjectChanged, ProjectPropertiesRequested, ProjectsScreen,
+};
 use crate::screens::settings::{CloseSettings, SettingsScreen, SettingsSection, SettingsServices};
 use crate::startup_error::{self, StartupError};
 use crate::ui::controls::icon_action;
@@ -106,9 +108,28 @@ actions!(
         /// Runs the highlighted palette item.
         PaletteRun,
         /// Closes the palette.
-        PaletteClose
+        PaletteClose,
+        /// Opens or closes the project picker under the crumb.
+        ToggleProjectPicker,
+        /// Moves the project picker's highlight down.
+        PickerDown,
+        /// Moves the project picker's highlight up.
+        PickerUp,
+        /// Switches to the highlighted project.
+        PickerRun,
+        /// Closes the project picker.
+        PickerClose
     ]
 );
+
+/// What the popover under the project crumb shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProjectPopover {
+    /// The project picker: filter, list, Abrir pasta.
+    Picker,
+    /// One project's properties and removal.
+    Properties,
+}
 
 /// Height of the custom title bar (brand, theme and caption controls).
 const TITLE_BAR_HEIGHT: f32 = 40.0;
@@ -275,6 +296,8 @@ pub struct Shell<
     search: Entity<SearchField>,
     _search_subscription: Subscription,
     _project_subscription: Option<Subscription>,
+    /// A picker row's `⋯` turns the popover into that project's properties.
+    _properties_subscription: Option<Subscription>,
     _inbox_subscription: Option<Subscription>,
     _inbox_opens: Option<Subscription>,
     _inbox_diagnostics: Option<Subscription>,
@@ -307,8 +330,8 @@ pub struct Shell<
     hovered_tab: Option<Destination>,
     theme_focus: FocusHandle,
     project_focus: FocusHandle,
-    /// Whether the project panel under the breadcrumb is open.
-    project_panel: Popup<()>,
+    /// The popover under the breadcrumb: the picker or a project's properties.
+    project_panel: Popup<ProjectPopover>,
     /// The quick theme menu under the title bar's contrast button.
     theme_menu: Popup<()>,
     /// Focus mode: the projects sidebar folded away.
@@ -394,6 +417,18 @@ impl<
                     screen.update(cx, |screen, cx| screen.set_query(&event.0, cx));
                 }
             }
+        });
+        let properties_subscription = screen.as_ref().map(|screen| {
+            cx.subscribe(
+                screen,
+                |shell, projects, _: &ProjectPropertiesRequested, cx| {
+                    projects.update(cx, |projects, cx| projects.picker_dismissed(cx));
+                    if let Some(popover) = shell.project_panel.open_mut() {
+                        *popover = ProjectPopover::Properties;
+                    }
+                    cx.notify();
+                },
+            )
         });
         let project_subscription = screen.as_ref().map(|screen| {
             cx.subscribe(screen, |shell, _, event: &ProjectChanged, cx| {
@@ -528,6 +563,7 @@ impl<
             _activation: None,
             _search_subscription: search_subscription,
             _project_subscription: project_subscription,
+            _properties_subscription: properties_subscription,
             _inbox_subscription: inbox_subscription,
             _inbox_opens: inbox_opens,
             _inbox_diagnostics: inbox_diagnostics,
@@ -890,7 +926,17 @@ impl<
             return;
         };
         projects.update(cx, |screen, cx| screen.select_project(project, window, cx));
-        self.go_route(&route, window, cx);
+        // `project-picker[:route]` opens the crumb's picker over that place.
+        match route.strip_prefix("project-picker") {
+            Some(rest) => {
+                self.go_route(rest.trim_start_matches(':'), window, cx);
+                // After the selection's ProjectChanged, which closes popovers.
+                cx.defer_in(window, |this, window, cx| {
+                    this.toggle_project_picker(window, cx)
+                });
+            }
+            None => self.go_route(&route, window, cx),
+        }
         if self.demo && route == "context:knowledge-review-results" {
             if let Some(screen) = &self.context {
                 screen.update(cx, |screen, cx| {
@@ -1247,10 +1293,13 @@ impl<
         cx.notify();
     }
 
-    /// Starts the project panel's exit (no focus change).
+    /// Starts the project popover's exit (no focus change).
     fn dismiss_project_panel(&mut self, cx: &mut Context<Self>) {
         if self.project_panel.begin_close() {
             reap(cx, |shell: &mut Self| &mut shell.project_panel);
+            if let Some(projects) = &self.projects {
+                projects.update(cx, |projects, cx| projects.picker_dismissed(cx));
+            }
         }
     }
 
@@ -1515,11 +1564,7 @@ impl<
                     decisions.update(cx, |screen, cx| screen.open_decision(id, cx));
                 }
             }
-            Command::ProjectPanel => {
-                if !self.project_panel.is_open() {
-                    self.toggle_project_panel(window, cx);
-                }
-            }
+            Command::ProjectPanel => self.open_project_properties(window, cx),
             Command::OpenFolder => {
                 if let Some(projects) = &self.projects {
                     projects.update(cx, |screen, cx| screen.open_folder_dialog(cx));
@@ -1827,16 +1872,48 @@ impl<
         cx.notify();
     }
 
-    fn toggle_project_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // The press that dismissed the panel (outside click on the crumb)
+    /// The crumb and `Ctrl P`: opens or closes the project picker.
+    fn toggle_project_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // The press that dismissed the popover (outside click on the crumb)
         // must not reopen it on the same click.
         if self.project_panel.take_press_was_open() || self.project_panel.is_open() {
             self.close_project_panel(window, cx);
             return;
         }
-        self.project_panel.open(());
-        if let Some(projects) = &self.projects {
-            window.focus(&projects.read(cx).panel_focus(), cx);
+        let Some(projects) = self.projects.clone() else {
+            return;
+        };
+        if self.palette.is_open() {
+            self.close_palette(window, cx);
+        }
+        self.project_panel.open(ProjectPopover::Picker);
+        let crumb = self.project_focus.clone();
+        projects.update(cx, |projects, cx| projects.open_picker(crumb, window, cx));
+        cx.notify();
+    }
+
+    /// The palette's "Propriedades do projeto": the current project's panel.
+    fn open_project_properties(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(projects) = self.projects.clone() else {
+            return;
+        };
+        projects.update(cx, |projects, cx| {
+            projects.picker_dismissed(cx);
+            projects.show_properties(None);
+        });
+        self.project_panel.open(ProjectPopover::Properties);
+        window.focus(&projects.read(cx).panel_focus(), cx);
+        cx.notify();
+    }
+
+    /// One key in the open picker; a pick or Esc closes it (focus goes back
+    /// to the crumb from the picker itself).
+    fn picker_key(&mut self, key: PickerKey, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(projects) = self.projects.clone() else {
+            return;
+        };
+        if projects.update(cx, |projects, cx| projects.picker_key(key, window, cx)) {
+            self.dismiss_project_panel(cx);
         }
         cx.notify();
     }
@@ -1849,7 +1926,7 @@ impl<
         cx.notify();
     }
 
-    /// The project name as a quiet button: it opens the project panel.
+    /// The project name as a quiet button: it opens the project picker.
     fn project_crumb(&self, name: String, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let open = self.project_panel.is_open();
@@ -1867,9 +1944,9 @@ impl<
                 crumb.hover(move |style| style.bg(theme.colors.hover_veil()))
             })
             .role(Role::Button)
-            .aria_label(t::project_properties_aria(&name))
+            .aria_label(t::switch_project_aria(&name))
             .aria_expanded(open)
-            .tooltip(tooltip(t::project_properties(), None))
+            .tooltip(tooltip(t::switch_project(), Some("Ctrl P")))
             .track_focus(&self.project_focus)
             .focus_visible(focus_ring(&theme))
             .cursor_pointer()
@@ -1877,10 +1954,10 @@ impl<
                 gpui::MouseButton::Left,
                 cx.listener(|this, _, _, _| this.project_panel.note_trigger_press()),
             )
-            .on_click(cx.listener(|this, _, window, cx| this.toggle_project_panel(window, cx)))
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_project_picker(window, cx)))
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                    this.toggle_project_panel(window, cx);
+                    this.toggle_project_picker(window, cx);
                     cx.stop_propagation();
                 }
             }))
@@ -2449,10 +2526,32 @@ impl<
                 window.request_animation_frame();
             }
             let measure_tabs = self.tab_indicator.measure(cx.entity_id());
-            let mut panel = if self.project_panel.get().is_some() {
-                projects.update(cx, |screen, cx| screen.render_project_panel(cx))
-            } else {
-                None
+            let mut panel = match self.project_panel.get() {
+                Some(ProjectPopover::Picker) => {
+                    let picker = projects.update(cx, |screen, cx| screen.render_picker(cx));
+                    Some(
+                        div()
+                            .key_context("ProjectPicker")
+                            .on_action(cx.listener(|this, _: &PickerDown, window, cx| {
+                                this.picker_key(PickerKey::Down, window, cx)
+                            }))
+                            .on_action(cx.listener(|this, _: &PickerUp, window, cx| {
+                                this.picker_key(PickerKey::Up, window, cx)
+                            }))
+                            .on_action(cx.listener(|this, _: &PickerRun, window, cx| {
+                                this.picker_key(PickerKey::Enter, window, cx)
+                            }))
+                            .on_action(cx.listener(|this, _: &PickerClose, window, cx| {
+                                this.picker_key(PickerKey::Escape, window, cx)
+                            }))
+                            .child(picker)
+                            .into_any_element(),
+                    )
+                }
+                Some(ProjectPopover::Properties) => {
+                    projects.update(cx, |screen, cx| screen.render_project_panel(cx))
+                }
+                None => None,
             };
             let content = if selected.is_some() && self.destination == Destination::Overview {
                 self.overview
@@ -2564,8 +2663,8 @@ impl<
                                     .inset(),
                                 ])
                         })
-                        // One bar: the project as breadcrumb (its properties open
-                        // in a panel from there), then its destinations.
+                        // One bar: the project as breadcrumb (it opens the
+                        // project picker), then its destinations.
                         .children(selected.as_ref().map(|project| {
                             div()
                                 .relative()
@@ -2756,6 +2855,9 @@ impl<
             .on_action(
                 cx.listener(|this, _: &TogglePalette, window, cx| this.toggle_palette(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &ToggleProjectPicker, window, cx| {
+                this.toggle_project_picker(window, cx)
+            }))
             .on_action(cx.listener(|this, _: &ToggleFocusMode, _, cx| this.toggle_focus_mode(cx)))
             .on_action(cx.listener(|this, _: &GoReview, window, cx| {
                 this.switch_to(Destination::Review, window, cx)
