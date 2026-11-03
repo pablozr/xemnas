@@ -747,11 +747,6 @@ formats! {
         it: "Mostra tutte ({remaining})", ja: "すべて表示 ({remaining})",
         zh: "显示全部({remaining})", ko: "모두 보기 ({remaining})",
         ru: "Показать все ({remaining})" }
-    /// Index footer: the date the map is read as of.
-    status_as_of(date: &str) { en: "Status as of {date}", pt: "Situação em {date}",
-        es: "Situación al {date}", fr: "Situation au {date}", de: "Stand: {date}",
-        it: "Situazione al {date}", ja: "{date}時点の状況", zh: "截至 {date} 的状态",
-        ko: "{date} 기준 상태", ru: "Состояние на {date}" }
     /// Header subtitle, after the count: when the map was read.
     updated_on(date: &str) { en: "updated {date}", pt: "atualizado em {date}",
         es: "actualizado el {date}", fr: "mis à jour le {date}", de: "aktualisiert am {date}",
