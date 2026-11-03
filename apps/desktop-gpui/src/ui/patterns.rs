@@ -1099,6 +1099,15 @@ pub fn fade_in(content: Div, key: impl Into<ElementId>) -> AnimationElement<Div>
 // for whoever does not see it.
 // ---------------------------------------------------------------------------
 
+/// One ↑/↓ step through `count` rows, wrapping at both ends; an index past
+/// the end (the list shrank) steps from the last row. An empty list stays put.
+pub fn wrap_step(index: usize, step: isize, count: usize) -> usize {
+    if count == 0 {
+        return index;
+    }
+    (index.min(count - 1) as isize + step).rem_euclid(count as isize) as usize
+}
+
 /// Share of `value` in `of`, kept in 0 to 1 (an empty whole is 0).
 pub fn share(value: usize, of: usize) -> f32 {
     if of == 0 {

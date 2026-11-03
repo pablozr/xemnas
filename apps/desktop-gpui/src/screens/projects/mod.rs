@@ -239,13 +239,23 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
     /// The current project. The filter only narrows the list; typing in it
     /// never switches project (the newest one stands in for no selection).
     pub fn selected_project(&self) -> Option<ProjectSummary> {
-        let ListState::Ready(list) = &self.list else {
-            return None;
-        };
+        self.current().cloned()
+    }
+
+    /// The current project, borrowed: see [`Self::selected_project`].
+    fn current(&self) -> Option<&ProjectSummary> {
+        let list = self.ready_list();
         list.iter()
             .find(|item| Some(item.id().as_str()) == self.selected_id.as_deref())
             .or_else(|| list.last())
-            .cloned()
+    }
+
+    /// The loaded projects, oldest first; empty while loading or failed.
+    fn ready_list(&self) -> &[ProjectSummary] {
+        match &self.list {
+            ListState::Ready(list) => list,
+            _ => &[],
+        }
     }
 
     /// Schedules the first list load, painting the loading state first.
@@ -268,22 +278,15 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
     }
 
     /// The rows that match the current search, newest first.
-    fn visible_rows(&self) -> Vec<ProjectSummary> {
-        let ListState::Ready(list) = &self.list else {
-            return Vec::new();
-        };
-        list.iter()
-            .rev()
-            .filter(|summary| {
-                picker::matches(summary.name(), &summary.location().to_string(), &self.query)
-            })
-            .cloned()
-            .collect()
+    fn visible_rows(&self) -> impl Iterator<Item = &ProjectSummary> {
+        let needle = picker::needle(&self.query);
+        self.ready_list().iter().rev().filter(move |summary| {
+            picker::matches(summary.name(), || summary.location().to_string(), &needle)
+        })
     }
 
     fn visible_ids(&self) -> Vec<String> {
         self.visible_rows()
-            .iter()
             .map(|summary| summary.id().as_str().to_owned())
             .collect()
     }
@@ -640,8 +643,8 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
         let row = div()
             .id((ElementId::from("project-entry"), id.clone()))
             .relative()
-            .h(px(48.0))
-            .px(px(SpacingScale::S4))
+            .h(px(44.0))
+            .px(px(SpacingScale::S3))
             .flex()
             .items_center()
             .gap(px(SpacingScale::S3));
@@ -697,19 +700,16 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
 impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
     /// Projects for the command palette: id, name and location.
     pub fn palette_projects(&self) -> Vec<(String, String, String)> {
-        match &self.list {
-            ListState::Ready(list) => list
-                .iter()
-                .map(|project| {
-                    (
-                        project.id().as_str().to_owned(),
-                        project.name().to_owned(),
-                        project.location().to_string(),
-                    )
-                })
-                .collect(),
-            _ => Vec::new(),
-        }
+        self.ready_list()
+            .iter()
+            .map(|project| {
+                (
+                    project.id().as_str().to_owned(),
+                    project.name().to_owned(),
+                    project.location().to_string(),
+                )
+            })
+            .collect()
     }
 
     /// Selects a project from the command palette.
@@ -727,9 +727,11 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
         self.remove_focus.clone()
     }
 
-    /// Which project the properties panel shows: `None` is the current one.
-    pub fn show_properties(&mut self, id: Option<String>) {
-        self.properties_id = id;
+    /// The properties panel shows the current project (the picker, if it
+    /// was open, gives way to it).
+    pub fn show_current_properties(&mut self) {
+        self.properties_id = None;
+        self.picker_return = None;
     }
 
     /// Readies the picker: an empty filter, the highlight on the current
@@ -745,10 +747,9 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
         self.search
             .update(cx, |search, cx| search.set_value("", cx));
         self.query.clear();
-        let selected = self.selected_project();
         self.picker = Picker::open(
             &self.visible_ids(),
-            selected.as_ref().map(|summary| summary.id().as_str()),
+            self.current().map(|summary| summary.id().as_str()),
         );
         window.focus(&self.search.read(cx).focus_handle(cx), cx);
         cx.notify();
@@ -790,13 +791,10 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
     /// popover frame (width, edge, shadow) belongs to the shell.
     pub fn render_picker(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
-        let visible = self.visible_rows();
-        let total = match &self.list {
-            ListState::Ready(list) => list.len(),
-            _ => 0,
-        };
-        let selected = self.selected_project();
-        let selected_id = selected.as_ref().map(|item| item.id().as_str());
+        let visible: Vec<ProjectSummary> = self.visible_rows().cloned().collect();
+        let total = self.ready_list().len();
+        let selected_id = self.current().map(|item| item.id().as_str().to_owned());
+        let selected_id = selected_id.as_deref();
         let highlighted = self.picker.highlighted.min(visible.len().saturating_sub(1));
         let rows: Vec<AnyElement> = visible
             .iter()
@@ -810,25 +808,24 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
                 } else {
                     row.hover(move |style| style.bg(theme.colors.hover_veil()))
                 };
-                row.h(px(44.0))
-                    .px(px(SpacingScale::S3))
-                    .child(
-                        icon_action(
-                            &theme,
-                            (ElementId::from("project-more"), id),
-                            &t::project_more_aria(item.name()),
-                        )
-                        .tooltip(tooltip(t::properties(), None))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.properties_id = Some(more_id.clone());
-                            window.focus(&this.remove_focus, cx);
-                            cx.emit(ProjectPropertiesRequested);
-                            cx.stop_propagation();
-                        }))
-                        .text_color(theme.colors.text_muted())
-                        .child("⋯"),
+                row.child(
+                    icon_action(
+                        &theme,
+                        (ElementId::from("project-more"), id),
+                        &t::project_more_aria(item.name()),
                     )
-                    .into_any_element()
+                    .tooltip(tooltip(t::properties(), None))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.properties_id = Some(more_id.clone());
+                        this.picker_return = None;
+                        window.focus(&this.remove_focus, cx);
+                        cx.emit(ProjectPropertiesRequested);
+                        cx.stop_propagation();
+                    }))
+                    .text_color(theme.colors.text_muted())
+                    .child("⋯"),
+                )
+                .into_any_element()
             })
             .collect();
         let body: AnyElement = match &self.list {
@@ -1147,7 +1144,6 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
     /// first-run empty state.
     pub fn render_details(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
-        let visible = self.visible_rows();
         let content: AnyElement = match &self.list {
             ListState::Loading => loading_state(&theme).into_any_element(),
             ListState::Error(failure) => error_state(
@@ -1161,7 +1157,9 @@ impl<R: ProjectRepository + Send + 'static> ProjectsScreen<R> {
             ListState::Ready(list) if list.is_empty() => {
                 self.render_empty(&theme, cx).into_any_element()
             }
-            ListState::Ready(_) if !self.query.is_empty() && visible.is_empty() => {
+            ListState::Ready(_)
+                if !self.query.is_empty() && self.visible_rows().next().is_none() =>
+            {
                 no_matches_state(&theme, &self.query).into_any_element()
             }
             // A selected project is read through its destinations; its

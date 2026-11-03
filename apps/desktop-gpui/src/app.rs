@@ -39,7 +39,7 @@ use crate::ui::icons::{icon, IconName};
 use crate::ui::motion::glide::SlideIndicator;
 use crate::ui::motion::{menu_in, menu_out};
 use crate::ui::patterns::{
-    count_chip, fade_in, kbd, section_label, toast, track_hover, TOAST_DURATION,
+    count_chip, fade_in, kbd, section_label, toast, track_hover, wrap_step, TOAST_DURATION,
 };
 use crate::ui::popup::{reap, Popup};
 use crate::ui::search_field::{SearchChanged, SearchField};
@@ -417,16 +417,12 @@ impl<
             }
         });
         let properties_subscription = screen.as_ref().map(|screen| {
-            cx.subscribe(
-                screen,
-                |shell, projects, _: &ProjectPropertiesRequested, cx| {
-                    projects.update(cx, |projects, _| projects.picker_dismissed());
-                    if let Some(popover) = shell.project_panel.open_mut() {
-                        *popover = ProjectPopover::Properties;
-                    }
-                    cx.notify();
-                },
-            )
+            cx.subscribe(screen, |shell, _, _: &ProjectPropertiesRequested, cx| {
+                if let Some(popover) = shell.project_panel.open_mut() {
+                    *popover = ProjectPopover::Properties;
+                }
+                cx.notify();
+            })
         });
         let project_subscription = screen.as_ref().map(|screen| {
             cx.subscribe(screen, |shell, _, event: &ProjectChanged, cx| {
@@ -1523,10 +1519,7 @@ impl<
     fn move_palette(&mut self, delta: isize, cx: &mut Context<Self>) {
         let count = self.visible_palette_items(cx).len();
         if let Some(palette) = self.palette.open_mut() {
-            if count > 0 {
-                palette.highlighted =
-                    (palette.highlighted as isize + delta).rem_euclid(count as isize) as usize;
-            }
+            palette.highlighted = wrap_step(palette.highlighted, delta, count);
             cx.notify();
         }
     }
@@ -1902,10 +1895,7 @@ impl<
         let Some(projects) = self.projects.clone() else {
             return;
         };
-        projects.update(cx, |projects, _| {
-            projects.picker_dismissed();
-            projects.show_properties(None);
-        });
+        projects.update(cx, |projects, _| projects.show_current_properties());
         self.project_panel.open(ProjectPopover::Properties);
         window.focus(&projects.read(cx).panel_focus(), cx);
         cx.notify();

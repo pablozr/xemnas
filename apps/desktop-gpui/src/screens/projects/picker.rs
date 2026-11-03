@@ -2,6 +2,8 @@
 //! is highlighted, what ↑/↓/Enter/Esc do and which projects the filter keeps.
 //! Pure, so the behaviour is tested without a window.
 
+use crate::ui::patterns::wrap_step;
+
 /// A key the picker understands while it is open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PickerKey {
@@ -46,13 +48,11 @@ impl Picker {
     pub fn key(&mut self, key: PickerKey, visible: &[String]) -> PickerOutcome {
         let count = visible.len();
         match key {
-            PickerKey::Down | PickerKey::Up if count > 0 => {
+            PickerKey::Down | PickerKey::Up => {
                 let step = if key == PickerKey::Down { 1 } else { -1 };
-                self.highlighted = (self.highlighted.min(count - 1) as isize + step)
-                    .rem_euclid(count as isize) as usize;
+                self.highlighted = wrap_step(self.highlighted, step, count);
                 PickerOutcome::Moved
             }
-            PickerKey::Down | PickerKey::Up => PickerOutcome::Moved,
             PickerKey::Enter => visible
                 .get(self.highlighted.min(count.saturating_sub(1)))
                 .map_or(PickerOutcome::Moved, |id| PickerOutcome::Pick(id.clone())),
@@ -61,13 +61,19 @@ impl Picker {
     }
 }
 
-/// Whether a project matches the filter: by name or by location, ignoring
-/// case; an empty filter keeps every project.
-pub fn matches(name: &str, location: &str, query: &str) -> bool {
-    let needle = query.trim().to_lowercase();
+/// The filter as [`matches`] compares it: trimmed and lower-cased, built
+/// once per pass over the list.
+pub fn needle(query: &str) -> String {
+    query.trim().to_lowercase()
+}
+
+/// Whether a project matches the filter `needle` (see [`needle`]): by name
+/// or by location, ignoring case; an empty filter keeps every project. The
+/// location is only built when the name does not match.
+pub fn matches(name: &str, location: impl FnOnce() -> String, needle: &str) -> bool {
     needle.is_empty()
-        || name.to_lowercase().contains(&needle)
-        || location.to_lowercase().contains(&needle)
+        || name.to_lowercase().contains(needle)
+        || location().to_lowercase().contains(needle)
 }
 
 #[cfg(test)]
@@ -99,13 +105,13 @@ mod tests {
     fn the_kpi_filter_leaves_one_row() {
         let rows: Vec<_> = DEMO
             .iter()
-            .filter(|(name, location)| matches(name, location, "kpi"))
+            .filter(|(name, location)| matches(name, || location.to_string(), &needle("kpi")))
             .collect();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].0, "kpi-front");
         assert_eq!(
             DEMO.iter()
-                .filter(|(name, location)| matches(name, location, " "))
+                .filter(|(name, location)| matches(name, || location.to_string(), &needle(" ")))
                 .count(),
             2
         );
