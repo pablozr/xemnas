@@ -1260,17 +1260,22 @@ impl<S: MapStores> MapScreen<S> {
                     cx.stop_propagation();
                 }
             }))
+            .flex_none()
             .child(icon(IconName::Plus, 13.0, colors.text_secondary()))
             .child(t::new_short());
+        // The search and the button keep their size; only the subtitle gives
+        // way, so long page labels (ru, de) never push them off the window.
         div()
             .flex_none()
             .flex()
             .items_center()
+            .min_w(px(0.0))
+            .overflow_hidden()
             .gap(px(SpacingScale::S3))
             .px(px(SpacingScale::S8))
             .pt(px(SpacingScale::S4))
             .pb(px(SpacingScale::S2))
-            .child(pages)
+            .child(pages.flex_none())
             .child(
                 text_style(div(), TypeScale::META)
                     .flex_1()
@@ -1279,7 +1284,7 @@ impl<S: MapStores> MapScreen<S> {
                     .text_color(colors.text_muted())
                     .child(subtitle),
             )
-            .child(self.search.clone())
+            .child(div().flex_none().child(self.search.clone()))
             .child(new_button)
     }
 
