@@ -902,6 +902,38 @@ impl MotionTokens {
     }
 }
 
+/// The night palette of the ASCII scenes (the lake, the sky, the garden and
+/// the river), `spec-lote2.md` §4: the same in every theme.
+pub mod night {
+    /// A colour of the scenes, as red, green and blue bytes.
+    pub type Rgb = [u8; 3];
+
+    /// Faint glyphs: stars, dust, labels.
+    pub const MUTED: Rgb = [0x85, 0x8C, 0x9D];
+    /// Lavender: halo, strokes, open lanterns.
+    pub const LAV: Rgb = [0xA8, 0x9E, 0xBA];
+    /// Amber: what is new or waiting.
+    pub const AMBER: Rgb = [0xD4, 0xB5, 0x6E];
+    /// Glow: lit eyes and flames.
+    pub const GLOW: Rgb = [0xF2, 0xD3, 0x7A];
+    /// Pale: the moon, hair and highlights.
+    pub const PALE: Rgb = [0xE6, 0xE1, 0xF0];
+    /// Slate: water and the sky's flows.
+    pub const SLATE: Rgb = [0x7F, 0x8F, 0xB5];
+    /// Weed green.
+    pub const WEED: Rgb = [0x5E, 0x7D, 0x72];
+    /// Rock: the cliff, the hill and the pier.
+    pub const ROCK: Rgb = [0x3A, 0x41, 0x55];
+    /// The mascot's hood.
+    pub const HOOD: Rgb = [0x5B, 0x55, 0x86];
+    /// Dark glyphs over pale tiles.
+    pub const DARK: Rgb = [0x0D, 0x11, 0x1A];
+    /// The void inside the hood.
+    pub const VOID: Rgb = [0x05, 0x06, 0x0B];
+    /// White, for the koi's highlights.
+    pub const WHITE: Rgb = [0xFF, 0xFF, 0xFF];
+}
+
 #[cfg(test)]
 mod tests {
     use gpui::Rgba;

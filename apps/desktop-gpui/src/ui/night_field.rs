@@ -21,18 +21,15 @@ use std::cell::RefCell;
 use std::f64::consts::{PI, TAU};
 use std::rc::Rc;
 
-use gpui::{
-    canvas, font, point, px, quad, size, Bounds, Context, FontWeight, Hsla, IntoElement, Pixels,
-    Render, Rgba, SharedString, Styled, TextAlign, TextRun, Window,
+use gpui::{canvas, px, Bounds, Context, IntoElement, Pixels, Render, Styled, Window};
+
+use crate::ui::scene::{
+    frame, mascot_cell, mix, paint_frame, scene_time, smooth, Cell, CellBuf, SceneLayer,
+    MASCOT_COLS, MASCOT_ROWS,
 };
+pub use crate::ui::scene::{Owner, CELL_HEIGHT, CELL_WIDTH};
+use crate::ui::tokens::night::{Rgb, AMBER, DARK, LAV, MUTED, PALE, ROCK, SLATE, WEED, WHITE};
 
-use crate::ui::motion::clock::{self, Rate};
-use crate::ui::theme::Theme;
-
-/// Width of a cell, in pixels.
-pub const CELL_WIDTH: f32 = 10.0;
-/// Height of a cell, in pixels.
-pub const CELL_HEIGHT: f32 = 11.0;
 /// Columns and rows of the reference strip.
 const STRIP_WIDTH: usize = 130;
 const STRIP_HEIGHT: usize = 35;
@@ -43,13 +40,6 @@ const MIN_ROWS: usize = 35;
 const MAX_ROWS: usize = 40;
 /// Rows of water, from the surface to the bottom.
 const WATER_ROWS: usize = 22;
-/// Font size of the glyphs, in pixels.
-const GLYPH_SIZE: f32 = 10.0;
-/// Horizontal nudge that centres a glyph in its cell.
-const GLYPH_NUDGE: f32 = 2.0;
-/// Gap between a tile and its cell, and the radius of its corners.
-const TILE_INSET: f32 = 0.5;
-const TILE_RADIUS: f32 = 1.5;
 /// Columns at each side where the ambient fades and no object goes.
 const EDGE_COLS: usize = 3;
 /// Distance over which the ambient comes back around a text, in pixels.
@@ -63,114 +53,8 @@ const CLEAR_Y: f64 = 40.0;
 const CARP_CLEAR_X: f64 = 24.0;
 const CARP_CLEAR_Y: f64 = 6.0;
 const DIVE: f64 = 40.0;
-/// A fixed instant for reduced motion.
-const STILL_TIME: f64 = 2.4;
-/// Levels the alpha is quantized to.
-const ALPHA_LEVELS: f32 = 16.0;
-/// A tile fainter than this is not painted.
-const TILE_MIN: f32 = 0.02;
 /// Most koi in the lake.
 const MAX_CARPS: usize = 4;
-
-type Rgb = [u8; 3];
-
-const MUTED: Rgb = [0x85, 0x8C, 0x9D];
-const LAV: Rgb = [0xA8, 0x9E, 0xBA];
-const AMBER: Rgb = [0xD4, 0xB5, 0x6E];
-const PALE: Rgb = [0xE6, 0xE1, 0xF0];
-const SLATE: Rgb = [0x7F, 0x8F, 0xB5];
-const WEED: Rgb = [0x5E, 0x7D, 0x72];
-const ROCK: Rgb = [0x3A, 0x41, 0x55];
-const HOOD: Rgb = [0x5B, 0x55, 0x86];
-const DARK: Rgb = [0x0D, 0x11, 0x1A];
-const VOID: Rgb = [0x05, 0x06, 0x0B];
-const GLOW: Rgb = [0xF2, 0xD3, 0x7A];
-const WHITE: Rgb = [255, 255, 255];
-
-/// Who a cell belongs to. Ambient cells fade by cell; the rest are objects.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Owner {
-    /// Stars, halo, surface, dust, dashes, bottom and cliff.
-    Ambient,
-    /// The moon disc.
-    Moon,
-    /// A koi, by index.
-    Carp(u8),
-    /// A weed, by index.
-    Weed(u8),
-    /// The mascot with its rod, line and hook.
-    Mascot,
-}
-
-/// One cell of the grid.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Cell {
-    /// The glyph.
-    pub ch: char,
-    /// Colour of the glyph.
-    pub glyph: Rgb,
-    /// Opacity of the glyph, from 0 to 1.
-    pub alpha: f32,
-    /// Colour and opacity of the tile under the glyph.
-    pub tile: Option<(Rgb, f32)>,
-    /// Whether the glyph is bold.
-    pub bold: bool,
-    /// Who the cell belongs to.
-    pub owner: Owner,
-}
-
-impl Cell {
-    const BLANK: Cell = Cell {
-        ch: ' ',
-        glyph: MUTED,
-        alpha: 0.0,
-        tile: None,
-        bold: false,
-        owner: Owner::Ambient,
-    };
-
-    fn glyph(ch: char, glyph: Rgb, alpha: f64, owner: Owner) -> Self {
-        Self {
-            ch,
-            glyph,
-            alpha: alpha as f32,
-            tile: None,
-            bold: false,
-            owner,
-        }
-    }
-
-    fn tiled(ch: char, glyph: (Rgb, f64), tile: (Rgb, f64), bold: bool, owner: Owner) -> Self {
-        Self {
-            ch,
-            glyph: glyph.0,
-            alpha: glyph.1 as f32,
-            tile: Some((tile.0, tile.1 as f32)),
-            bold,
-            owner,
-        }
-    }
-
-    fn glyph_visible(&self) -> bool {
-        self.ch != ' ' && level(self.alpha) > 0
-    }
-
-    fn tile_visible(&self) -> bool {
-        self.tile.is_some_and(|(_, alpha)| alpha > TILE_MIN)
-    }
-
-    /// Whether anything of the cell shows.
-    pub fn visible(&self) -> bool {
-        self.glyph_visible() || self.tile_visible()
-    }
-
-    fn scale(&mut self, factor: f64) {
-        self.alpha *= factor as f32;
-        if let Some((_, alpha)) = self.tile.as_mut() {
-            *alpha *= factor as f32;
-        }
-    }
-}
 
 /// A rectangle in pixels of the strip.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -299,11 +183,6 @@ pub fn full_columns(width: f32) -> usize {
     ((width / CELL_WIDTH).floor().max(0.0) as usize).clamp(MIN_COLUMNS, STRIP_WIDTH)
 }
 
-/// The alpha as one of the 16 levels (0 is invisible).
-fn level(alpha: f32) -> u8 {
-    (alpha.clamp(0.0, 1.0) * ALPHA_LEVELS).round() as u8
-}
-
 /// A small deterministic generator (mulberry32).
 struct Rng(u32);
 
@@ -320,11 +199,6 @@ impl Rng {
     }
 }
 
-fn smooth(k: f64) -> f64 {
-    let k = k.clamp(0.0, 1.0);
-    k * k * (3.0 - 2.0 * k)
-}
-
 fn hash2(x: f64, y: f64, s: f64) -> f64 {
     let n = (x * 127.1 + y * 311.7 + s * 74.7).sin() * 43758.5453;
     n - n.floor()
@@ -337,12 +211,6 @@ fn vnoise(x: f64, y: f64, s: f64) -> f64 {
     let (a, b) = (hash2(xi, yi, s), hash2(xi + 1.0, yi, s));
     let (c, d) = (hash2(xi, yi + 1.0, s), hash2(xi + 1.0, yi + 1.0, s));
     a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v
-}
-
-fn mix(a: Rgb, b: Rgb, k: f64) -> Rgb {
-    let channel =
-        |i: usize| (f64::from(a[i]) + (f64::from(b[i]) - f64::from(a[i])) * k).round() as u8;
-    [channel(0), channel(1), channel(2)]
 }
 
 /// Centre of a cell, in pixels of the strip.
@@ -692,97 +560,6 @@ fn carp_gap(bounds: &Rect, keep_out: &[Rect]) -> f64 {
         .iter()
         .map(|rect| bounds.gap(&rect.grown(CARP_CLEAR_X, CARP_CLEAR_Y), 1.0))
         .fold(f64::INFINITY, f64::min)
-}
-
-// ---------------------------------------------------------------- mascot
-
-const MASCOT_COLS: usize = 11;
-const MASCOT_ROWS: usize = 13;
-const MASCOT: [&str; MASCOT_ROWS] = [
-    "...HHHHH...",
-    "..HhhHHHH..",
-    ".HhhWWWHHH.",
-    ".HhWWWWWHH.",
-    ".HhWVWVWVH.",
-    ".HVEEVEEVH.",
-    ".HVVVVVVVH.",
-    "..HHVVVHH..",
-    ".HhsHzHsHH.",
-    ".HhsHzHsHH.",
-    "MHhoHzHoHHM",
-    "MHhHHzHHHHM",
-    ".HHHHHHHHH.",
-];
-
-/// The row of the eyes while the mascot looks ahead, left or right.
-fn eye_row(look: i32) -> &'static str {
-    match look {
-        -1 => ".HEEVEEVVH.",
-        1 => ".HVVEEVEEH.",
-        _ => ".HVEEVEEVH.",
-    }
-}
-
-fn hair(c: usize, r: usize) -> char {
-    match (c, r) {
-        (4, 2) | (4, 3) | (7, 3) => '\\',
-        (6, 2) | (3, 3) | (6, 3) => '/',
-        _ => '|',
-    }
-}
-
-fn mascot_cell(c: usize, r: usize, t: f64) -> Option<Cell> {
-    let row = if r == 5 {
-        let phase = t % 9.0;
-        eye_row(if phase > 5.0 && phase < 6.6 { -1 } else { 0 })
-    } else {
-        MASCOT[r]
-    };
-    let k = row.as_bytes()[c] as char;
-    if k == '.' {
-        return None;
-    }
-    let shade = 1.0 - 0.35 * c as f64 / (MASCOT_COLS - 1) as f64;
-    let owner = Owner::Mascot;
-    Some(match k {
-        'H' | 'h' => {
-            let rim = Some(c) == row.find('H') || (r > 0 && MASCOT[r - 1].as_bytes()[c] == b'.');
-            let a =
-                (0.42 + if k == 'h' { 0.12 } else { 0.0 } + if rim { 0.10 } else { 0.0 }) * shade;
-            if rim {
-                Cell::tiled(' ', (PALE, 0.0), (mix(HOOD, LAV, 0.45), a), false, owner)
-            } else {
-                let ch = if k == 'h' && (c + r).is_multiple_of(3) {
-                    ':'
-                } else {
-                    ' '
-                };
-                let lift = if k == 'h' { 0.25 } else { 0.0 };
-                Cell::tiled(ch, (PALE, 0.40), (mix(HOOD, LAV, lift), a), false, owner)
-            }
-        }
-        'V' => Cell::tiled(' ', (DARK, 0.0), (VOID, 0.95), false, owner),
-        'E' => {
-            if (t + 1.3) % 4.2 < 0.16 {
-                Cell::tiled(' ', (DARK, 0.0), (VOID, 0.95), false, owner)
-            } else {
-                let glow = 0.88 + 0.12 * (t * 1.7).sin();
-                Cell::tiled(' ', (DARK, 0.0), (GLOW, glow), false, owner)
-            }
-        }
-        'W' => Cell::tiled(
-            hair(c, r),
-            (DARK, 0.80),
-            (PALE, 0.80 * shade + 0.1),
-            true,
-            owner,
-        ),
-        's' => Cell::tiled('|', (PALE, 0.90), (HOOD, 0.30 * shade), true, owner),
-        'o' => Cell::tiled('o', (PALE, 0.95), (HOOD, 0.30 * shade), true, owner),
-        'z' => Cell::tiled(':', (PALE, 0.55), (HOOD, 0.30 * shade), false, owner),
-        'M' => Cell::tiled(' ', (DARK, 0.0), (PALE, 0.75 * shade + 0.1), false, owner),
-        _ => return None,
-    })
 }
 
 /// Rod, line and hook of the mascot at the cell (`cx`, `cy`).
@@ -1149,7 +926,7 @@ fn build(scene: &Scene, t: f64, keep_out: &[Rect], finish: bool) -> Vec<Cell> {
                 for cx in first.saturating_sub(15)..geo.cols {
                     let (mc, mr) = (cx.wrapping_sub(first), cy + MASCOT_ROWS - geo.surface);
                     let body = (mc < MASCOT_COLS && mr < MASCOT_ROWS)
-                        .then(|| mascot_cell(mc, mr, t))
+                        .then(|| mascot_cell(mc, mr, t, 0, Owner::Mascot))
                         .flatten();
                     if let Some(cell) = body.or_else(|| rig_cell(&geo, cx, cy)) {
                         grid.set(cx as i64, cy as i64, cell);
@@ -1178,53 +955,39 @@ fn fade_ambient(grid: &mut Grid, keep_out: &[Rect]) {
     }
 }
 
-// ---------------------------------------------------------------- paint
-
-/// A run: its length in bytes, its colour and level (None for blanks) and
-/// whether it is bold.
-type Run = (usize, Option<(Rgb, u8)>, bool);
-
-/// Runs of one line: colour (None for blanks), alpha level and weight.
-struct Line {
-    text: String,
-    runs: Vec<Run>,
-}
-
-fn lines(cells: &[Cell], width: usize) -> Vec<Line> {
-    cells
-        .chunks(width)
-        .map(|row| {
-            let mut text = String::with_capacity(width);
-            let mut runs: Vec<Run> = Vec::new();
-            for cell in row {
-                let (ch, key, bold) = if cell.glyph_visible() {
-                    (cell.ch, Some((cell.glyph, level(cell.alpha))), cell.bold)
-                } else {
-                    (' ', None, false)
-                };
-                text.push(ch);
-                match runs.last_mut() {
-                    Some(last) if last.1 == key && last.2 == bold => last.0 += ch.len_utf8(),
-                    _ => runs.push((ch.len_utf8(), key, bold)),
-                }
-            }
-            Line { text, runs }
-        })
-        .collect()
-}
-
-fn tile_color(rgb: Rgb, alpha: f32) -> Hsla {
-    Hsla::from(Rgba {
-        r: f32::from(rgb[0]) / 255.0,
-        g: f32::from(rgb[1]) / 255.0,
-        b: f32::from(rgb[2]) / 255.0,
-        a: alpha.clamp(0.0, 1.0),
-    })
-}
-
 /// The two rectangles the texts take, measured in the window: "next" and the
 /// pill. Written by the ticket while it paints, read by the scene.
 pub type Clearings = Rc<RefCell<[Option<Bounds<Pixels>>; 2]>>;
+
+/// The lake as a [`SceneLayer`]: a finished frame of [`render`]. The lake
+/// fades its edges and clears its texts by itself, so the frame adds no band.
+struct Lake<'a> {
+    scene: &'a Scene,
+    cells: Vec<Cell>,
+}
+
+impl SceneLayer for Lake<'_> {
+    fn min_size(&self) -> (usize, usize) {
+        (self.scene.width, self.scene.height)
+    }
+
+    fn fade_top(&self) -> usize {
+        0
+    }
+
+    fn side_fade(&self) -> usize {
+        0
+    }
+
+    fn cells(&self, _t: f64, buf: &mut CellBuf) {
+        let width = self.scene.width;
+        for (index, cell) in self.cells.iter().enumerate() {
+            if *cell != Cell::BLANK {
+                buf.set((index % width) as i64, (index / width) as i64, *cell);
+            }
+        }
+    }
+}
 
 fn paint_scene(
     scene: &Scene,
@@ -1254,63 +1017,9 @@ fn paint_scene(
         }
     };
     let cells = render(scene, t, &keep_out);
-    for (index, cell) in cells.iter().enumerate() {
-        if let Some((rgb, alpha)) = cell.tile.filter(|_| cell.tile_visible()) {
-            let (col, row) = ((index % scene.width) as f32, (index / scene.width) as f32);
-            let origin = bounds.origin
-                + point(
-                    px(col * CELL_WIDTH + TILE_INSET),
-                    px(row * CELL_HEIGHT + TILE_INSET),
-                );
-            window.paint_quad(quad(
-                Bounds::new(origin, size(px(CELL_WIDTH - 1.0), px(CELL_HEIGHT - 1.0))),
-                px(TILE_RADIUS),
-                tile_color(rgb, alpha),
-                px(0.0),
-                gpui::transparent_black(),
-                gpui::BorderStyle::default(),
-            ));
-        }
-    }
-    let mono = Theme::font_mono();
-    for (row, line) in lines(&cells, scene.width).into_iter().enumerate() {
-        if line.runs.iter().all(|run| run.1.is_none()) {
-            continue;
-        }
-        let runs: Vec<TextRun> = line
-            .runs
-            .iter()
-            .map(|&(len, key, bold)| {
-                let mut face = font(mono.clone());
-                if bold {
-                    face.weight = FontWeight::BOLD;
-                }
-                TextRun {
-                    len,
-                    font: face,
-                    color: key.map_or(gpui::transparent_black(), |(rgb, step)| {
-                        tile_color(rgb, f32::from(step) / ALPHA_LEVELS)
-                    }),
-                    background_color: None,
-                    underline: None,
-                    strikethrough: None,
-                }
-            })
-            .collect();
-        let shaped = window.text_system().shape_line(
-            SharedString::from(line.text),
-            px(GLYPH_SIZE),
-            &runs,
-            Some(px(CELL_WIDTH)),
-        );
-        let _ = shaped.paint(
-            bounds.origin + point(px(GLYPH_NUDGE), px(row as f32 * CELL_HEIGHT)),
-            px(CELL_HEIGHT),
-            TextAlign::Left,
-            None,
-            window,
-            cx,
-        );
+    let lake = Lake { scene, cells };
+    if let Some(frame) = frame(&lake, t, scene.width, scene.height) {
+        paint_frame(&frame, bounds.origin, window, cx);
     }
 }
 
@@ -1376,11 +1085,7 @@ impl NightField {
 
 impl Render for NightField {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let t = if cx.reduce_motion() {
-            STILL_TIME
-        } else {
-            f64::from(clock::seconds(cx.entity_id(), Rate::Calm, cx))
-        };
+        let t = scene_time(cx.entity_id(), cx);
         let scene = self.scene.clone();
         let clearings = self.clearings.clone();
         let (width, height) = self.size();
@@ -1397,6 +1102,61 @@ impl Render for NightField {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::scene::tests::assert_never_clipped;
+    use crate::ui::scene::{level, MASCOT};
+
+    /// The lake at whatever size the frame asks for, with four koi.
+    struct LiveLake;
+
+    impl SceneLayer for LiveLake {
+        fn min_size(&self) -> (usize, usize) {
+            (MIN_COLUMNS, MIN_ROWS)
+        }
+
+        fn fade_top(&self) -> usize {
+            0
+        }
+
+        fn side_fade(&self) -> usize {
+            0
+        }
+
+        fn cells(&self, t: f64, buf: &mut CellBuf) {
+            let scene = scene(buf.cols(), buf.rows(), 4);
+            Lake {
+                cells: render(&scene, t, &scene.default_keep_out()),
+                scene: &scene,
+            }
+            .cells(t, buf);
+        }
+    }
+
+    /// Painting through the scene layer changes no cell of the lake.
+    #[test]
+    fn the_scene_layer_frame_is_the_rendered_lake() {
+        for (width, height) in SIZES {
+            let scene = scene(width, height, 4);
+            for t in [0.0, 2.4, 7.3, 31.9] {
+                let cells = render(&scene, t, &scene.default_keep_out());
+                let lake = Lake {
+                    scene: &scene,
+                    cells: cells.clone(),
+                };
+                let done = frame(&lake, t, width, height).expect("drawn");
+                assert_eq!(done.cells, cells, "{width}x{height} t={t}");
+                assert!(done.labels.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn the_lake_goes_through_the_scene_layer_whole() {
+        assert_never_clipped(
+            &LiveLake,
+            (MIN_COLUMNS, STRIP_WIDTH + 1),
+            (MIN_ROWS, MAX_ROWS + 1),
+        );
+    }
 
     const SIZES: [(usize, usize); 3] = [(130, 35), (110, 40), (96, 35)];
 
@@ -1708,25 +1468,5 @@ mod tests {
             y1: moved[1].y1 - 10.0,
         };
         assert_eq!(ink(&moved, &new), 0);
-    }
-
-    #[test]
-    fn runs_are_grouped_by_colour_level_and_weight() {
-        let cell = |ch, alpha| Cell::glyph(ch, MUTED, alpha, Owner::Ambient);
-        let cells = [
-            cell('a', 0.5),
-            cell('b', 0.51),
-            Cell {
-                bold: true,
-                ..cell('c', 0.5)
-            },
-            cell(' ', 0.9),
-            cell('d', 0.001),
-        ];
-        let rows = lines(&cells, 5);
-        assert_eq!(rows[0].text, "abc  ");
-        assert_eq!(rows[0].runs.len(), 3);
-        assert_eq!(rows[0].runs[0].0, 2);
-        assert_eq!(rows[0].runs.iter().map(|run| run.0).sum::<usize>(), 5);
     }
 }
