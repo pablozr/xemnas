@@ -26,7 +26,7 @@ use crate::screens::context::{ContextScreen, ContextServices, ContextStores, Ope
 use crate::screens::decisions::DecisionsScreen;
 use crate::screens::inbox::{InboxScreen, OpenDecisions, OpenDiagnostics, ReviewView};
 use crate::screens::map::OpenSuggestions;
-use crate::screens::map::{kind_icon, MapPage, MapScreen, MapServices};
+use crate::screens::map::{MapPage, MapScreen, MapServices};
 use crate::screens::overview::OverviewScreen;
 use crate::screens::projects::{
     PickerKey, ProjectChanged, ProjectPropertiesRequested, ProjectsScreen,
@@ -208,10 +208,8 @@ fn search_target(destination: Destination) -> Destination {
 }
 
 /// The palette's Mapa group: its pages, then every component and
-/// technology (id, name, kind).
-fn map_palette_items(
-    entities: Vec<(String, String, domain::entities::EntityKind)>,
-) -> Vec<PaletteItem<Command>> {
+/// technology (id, name, glyph).
+fn map_palette_items(entities: Vec<(String, String, IconName)>) -> Vec<PaletteItem<Command>> {
     let pages = MapPage::ALL.into_iter().map(|page| PaletteItem {
         group: t::nav_map(),
         label: page.label().to_owned(),
@@ -220,11 +218,11 @@ fn map_palette_items(
         shortcut: None,
         command: Command::MapPage(page),
     });
-    let entities = entities.into_iter().map(|(id, name, kind)| PaletteItem {
+    let entities = entities.into_iter().map(|(id, name, glyph)| PaletteItem {
         group: t::nav_map(),
         label: name,
         detail: None,
-        glyph: kind_icon(kind),
+        glyph,
         shortcut: None,
         command: Command::MapEntity(id),
     });
@@ -3038,10 +3036,9 @@ mod navigation_lifecycle_tests {
 
     #[test]
     fn every_map_entity_and_page_reaches_the_palette() {
-        use domain::entities::EntityKind;
         let entities = vec![
-            ("c1".to_owned(), "jobs".to_owned(), EntityKind::Component),
-            ("t1".to_owned(), "Rust".to_owned(), EntityKind::Technology),
+            ("c1".to_owned(), "jobs".to_owned(), IconName::Component),
+            ("t1".to_owned(), "Rust".to_owned(), IconName::Cpu),
         ];
         let items = map_palette_items(entities.clone());
         for page in MapPage::ALL {

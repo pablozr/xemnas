@@ -348,7 +348,7 @@ impl OverviewScreen {
     ) -> Stateful<Div> {
         let label = source_label(citation);
         let element = element.aria_label(label.clone());
-        let Some(open) = opens(citation) else {
+        let Some(open) = opens(citation).map(str::to_owned) else {
             return element.tooltip(tooltip(label, None));
         };
         let title = source_title(citation);
@@ -362,7 +362,7 @@ impl OverviewScreen {
         self.pressable(
             element,
             id,
-            move |_, cx| cx.emit(OpenDecision(open.0.clone())),
+            move |_, cx| cx.emit(OpenDecision(open.clone())),
             cx,
         )
     }
@@ -588,11 +588,10 @@ impl Render for OverviewScreen {
 /// Every record the page cites, once, in order of first appearance; a
 /// record's number is its place in this list plus one.
 fn sources(summary: &[OverviewParagraph]) -> Vec<Citation> {
-    let all: Vec<&Citation> = summary
-        .iter()
-        .flat_map(|paragraph| &paragraph.citations)
-        .collect();
-    unique(all).into_iter().cloned().collect()
+    unique(summary.iter().flat_map(|paragraph| &paragraph.citations))
+        .into_iter()
+        .cloned()
+        .collect()
 }
 
 /// The citations without repeats of the same record, in order.
@@ -620,8 +619,8 @@ fn source_number(sources: &[Citation], citation: &Citation) -> Option<usize> {
 
 /// What pressing a source does: a decision opens in Decisões; documents and
 /// rules only explain themselves.
-fn opens(citation: &Citation) -> Option<OpenDecision> {
-    (citation.kind == "decision").then(|| OpenDecision(citation.id.clone()))
+fn opens(citation: &Citation) -> Option<&str> {
+    (citation.kind == "decision").then_some(citation.id.as_str())
 }
 
 fn source_title(citation: &Citation) -> String {
@@ -702,7 +701,7 @@ mod tests {
         let sources = sources(&summary());
         let first = summary()[0].citations[0].clone();
         assert_eq!(source_number(&sources, &first), Some(1));
-        assert_eq!(opens(&sources[0]).map(|open| open.0), Some("d1".into()));
+        assert_eq!(opens(&sources[0]), Some("d1"));
         assert!(opens(&cite("document", "doc.md")).is_none());
         assert!(opens(&cite("claim", "r1")).is_none());
     }

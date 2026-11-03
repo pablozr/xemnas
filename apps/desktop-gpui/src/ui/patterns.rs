@@ -287,7 +287,7 @@ pub fn word_wrapped_with(text: &str, token: TypeToken, tail: impl IntoElement) -
 
 /// The words of `text` before the last one, and the last one (kept with
 /// whatever follows it).
-pub fn split_tail(text: &str) -> (Vec<&str>, Option<&str>) {
+fn split_tail(text: &str) -> (Vec<&str>, Option<&str>) {
     let mut words: Vec<&str> = text.split_whitespace().collect();
     let last = words.pop();
     (words, last)

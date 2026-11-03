@@ -220,8 +220,10 @@ fn group_target(
 
 /// The count on the Entregas tab: only when there is something to count.
 /// The other groups are lists whose size says nothing about attention.
-fn tab_badge(deliveries: usize) -> Option<String> {
-    (deliveries > 0).then(|| deliveries.to_string())
+fn tab_badge(group: Group, deliveries: Option<usize>) -> Option<String> {
+    deliveries
+        .filter(|count| group == Group::Deliveries && *count > 0)
+        .map(|count| count.to_string())
 }
 
 impl Section {
@@ -1620,10 +1622,7 @@ impl<S: ContextStores> ContextScreen<S> {
         for (index, group) in Group::ALL.into_iter().enumerate() {
             let selected = self.section.group() == group;
             let section = group_target(self.section, &self.last_in_group, group);
-            let badge = (group == Group::Deliveries)
-                .then_some(deliveries)
-                .flatten()
-                .and_then(tab_badge);
+            let badge = tab_badge(group, deliveries);
             let tip = match (group, &mode_line) {
                 (Group::Settings, Some((_, text))) => format!("{} · {text}", group.label()),
                 _ => group.label().to_owned(),
@@ -2750,8 +2749,9 @@ mod tests {
 
     #[test]
     fn the_deliveries_tab_counts_only_when_there_are_some() {
-        assert_eq!(tab_badge(5).as_deref(), Some("5"));
-        assert_eq!(tab_badge(0), None);
+        assert_eq!(tab_badge(Group::Deliveries, Some(5)).as_deref(), Some("5"));
+        assert_eq!(tab_badge(Group::Deliveries, Some(0)), None);
+        assert_eq!(tab_badge(Group::Sources, Some(5)), None);
     }
 
     fn delivery(days_ago: i64, session: &str) -> Delivery {

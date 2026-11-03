@@ -153,11 +153,6 @@ impl MapPage {
         }
     }
 
-    /// Whether the reading column shows this page.
-    fn shows(self, view: &View) -> bool {
-        *view == self.view()
-    }
-
     /// The page's name.
     pub fn label(self) -> &'static str {
         match self {
@@ -655,8 +650,8 @@ impl<S: MapStores> MapScreen<S> {
         window.focus(&gpui::Focusable::focus_handle(self.search.read(cx), cx), cx);
     }
 
-    /// Every component and technology, for the palette: id, name and kind.
-    pub fn palette_entities(&self) -> Vec<(String, String, EntityKind)> {
+    /// Every component and technology, for the palette: id, name and glyph.
+    pub fn palette_entities(&self) -> Vec<(String, String, IconName)> {
         self.data
             .as_ref()
             .map(|data| palette_entities(&data.map.entities))
@@ -1231,7 +1226,7 @@ impl<S: MapStores> MapScreen<S> {
                     page.id(),
                     page.glyph(),
                     page.label(),
-                    page.shows(&self.view),
+                    page.view() == self.view,
                 )
                 .track_focus(&focus)
                 .on_click(cx.listener(move |this, _, _, cx| this.show_page(page, cx)))
@@ -2701,7 +2696,7 @@ impl<S: MapStores> MapScreen<S> {
         };
         let map = Arc::clone(&index.map);
         let last = ix + 1 == self.overview_rows.len();
-        let needle = self.search.read(cx).value().trim().to_lowercase();
+        let needle = crate::palette::normalize(self.search.read(cx).value().trim());
         let element = match row {
             OverviewRow::Header => {
                 let switch = self.layout_switch(&theme, cx);
@@ -2726,8 +2721,8 @@ impl<S: MapStores> MapScreen<S> {
                 .pb(px(SpacingScale::S2))
                 .text_color(colors.text_muted())
                 .child(match kind {
-                    EntityKind::Component => t::index_empty_components(),
-                    EntityKind::Technology => t::index_empty_technologies(),
+                    EntityKind::Component => t::empty_components(),
+                    EntityKind::Technology => t::empty_technologies(),
                 })
                 .into_any_element(),
             OverviewRow::Blocks(first) => {
@@ -3471,9 +3466,10 @@ fn blocks_rows(tops: usize, technologies: usize, conflicted: bool) -> Vec<Overvi
 }
 
 /// Whether a name answers the header's search (`needle` already trimmed and
-/// lowercased); `None` while the search is empty.
+/// normalized like the palette's: no case, no accents); `None` while the
+/// search is empty.
 fn name_matches(name: &str, needle: &str) -> Option<bool> {
-    (!needle.is_empty()).then(|| name.to_lowercase().contains(needle))
+    (!needle.is_empty()).then(|| crate::palette::normalize(name).contains(needle))
 }
 
 /// A block or chip under the search: what matches gets the accent edge,
@@ -3486,15 +3482,15 @@ fn found(theme: &Theme, element: Stateful<Div>, matched: Option<bool>) -> Statef
     }
 }
 
-/// The palette's entries for the map's entities: id, name and kind.
-fn palette_entities(entities: &[MapEntity]) -> Vec<(String, String, EntityKind)> {
+/// The palette's entries for the map's entities: id, name and glyph.
+fn palette_entities(entities: &[MapEntity]) -> Vec<(String, String, IconName)> {
     entities
         .iter()
         .map(|row| {
             (
                 row.entity.entity_id.clone(),
                 row.entity.name.clone(),
-                row.entity.kind,
+                kind_icon(row.entity.kind),
             )
         })
         .collect()
@@ -3994,7 +3990,7 @@ fn kind_plural(kind: EntityKind) -> &'static str {
 }
 
 /// The glyph of a kind of map item.
-pub fn kind_icon(kind: EntityKind) -> IconName {
+fn kind_icon(kind: EntityKind) -> IconName {
     match kind {
         EntityKind::Component => IconName::Component,
         EntityKind::Technology => IconName::Cpu,
@@ -4036,8 +4032,6 @@ mod tests {
         assert_eq!(MapPage::Overview.view(), View::Overview);
         assert_eq!(MapPage::FileLens.view(), View::File);
         assert_eq!(MapPage::Timeline.view(), View::Timeline);
-        assert!(MapPage::Timeline.shows(&View::Timeline));
-        assert!(!MapPage::Overview.shows(&View::Entity("e".into())));
     }
 
     /// Without the index (lote 2, §2.3) every page is in the header, every
@@ -4071,6 +4065,8 @@ mod tests {
         assert_eq!(name_matches("Jobs", ""), None);
         assert_eq!(name_matches("Jobs", "job"), Some(true));
         assert_eq!(name_matches("Rust", "job"), Some(false));
+        // Like the palette: no case, no accents.
+        assert_eq!(name_matches("Coleção", "colecao"), Some(true));
     }
 
     #[test]
