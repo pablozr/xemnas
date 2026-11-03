@@ -22,11 +22,11 @@ pub const MAX_ARTIFACTS: usize = 64;
 /// Maximum UTF-8 bytes of diff content per envelope.
 pub const MAX_DIFF_BYTES: usize = 32 * 1024;
 
-/// Envelope for `turn`, or `None` when nothing survives cleaning (an envelope
+/// Envelope for `turn` in the project at `root` (the cwd, or the repository the turn worked in), or `None` when nothing survives cleaning (an envelope
 /// carries at least one artifact).
 pub fn build_envelope(
     session_id: &str,
-    cwd: &str,
+    root: &str,
     worktrees: &mut Worktrees,
     turn: &Turn,
     observed_at: String,
@@ -68,7 +68,7 @@ pub fn build_envelope(
     );
 
     // One block per edited file, in first-edit order; files outside the
-    // project (the cwd or a worktree of its repository) are dropped, like
+    // project (the root or a worktree of its repository) are dropped, like
     // `reducePatches` does.
     let mut files: Vec<(String, String)> = Vec::new();
     for edit in &turn.edits {
@@ -130,7 +130,7 @@ pub fn build_envelope(
             message_id: turn.prompt_uuid.clone(),
         },
         project: ProjectRef {
-            canonical_path: cwd.to_string(),
+            canonical_path: root.to_string(),
         },
         observed_at,
         artifacts,
@@ -148,11 +148,11 @@ fn cleaned(text: &str, max_bytes: usize) -> String {
     text[..end].to_string()
 }
 
-/// `path` relative to `cwd` with forward slashes, or `None` when it is outside.
-/// A relative `path` is taken as inside `cwd`. Windows paths compare ignoring case.
-pub fn relative_inside(path: &str, cwd: &str) -> Option<String> {
+/// `path` relative to `root` with forward slashes, or `None` when it is outside.
+/// A relative `path` is taken as inside `root`. Windows paths compare ignoring case.
+pub fn relative_inside(path: &str, root: &str) -> Option<String> {
     let path = path.replace('\\', "/");
-    let cwd = cwd.replace('\\', "/");
+    let cwd = root.replace('\\', "/");
     let cwd = cwd.trim_end_matches('/');
     let absolute = path.starts_with('/') || path.as_bytes().get(1) == Some(&b':');
     let relative = if absolute {

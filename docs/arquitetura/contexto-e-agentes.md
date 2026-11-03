@@ -91,7 +91,10 @@ O:<ref> v<versão> <tipo> <nome> <versão declarada> (<manifest>); declarado, n�
 `xemnas-mcp` (`apps/mcp-server`) é um servidor MCP sobre stdio (JSON-RPC por linha,
 protocolo próprio, sem SDK) que fala com o app aberto por `POST /v1/agent/*`
 (`application::agent_access`). Sem app aberto, responde "o app está fechado"; não há
-modo headless. O projeto é `--project <dir>` ou o diretório em que o agente o iniciou.
+modo headless. O projeto é, nesta ordem: o argumento `project` da ferramenta (caminho
+absoluto do repositório), a raiz git do `path` quando ele é absoluto, e `--project <dir>`
+ou o diretório em que o agente iniciou o servidor. Agentes que rodam fora do repositório
+(pasta própria de um launcher) passam `path` absoluto ou `project`.
 
 | Ferramenta | Devolve |
 | --- | --- |
@@ -133,6 +136,15 @@ imprimem nada em caso de erro (no máximo uma linha sanitizada no stderr).
 - **Worktrees do git:** um worktree de projeto registrado conta como o projeto; o app
   resolve `canonical_path` pelo `git rev-parse --git-common-dir`
   (`application::repo_identity`, cache de 5 min). Outro repositório continua recusado.
+- **Sessão fora de repositório:** se o `cwd` não está dentro de um work tree git (agentes
+  de launcher editam outros repositórios por caminho absoluto), a raiz da captura é o
+  repositório em que o turno trabalhou (`hook/root.rs`): cada arquivo editado vale 3
+  pontos e cada lido (`Read`) 1, só caminhos absolutos; vence a maior pontuação, o empate
+  fica com o primeiro encontrado (edições antes de leituras), e sem repositório vale o
+  `cwd`. Um turno em vários repositórios gera um único envelope, do dominante, sem os
+  diffs dos outros. O 403 vale por raiz: o repositório recusado é pulado, os demais
+  seguem. `hook prompt` usa a mesma regra com os arquivos recentes (até 4 consultas ao
+  git, por causa dos 300 ms). Um `cwd` dentro de um work tree continua sendo a raiz.
 
 ## Onde estão os testes
 

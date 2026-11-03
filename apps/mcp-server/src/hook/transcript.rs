@@ -64,6 +64,8 @@ pub struct Turn {
     pub tools: Vec<ToolCall>,
     /// File changes, in order.
     pub edits: Vec<FileEdit>,
+    /// Paths the file tools were called on (edits and reads), in order, without repeats.
+    pub touched: Vec<String>,
     /// What the user answered to the questions the assistant asked with
     /// `AskUserQuestion`, one entry per question: where they chose.
     pub answers: Vec<String>,
@@ -79,10 +81,20 @@ impl Turn {
             && answer <= TRIVIAL_ASSISTANT_CHARS
     }
 
+    /// Records a file the turn touched, keeping first-seen order without repeats.
+    fn touch(&mut self, path: &str) {
+        if !self.touched.iter().any(|known| known == path) {
+            self.touched.push(path.to_string());
+        }
+    }
+
     /// Appends `other`'s prompt and answer after this turn's, separated by a
     /// blank line. The identity (uuid, offset) stays this turn's.
     pub fn fold(&mut self, other: &Turn) {
         self.answers.extend(other.answers.iter().cloned());
+        for path in &other.touched {
+            self.touch(path);
+        }
         if !other.user_text.trim().is_empty() {
             if !self.user_text.trim().is_empty() {
                 self.user_text.push_str("\n\n");
@@ -217,6 +229,9 @@ fn add_assistant(turn: &mut Turn, entry: &Value) {
             }
             Some("tool_use") => {
                 if let Some(name) = block["name"].as_str() {
+                    if let Some(path) = touched_path(name, &block["input"]) {
+                        turn.touch(path);
+                    }
                     turn.tools.push(ToolCall {
                         name: name.to_string(),
                         id: block["id"].as_str().unwrap_or_default().to_string(),
@@ -227,6 +242,16 @@ fn add_assistant(turn: &mut Turn, entry: &Value) {
             _ => {}
         }
     }
+}
+
+/// The file a file tool was called on.
+fn touched_path<'a>(tool: &str, input: &'a Value) -> Option<&'a str> {
+    if !FILE_TOOLS.contains(&tool) {
+        return None;
+    }
+    input["file_path"]
+        .as_str()
+        .or_else(|| input["notebook_path"].as_str())
 }
 
 fn add_results(turn: &mut Turn, entry: &Value) {
@@ -477,6 +502,31 @@ mod tests {
         assert_eq!(head.start_offset, 7);
         assert_eq!(head.user_text, "proposta\n\npode");
         assert_eq!(head.assistant_texts.join("\n"), "faço X?\n\nfeito");
+    }
+
+    #[test]
+    fn touched_files_come_from_the_file_tools_in_order_without_repeats() {
+        let mut turn = Turn::default();
+        for (name, file) in [
+            ("Read", "/a/x.rs"),
+            ("Bash", "/a/no.rs"),
+            ("Edit", "/b/y.rs"),
+            ("Edit", "/a/x.rs"),
+        ] {
+            add_assistant(&mut turn, &tool(name, file));
+        }
+        let notebook = json!({ "type": "assistant", "message": { "content": [
+            { "type": "tool_use", "id": "n", "name": "NotebookEdit", "input": { "notebook_path": "/c/n.ipynb" } }
+        ] } });
+        add_assistant(&mut turn, &notebook);
+        assert_eq!(turn.touched, ["/a/x.rs", "/b/y.rs", "/c/n.ipynb"]);
+
+        let mut head = Turn {
+            touched: vec!["/b/y.rs".to_string()],
+            ..Turn::default()
+        };
+        head.fold(&turn);
+        assert_eq!(head.touched, ["/b/y.rs", "/a/x.rs", "/c/n.ipynb"]);
     }
 
     #[test]
