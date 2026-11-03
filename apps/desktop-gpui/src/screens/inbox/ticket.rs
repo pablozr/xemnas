@@ -13,7 +13,7 @@ use crate::app::{OpenProof, ToggleQueue};
 use crate::i18n::inbox_ticket as tt;
 use crate::screens::capture_health::CaptureHealth;
 use crate::ui::material::{elevation, Elevation};
-use crate::ui::night_field::{strip_dims, Clearings};
+use crate::ui::night_field::{full_columns, strip_dims, Clearings};
 use crate::ui::theme::code_style;
 use crate::ui::tokens::TypeToken;
 use crate::ui::tokens::{mix, tint};
@@ -64,6 +64,9 @@ const WHERE_FILE: TypeToken = TypeToken::new(13.0, 19.0, 400.0);
 pub(super) struct NightSlot {
     measured: Cell<(usize, usize)>,
     drawn: Cell<(usize, usize)>,
+    /// Columns of the full lake that fit the empty queue's pane (0 before
+    /// the first measure).
+    full_columns: Cell<usize>,
     /// Where "next" (0) and the pill (1) were last painted, in the window:
     /// the lake keeps them clear.
     clearings: Clearings,
@@ -388,12 +391,31 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
     fn night(&self, cx: &mut Context<Self>) -> AnyElement {
         let clearings = self.night_slot.clearings.clone();
         let mascot = !self.status_bar;
+        let columns = self.night_slot.full_columns.get();
         self.night_full.update(cx, |field, _| {
             field.set_waiting(0);
             field.set_clearings(&clearings);
             field.set_mascot(mascot);
+            if columns > 0 {
+                field.set_columns(columns);
+            }
         });
         let (width, height) = self.night_full.read(cx).size();
+        let slot = self.night_slot.clone();
+        let screen = cx.entity_id();
+        // A pane narrower than the lake would cut the cliff and the pier:
+        // measure it and repaint once with the columns that fit.
+        let measure = canvas(
+            move |bounds, _, cx| {
+                let fits = full_columns(f32::from(bounds.size.width));
+                if slot.full_columns.replace(fits) != fits {
+                    cx.defer(move |cx| cx.notify(screen));
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full();
         div()
             .absolute()
             .left_0()
@@ -404,6 +426,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             .flex()
             .justify_center()
             .overflow_hidden()
+            .child(measure)
             .child(
                 div()
                     .w(px(width))

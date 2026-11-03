@@ -293,6 +293,12 @@ pub fn strip_dims(width: f32, height: f32) -> (usize, usize) {
     }
 }
 
+/// Columns of the full lake that fit a box `width` pixels wide, so the
+/// cliff and the pier are never cut by a narrow pane.
+pub fn full_columns(width: f32) -> usize {
+    ((width / CELL_WIDTH).floor().max(0.0) as usize).clamp(MIN_COLUMNS, STRIP_WIDTH)
+}
+
 /// The alpha as one of the 16 levels (0 is invisible).
 fn level(alpha: f32) -> u8 {
     (alpha.clamp(0.0, 1.0) * ALPHA_LEVELS).round() as u8
@@ -1348,6 +1354,11 @@ impl NightField {
         };
     }
 
+    /// Fits the scene to `columns`, keeping its rows (see [`full_columns`]).
+    pub fn set_columns(&mut self, columns: usize) {
+        self.set_size(columns, self.scene.height);
+    }
+
     /// Shows or hides the mascot on the cliff. The parent is repainting, so
     /// this does not notify.
     pub fn set_mascot(&mut self, mascot: bool) {
@@ -1506,6 +1517,9 @@ mod tests {
     #[test]
     fn the_strip_fits_the_room_it_is_given() {
         assert_eq!(strip_dims(2000.0, 600.0), (STRIP_WIDTH, MAX_ROWS));
+        assert_eq!(full_columns(2000.0), STRIP_WIDTH);
+        assert_eq!(full_columns(1164.0), 116);
+        assert_eq!(full_columns(500.0), MIN_COLUMNS);
         assert_eq!(strip_dims(1000.0, 385.0), (100, 35));
         assert_eq!(strip_dims(1000.0, 374.0).1, 0);
         assert_eq!(strip_dims(900.0, 400.0).1, 0);
