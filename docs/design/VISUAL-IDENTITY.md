@@ -265,12 +265,11 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
 
 ## Contexto — o que o agente recebe
 
-- Terceiro destino do projeto (Ctrl 3). Mesma gramática do Mapa: índice à
-  esquerda (`index_rail` + `index_row`, 296 px) e uma `reading_page` por
-  página. O índice agrupa **Agente** (Visão geral, Entregas, Testar uma
-  tarefa), **Fontes** (Decisões em vigor, Regras, Documentação, com contagem)
-  e **Ajustes** (Modo de entrega); o pé mostra o modo salvo ("Ativo · até
-  300 tokens") com ponto de estado.
+- Terceiro destino do projeto (Ctrl 3). Sem índice lateral: uma linha de
+  quatro abas no topo (seção "Contexto — quatro abas") e uma `reading_page`
+  por página. À direita das abas, o modo salvo ("Ativo · até 300 tokens") com
+  ponto de estado; ele trunca antes das abas e o tooltip de Ajustes repete o
+  texto.
 - **Visão geral** sem cartões: linha de estado (ponto de 8 px na cor do
   modo: verde Ativo, azul Medindo, cinza Desligado; frase do que acontece;
   "Mudar modo" ou "Ativar" secundário); "Como chega ao agente" em três
@@ -310,8 +309,8 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
 - Primeira aba do projeto (Ctrl 0, paleta), ADR-0007, numa `reading_page`:
   título "Visão do projeto", linha de meta (data, quantas decisões e regras,
   e em âmbar "N decisões novas desde então") e "Atualizar visão" secundário;
-  seção Resumo com parágrafos e, abaixo de cada um, chips mono das fontes
-  (decisão abre em Decisões; regra é só rótulo); depois a seção "Arquitetura e
+  seção Resumo com parágrafos terminados por números pequenos das fontes e,
+  abaixo, a lista Fontes; depois a seção "Arquitetura e
   fluxos": uma frase com o que a página guarda ("8 partes e 3 fluxos") e o botão
   primário "Ver arquitetura e fluxos".
 - **Arquitetura e fluxos não se desenham no app.** Um diagrama de arquitetura e a
@@ -319,9 +318,13 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   uma coluna de leitura de 760 px. Eles vivem numa página HTML (próxima seção); o app
   só carrega o resumo e o caminho até ela. O modelo `application::architecture`
   continua sendo derivado do Mapa e dos fluxos, sem IA nova, e alimenta a página.
-- Fontes são chips com ícone (documento = decisão, escudo = regra) e o
-  título encurtado em palavra inteira; o texto completo fica no tooltip.
-  Defasagem é uma linha própria com ponto âmbar, nunca a meta inteira em cor.
+- Fontes são números sobrescritos no fim do parágrafo (META 10/600,
+  `accent.default`, 5 px acima da linha, área de clique 2×3), numerados por
+  página na ordem da primeira aparição; a última palavra e os números quebram
+  juntos (`word_wrapped_with`). A lista Fontes repete cada número uma vez, com
+  o ícone do tipo (decisão, livro = documento, escudo = regra) e o título
+  inteiro em BODY_SMALL. Decisão abre em Decisões (clique, Tab, Enter);
+  documento e regra só explicam no tooltip. Defasagem é uma linha própria com ponto âmbar, nunca a meta inteira em cor.
 - Gerar a Visão também manda documentos novos ou alterados para análise; o
   toast diz quantos ("3 documentos foram para análise; os candidatos aparecem
   na Revisão"). Na Revisão, a evidência aparece como "Documento do projeto"
@@ -519,10 +522,11 @@ abre um passo com um campo de uma linha para o escopo de cada lado e o único bo
 (*Manter as duas*), ligado só com os dois campos preenchidos. Carregando: esqueleto;
 falha (o conflito mudou): `error_banner` com "Tentar de novo"; confirmação: `toast`.
 
-## Contexto — quatro entradas
+## Contexto — quatro abas
 
-O índice do Contexto tem quatro entradas (Visão geral, Fontes, Entregas, Ajustes), sem
-cabeçalhos de grupo; só Entregas leva contagem. As páginas de um grupo se alternam numa
+O Contexto tem quatro abas (Visão geral, Fontes, Entregas, Ajustes) numa linha no topo,
+com fundo `selection` na ativa, setas entre abas e Enter para abrir; só Entregas leva
+contagem. As páginas de um grupo se alternam numa
 chave segmentada fina no topo da página, e cada entrada abre na página que a pessoa
 usou por último naquele grupo (Fontes: Decisões, Regras, Documentação, Revisar com IA;
 Entregas: Histórico, Testar uma tarefa). As rotas de captura (`context:rules`,
@@ -545,12 +549,13 @@ pai: a forma não é a única fonte.
 
 ## Mapa — o grafo do projeto
 
-- Quarto destino do projeto (Ctrl 4, paleta), ADR-0005. Índice à esquerda
-  (296 px, `pane`, filete à direita) com três visões fixas (Sugestões com
-  contagem, Lente de arquivo, Linha do tempo) e as listas de Componentes e
-  Tecnologias; cada linha mostra o nome e o peso ("3 decisões · 1 regra") e um
-  ponto âmbar quando há conflito. Seleção com `mark_selected`; o `+` do
-  cabeçalho abre o formulário de item novo.
+- Quarto destino do projeto (Ctrl 4, paleta), ADR-0005. Sem índice lateral:
+  um cabeçalho com a chave segmentada das páginas (Visão geral, Lente de
+  arquivo, Linha do tempo), o subtítulo META "N itens · atualizado em <data>",
+  "Buscar no mapa" (240 px; Ctrl F no Mapa foca este campo) e "+ Novo"
+  secundário, que abre o formulário de item novo. A busca destaca sem
+  esconder: o que casa ganha borda `accent.default`, o resto fica a 40 %.
+  Componentes, tecnologias e as três páginas também estão na paleta (Ctrl K).
 - Coluna de leitura (`reading_page`) por visão: sugestões com Confirmar e
   Rejeitar por linha e itens propostos com Criar; detalhe da entidade (tipo,
   nome, descrição, padrões em mono, ações Vincular decisão, Vincular regra,
@@ -571,7 +576,8 @@ pai: a forma não é a única fonte.
   linha e de mesma altura na linha, um por componente de topo, com as partes
   dentro como chips; o rodapé do bloco diz o peso ("2 decisões · 1 regra") e
   "mudou em 29 set" quando houve atividade nos últimos 14 dias; ponto âmbar =
-  decisões em conflito, com legenda só quando existe. Tecnologias em chips abaixo.
+  decisões em conflito, com legenda só quando existe. Tecnologias em chips abaixo;
+  o rótulo Tecnologias aparece sempre, com uma frase quando não há nenhuma.
 - **Vizinhança** (topo do detalhe): diagrama em camadas, decisões à esquerda
   (abrem em Decisões), o item no centro (única superfície com `selection`) e
   regras à direita, ligados por curvas de 1,25 px desenhadas com `canvas` +
@@ -701,10 +707,10 @@ diz o que ela é e o que confirmar faz, e cada sugestão é um cartão
 O pilar do projeto é desempenho e baixo custo; as regras e orçamentos estão
 em `docs/arquitetura/desempenho-e-escala.md`. No visual, isso vira:
 
-- **Listas longas são virtuais.** O índice do Mapa e o índice de Decisões
-  usam a lista do GPUI (`list` + `ListState`): só as linhas em vista viram
-  elementos, então rolar custa o mesmo com 10 ou 10 mil itens. As linhas são
-  chaves baratas (`IndexRow`, `IndexItem`) e cada elemento é montado quando
+- **Listas longas são virtuais.** O índice de Decisões usa a lista do GPUI
+  (`list` + `ListState`): só as linhas em vista viram elementos, então rolar
+  custa o mesmo com 10 ou 10 mil itens. As linhas são chaves baratas
+  (`IndexItem`) e cada elemento é montado quando
   entra na tela. Quando o formato muda, `splice` refaz a medição.
 - **Barra fina que some** (`ui::list::{ScrollMemory, scroll_thumb}`): 3 px,
   `text_muted` a 55 %, aparece ao rolar, fica 650 ms e some em 350 ms; não é
