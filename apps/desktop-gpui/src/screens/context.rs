@@ -48,13 +48,14 @@ use crate::i18n::context as t;
 use crate::ui::controls::{action_button, button_foreground, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
-    count_chip, count_up, empty_panel, error_banner, index_rail, index_row, meter, radio_list,
-    radio_row, reading_page, ring, section_header, section_label, share, skeleton_list, sparkline,
-    status_pill, toast, TOAST_DURATION,
+    count_chip, count_up, empty_panel, error_banner, meter, radio_list, radio_row, reading_page,
+    ring, section_header, section_label, share, skeleton_list, sparkline, status_pill, toast,
+    TOAST_DURATION,
 };
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme};
-use crate::ui::tokens::{tint, RadiusScale, SpacingScale, TypeScale};
+use crate::ui::tokens::{tint, ControlSize, RadiusScale, SpacingScale, TypeScale};
+use crate::ui::tooltip::tooltip;
 
 /// Every port the Contexto screen reads through.
 pub trait ContextStores:
@@ -198,6 +199,29 @@ impl Group {
             Self::Settings => &[Section::Mode],
         }
     }
+}
+
+/// The page a group's tab opens: the open page when the group is the
+/// current one, else the page last used in it, else its first page.
+fn group_target(
+    current: Section,
+    last_in_group: &BTreeMap<&'static str, Section>,
+    group: Group,
+) -> Section {
+    if current.group() == group {
+        current
+    } else {
+        last_in_group
+            .get(group.id())
+            .copied()
+            .unwrap_or(group.members()[0])
+    }
+}
+
+/// The count on the Entregas tab: only when there is something to count.
+/// The other groups are lists whose size says nothing about attention.
+fn tab_badge(deliveries: usize) -> Option<String> {
+    (deliveries > 0).then(|| deliveries.to_string())
 }
 
 impl Section {
@@ -1560,102 +1584,132 @@ impl<S: ContextStores> ContextScreen<S> {
 }
 
 impl<S: ContextStores> ContextScreen<S> {
-    /// The index of the destination: the agent, its sources and the
-    /// delivery setting, with the saved mode at the foot.
-    fn render_rail(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Div {
+    /// The four groups as tabs on one line, with the saved mode at the right
+    /// ("Ativo · até 300 tokens"). The tabs never wrap: when the line is
+    /// short the mode text truncates first, and the Ajustes tab repeats it
+    /// in its tooltip.
+    fn render_tabs(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Div {
         let colors = theme.colors;
-        let counts = self.snapshot.as_ref().map(|snapshot| {
-            (
-                snapshot.decisions.len(),
-                snapshot.claims.len(),
-                snapshot.documents.len(),
-                snapshot.deliveries.len(),
-            )
-        });
-        let mut list = div()
-            .flex()
-            .flex_col()
-            .gap(px(2.0))
-            .px(px(SpacingScale::S2))
-            .pt(px(SpacingScale::S4));
-        for group in Group::ALL {
-            // Only the deliveries carry a count: the others are lists whose
-            // size says nothing about whether something needs attention.
-            let badge = counts
-                .map(|(_, _, _, deliveries)| deliveries)
-                .filter(|count| group == Group::Deliveries && *count > 0)
-                .map(|count| count.to_string());
-            // A group opens on the page the person last used in it.
-            let section = if self.section.group() == group {
-                self.section
-            } else {
-                self.last_in_group
-                    .get(group.id())
-                    .copied()
-                    .unwrap_or(group.members()[0])
-            };
-            let focus = self.focus_for(group.id(), cx);
-            list = list.child(
-                index_row(
-                    theme,
-                    group.id(),
-                    self.section.group() == group,
-                    group.glyph(),
-                    group.label(),
-                    badge,
-                )
-                .track_focus(&focus)
-                .on_click(cx.listener(move |this, _, _, cx| this.go(section, cx)))
-                .on_key_down(cx.listener(
-                    move |this, event: &gpui::KeyDownEvent, _, cx| {
-                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                            this.go(section, cx);
-                            cx.stop_propagation();
-                        }
-                    },
-                )),
-            );
-        }
-        let foot = self.snapshot.as_ref().map(|snapshot| {
+        let deliveries = self
+            .snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.deliveries.len());
+        let mode_line = self.snapshot.as_ref().map(|snapshot| {
             let mode = snapshot.settings.mode;
             let budget = snapshot
                 .settings
                 .budget_tokens
                 .unwrap_or(DEFAULT_BUDGET_TOKENS);
+            let text = match mode {
+                ContextMode::Off => t::mode_off().to_owned(),
+                mode => t::rail_foot(mode_word(mode), budget),
+            };
+            (mode, text)
+        });
+        let focus: Vec<gpui::FocusHandle> = Group::ALL
+            .iter()
+            .map(|group| self.focus_for(group.id(), cx))
+            .collect();
+        let mut tabs = div()
+            .id("context-tabs")
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(SpacingScale::S1))
+            .role(Role::TabList);
+        for (index, group) in Group::ALL.into_iter().enumerate() {
+            let selected = self.section.group() == group;
+            let section = group_target(self.section, &self.last_in_group, group);
+            let badge = (group == Group::Deliveries)
+                .then_some(deliveries)
+                .flatten()
+                .and_then(tab_badge);
+            let tip = match (group, &mode_line) {
+                (Group::Settings, Some((_, text))) => format!("{} · {text}", group.label()),
+                _ => group.label().to_owned(),
+            };
+            let foreground = if selected {
+                colors.text_primary()
+            } else {
+                colors.text_muted()
+            };
+            let hover = colors.glass_fill_low();
+            let neighbours = (
+                focus[(index + Group::ALL.len() - 1) % Group::ALL.len()].clone(),
+                focus[(index + 1) % Group::ALL.len()].clone(),
+            );
+            tabs = tabs.child(
+                text_style(div(), TypeScale::BODY_SMALL)
+                    .id(group.id())
+                    .flex_none()
+                    .h(px(ControlSize::SM))
+                    .px(px(10.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(SpacingScale::S2))
+                    .whitespace_nowrap()
+                    .rounded(theme.radius.control())
+                    .cursor_pointer()
+                    .role(Role::Tab)
+                    .aria_label(group.label())
+                    .aria_selected(selected)
+                    .text_color(foreground)
+                    .when(selected, |tab| tab.bg(colors.selection()))
+                    .when(!selected, |tab| tab.hover(move |style| style.bg(hover)))
+                    .track_focus(&focus[index])
+                    .focus_visible(crate::ui::controls::focus_ring(theme))
+                    .on_click(cx.listener(move |this, _, _, cx| this.go(section, cx)))
+                    .on_key_down(cx.listener(
+                        move |this, event: &gpui::KeyDownEvent, window, cx| {
+                            match event.keystroke.key.as_str() {
+                                "enter" | "space" => this.go(section, cx),
+                                "left" => window.focus(&neighbours.0, cx),
+                                "right" => window.focus(&neighbours.1, cx),
+                                _ => return,
+                            }
+                            cx.stop_propagation();
+                        },
+                    ))
+                    .child(icon(group.glyph(), 14.0, foreground))
+                    .child(group.label())
+                    .children(badge.map(|badge| count_chip(theme, badge)))
+                    .tooltip(tooltip(tip, None)),
+            );
+        }
+        let mode = mode_line.map(|(mode, text)| {
             div()
-                .flex_none()
+                .flex_1()
+                .min_w(px(0.0))
                 .flex()
                 .items_center()
+                .justify_end()
                 .gap(px(SpacingScale::S2))
-                .px(px(SpacingScale::S4))
-                .py(px(SpacingScale::S2))
-                .border_t_1()
-                .border_color(colors.hairline_divider())
                 .child(
                     div()
+                        .flex_none()
                         .size(px(6.0))
                         .rounded_full()
                         .bg(mode_color(theme, mode)),
                 )
                 .child(
                     text_style(div(), TypeScale::META)
+                        .min_w(px(0.0))
+                        .truncate()
                         .text_color(colors.text_muted())
-                        .child(match mode {
-                            ContextMode::Off => t::mode_off().to_owned(),
-                            mode => t::rail_foot(mode_word(mode), budget),
-                        }),
+                        .child(text),
                 )
         });
-        index_rail(theme)
-            .child(
-                div()
-                    .id("context-rail")
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .overflow_y_scroll()
-                    .child(list),
-            )
-            .children(foot)
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(SpacingScale::S4))
+            .px(px(SpacingScale::S4))
+            .py(px(SpacingScale::S2))
+            .border_b_1()
+            .border_color(colors.hairline_divider())
+            .child(tabs)
+            .children(mode)
     }
 
     /// The switch between the pages of the open group ("Decisões | Regras |
@@ -2406,16 +2460,17 @@ impl<S: ContextStores> Render for ContextScreen<S> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _probe = crate::ui::perf::Probe::start("context");
         let theme = Theme::current(cx);
-        let rail = self.render_rail(&theme, cx);
+        let tabs = self.render_tabs(&theme, cx);
         let switch = self.render_switch(&theme, cx);
         if self.section == Section::KnowledgeReview {
-            return div().size_full().relative().flex().child(rail).child(
+            return div().size_full().relative().flex().child(
                 div()
                     .flex_1()
                     .min_w(px(0.0))
                     .h_full()
                     .flex()
                     .flex_col()
+                    .child(tabs)
                     .children(switch)
                     .child(
                         div()
@@ -2468,7 +2523,6 @@ impl<S: ContextStores> Render for ContextScreen<S> {
             .size_full()
             .relative()
             .flex()
-            .child(rail)
             .child(
                 div()
                     .flex_1()
@@ -2482,6 +2536,7 @@ impl<S: ContextStores> Render for ContextScreen<S> {
                             .role(Role::Alert)
                             .children(retry)
                     }))
+                    .child(tabs)
                     .children(switch)
                     .child(div().flex_1().min_h(px(0.0)).flex().flex_col().child(body)),
             )
@@ -2654,8 +2709,50 @@ fn daily(deliveries: &[Delivery], days: usize) -> (Vec<f32>, Vec<f32>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{claim_failure, daily, kind_label, kind_plural};
+    use super::{
+        claim_failure, daily, group_target, kind_label, kind_plural, tab_badge, Group, Section,
+    };
     use application::injection::{Delivery, InjectionMode};
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn the_four_tabs_open_the_first_page_of_their_group() {
+        let none = BTreeMap::new();
+        let opened: Vec<Section> = Group::ALL
+            .into_iter()
+            .map(|group| group_target(Section::Mode, &none, group))
+            .collect();
+        assert_eq!(
+            opened,
+            vec![
+                Section::Overview,
+                Section::Decisions,
+                Section::Deliveries,
+                Section::Mode
+            ]
+        );
+    }
+
+    #[test]
+    fn a_tab_reopens_the_page_last_used_in_its_group() {
+        // Fontes → Regras, then Entregas, then back to Fontes.
+        let mut last = BTreeMap::new();
+        last.insert(Group::Sources.id(), Section::Rules);
+        let current = group_target(Section::Rules, &last, Group::Deliveries);
+        last.insert(Group::Deliveries.id(), current);
+        assert_eq!(group_target(current, &last, Group::Sources), Section::Rules);
+        // The open group's tab keeps the open page.
+        assert_eq!(
+            group_target(Section::Test, &last, Group::Deliveries),
+            Section::Test
+        );
+    }
+
+    #[test]
+    fn the_deliveries_tab_counts_only_when_there_are_some() {
+        assert_eq!(tab_badge(5).as_deref(), Some("5"));
+        assert_eq!(tab_badge(0), None);
+    }
 
     fn delivery(days_ago: i64, session: &str) -> Delivery {
         Delivery {
