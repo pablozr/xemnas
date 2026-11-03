@@ -337,6 +337,59 @@ pub fn reading_page(id: impl Into<ElementId>, column: impl IntoElement) -> State
         )
 }
 
+/// The reading zone between a text and a scene, and between a scene and the
+/// status bar, in pixels.
+pub const SCENE_GAP: f32 = 40.0;
+
+/// A reading page with a scene under the column (`spec-lote2.md` §3.1): the
+/// scene is the column's sibling, never behind it. It takes the room left
+/// under the column, after the reading zone, and gets none when the column
+/// is taller than the pane.
+pub fn scene_page(
+    id: impl Into<ElementId>,
+    column: impl IntoElement,
+    scene: impl IntoElement,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex_1()
+        .min_h(px(0.0))
+        .overflow_y_scroll()
+        .child(
+            div()
+                .min_h(gpui::relative(1.0))
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .flex_none()
+                        .px(px(SpacingScale::S8))
+                        .pt(px(SpacingScale::S8))
+                        .child(
+                            div()
+                                .w_full()
+                                .max_w(px(READING_WIDTH))
+                                .mx_auto()
+                                .flex()
+                                .flex_col()
+                                .gap(px(SpacingScale::S6))
+                                .child(column),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .px(px(SpacingScale::S8))
+                        .pt(px(SCENE_GAP))
+                        .pb(px(SCENE_GAP))
+                        .flex()
+                        .flex_col()
+                        .child(scene),
+                ),
+        )
+}
+
 /// A labelled form field: section label above the control, optional hint.
 pub fn form_field(
     theme: &Theme,

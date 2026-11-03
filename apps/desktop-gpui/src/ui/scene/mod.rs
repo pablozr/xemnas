@@ -11,6 +11,8 @@
 //! cell outside the grid or inside a fade band is dropped, and the fade never
 //! touches an object's cell.
 
+pub mod river;
+
 use std::rc::Rc;
 
 use gpui::{

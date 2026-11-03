@@ -10,6 +10,7 @@
 
 use application::knowledge_review::KnowledgeReviewApi;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use application::claim_suggestions::{ClaimSuggestionStore, ClaimSuggestions};
@@ -49,9 +50,11 @@ use crate::ui::controls::{action_button, button_foreground, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
     count_chip, count_up, empty_panel, error_banner, meter, radio_list, radio_row, reading_page,
-    ring, section_header, section_label, share, skeleton_list, sparkline, status_pill, toast,
-    TOAST_DURATION,
+    ring, scene_page, section_header, section_label, share, skeleton_list, sparkline, status_pill,
+    toast, TOAST_DURATION,
 };
+use crate::ui::scene::river::River;
+use crate::ui::scene::{scene_canvas, scene_time};
 use crate::ui::search_field::{SearchChanged, SearchField};
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{tint, ControlSize, RadiusScale, SpacingScale, TypeScale};
@@ -2507,9 +2510,21 @@ impl<S: ContextStores> Render for ContextScreen<S> {
                         cx.notify();
                     });
                 }
-                reading_page("context-page", page)
-                    .track_scroll(&self.scroll)
-                    .into_any_element()
+                let river = (self.section == Section::Overview)
+                    .then(|| self.snapshot.as_ref().map(|s| river(&s.deliveries)))
+                    .flatten();
+                match river {
+                    Some(river) => {
+                        let scene = scene_canvas(Rc::new(river), scene_time(cx.entity_id(), cx))
+                            .size_full();
+                        scene_page("context-page", page, scene)
+                            .track_scroll(&self.scroll)
+                            .into_any_element()
+                    }
+                    None => reading_page("context-page", page)
+                        .track_scroll(&self.scroll)
+                        .into_any_element(),
+                }
             }
         };
         let retry = self.error.is_some().then(|| {
@@ -2706,6 +2721,22 @@ fn daily(deliveries: &[Delivery], days: usize) -> (Vec<f32>, Vec<f32>) {
     )
 }
 
+/// The river of the overview: one lantern per delivery of the last seven
+/// days, newest first, and the items the budget left out.
+fn river(deliveries: &[Delivery]) -> River {
+    let since = (chrono::Utc::now() - chrono::Duration::days(7))
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+    let mut recent: Vec<&Delivery> = deliveries
+        .iter()
+        .filter(|delivery| delivery.created_at.as_str() >= since.as_str())
+        .collect();
+    recent.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    River::new(
+        recent.iter().map(|delivery| delivery.tokens).collect(),
+        recent.iter().map(|delivery| delivery.omitted).sum(),
+    )
+}
 #[cfg(test)]
 mod tests {
     use super::{
