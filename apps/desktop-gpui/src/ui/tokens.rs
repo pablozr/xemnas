@@ -69,6 +69,10 @@ struct Palette {
     accent_default: Tone,
     accent_emphasis: Tone,
     accent_hover: Tone,
+    /// The flat primary button: rest, hover (+6% lightness) and pressed.
+    button_primary: Tone,
+    button_primary_hover: Tone,
+    button_primary_pressed: Tone,
 }
 
 /// Blue graphite: the original Quiet Glass palette.
@@ -97,6 +101,9 @@ const QUIET_GLASS: Palette = Palette {
     accent_default: Tone::solid(0x9188A8),
     accent_emphasis: Tone::solid(0xA89EBA),
     accent_hover: Tone::solid(0xB3A5CB),
+    button_primary: Tone::solid(0xA89EBA),
+    button_primary_hover: Tone::solid(0xB3AAC4),
+    button_primary_pressed: Tone::solid(0x9A90AD),
 };
 
 /// Neutral charcoal: the editorial palette.
@@ -125,6 +132,9 @@ const CHARCOAL: Palette = Palette {
     accent_default: Tone::solid(0x9188A8),
     accent_emphasis: Tone::solid(0xA89EBA),
     accent_hover: Tone::solid(0xB3A5CB),
+    button_primary: Tone::solid(0xA89EBA),
+    button_primary_hover: Tone::solid(0xB3AAC4),
+    button_primary_pressed: Tone::solid(0x9A90AD),
 };
 
 /// The Organization: near-black with cold silver; the mascot's amber stays a
@@ -154,6 +164,9 @@ const ORGANIZATION: Palette = Palette {
     accent_default: Tone::solid(0x9DA3B1),
     accent_emphasis: Tone::solid(0xC3C8D4),
     accent_hover: Tone::solid(0xD5D9E3),
+    button_primary: Tone::solid(0xA89EBA),
+    button_primary_hover: Tone::solid(0xB3AAC4),
+    button_primary_pressed: Tone::solid(0x9A90AD),
 };
 
 /// Moss: green ink with a sage accent; quiet, botanical.
@@ -182,6 +195,9 @@ const MOSS: Palette = Palette {
     accent_default: Tone::solid(0x86A391),
     accent_emphasis: Tone::solid(0xA3BDAB),
     accent_hover: Tone::solid(0xB5CDBC),
+    button_primary: Tone::solid(0xA89EBA),
+    button_primary_hover: Tone::solid(0xB3AAC4),
+    button_primary_pressed: Tone::solid(0x9A90AD),
 };
 
 /// Midnight: deep navy with a cold, muted cyan.
@@ -210,6 +226,9 @@ const MIDNIGHT: Palette = Palette {
     accent_default: Tone::solid(0x7699B0),
     accent_emphasis: Tone::solid(0x93B8CC),
     accent_hover: Tone::solid(0xA6C8DA),
+    button_primary: Tone::solid(0xA89EBA),
+    button_primary_hover: Tone::solid(0xB3AAC4),
+    button_primary_pressed: Tone::solid(0x9A90AD),
 };
 
 /// A token at another opacity: status tints and soft backgrounds are derived
@@ -535,6 +554,21 @@ impl ColorTokens {
     /// marker: one step lighter than `accent.emphasis`.
     pub fn accent_hover(&self) -> Rgba {
         self.palette.accent_hover.rgba()
+    }
+
+    /// `button.primary` — the flat fill of the primary button.
+    pub fn button_primary(&self) -> Rgba {
+        self.palette.button_primary.rgba()
+    }
+
+    /// `button.primary-hover` — the primary button under the pointer.
+    pub fn button_primary_hover(&self) -> Rgba {
+        self.palette.button_primary_hover.rgba()
+    }
+
+    /// `button.primary-pressed` — the primary button while pressed.
+    pub fn button_primary_pressed(&self) -> Rgba {
+        self.palette.button_primary_pressed.rgba()
     }
 
     /// `accent.on-emphasis` — text over light lavender.

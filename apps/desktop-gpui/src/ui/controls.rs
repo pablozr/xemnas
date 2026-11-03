@@ -8,7 +8,6 @@ use gpui::prelude::*;
 use gpui::{div, px, Div, ElementId, Rgba, Role, Stateful};
 
 pub use crate::ui::glass::focus_ring;
-use crate::ui::material::{accent_plate, accent_pressed, neutral_plate};
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{ControlSize, SpacingScale, TypeScale};
 
@@ -61,37 +60,20 @@ pub fn action_button(
         .focus_visible(focus_ring(theme))
         .cursor_pointer();
     let button = button.text_color(button_foreground(theme, kind, enabled));
-    // GPUI has no style transitions, so each state has to read on its own:
-    // hover lifts the fill and the edge, press settles one step deeper, and a
-    // disabled control ignores both so it never looks clickable.
+    // Flat buttons: one solid fill per state, no gradient, rim or halo. GPUI
+    // has no style transitions, so each state has to read on its own, and a
+    // disabled control ignores hover and press so it never looks clickable.
     match (kind, enabled) {
-        (ButtonKind::Primary, true) => {
-            // The material: lit gradient, rim, top highlight and a lavender
-            // halo that spreads on hover (`ui::material`).
-            let hover = accent_plate(theme, 1.0);
-            let (hover_bg, hover_shadows) = (hover.background(), hover.shadows());
-            let pressed = accent_pressed(theme);
-            let (pressed_bg, pressed_shadows) = (pressed.background(), pressed.shadows());
-            accent_plate(theme, 0.0)
-                .apply(button)
-                .hover(move |style| style.bg(hover_bg).shadow(hover_shadows))
-                .active(move |style| style.bg(pressed_bg).shadow(pressed_shadows))
-        }
+        (ButtonKind::Primary, true) => button
+            .bg(colors.button_primary())
+            .hover(move |style| style.bg(colors.button_primary_hover()))
+            .active(move |style| style.bg(colors.button_primary_pressed())),
         (ButtonKind::Primary, false) => button.bg(colors.surface()),
-        (ButtonKind::Secondary, true) => {
-            let hover = neutral_plate(theme, 1.0);
-            let (hover_bg, hover_shadows) = (hover.background(), hover.shadows());
-            neutral_plate(theme, 0.0)
-                .apply(button)
-                .hover(move |style| {
-                    style
-                        .bg(hover_bg)
-                        .shadow(hover_shadows)
-                        .border_color(colors.glass_border_card_hover())
-                        .text_color(colors.text_primary())
-                })
-                .active(move |style| style.bg(colors.glass_fill_strong()).shadow(vec![]))
-        }
+        (ButtonKind::Secondary, true) => button
+            .border_1()
+            .border_color(colors.hairline_divider())
+            .hover(move |style| style.bg(colors.hover_veil()))
+            .active(move |style| style.bg(colors.glass_fill_strong())),
         (ButtonKind::Secondary, false) => button.border_1().border_color(colors.hairline_divider()),
         (ButtonKind::Ghost, true) => button
             .hover(move |style| {
@@ -122,4 +104,27 @@ pub fn icon_action(theme: &Theme, id: impl Into<ElementId>, aria_label: &str) ->
         .aria_label(aria_label.to_string())
         .focus_visible(focus_ring(theme))
         .cursor_pointer()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn primary_button_is_flat_and_32_high() {
+        let theme = Theme::quiet_glass();
+        let mut button = action_button(&theme, "primary", ButtonKind::Primary, true);
+        let style = button.style();
+        let Some(gpui::Fill::Color(background)) = style.background.clone() else {
+            panic!("the primary button has no fill");
+        };
+        assert_eq!(
+            background.as_solid(),
+            Some(theme.colors.button_primary().into()),
+            "a solid fill, never a gradient"
+        );
+        assert!(style.box_shadow.as_ref().is_none_or(Vec::is_empty));
+        assert_eq!(style.size.height, Some(px(ControlSize::MD).into()));
+        assert_eq!(ControlSize::MD, 32.0);
+    }
 }
