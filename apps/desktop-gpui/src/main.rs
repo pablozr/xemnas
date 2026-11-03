@@ -883,11 +883,21 @@ fn run_shell_mode(
         };
         let route = demo.then(|| argument_after("--open")).flatten();
         let background = demo && std::env::args().any(|argument| argument == "--background");
-        let dimensions = if compact {
-            size(px(1180.0), px(760.0))
-        } else {
-            size(px(1440.0), px(1024.0))
+        // `--size WxH` sets the demo window for captures; `--compact` is
+        // `--size 1180x760`. A size the app cannot show stops the demo.
+        let requested = demo
+            .then(|| argument_after("--size"))
+            .flatten()
+            .or_else(|| compact.then(|| COMPACT_SIZE.to_owned()));
+        let (width, height) = match requested.as_deref().map(parse_window_size) {
+            Some(Ok(dimensions)) => dimensions,
+            Some(Err(error)) => {
+                eprintln!("{error}");
+                std::process::exit(2);
+            }
+            None => (1440.0, 1024.0),
         };
+        let dimensions = size(px(width), px(height));
         // Off every monitor: the window renders for PrintWindow and never
         // covers anything on screen.
         let bounds = if background {
@@ -1046,10 +1056,12 @@ fn run_shell_mode(
                     ..Default::default()
                 }),
                 app_id: Some("com.xemnas.desktop".into()),
-                window_min_size: Some(if compact {
+                // A sized capture checked its size already; its window
+                // frame must not push the client area past WxH.
+                window_min_size: Some(if requested.is_some() {
                     size(px(960.0), px(640.0))
                 } else {
-                    size(px(1180.0), px(760.0))
+                    size(px(MIN_WINDOW.0), px(MIN_WINDOW.1))
                 }),
                 // Opaque unless `XEMNAS_BACKDROP` asks for a material.
                 window_background: backdrop,
@@ -1075,6 +1087,26 @@ fn run_shell_mode(
 
 /// Maps the storage failure to the cause the screen explains; the raw text
 /// stays in the variant for the log and "Copy details".
+/// The smallest window the app supports (its `window_min_size`).
+const MIN_WINDOW: (f32, f32) = (1180.0, 760.0);
+/// What `--compact` stands for.
+const COMPACT_SIZE: &str = "1180x760";
+
+/// Reads `--size WxH` (whole pixels, at least [`MIN_WINDOW`]).
+fn parse_window_size(value: &str) -> Result<(f32, f32), String> {
+    let invalid = || format!("--size {value}: expected WxH, such as 1280x800");
+    let (width, height) = value.split_once(['x', 'X']).ok_or_else(invalid)?;
+    let width: u16 = width.parse().map_err(|_| invalid())?;
+    let height: u16 = height.parse().map_err(|_| invalid())?;
+    let (width, height) = (f32::from(width), f32::from(height));
+    if width < MIN_WINDOW.0 || height < MIN_WINDOW.1 {
+        return Err(format!(
+            "--size {value}: below the minimum window, {COMPACT_SIZE}"
+        ));
+    }
+    Ok((width, height))
+}
+
 fn startup_error(error: StorageError) -> StartupError {
     match error {
         StorageError::Migration(detail) => StartupError::Migration { detail },
@@ -1218,6 +1250,17 @@ fn start_local_api(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_size_parses_and_respects_the_minimum() {
+        assert_eq!(parse_window_size("1280x800"), Ok((1280.0, 800.0)));
+        assert_eq!(parse_window_size(COMPACT_SIZE), Ok(MIN_WINDOW));
+        for invalid in [
+            "0x1", "abc", "1179x760", "1180x759", "1280x", "x800", "-1x800",
+        ] {
+            assert!(parse_window_size(invalid).is_err(), "{invalid}");
+        }
+    }
 
     #[test]
     fn storage_failures_map_to_their_startup_cause() {

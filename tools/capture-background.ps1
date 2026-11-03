@@ -12,7 +12,9 @@
     Routes: overview, overview:flow0, review, review:queue, decisions,
     context, map, map:timeline, map:suggestions, map:file, map:entity:<name>,
     settings:<section> (ai, opencode, diagnostics, appearance, language).
-    -Language picks the interface language (default en).
+    -Language picks the interface language (default en). -Size "WxH" sets
+    the window (at least 1180x760, the app's minimum); -Compact is
+    -Size 1180x760.
     XEMNAS_DEMO_CAPTURE=listening|unavailable sets the capture state and
     XEMNAS_DEMO_EMPTY_REVIEW=1 empties the sample project's queue.
 
@@ -28,6 +30,7 @@ param(
     [string]$Wallpaper = '',
     [ValidateSet('en', 'pt-BR', 'es', 'fr', 'de', 'it', 'ja', 'zh-CN', 'ko', 'ru')][string]$Language = 'en',
     [switch]$Compact,
+    [ValidatePattern('^\d+x\d+$')][string]$Size = '',
     [int]$SettleMs = 3500
 )
 
@@ -53,7 +56,12 @@ $arguments = @('--demo', '--background', '--open', $Route)
 if ($Theme -ne 'quiet') { $arguments += @('--theme', $Theme) }
 if ($Wallpaper -ne '') { $arguments += @('--wallpaper', $Wallpaper) }
 if ($Language -ne 'en') { $arguments += @('--language', $Language) }
-if ($Compact) { $arguments += '--compact' }
+if ($Compact) {
+    $arguments += '--compact'
+    if ($Size -eq '') { $Size = '1180x760' }
+} elseif ($Size -ne '') {
+    $arguments += @('--size', $Size)
+}
 $proc = Start-Process -FilePath $ExePath -ArgumentList $arguments -PassThru
 try {
     $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -63,10 +71,12 @@ try {
         Start-Sleep -Milliseconds 50
     }
     if ($proc.MainWindowHandle -eq [IntPtr]::Zero) { throw "no window appeared" }
-    if ($Compact) {
+    if ($Size -ne '') {
+        # The capture is exactly WxH pixels, whatever the display scale.
         # SWP_NOZORDER | SWP_NOACTIVATE: resize offscreen without focus or input.
-        if (-not [XemnasBg]::SetWindowPos($proc.MainWindowHandle, [IntPtr]::Zero, -12000, 0, 1180, 760, 0x14)) {
-            throw "background compact resize failed"
+        $width, $height = $Size.Split('x') | ForEach-Object { [int]$_ }
+        if (-not [XemnasBg]::SetWindowPos($proc.MainWindowHandle, [IntPtr]::Zero, -12000, 0, $width, $height, 0x14)) {
+            throw "background resize to $Size failed"
         }
     }
     Start-Sleep -Milliseconds $SettleMs
