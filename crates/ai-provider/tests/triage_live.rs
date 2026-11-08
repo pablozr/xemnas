@@ -16,7 +16,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use application::analysis::ExtractorFactory;
-use application::extract::{assess_relevance, triage_input_chars, CandidateExtractor, Relevance};
+use application::extract::{
+    assess_relevance, triage_input_chars, user_speech, CandidateExtractor, Relevance,
+};
 use application::paths::AppPaths;
 use application::profile::{AiSettings, FileProfileStore};
 
@@ -58,6 +60,7 @@ fn live_turn_triage_accuracy() {
     let (mut non_decisions, mut barred) = (0usize, 0usize);
     let mut errors: BTreeMap<&'static str, usize> = BTreeMap::new();
     for (name, evidence, relevant) in cases::corpus(&dir) {
+        let evidence = user_speech(evidence);
         let input = match assess_relevance(&evidence) {
             Relevance::Pass(_) => {
                 structural += 1;

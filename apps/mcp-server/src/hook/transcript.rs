@@ -10,7 +10,7 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
-use application::extract::WAKE_SOURCE;
+use application::extract::{truncate_content, WAKE_SOURCE};
 use application::speaker::{classify, opens_with_harness_tag, Speaker};
 use serde_json::Value;
 
@@ -25,6 +25,9 @@ const COMMAND_PREFIXES: [&str; 3] = ["<command-name>", "<local-command-", "<comm
 
 /// Longest answer to an `AskUserQuestion` kept, in characters.
 const MAX_ANSWER_CHARS: usize = 2_000;
+/// Head kept of a prompt the speaker classifier calls the harness's only by
+/// its opening tag: enough to classify it again, bounded per folded turn.
+const SHAPE_KEPT_BYTES: usize = 4 * 1024;
 
 /// Longest prompt (chars, trimmed) of a trivial turn: "ok", "pode seguir", a quick question.
 pub const TRIVIAL_PROMPT_CHARS: usize = 80;
@@ -250,12 +253,23 @@ fn prompt_of(entry: &Value) -> Option<(String, Option<Prompt>, usize)> {
                 said_chars,
             )
         }
-        Speaker::User(Cow::Borrowed(_)) => {
-            let said_chars = text.trim().chars().count();
+        // Leading reminders are the harness's, a fact: only the words go.
+        Speaker::User(Cow::Borrowed(words)) => {
+            let said_chars = words.trim().chars().count();
+            let text = if words.len() == text.len() {
+                text
+            } else {
+                words.to_string()
+            };
             (Some(Prompt { text, source: None }), said_chars)
         }
+        // Kept raw in case the shape was wrong; the head is enough for that,
+        // and a subagent's notification can be tens of kilobytes.
         Speaker::Harness | Speaker::Agent => {
-            let kept = opens_with_harness_tag(&text).then_some(Prompt { text, source: None });
+            let kept = opens_with_harness_tag(&text).then(|| Prompt {
+                text: truncate_content(&text, SHAPE_KEPT_BYTES),
+                source: None,
+            });
             (kept, 0)
         }
     };

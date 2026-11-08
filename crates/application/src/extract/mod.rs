@@ -7,6 +7,8 @@ mod relevance;
 mod triage;
 mod validation;
 
+use std::borrow::Cow;
+
 use integration_contracts::capture::artifact_fingerprint;
 
 use crate::clock::now_rfc3339;
@@ -891,22 +893,33 @@ pub(crate) fn normalize(mut evidence: DecisionEvidence) -> DecisionEvidence {
 /// words and is kept as it is. Diffs and tool summaries stay.
 pub fn user_speech(mut evidence: DecisionEvidence) -> DecisionEvidence {
     evidence.artifacts.retain_mut(|artifact| {
-        if artifact.kind != "user_text" || has_adapter_source(&artifact.metadata) {
+        if artifact.kind != "user_text" {
             return true;
         }
-        match crate::speaker::classify(&artifact.content) {
-            // A borrowed answer is a suffix of the content (leading
-            // reminders cut), so a length check tells whether it changed.
-            crate::speaker::Speaker::User(words) => {
-                if words.len() != artifact.content.len() {
-                    artifact.content = words.into_owned();
-                }
-                true
-            }
-            _ => false,
+        let Some(words) = spoken_words(&artifact.content, &artifact.metadata) else {
+            return false;
+        };
+        // A borrowed answer is a suffix of the content (leading reminders
+        // cut), so a length check tells whether it changed.
+        if words.len() != artifact.content.len() {
+            let words = words.into_owned();
+            artifact.content = words;
         }
+        true
     });
     evidence
+}
+
+/// The user's words in one `user_text` artifact, `None` when the harness or
+/// another agent wrote it: the rule [`user_speech`] applies to each artifact.
+pub fn spoken_words<'a>(content: &'a str, metadata: &str) -> Option<Cow<'a, str>> {
+    if has_adapter_source(metadata) {
+        return Some(Cow::Borrowed(content));
+    }
+    match crate::speaker::classify(content) {
+        crate::speaker::Speaker::User(words) => Some(words),
+        _ => None,
+    }
 }
 
 /// Truncates `value` to at most `max_bytes`, respecting char boundaries.

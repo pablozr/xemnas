@@ -72,22 +72,28 @@ impl CaptureProgressStore for SqliteStore {
             };
             // Bounded read: a few indexed rows, only the head of each prompt. The
             // first one that is the user's words names the capture.
-            let mut prompts = tx
-                .prepare(
-                    "SELECT substr(content,1,2000),metadata FROM capture_artifacts
-                    WHERE capture_id=?1 AND kind='user_text' ORDER BY artifact_id LIMIT 4",
-                )
-                .map_err(|e| e.to_string())?;
-            let title = prompts
-                .query_map(params![capture_id], |r| {
-                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-                })
-                .map_err(|e| e.to_string())?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| e.to_string())?
-                .into_iter()
-                .find_map(|(text, metadata)| spoken_title(&text, &metadata));
-            drop(prompts);
+            let title = {
+                let mut prompts = tx
+                    .prepare(
+                        "SELECT substr(content,1,2000),metadata FROM capture_artifacts
+                        WHERE capture_id=?1 AND kind='user_text' ORDER BY artifact_id LIMIT 4",
+                    )
+                    .map_err(|e| e.to_string())?;
+                let mut rows = prompts
+                    .query(params![capture_id])
+                    .map_err(|e| e.to_string())?;
+                let mut title = None;
+                while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+                    let text: String = row.get(0).map_err(|e| e.to_string())?;
+                    let metadata: String = row.get(1).map_err(|e| e.to_string())?;
+                    title = application::extract::spoken_words(&text, &metadata)
+                        .and_then(|words| title_of(&words));
+                    if title.is_some() {
+                        break;
+                    }
+                }
+                title
+            };
             let adapter = tx
                 .query_row(
                     "SELECT json_extract(provenance,'$.adapter') FROM capture_episode_sources
@@ -173,18 +179,6 @@ impl CaptureProgressStore for SqliteStore {
         }
         tx.commit().map_err(|e| e.to_string())?;
         Ok(result)
-    }
-}
-
-/// The title of a prompt when it is the user's words: an artifact with an
-/// adapter source already is; any other goes through the speaker classifier.
-fn spoken_title(text: &str, metadata: &str) -> Option<String> {
-    if application::extract::has_adapter_source(metadata) {
-        return title_of(text);
-    }
-    match application::speaker::classify(text) {
-        application::speaker::Speaker::User(words) => title_of(&words),
-        _ => None,
     }
 }
 

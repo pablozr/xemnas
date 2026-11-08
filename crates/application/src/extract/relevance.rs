@@ -374,26 +374,28 @@ fn is_ask_user_question(artifact: &EvidenceArtifact) -> bool {
         })
 }
 
+/// The `source` the adapter or the hook wrote in an artifact's metadata, when
+/// it is one this module knows; parsed only when the key is there.
+fn metadata_source(metadata: &str) -> Option<&'static str> {
+    if !metadata.contains("\"source\"") {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(metadata).ok()?;
+    [ASK_USER_QUESTION_SOURCE, WAKE_SOURCE]
+        .into_iter()
+        .find(|source| value["source"] == *source)
+}
+
 /// The adapter writes the answer to a question as `user_text` with this source.
 fn answers_a_question(artifact: &EvidenceArtifact) -> bool {
-    artifact.metadata.contains(ASK_USER_QUESTION_SOURCE)
-        && serde_json::from_str::<serde_json::Value>(&artifact.metadata)
-            .is_ok_and(|value| value["source"] == ASK_USER_QUESTION_SOURCE)
+    metadata_source(&artifact.metadata) == Some(ASK_USER_QUESTION_SOURCE)
 }
 
 /// Whether the adapter or the hook already took the user's words out of what
 /// the harness wrote: the answer to a question or the human text of a wake.
 /// Such an artifact is not classified again, whatever it opens with.
 pub fn has_adapter_source(metadata: &str) -> bool {
-    if metadata == "{}" {
-        return false;
-    }
-    [ASK_USER_QUESTION_SOURCE, WAKE_SOURCE]
-        .into_iter()
-        .any(|source| metadata.contains(source))
-        && serde_json::from_str::<serde_json::Value>(metadata).is_ok_and(|value| {
-            value["source"] == ASK_USER_QUESTION_SOURCE || value["source"] == WAKE_SOURCE
-        })
+    metadata_source(metadata).is_some()
 }
 
 /// Whether the diff adds a line to a normative document: an ADR, a

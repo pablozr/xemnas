@@ -11,8 +11,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use application::extract::{
-    assess_relevance, triage_input_chars, truncate_content, DecisionEvidence, EvidenceArtifact,
-    Relevance, MAX_EVIDENCE_ARTIFACTS, MAX_EVIDENCE_CONTENT_BYTES,
+    assess_relevance, triage_input_chars, truncate_content, user_speech, DecisionEvidence,
+    EvidenceArtifact, Relevance, MAX_EVIDENCE_ARTIFACTS, MAX_EVIDENCE_CONTENT_BYTES,
 };
 use application::{AppPaths, DEFAULT_MAX_INPUT_CHARS};
 use rusqlite::{Connection, OpenFlags};
@@ -139,6 +139,7 @@ fn relevance_replay() {
             .next()
             .unwrap_or("?")
             .to_string();
+        let evidence = user_speech(evidence);
         let relevance = assess_relevance(&evidence);
         let extractor_chars: usize = evidence
             .artifacts
