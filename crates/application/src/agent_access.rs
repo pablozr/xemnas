@@ -4,13 +4,14 @@ use std::collections::BTreeSet;
 
 use crate::claims::ClaimStore;
 use crate::context::{
-    ContextError, ContextPacks, ContextProvider, ContextRequest, ContextStore, MAX_BUDGET_CHARS,
-    MAX_TASK_CHARS,
+    ContextError, ContextPack, ContextPacks, ContextProvider, ContextRequest, ContextStore,
+    DocumentOrigin, MAX_BUDGET_CHARS, MAX_TASK_CHARS,
 };
 use crate::decisions::{DecisionStatus, DecisionStore, Decisions};
 use crate::graph::GraphStore;
 use crate::injection::{
-    clean, render_compact, short_ref, DEFAULT_BUDGET_TOKENS, MAX_BUDGET_TOKENS, MIN_BUDGET_TOKENS,
+    claim_tag, clean, render_compact, short_ref, DEFAULT_BUDGET_TOKENS, MAX_BUDGET_TOKENS,
+    MIN_BUDGET_TOKENS,
 };
 use crate::projects::{find_project_by_directory, ProjectRepository};
 use crate::relations::RelationStore;
@@ -328,7 +329,9 @@ where
                 budget_chars: Some(MAX_BUDGET_CHARS),
                 files,
             })?;
-        let text = render_compact(&pack, budget, &BTreeSet::new()).map(|block| block.text);
+        let origin = self.store.document_origin(&project)?;
+        let text = render_compact(&pack, budget, &BTreeSet::new())
+            .map(|block| label_document_origin(block.text, &pack, &origin));
         let (outcome, chars) = match &text {
             Some(text) => (AgentOutcome::Answered, text.chars().count()),
             None => (AgentOutcome::Empty, 0),
@@ -355,10 +358,14 @@ where
         };
         let mut lines = vec![
             format!(
-                "D:{} v{} ({status}) confirmada {}",
+                "D:{} v{} ({status}) confirmada {}{}",
                 short_ref(id),
                 summary.version,
-                summary.confirmed_at
+                summary.confirmed_at,
+                self.store
+                    .document_origin(project)?
+                    .label(id)
+                    .map_or_else(String::new, |label| format!(" ({label})"))
             ),
             format!("pergunta: {}", clean(&summary.question)),
             format!("escolha: {}", clean(&summary.choice)),
@@ -462,6 +469,42 @@ where
     ) -> Result<Option<String>, AgentAccessError> {
         AgentAccess::file_context(self, directory, path, budget_tokens)
     }
+}
+
+/// Marks the lines of items extracted from a document with their file, right
+/// after `D:{ref} v{n}` (or the rule's tag): the agent asked for them, so they
+/// stay, but it should know they restate a document.
+fn label_document_origin(text: String, pack: &ContextPack, origin: &DocumentOrigin) -> String {
+    let mut labeled = text;
+    let heads = pack
+        .decisions
+        .iter()
+        .map(|decision| {
+            (
+                format!(
+                    "D:{} v{}",
+                    short_ref(&decision.decision_id),
+                    decision.version
+                ),
+                &decision.decision_id,
+            )
+        })
+        .chain(pack.claims.iter().map(|claim| {
+            (
+                format!(
+                    "{}:{} v1",
+                    claim_tag(&claim.kind),
+                    short_ref(&claim.claim_id)
+                ),
+                &claim.claim_id,
+            )
+        }));
+    for (head, id) in heads {
+        if let Some(label) = origin.label(id) {
+            labeled = labeled.replacen(&head, &format!("{head} ({label})"), 1);
+        }
+    }
+    labeled
 }
 
 fn alphanumeric(text: &str) -> String {

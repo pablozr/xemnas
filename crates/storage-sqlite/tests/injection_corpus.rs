@@ -204,6 +204,57 @@ fn rows(test: &support::TestStore) -> i64 {
         .expect("count")
 }
 
+/// Text only the decision and the rule taken from a document carry.
+const DOCUMENT_DECISION: &str = "Cache da API com Redis compartilhado";
+const DOCUMENT_RULE: &str = "O cache da API expira em sessenta segundos";
+
+/// A decision and a rule on the same topic as the turn, both extracted from a
+/// document: the block must never carry them.
+fn add_document_origin(test: &support::TestStore) {
+    let decision = support::decision(
+        &test.store,
+        "p1",
+        "doc",
+        "Como fazer cache da API?",
+        DOCUMENT_DECISION,
+    );
+    let connection = Connection::open(test.root.join("app.db")).expect("raw");
+    connection
+        .execute(
+            "INSERT INTO capture_receipts              (capture_id, idempotency_key, canonical_path, received_at, artifact_count)              VALUES ('capture-doc', 'key-doc', 'C:/synthetic/p1', '2026-01-01T00:00:00Z', 1)",
+            [],
+        )
+        .expect("receipt");
+    connection
+        .execute(
+            "INSERT INTO capture_artifacts              (capture_id, artifact_id, kind, content, metadata, fingerprint)              VALUES ('capture-doc', 'art-doc', 'document', '# ADR',                      '{\"file\":\"docs/adr/0001-cache.md\"}', ?1)",
+            [format!("{:0>64}", 7)],
+        )
+        .expect("artifact");
+    connection
+        .execute(
+            "UPDATE decision_candidates SET capture_id = 'capture-doc' WHERE id = 'cand-doc'",
+            [],
+        )
+        .expect("tie the candidate to the document");
+    Claims::new(test.store.clone())
+        .create(NewClaim {
+            source_version: None,
+            qualifiers: vec![application::qualifiers::KnowledgeQualifier {
+                kind: application::qualifiers::QualifierKind::Scope,
+                text: application::context::GLOBAL_SCOPE.into(),
+                artifact_id: None,
+            }],
+            project_id: "p1".to_string(),
+            kind: ClaimKind::Convention,
+            statement: DOCUMENT_RULE.to_string(),
+            valid_from: Some("2020-01-01".to_string()),
+            valid_until: None,
+            source_decision_id: Some(decision),
+        })
+        .expect("document rule");
+}
+
 fn fixture() -> (support::TestStore, String) {
     let test = support::open("inject-corpus", &["p1"]);
     let path = register_directory(&test);
@@ -230,6 +281,7 @@ fn fixture() -> (support::TestStore, String) {
             source_decision_id: None,
         })
         .expect("claim");
+    add_document_origin(&test);
     ContextSettings::new(test.store.clone())
         .set("p1", ContextMode::Inject, None)
         .expect("inject mode");
@@ -242,6 +294,7 @@ struct Measure {
     blocks: usize,
     filler: usize,
     harness: usize,
+    document: usize,
     found: usize,
     wanted: usize,
     tokens: usize,
@@ -280,6 +333,9 @@ fn run_session(
         };
         measure.blocks += 1;
         measure.tokens += outcome.tokens;
+        if block.contains(DOCUMENT_DECISION) || block.contains(DOCUMENT_RULE) {
+            measure.document += 1;
+        }
         let found = turn
             .wants
             .iter()
@@ -303,10 +359,12 @@ fn quality() -> Measure {
     let mut latency = Vec::new();
     let measure = run_session(&test, &path, "s0", &mut latency);
     println!(
-        "gate injection blocks={} filler={} harness={} recall={}/{} avg_tokens={} total_tokens={}",
+        "gate injection blocks={} filler={} harness={} document={} recall={}/{} \
+         avg_tokens={} total_tokens={}",
         measure.blocks,
         measure.filler,
         measure.harness,
+        measure.document,
         measure.found,
         measure.wanted,
         measure.tokens.checked_div(measure.blocks).unwrap_or(0),
@@ -343,6 +401,10 @@ fn injection_quality_gate() {
         "blocks without anything the turn asked for"
     );
     assert_eq!(measure.harness, 0, "synthetic prompts must get nothing");
+    assert_eq!(
+        measure.document, 0,
+        "what a document says is not injected on its own"
+    );
     assert_eq!(
         measure.found, measure.wanted,
         "a requested item was not delivered"

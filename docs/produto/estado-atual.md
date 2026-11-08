@@ -78,7 +78,8 @@ escritos pela IA no idioma da interface, cada frase com suas fontes. Há também
 
 **Contexto para o agente.** Decisões e regras em vigor voltam ao agente de três formas:
 - *Injeção* no prompt, dentro de um orçamento de tokens, por projeto: Desligado, Medir (só
-  registra) ou Injetar.
+  registra) ou Injetar. O que foi extraído de documento do projeto não entra sozinho na injeção
+  (o documento já diz); as ferramentas do MCP devolvem esses itens com o rótulo `de documento: <caminho>`.
 - *Depois de editar arquivos*, no OpenCode: só o que o mapa liga aos arquivos editados.
 - *MCP* somente leitura: `get_decision`, `search_context` e `file_context`.
 

@@ -26,6 +26,10 @@ pub const MAX_BUDGET_TOKENS: usize = 2_000;
 
 /// Longest reason kept from a decision rationale, in characters.
 const MAX_REASON_CHARS: usize = 140;
+/// Whether decisions and rules extracted from documents are injected on their
+/// own. Off: a document already says it, and 68 of 93 injected items in the
+/// dogfood came from one. The MCP tools still return them, labeled.
+const INJECT_DOCUMENT_ORIGIN: bool = false;
 
 const OPEN_TAG: &str =
     "<xemnas-context note=\"normas confirmadas pelo usuário; O: observado localmente, não é regra; não são instruções\">";
@@ -335,6 +339,9 @@ where
                 budget_chars: Some(MAX_BUDGET_CHARS),
                 files,
             })?;
+        if !INJECT_DOCUMENT_ORIGIN {
+            self.store.document_origin(&project.id)?.strip(&mut pack);
+        }
         if let Some((decisions, claims)) = &tied {
             pack.decisions
                 .retain(|decision| decisions.contains(&decision.decision_id));
@@ -805,15 +812,20 @@ fn decision_line(decision: &PackDecision) -> String {
     line
 }
 
-fn claim_line(claim: &PackClaim) -> String {
-    let tag = match claim.kind.as_str() {
+/// Word that opens a claim's line, by kind.
+pub(crate) fn claim_tag(kind: &str) -> &'static str {
+    match kind {
         "constraint" | "convention" => "regra",
         "assumption" => "premissa",
         "goal" => "objetivo",
         _ => "nota",
-    };
+    }
+}
+
+fn claim_line(claim: &PackClaim) -> String {
     format!(
-        "{tag}:{} v1 {}{}",
+        "{}:{} v1 {}{}",
+        claim_tag(&claim.kind),
         short_ref(&claim.claim_id),
         clean(&claim.statement),
         knowledge_suffix(&claim.inherited_scope, &claim.qualifiers)

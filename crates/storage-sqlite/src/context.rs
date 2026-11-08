@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use application::context::{ContextError, ContextStore};
+use application::context::{ContextError, ContextStore, DocumentOrigin};
 use rusqlite::params;
 
 use crate::store::SqliteStore;
@@ -55,6 +55,46 @@ impl ContextStore for SqliteStore {
             .collect::<Result<BTreeMap<String, String>, _>>()
             .map_err(storage_error)?;
         Ok(terms)
+    }
+
+    fn document_origin(&self, project_id: &str) -> Result<DocumentOrigin, ContextError> {
+        let connection = self.lock();
+        let mut origin = DocumentOrigin::default();
+        let mut decisions = connection
+            .prepare_cached(
+                "SELECT d.decision_id,                         (SELECT min(json_extract(a.metadata, '$.file')) FROM capture_artifacts a                          WHERE a.capture_id = c.capture_id AND a.kind = 'document')                  FROM engineering_decisions d                  JOIN decision_candidates c ON c.id = d.candidate_id                  WHERE d.project_id = ?1 AND EXISTS                        (SELECT 1 FROM capture_artifacts a                         WHERE a.capture_id = c.capture_id AND a.kind = 'document')",
+            )
+            .map_err(storage_error)?;
+        let rows = decisions
+            .query_map([project_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+            })
+            .map_err(storage_error)?;
+        for row in rows {
+            let (id, path) = row.map_err(storage_error)?;
+            origin.decisions.insert(id.clone());
+            if let Some(path) = path {
+                origin.path_of.insert(id, path);
+            }
+        }
+        let mut claims = connection
+            .prepare_cached(
+                "SELECT k.claim_id,                         (SELECT min(json_extract(a.metadata, '$.file')) FROM capture_artifacts a                          WHERE a.capture_id = c.capture_id AND a.kind = 'document')                  FROM context_claims k                  JOIN decision_candidates c ON c.id = COALESCE(k.source_candidate_id,                       (SELECT d.candidate_id FROM engineering_decisions d                        WHERE d.decision_id = k.source_decision_id))                  WHERE k.project_id = ?1 AND EXISTS                        (SELECT 1 FROM capture_artifacts a                         WHERE a.capture_id = c.capture_id AND a.kind = 'document')",
+            )
+            .map_err(storage_error)?;
+        let rows = claims
+            .query_map([project_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+            })
+            .map_err(storage_error)?;
+        for row in rows {
+            let (id, path) = row.map_err(storage_error)?;
+            origin.claims.insert(id.clone());
+            if let Some(path) = path {
+                origin.path_of.insert(id, path);
+            }
+        }
+        Ok(origin)
     }
 
     fn rank_claims(

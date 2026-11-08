@@ -248,6 +248,42 @@ pub trait ContextStore {
     ) -> Result<BTreeMap<String, String>, ContextError> {
         Ok(BTreeMap::new())
     }
+
+    /// Which decisions and claims of a project were extracted from a document
+    /// (a capture with a `document` artifact), and from which file.
+    fn document_origin(&self, _project_id: &str) -> Result<DocumentOrigin, ContextError> {
+        Ok(DocumentOrigin::default())
+    }
+}
+
+/// Knowledge a project's documents gave rise to. What a document says is
+/// already in the document, so automatic injection leaves it out; the MCP tools
+/// keep returning it, labeled with the file.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DocumentOrigin {
+    /// Decisions extracted from a document.
+    pub decisions: std::collections::HashSet<String>,
+    /// Claims extracted from a document, directly or through their decision.
+    pub claims: std::collections::HashSet<String>,
+    /// File each of those decisions and claims came from, by id.
+    pub path_of: std::collections::HashMap<String, String>,
+}
+
+impl DocumentOrigin {
+    /// Removes document-derived items from a pack.
+    pub fn strip(&self, pack: &mut ContextPack) {
+        pack.decisions
+            .retain(|decision| !self.decisions.contains(&decision.decision_id));
+        pack.claims
+            .retain(|claim| !self.claims.contains(&claim.claim_id));
+    }
+
+    /// `de documento: <path>` for an item that came from one.
+    pub fn label(&self, id: &str) -> Option<String> {
+        self.path_of
+            .get(id)
+            .map(|path| format!("de documento: {}", crate::injection::clean(path)))
+    }
 }
 
 /// Builds Context Packs.

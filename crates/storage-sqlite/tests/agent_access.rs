@@ -308,3 +308,53 @@ fn every_query_is_logged_without_its_text() {
         }
     }
 }
+
+#[test]
+fn a_decision_taken_from_a_document_says_so_in_every_tool() {
+    let test = support::open("agent-document-origin", &["p1"]);
+    let path = register_directory(&test);
+    let id = support::decision(
+        &test.store,
+        "p1",
+        "doc",
+        "Como fazer cache da API?",
+        "Cache em memória",
+    );
+    let connection = Connection::open(test.root.join("app.db")).expect("raw");
+    connection
+        .execute(
+            "INSERT INTO capture_receipts \
+             (capture_id, idempotency_key, canonical_path, received_at, artifact_count) \
+             VALUES ('capture-doc', 'key-doc', 'C:/synthetic/p1', '2026-01-01T00:00:00Z', 1)",
+            [],
+        )
+        .expect("receipt");
+    connection
+        .execute(
+            "INSERT INTO capture_artifacts \
+             (capture_id, artifact_id, kind, content, metadata, fingerprint) \
+             VALUES ('capture-doc', 'art-doc', 'document', '# ADR', ?1, ?2)",
+            [
+                r#"{"file":"docs/adr/0001-cache.md"}"#.to_string(),
+                format!("{:0>64}", 7),
+            ],
+        )
+        .expect("artifact");
+    connection
+        .execute(
+            "UPDATE decision_candidates SET capture_id = 'capture-doc' WHERE id = 'cand-doc'",
+            [],
+        )
+        .expect("tie the candidate to the document");
+    let access = AgentAccess::new(test.store.clone());
+    let label = "de documento: docs/adr/0001-cache.md";
+
+    let opened = access.decision(&path, &short_ref(&id)).unwrap();
+    assert!(opened.contains(label), "{opened}");
+    let found = access
+        .search(&path, "cache da API", None, None)
+        .unwrap()
+        .expect("the agent asked for it, so it is returned");
+    assert!(found.contains(label), "{found}");
+    assert!(found.contains("Cache em memória"));
+}
