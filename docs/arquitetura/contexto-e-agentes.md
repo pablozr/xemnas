@@ -71,8 +71,11 @@ O:<ref> v<versão> <tipo> <nome> <versão declarada> (<manifest>); declarado, n�
   que os sustenta fica de fora da linha e se confere em `get_decision` e na exportação.
 - Observação de manifest só entra quando o pedido cita o pacote ou o manifest pelo
   nome (no gatilho `edit`, o manifest editado); arquivos do transcript não contam.
-- Prompts `<task-notification>` (fim de subagente em segundo plano) não recebem
-  contexto nem gravam `context_injections`. Bloco sem item útil, só com "Omitidos
+- Só a fala do usuário recebe contexto (`speaker::classify`, ver
+  `qualidade-do-nucleo.md`): prompts do harness (`<task-notification>`, comandos,
+  `<system-reminder>`, interrupção) e de outros agentes (OpenBot) não recebem contexto nem
+  gravam `context_injections`. Um `<wake>` com mensagem humana casa pelo texto do humano,
+  não pelo envelope. Bloco sem item útil, só com "Omitidos
   pelo orçamento", não é enviado.
 - Orçamento por projeto de 50 a 2.000 tokens estimados (padrão 300; 4 caracteres por
   token). Itens já entregues na sessão não voltam, salvo versão nova.
