@@ -395,6 +395,42 @@ pub const CASES: &[Case] = &[
         &["tests/a_test.rs"],
         false,
     ),
+    // Text that opens with a plain tag is still the user's: pasted markup or a log.
+    case(
+        "html-colado",
+        "<template>\n<div class=x></div>\n</template>\nesse componente fica de lado, a partir de agora usamos o Table do design system",
+        "Certo, troco pelo Table.",
+        &["src/ui.rs"],
+        true,
+    ),
+    case(
+        "br-colado",
+        "<br>\nesquece o v2 por enquanto, foca no sqlite local",
+        "Certo, sigo no sqlite local.",
+        &["src/store.rs"],
+        true,
+    ),
+    case(
+        "xml-de-log",
+        "<log>\n<entry>timeout</entry>\n</log>\ntroca o redis por sqlite local daqui pra frente",
+        "O timeout vem do redis.",
+        &["src/store.rs"],
+        true,
+    ),
+    case(
+        "wake-humano-com-tag",
+        "<wake reason=\"message\">\n<message id=\"00000000-0000-0000-0000-000000000005\" from=\"human\" at=\"2026-01-01T00:00:00Z\"><div>antigo</div> esquece o redis por enquanto, vamos focar no sqlite local</message>\n</wake>",
+        "Entendido, sigo com o plano.",
+        &["src/store.rs"],
+        true,
+    ),
+    case(
+        "bash-stdout-com-frase-de-rumo",
+        "<bash-stdout>a partir de agora o modulo antigo fica de lado</bash-stdout>",
+        "",
+        &["tests/a_test.rs"],
+        false,
+    ),
     // The user's words inside an envelope or next to pasted material still count.
     case(
         "wake-humano",

@@ -44,6 +44,12 @@ const SCRIPT: &[Turn] = &[
         harness: true,
     },
     Turn {
+        prompt: "<bash-input>melhorar o cache da API</bash-input>",
+        files: &["src/api.ts"],
+        wants: &[],
+        harness: true,
+    },
+    Turn {
         prompt: "rodar os testes de novo",
         files: &["src/index.ts"],
         wants: &[],
@@ -620,5 +626,32 @@ fn compact_density_gate() {
     assert!(
         chars_per_item <= MAX_CHARS_PER_ITEM,
         "{chars_per_item} chars per item"
+    );
+}
+
+/// A prompt that opens with a plain tag is the user's; one that opens with a
+/// harness-shaped tag is not.
+#[test]
+fn a_common_tag_opening_is_the_users() {
+    let (test, path) = fixture();
+    let injection = ContextInjection::new(test.store.clone());
+    let prepare = |session: &str, prompt: &str| {
+        injection
+            .prepare(InjectionRequest {
+                canonical_path: path.clone(),
+                session_id: session.to_string(),
+                prompt: prompt.to_string(),
+                files: vec!["src/api.ts".to_string()],
+                ..InjectionRequest::default()
+            })
+            .expect("prepare")
+    };
+    assert!(prepare("div", "<div>\nmelhorar o cache da API")
+        .block
+        .is_some());
+    assert!(
+        prepare("tag", "<bash-stdout>melhorar o cache da API</bash-stdout>")
+            .block
+            .is_none()
     );
 }

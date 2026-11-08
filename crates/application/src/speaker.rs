@@ -4,8 +4,11 @@
 //! messages: the end of a background subagent, a slash command and its output,
 //! `<system-reminder>` blocks, an interruption notice, what another agent sent.
 //! This is the one place that tells them apart, by the shape of the text and
-//! never by a list of tags, so the hook, the triage, the extractor and the
-//! injection agree. No regex, and no allocation unless a wake is unwrapped.
+//! never by a list of tags, so the triage, the extractor and the injection
+//! agree. The one heuristic is the shape of a harness tag: a standard HTML
+//! element never has a `-` or `_` in its name, so a prompt that opens with
+//! `<div>`, `<template>` or `<br>` is still the user. No regex, and no
+//! allocation unless a wake is unwrapped.
 
 use std::borrow::Cow;
 
@@ -26,6 +29,7 @@ const AGENT_PREFIXES: &[&str] = &[
     "Message from OpenBot teammate",
     "You have one assignment in a shared OpenBot channel",
     "Continue this OpenBot conversation.",
+    "<openbot_",
 ];
 
 /// The author of a user-role message.
@@ -45,22 +49,24 @@ pub enum Speaker<'a> {
 /// 1. Nothing left after the leading reminders, or an interruption notice: harness.
 /// 2. A fixed agent opening: agent.
 /// 3. `<wake ...>`: the human message inside it is the user's; without one, agent.
-/// 4. A bare opening tag (`<name>`, no attributes): harness. A tag with
-///    attributes (`<pasted_content id=...>`) is prose the user pasted.
+/// 4. An opening tag with a harness-shaped name (`<command-name>`,
+///    `<task-notification>`: no attributes, lowercase, with a `-` or `_`):
+///    harness. A standard element (`<div>`, `<br>`), a tag with attributes
+///    (`<pasted_content id=...>`) or a long name is prose the user pasted.
 /// 5. Anything else: the user.
 pub fn classify(text: &str) -> Speaker<'_> {
     let rest = strip_leading_reminders(text);
     if rest.is_empty() || rest.starts_with(INTERRUPTED_PREFIX) {
         return Speaker::Harness;
     }
-    if AGENT_PREFIXES.iter().any(|prefix| rest.starts_with(prefix)) {
+    if opens_agent(rest) {
         return Speaker::Agent;
     }
     if is_wake(rest) {
         return human_of_wake(rest)
             .map_or(Speaker::Agent, |human| Speaker::User(Cow::Owned(human)));
     }
-    if starts_with_bare_tag(rest) {
+    if starts_with_harness_tag(rest) {
         return Speaker::Harness;
     }
     Speaker::User(Cow::Borrowed(rest))
@@ -107,17 +113,44 @@ fn human_of_wake(wake: &str) -> Option<String> {
     (!humans.is_empty()).then(|| humans.join("\n"))
 }
 
-/// Whether `rest` opens with `<name>`: an ascii name of letters, digits, `_`
-/// and `-` (at most [`MAX_TAG_NAME`]) closed directly by `>`.
-fn starts_with_bare_tag(rest: &str) -> bool {
+/// Whether `rest` opens with `<name>`, a name that looks like the harness's:
+/// ascii lowercase starting with a letter, only `a-z`, digits, `_` and `-`, at
+/// least one `-` or `_` (a standard HTML element never has one), at most
+/// [`MAX_TAG_NAME`], closed directly by `>`. One pass, no allocation.
+///
+/// Accepted risk: a custom element or XML tag with a separator and no
+/// attributes at the very start (`<my-card>`, `<log_entry>`) counts as harness.
+fn starts_with_harness_tag(rest: &str) -> bool {
     let Some(after) = rest.strip_prefix('<') else {
         return false;
     };
-    let name = after
-        .bytes()
-        .take_while(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-        .count();
-    (1..=MAX_TAG_NAME).contains(&name) && after.as_bytes().get(name) == Some(&b'>')
+    let bytes = after.as_bytes();
+    if !bytes.first().is_some_and(u8::is_ascii_lowercase) {
+        return false;
+    }
+    let mut separators = 0usize;
+    let mut name = 0usize;
+    for &byte in bytes.iter().take(MAX_TAG_NAME + 1) {
+        match byte {
+            b'a'..=b'z' | b'0'..=b'9' => {}
+            b'_' | b'-' => separators += 1,
+            _ => break,
+        }
+        name += 1;
+    }
+    (1..=MAX_TAG_NAME).contains(&name) && separators > 0 && bytes.get(name) == Some(&b'>')
+}
+
+/// Whether the text opens, after the reminders, with a harness-shaped tag.
+/// The Harness verdict of [`classify`] then came from the shape of the tag (a
+/// heuristic), not from a fact such as an interruption or a fixed agent opening.
+pub fn opens_with_harness_tag(text: &str) -> bool {
+    let rest = strip_leading_reminders(text);
+    starts_with_harness_tag(rest) && !opens_agent(rest)
+}
+
+fn opens_agent(rest: &str) -> bool {
+    AGENT_PREFIXES.iter().any(|prefix| rest.starts_with(prefix))
 }
 
 #[cfg(test)]
@@ -129,16 +162,48 @@ mod tests {
     }
 
     #[test]
-    fn a_bare_tag_is_the_harness() {
+    fn a_harness_shaped_tag_is_the_harness() {
         for text in [
             "  <task-notification><status>done</status></task-notification>",
             "<command-name>/compact</command-name>",
             "<local-command-stdout>ok</local-command-stdout>",
+            "<local-command-caveat>x</local-command-caveat>",
             "<user-prompt-submit-hook>x</user-prompt-submit-hook>",
-            "<openbot_saved_memories>m</openbot_saved_memories>\nbrief",
-            "<foo>",
+            "<bash-input>ls</bash-input>",
+            "<bash-stdout>ok</bash-stdout>",
+            // Accepted risk: a custom element with a separator looks like the harness.
+            "<foo-bar>",
         ] {
             assert_eq!(classify(text), Speaker::Harness, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_common_tag_opening_is_the_user() {
+        for text in [
+            "<div>oi</div> por que quebra?",
+            "<template>\n  <p>x</p>\n</template>\nesse componente",
+            "<br>",
+            "<log><entry>timeout</entry></log>\ntroca o redis",
+            "<foo>",
+            "<wakeup>x",
+            "<Task-Notification>x",
+            "<-x>",
+            "<1-a>",
+            "<?xml version=\"1.0\"?><a/>",
+            "<!-- c -->",
+        ] {
+            assert!(is_user(text), "{text}");
+        }
+    }
+
+    #[test]
+    fn openbot_memories_are_an_agent() {
+        for text in [
+            "<openbot_saved_memories>m</openbot_saved_memories>\nbrief",
+            "<openbot_memories_update>x</openbot_memories_update>",
+        ] {
+            assert_eq!(classify(text), Speaker::Agent, "{text}");
         }
     }
 
@@ -188,10 +253,25 @@ mod tests {
 
     #[test]
     fn a_long_tag_name_is_prose() {
-        let name = "a".repeat(MAX_TAG_NAME + 1);
-        assert!(is_user(&format!("<{name}>")));
-        let name = "a".repeat(MAX_TAG_NAME);
+        let name = format!("a-{}", "a".repeat(MAX_TAG_NAME - 2));
         assert_eq!(classify(&format!("<{name}>")), Speaker::Harness);
+        let name = format!("a-{}", "a".repeat(MAX_TAG_NAME - 1));
+        assert!(is_user(&format!("<{name}>")));
+    }
+
+    #[test]
+    fn only_the_shape_of_the_tag_is_a_heuristic_verdict() {
+        assert!(opens_with_harness_tag(
+            "<system-reminder>r</system-reminder>\n<bash-stdout>x</bash-stdout>"
+        ));
+        for text in [
+            "[Request interrupted by user for tool use]",
+            "Message from OpenBot teammate Agente A: oi",
+            "<openbot_saved_memories>m</openbot_saved_memories>",
+            "<div>",
+        ] {
+            assert!(!opens_with_harness_tag(text), "{text}");
+        }
     }
 
     #[test]
@@ -227,6 +307,18 @@ mod tests {
         ] {
             assert_eq!(classify(wake), Speaker::Agent, "{wake}");
         }
-        assert_eq!(classify("<wakeup>x"), Speaker::Harness);
+        assert!(is_user("<wakeup>x"));
+    }
+
+    #[test]
+    fn a_wake_human_text_that_opens_with_a_harness_tag_stays_the_users() {
+        let wake = "<wake><message from=\"human\"><task-notification>x</task-notification>\
+                    </message></wake>";
+        assert_eq!(
+            classify(wake),
+            Speaker::User(Cow::Owned(
+                "<task-notification>x</task-notification>".to_string()
+            ))
+        );
     }
 }
