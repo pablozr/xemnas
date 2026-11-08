@@ -74,7 +74,8 @@ O:<ref> v<versão> <tipo> <nome> <versão declarada> (<manifest>); declarado, n�
 - Só a fala do usuário recebe contexto (`speaker::classify`, ver
   `qualidade-do-nucleo.md`): prompts do harness (`<task-notification>`, comandos,
   `<system-reminder>`, interrupção) e de outros agentes (OpenBot) não recebem contexto nem
-  gravam `context_injections`. Um `<wake>` com mensagem humana casa pelo texto do humano,
+  gravam `context_injections`; texto colado que abre com tag comum (`<div>`, `<template>`,
+  `<br>`) é fala do usuário e recebe contexto. Um `<wake>` com mensagem humana casa pelo texto do humano,
   não pelo envelope. Bloco sem item útil, só com "Omitidos
   pelo orçamento", não é enviado.
 - Orçamento por projeto de 50 a 2.000 tokens estimados (padrão 300; 4 caracteres por
