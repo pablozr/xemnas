@@ -8,6 +8,11 @@ formats! {
         en: "Select {name}", pt: "Selecionar {name}", es: "Seleccionar {name}",
         fr: "Sélectionner {name}", de: "{name} auswählen", it: "Seleziona {name}",
         ja: "{name}を選択", zh: "选择 {name}", ko: "{name} 선택", ru: "Выбрать «{name}»" }
+    /// Accessible name of a picker row's `⋯` (its properties).
+    project_more_aria(name: &str) {
+        en: "{name}: properties", pt: "{name}: propriedades", es: "{name}: propiedades",
+        fr: "{name} : propriétés", de: "{name}: Eigenschaften", it: "{name}: proprietà",
+        ja: "{name}：プロパティ", zh: "{name}：属性", ko: "{name}: 속성", ru: "{name}: свойства" }
     /// Count chip while a search narrows the list.
     filtered_count(visible: usize, total: usize) {
         en: "{visible} of {total}", pt: "{visible} de {total}", es: "{visible} de {total}",
@@ -144,6 +149,10 @@ strings! {
         it: "Apri cartella nel selettore di sistema",
         ja: "システムの選択画面でフォルダーを開く", zh: "在系统选择器中打开文件夹",
         ko: "시스템 선택기에서 폴더 열기", ru: "Открыть папку в системном окне выбора" }
+    /// Tooltip of a picker row's `⋯`.
+    properties { en: "Properties", pt: "Propriedades", es: "Propiedades",
+        fr: "Propriétés", de: "Eigenschaften", it: "Proprietà", ja: "プロパティ",
+        zh: "属性", ko: "속성", ru: "Свойства" }
     /// Open-folder button and tooltip.
     open_folder { en: "Open folder…", pt: "Abrir pasta…", es: "Abrir carpeta…",
         fr: "Ouvrir un dossier…", de: "Ordner öffnen …", it: "Apri cartella…",

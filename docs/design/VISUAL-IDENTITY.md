@@ -124,7 +124,7 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   geram `assets/mascot/sheet.png` (32 quadros de 160 px, 8 × 4, mesmo
   recorte) e `idle`, `blink`, `glow` avulsos para retrato e estados vazios.
   O app só exibe as imagens; não há 3D em tempo real.
-- Fica no pé da lateral, acima da linha de status: figura de 72 px, "Nº I"
+- Fica na barra de status (figura de 40 px); o retrato de 72 px tem "Nº I"
   em mono prata e uma frase real ("5 para revisar", ou o nome), com ponto
   âmbar quando há fila. Respira a cada ~5 s (sobe 3 px e assenta em 2,2 s)
   e fica parado entre uma respiração e outra; pisca e olha para os lados.
@@ -154,10 +154,11 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
 
 ## Projetos — superfície atual
 
-- Lista persistente de projetos de 248 px (linhas de 48 px com nome e caminho) e
-  workspace selecionado ocupando toda a área restante. O nome do projeto na
-  barra abre um painel com as propriedades reais (localização e data) e a
-  remoção secundária; Esc ou clique fora fecha, trocar de projeto também.
+- Sem coluna de projetos: o workspace ocupa a janela toda. O crumb do projeto
+  (ou Ctrl P) abre o seletor, um popover com filtro e linhas de 44 px com nome
+  e caminho; Enter troca de projeto e "⋯" abre o painel com as propriedades
+  reais (localização e data) e a remoção secundária; Esc ou clique fora fecha,
+  trocar de projeto também.
   Não impor um card de largura fixa
   nem criar métricas ou atividade inexistentes.
 - A linha selecionada conserva fundo e indicador lateral sob hover; foco visível
@@ -196,9 +197,10 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
 - A barra da janela (40 px) contém marca, selo de demonstração quando houver,
   tema e controles nativos. Abaixo dela, uma única barra de projeto de 44 px leva
   o nome do projeto como trilha (abre o painel do projeto) e as abas Revisão e
-  Decisões; o caminho fica na lista lateral e no painel. Não há barra de status:
-  o rodapé da lateral mostra só estados reais (captura ativa, indisponível ou
-  demonstração; jobs extraindo; falhas).
+  Decisões; o caminho fica no seletor e no painel. O crumb do projeto abre o
+  seletor (Ctrl P). Embaixo, uma barra de status de 48 px leva o mascote e só
+  estados reais (captura ativa, indisponível ou demonstração; jobs extraindo;
+  falhas).
 - Em Decisões o índice fica à esquerda, como em todo destino. Não há segunda fileira de abas: estado, versão, o acesso ao
   histórico ("Versões") e as ações Exportar/Revisar ficam na linha de metadados
   do documento. Linhas de lista e abas têm hover com mola criticamente amortecida.
@@ -263,12 +265,11 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
 
 ## Contexto — o que o agente recebe
 
-- Terceiro destino do projeto (Ctrl 3). Mesma gramática do Mapa: índice à
-  esquerda (`index_rail` + `index_row`, 296 px) e uma `reading_page` por
-  página. O índice agrupa **Agente** (Visão geral, Entregas, Testar uma
-  tarefa), **Fontes** (Decisões em vigor, Regras, Documentação, com contagem)
-  e **Ajustes** (Modo de entrega); o pé mostra o modo salvo ("Ativo · até
-  300 tokens") com ponto de estado.
+- Terceiro destino do projeto (Ctrl 3). Sem índice lateral: uma linha de
+  quatro abas no topo (seção "Contexto — quatro abas") e uma `reading_page`
+  por página. À direita das abas, o modo salvo ("Ativo · até 300 tokens") com
+  ponto de estado; ele trunca antes das abas e o tooltip de Ajustes repete o
+  texto.
 - **Visão geral** sem cartões: linha de estado (ponto de 8 px na cor do
   modo: verde Ativo, azul Medindo, cinza Desligado; frase do que acontece;
   "Mudar modo" ou "Ativar" secundário); "Como chega ao agente" em três
@@ -308,8 +309,8 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
 - Primeira aba do projeto (Ctrl 0, paleta), ADR-0007, numa `reading_page`:
   título "Visão do projeto", linha de meta (data, quantas decisões e regras,
   e em âmbar "N decisões novas desde então") e "Atualizar visão" secundário;
-  seção Resumo com parágrafos e, abaixo de cada um, chips mono das fontes
-  (decisão abre em Decisões; regra é só rótulo); depois a seção "Arquitetura e
+  seção Resumo com parágrafos terminados por números pequenos das fontes e,
+  abaixo, a lista Fontes; depois a seção "Arquitetura e
   fluxos": uma frase com o que a página guarda ("8 partes e 3 fluxos") e o botão
   primário "Ver arquitetura e fluxos".
 - **Arquitetura e fluxos não se desenham no app.** Um diagrama de arquitetura e a
@@ -317,9 +318,13 @@ onde as duas divergirem, vale este arquivo, junto com `ui/tokens.rs`.
   uma coluna de leitura de 760 px. Eles vivem numa página HTML (próxima seção); o app
   só carrega o resumo e o caminho até ela. O modelo `application::architecture`
   continua sendo derivado do Mapa e dos fluxos, sem IA nova, e alimenta a página.
-- Fontes são chips com ícone (documento = decisão, escudo = regra) e o
-  título encurtado em palavra inteira; o texto completo fica no tooltip.
-  Defasagem é uma linha própria com ponto âmbar, nunca a meta inteira em cor.
+- Fontes são números sobrescritos no fim do parágrafo (META 10/600,
+  `accent.default`, 5 px acima da linha, área de clique 2×3), numerados por
+  página na ordem da primeira aparição; a última palavra e os números quebram
+  juntos (`word_wrapped_with`). A lista Fontes repete cada número uma vez, com
+  o ícone do tipo (decisão, livro = documento, escudo = regra) e o título
+  inteiro em BODY_SMALL. Decisão abre em Decisões (clique, Tab, Enter);
+  documento e regra só explicam no tooltip. Defasagem é uma linha própria com ponto âmbar, nunca a meta inteira em cor.
 - Gerar a Visão também manda documentos novos ou alterados para análise; o
   toast diz quantos ("3 documentos foram para análise; os candidatos aparecem
   na Revisão"). Na Revisão, a evidência aparece como "Documento do projeto"
@@ -437,6 +442,11 @@ sem mudanças. Código em `screens/inbox/ticket.rs` e `ui/night_field.rs`.
   "A IA aceitou N seguras" com `L`, dez traços (aceitas pela IA em verde a 30%, as suas
   em lavanda) e "x de y para você"; `Tab` abre a fila **em sobreposição** (não há mais
   coluna de fila nem de efeitos).
+- **Linha densa da fila** (`ControlSize::ROW` = 56 px): ícone de 12 px numa coluna de
+  16 (sem círculo), a pergunta em uma linha (13/500, truncada) e, 2 px abaixo, uma
+  linha de meta (escolha truncada à esquerda; data, estado e "para você" à direita). A
+  meta é `text_muted` e sobe para `text_secondary` na linha selecionada. A seleção tem
+  pelo menos 1,5:1 sobre o rail nas cinco paletas.
 - **Tag âmbar** "a IA deixou para você · motivo" no cartão (`left_for_you`).
 - **Motivo numa frase** de 17 px com chips para arquivos e citações. `↵` abre a prova
   (fontes, "por que", `←/→` troca de fonte, `Esc` fecha); `E` abre "o que muda se
@@ -444,7 +454,17 @@ sem mudanças. Código em `screens/inbox/ticket.rs` e `ui/night_field.rs`.
 - **Pílula flutuante** Rejeitar R, Depois S, Ajustar A, Confirmar C (a única lavanda; as letras
   são texto 11 sem caixa), a 40 px da base, com "A seguir · …" acima.
 - **Fila zerada:** "Fila zerada." em Bricolage 46, o resumo do dia e os atalhos `D`
-  (Decisões) e `L` (o que a IA aceitou), sobre o Noturno em tela cheia.
+  (Decisões) e `L` (o que a IA aceitou), sobre o Noturno em tela cheia. Num dia sem
+  decisão o título é "Nada aguardando revisão.", sem resumo; `D` só aparece com alguma
+  decisão no dia e `L` só quando a IA aceitou algo.
+- **Estado da captura** (Revisão vazia, `screens/capture_health.rs`): quando a captura
+  chega, uma linha discreta de até 520 px, com ponto de 8 px (verde para ativa ou
+  aguardando a primeira sessão, azul na demo) e texto 13 secundário. Quando a captura
+  para ou nada chega há 24 h, um cartão de aviso de 520 px com borda âmbar a 28%, título
+  13/500, corpo recuado 16 px e "Ver diagnóstico". O fundo do cartão é **opaco** (o
+  canvas com âmbar a 8%, `tokens::mix`) para o Noturno não passar por trás. Análises que
+  falharam somam uma linha vermelha com o número e "Ver diagnóstico", exceto com a
+  captura parada ou na demo.
 - **Noturno** (`ui::night_field::NightField`): paisagem ASCII viva (estrelas, lua,
   nuvens, arco de hoje com uma estrela por decisão, cordilheiras com paralaxe, água com
   reflexo, penhasco e o Nº I pescando, vagalumes, estrela cadente a cada decisão
@@ -456,6 +476,8 @@ sem mudanças. Código em `screens/inbox/ticket.rs` e `ui/night_field.rs`.
   16 colunas esmaecidas) com um único vão retangular atrás de "A seguir" e da pílula.
   O motor é puro (`render(&Scene, t, shooting)`) e testado; trocar a cena não mexe
   no resto. Colofão em mono com versão, commit (`build.rs`) e licença.
+  O lago da fila vazia mede a largura do painel e usa 96 a 130 colunas
+  (`night_field::full_columns`), para a arte nunca ficar cortada.
 
 ## Aprovação automática
 
@@ -500,10 +522,11 @@ abre um passo com um campo de uma linha para o escopo de cada lado e o único bo
 (*Manter as duas*), ligado só com os dois campos preenchidos. Carregando: esqueleto;
 falha (o conflito mudou): `error_banner` com "Tentar de novo"; confirmação: `toast`.
 
-## Contexto — quatro entradas
+## Contexto — quatro abas
 
-O índice do Contexto tem quatro entradas (Visão geral, Fontes, Entregas, Ajustes), sem
-cabeçalhos de grupo; só Entregas leva contagem. As páginas de um grupo se alternam numa
+O Contexto tem quatro abas (Visão geral, Fontes, Entregas, Ajustes) numa linha no topo,
+com fundo `selection` na ativa, setas entre abas e Enter para abrir; só Entregas leva
+contagem. As páginas de um grupo se alternam numa
 chave segmentada fina no topo da página, e cada entrada abre na página que a pessoa
 usou por último naquele grupo (Fontes: Decisões, Regras, Documentação, Revisar com IA;
 Entregas: Histórico, Testar uma tarefa). As rotas de captura (`context:rules`,
@@ -526,12 +549,13 @@ pai: a forma não é a única fonte.
 
 ## Mapa — o grafo do projeto
 
-- Quarto destino do projeto (Ctrl 4, paleta), ADR-0005. Índice à esquerda
-  (296 px, `pane`, filete à direita) com três visões fixas (Sugestões com
-  contagem, Lente de arquivo, Linha do tempo) e as listas de Componentes e
-  Tecnologias; cada linha mostra o nome e o peso ("3 decisões · 1 regra") e um
-  ponto âmbar quando há conflito. Seleção com `mark_selected`; o `+` do
-  cabeçalho abre o formulário de item novo.
+- Quarto destino do projeto (Ctrl 4, paleta), ADR-0005. Sem índice lateral:
+  um cabeçalho com a chave segmentada das páginas (Visão geral, Lente de
+  arquivo, Linha do tempo), o subtítulo META "N itens · atualizado em <data>",
+  "Buscar no mapa" (240 px; Ctrl F no Mapa foca este campo) e "+ Novo"
+  secundário, que abre o formulário de item novo. A busca destaca sem
+  esconder: o que casa ganha borda `accent.default`, o resto fica a 40 %.
+  Componentes, tecnologias e as três páginas também estão na paleta (Ctrl K).
 - Coluna de leitura (`reading_page`) por visão: sugestões com Confirmar e
   Rejeitar por linha e itens propostos com Criar; detalhe da entidade (tipo,
   nome, descrição, padrões em mono, ações Vincular decisão, Vincular regra,
@@ -552,7 +576,8 @@ pai: a forma não é a única fonte.
   linha e de mesma altura na linha, um por componente de topo, com as partes
   dentro como chips; o rodapé do bloco diz o peso ("2 decisões · 1 regra") e
   "mudou em 29 set" quando houve atividade nos últimos 14 dias; ponto âmbar =
-  decisões em conflito, com legenda só quando existe. Tecnologias em chips abaixo.
+  decisões em conflito, com legenda só quando existe. Tecnologias em chips abaixo;
+  o rótulo Tecnologias aparece sempre, com uma frase quando não há nenhuma.
 - **Vizinhança** (topo do detalhe): diagrama em camadas, decisões à esquerda
   (abrem em Decisões), o item no centro (única superfície com `selection`) e
   regras à direita, ligados por curvas de 1,25 px desenhadas com `canvas` +
@@ -682,10 +707,10 @@ diz o que ela é e o que confirmar faz, e cada sugestão é um cartão
 O pilar do projeto é desempenho e baixo custo; as regras e orçamentos estão
 em `docs/arquitetura/desempenho-e-escala.md`. No visual, isso vira:
 
-- **Listas longas são virtuais.** O índice do Mapa e o índice de Decisões
-  usam a lista do GPUI (`list` + `ListState`): só as linhas em vista viram
-  elementos, então rolar custa o mesmo com 10 ou 10 mil itens. As linhas são
-  chaves baratas (`IndexRow`, `IndexItem`) e cada elemento é montado quando
+- **Listas longas são virtuais.** O índice de Decisões usa a lista do GPUI
+  (`list` + `ListState`): só as linhas em vista viram elementos, então rolar
+  custa o mesmo com 10 ou 10 mil itens. As linhas são chaves baratas
+  (`IndexItem`) e cada elemento é montado quando
   entra na tela. Quando o formato muda, `splice` refaz a medição.
 - **Barra fina que some** (`ui::list::{ScrollMemory, scroll_thumb}`): 3 px,
   `text_muted` a 55 %, aparece ao rolar, fica 650 ms e some em 350 ms; não é
@@ -763,8 +788,9 @@ em `docs/arquitetura/desempenho-e-escala.md`. No visual, isso vira:
 - Números de destaque contam até o valor (`count_up`) e todo contador usa
   algarismos de largura fixa (`tabular`, `tnum`), para nada pular quando o
   número muda.
-- Modo foco (Ctrl \, paleta): a lateral se recolhe em 220 ms; a largura de
-  fora desliza e a lateral de dentro mantém a largura, sem refluxo.
+- Modo foco (Ctrl \, paleta): a barra de status se recolhe em 220 ms
+  (`motion::FOLD`); a altura de fora desliza e o conteúdo de dentro mantém a
+  altura, sem refluxo.
 - Abertura: o mascote e o wordmark sobre o fundo do tema por 650 ms, o
   final num fade que sobe 8 px; sem isso com movimento reduzido.
 - Hover de linhas e abas segue a mola de `hover_tint`.

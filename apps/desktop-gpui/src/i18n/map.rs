@@ -581,8 +581,8 @@ strings! {
     loading { en: "Loading…", pt: "Carregando…", es: "Cargando…", fr: "Chargement…",
         de: "Wird geladen…", it: "Caricamento…", ja: "読み込み中…", zh: "加载中…",
         ko: "불러오는 중…", ru: "Загрузка…" }
-    /// Index: what a kind with no entities says (components).
-    index_empty_components { en: "None yet. Create one or see the suggestions.",
+    /// Blocks: what a kind with no entities says (components).
+    empty_components { en: "None yet. Create one or see the suggestions.",
         pt: "Nenhum ainda. Crie um ou veja as sugestões.",
         es: "Ninguno aún. Crea uno o mira las sugerencias.",
         fr: "Aucun pour l’instant. Créez-en un ou consultez les suggestions.",
@@ -592,8 +592,8 @@ strings! {
         zh: "暂无。新建一个,或查看建议。",
         ko: "아직 없어요. 만들거나 제안을 확인해 보세요.",
         ru: "Пока нет. Создайте или посмотрите предложения." }
-    /// Index: what a kind with no entities says (technologies).
-    index_empty_technologies { en: "None yet.", pt: "Nenhuma ainda.",
+    /// Blocks: what a kind with no entities says (technologies).
+    empty_technologies { en: "None yet.", pt: "Nenhuma ainda.",
         es: "Ninguna aún.", fr: "Aucune pour l’instant.", de: "Noch keine.",
         it: "Nessuna per ora.", ja: "まだありません。", zh: "暂无。",
         ko: "아직 없어요.", ru: "Пока нет." }
@@ -747,11 +747,37 @@ formats! {
         it: "Mostra tutte ({remaining})", ja: "すべて表示 ({remaining})",
         zh: "显示全部({remaining})", ko: "모두 보기 ({remaining})",
         ru: "Показать все ({remaining})" }
-    /// Index footer: the date the map is read as of.
-    status_as_of(date: &str) { en: "Status as of {date}", pt: "Situação em {date}",
-        es: "Situación al {date}", fr: "Situation au {date}", de: "Stand: {date}",
-        it: "Situazione al {date}", ja: "{date}時点の状況", zh: "截至 {date} 的状态",
-        ko: "{date} 기준 상태", ru: "Состояние на {date}" }
+    /// Header subtitle, after the count: when the map was read.
+    updated_on(date: &str) { en: "updated {date}", pt: "atualizado em {date}",
+        es: "actualizado el {date}", fr: "mis à jour le {date}", de: "aktualisiert am {date}",
+        it: "aggiornato il {date}", ja: "{date}に更新", zh: "更新于 {date}",
+        ko: "{date} 업데이트", ru: "обновлено {date}" }
+}
+
+plurals! {
+    /// Header subtitle: how many components and technologies the map has.
+    items_count(count: usize) {
+        en: ["{count} item", "{count} items"],
+        pt: ["{count} item", "{count} itens"],
+        es: ["{count} elemento", "{count} elementos"],
+        fr: ["{count} élément", "{count} éléments"],
+        de: ["{count} Element", "{count} Elemente"],
+        it: ["{count} elemento", "{count} elementi"],
+        ja: "{count}件",
+        zh: "{count} 项",
+        ko: "{count}개 항목",
+        ru: ["{count} элемент", "{count} элемента", "{count} элементов"]
+    }
+}
+
+strings! {
+    /// Header button: create a component or technology.
+    new_short { en: "New", pt: "Novo", es: "Nuevo", fr: "Nouveau", de: "Neu",
+        it: "Nuovo", ja: "新規", zh: "新建", ko: "새로 만들기", ru: "Создать" }
+    /// Header search: placeholder.
+    search_map { en: "Search the map", pt: "Buscar no mapa", es: "Buscar en el mapa",
+        fr: "Rechercher dans la carte", de: "Karte durchsuchen", it: "Cerca nella mappa",
+        ja: "マップを検索", zh: "搜索地图", ko: "맵 검색", ru: "Поиск по карте" }
 }
 
 // ---- suggestions page ------------------------------------------------------

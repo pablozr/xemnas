@@ -1,6 +1,7 @@
 //! Copy for the review ticket (one decision per screen). See [`crate::i18n`]
 //! for how entries are declared.
 
+use super::common::counted;
 use super::{formats, strings};
 
 strings! {
@@ -106,28 +107,108 @@ strings! {
         es: "lo que aceptó la IA", fr: "ce que l’IA a accepté", de: "was die KI übernommen hat",
         it: "cosa ha accettato l’IA", ja: "AI が承認したもの", zh: "AI 接受的内容",
         ko: "AI가 수락한 항목", ru: "что принял ИИ" }
-    /// Right side of the colophon under the night scene.
-    colophon_night { en: "night · every star in the arc is a decision from today · made with GPUI",
-        pt: "noturno · cada estrela do arco é uma decisão de hoje · feito com GPUI",
-        es: "nocturno · cada estrella del arco es una decisión de hoy · hecho con GPUI",
-        fr: "nocturne · chaque étoile de l’arc est une décision du jour · fait avec GPUI",
-        de: "Nachtbild · jeder Stern im Bogen ist eine Entscheidung von heute · gemacht mit GPUI",
-        it: "notturno · ogni stella dell’arco è una decisione di oggi · fatto con GPUI",
-        ja: "夜景 · 弧の星は今日の決定ひとつずつ · GPUI で制作",
-        zh: "夜景 · 弧线上的每颗星都是今天的一个决定 · 使用 GPUI 制作",
-        ko: "야경 · 호의 별 하나가 오늘의 결정 하나 · GPUI로 제작",
-        ru: "ночь · каждая звезда дуги — решение за сегодня · сделано на GPUI" }
-    /// Right side of the colophon when the queue is cleared.
-    colophon_closed { en: "night · the arc closed: ten stars, ten decisions · made with GPUI",
-        pt: "noturno · o arco fechou: dez estrelas, dez decisões · feito com GPUI",
-        es: "nocturno · el arco se cerró: diez estrellas, diez decisiones · hecho con GPUI",
-        fr: "nocturne · l’arc est fermé : dix étoiles, dix décisions · fait avec GPUI",
-        de: "Nachtbild · der Bogen ist geschlossen: zehn Sterne, zehn Entscheidungen · gemacht mit GPUI",
-        it: "notturno · l’arco si è chiuso: dieci stelle, dieci decisioni · fatto con GPUI",
-        ja: "夜景 · 弧が閉じました: 星十個、決定十件 · GPUI で制作",
-        zh: "夜景 · 弧线已闭合：十颗星，十个决定 · 使用 GPUI 制作",
-        ko: "야경 · 호가 닫혔어요: 별 열 개, 결정 열 개 · GPUI로 제작",
-        ru: "ночь · дуга замкнулась: десять звёзд, десять решений · сделано на GPUI" }
+    /// Right side of the colophon under the night scene: one koi per decision waiting.
+    colophon_night { en: "night · every koi is a decision waiting for you · made with GPUI",
+        pt: "noturno · cada carpa é uma decisão esperando você · feito com GPUI",
+        es: "nocturno · cada carpa es una decisión que te espera · hecho con GPUI",
+        fr: "nocturne · chaque carpe est une décision qui vous attend · fait avec GPUI",
+        de: "Nachtbild · jeder Koi ist eine Entscheidung, die auf dich wartet · gemacht mit GPUI",
+        it: "notturno · ogni carpa è una decisione che ti aspetta · fatto con GPUI",
+        ja: "夜景 · 鯉の一匹一匹があなたを待つ決定 · GPUI で制作",
+        zh: "夜景 · 每条锦鲤都是一个等你处理的决定 · 使用 GPUI 制作",
+        ko: "야경 · 잉어 한 마리가 당신을 기다리는 결정 하나 · GPUI로 제작",
+        ru: "ночь · каждый карп — решение, которое ждёт вас · сделано на GPUI" }
+    /// Right side of the colophon when the queue is cleared: the lake is calm.
+    colophon_closed { en: "night · a calm lake: no decision waiting · made with GPUI",
+        pt: "noturno · lago calmo: nenhuma decisão esperando · feito com GPUI",
+        es: "nocturno · lago en calma: ninguna decisión esperando · hecho con GPUI",
+        fr: "nocturne · lac calme : aucune décision en attente · fait avec GPUI",
+        de: "Nachtbild · stiller See: keine Entscheidung wartet · gemacht mit GPUI",
+        it: "notturno · lago calmo: nessuna decisione in attesa · fatto con GPUI",
+        ja: "夜景 · 静かな湖: 待っている決定はありません · GPUI で制作",
+        zh: "夜景 · 湖面平静：没有等待的决定 · 使用 GPUI 制作",
+        ko: "야경 · 고요한 호수: 기다리는 결정 없음 · GPUI로 제작",
+        ru: "ночь · тихое озеро: решений не ждёт · сделано на GPUI" }
+    /// Title of the empty queue when nobody decided anything today.
+    empty_title_sentence { en: "Nothing waiting for review.", pt: "Nada aguardando revisão.",
+        es: "Nada pendiente de revisión.", fr: "Rien en attente de revue.",
+        de: "Nichts wartet auf Prüfung.", it: "Niente in attesa di revisione.",
+        ja: "レビュー待ちはありません。", zh: "没有等待审阅的内容。",
+        ko: "검토 대기 중인 항목이 없어요.", ru: "Нет ничего на проверке." }
+    /// Capture state B: listening, nothing loaded yet.
+    capture_none_title { en: "Capture active · no session has arrived yet.",
+        pt: "Captura ativa · nenhuma sessão chegou ainda.",
+        es: "Captura activa · todavía no llegó ninguna sesión.",
+        fr: "Capture active · aucune session n’est encore arrivée.",
+        de: "Erfassung aktiv · noch keine Sitzung angekommen.",
+        it: "Acquisizione attiva · non è ancora arrivata nessuna sessione.",
+        ja: "キャプチャ有効 · まだセッションが届いていません。",
+        zh: "捕获已开启 · 还没有会话到达。",
+        ko: "캡처 켜짐 · 아직 도착한 세션이 없어요.",
+        ru: "Захват включён · сессий пока не было." }
+    /// Second line of state B.
+    capture_none_body { en: "Work with your agent in this project and its choices show up here.",
+        pt: "Trabalhe com seu agente neste projeto e as escolhas aparecem aqui.",
+        es: "Trabaja con tu agente en este proyecto y sus elecciones aparecerán aquí.",
+        fr: "Travaillez avec votre agent dans ce projet et ses choix apparaîtront ici.",
+        de: "Arbeite mit deinem Agenten in diesem Projekt, dann erscheinen seine Entscheidungen hier.",
+        it: "Lavora con il tuo agente in questo progetto e le sue scelte compariranno qui.",
+        ja: "このプロジェクトでエージェントと作業すると、その選択がここに表示されます。",
+        zh: "在此项目中与你的智能体协作，它的选择会显示在这里。",
+        ko: "이 프로젝트에서 에이전트와 작업하면 선택이 여기에 나타나요.",
+        ru: "Работайте с агентом в этом проекте, и его решения появятся здесь." }
+    /// Second line of state C (listening, but nothing for a day or more).
+    capture_stale_body { en: "The app’s capture is on; check that your agent is connected.",
+        pt: "A captura do app está ativa; confira se o agente está conectado.",
+        es: "La captura de la app está activa; comprueba que tu agente esté conectado.",
+        fr: "La capture de l’app est active ; vérifiez que votre agent est connecté.",
+        de: "Die Erfassung der App ist aktiv; prüfe, ob dein Agent verbunden ist.",
+        it: "L’acquisizione dell’app è attiva; controlla che il tuo agente sia connesso.",
+        ja: "アプリのキャプチャは有効です。エージェントが接続されているか確認してください。",
+        zh: "应用的捕获已开启；请检查你的智能体是否已连接。",
+        ko: "앱의 캡처는 켜져 있어요. 에이전트가 연결되어 있는지 확인하세요.",
+        ru: "Захват в приложении включён; проверьте, что агент подключён." }
+    /// Title of state D (the local API did not start).
+    capture_stopped_title { en: "Capture is stopped.", pt: "A captura está parada.",
+        es: "La captura está detenida.", fr: "La capture est arrêtée.",
+        de: "Die Erfassung ist angehalten.", it: "L’acquisizione è ferma.",
+        ja: "キャプチャは停止しています。", zh: "捕获已停止。", ko: "캡처가 멈췄어요.",
+        ru: "Захват остановлен." }
+    /// Second line of state D.
+    capture_stopped_body {
+        en: "The local API didn’t start. Sessions wait in the agent and arrive when it’s back.",
+        pt: "A API local não iniciou. As sessões ficam guardadas no agente e chegam quando ela voltar.",
+        es: "La API local no se inició. Las sesiones esperan en el agente y llegan cuando vuelva.",
+        fr: "L’API locale n’a pas démarré. Les sessions attendent dans l’agent et arriveront à son retour.",
+        de: "Die lokale API ist nicht gestartet. Sitzungen warten im Agenten und kommen an, sobald sie wieder läuft.",
+        it: "L’API locale non si è avviata. Le sessioni restano nell’agente e arrivano quando torna.",
+        ja: "ローカル API が起動しませんでした。セッションはエージェントに保持され、復帰すると届きます。",
+        zh: "本地 API 未启动。会话保存在智能体中，恢复后会送达。",
+        ko: "로컬 API가 시작되지 않았어요. 세션은 에이전트에 보관되고 다시 켜지면 도착해요.",
+        ru: "Локальный API не запустился. Сессии ждут в агенте и придут, когда он вернётся." }
+    /// Capture state F (demo).
+    capture_demo_line { en: "Demo · fictional data, no real capture",
+        pt: "Demonstração · dados fictícios, nenhuma captura real",
+        es: "Demostración · datos ficticios, ninguna captura real",
+        fr: "Démonstration · données fictives, aucune capture réelle",
+        de: "Demo · fiktive Daten, keine echte Erfassung",
+        it: "Demo · dati fittizi, nessuna acquisizione reale",
+        ja: "デモ · 架空のデータ、実際のキャプチャはありません",
+        zh: "演示 · 虚构数据，没有真实捕获", ko: "데모 · 가상 데이터, 실제 캡처 없음",
+        ru: "Демо · вымышленные данные, без настоящего захвата" }
+    /// Opens Settings on Diagnostics from a capture warning.
+    open_diagnostics { en: "View diagnostics", pt: "Ver diagnóstico", es: "Ver diagnóstico",
+        fr: "Voir le diagnostic", de: "Diagnose ansehen", it: "Vedi diagnostica",
+        ja: "診断を見る", zh: "查看诊断", ko: "진단 보기", ru: "Открыть диагностику" }
+    /// Project bar pill in state D.
+    capture_pill_stopped { en: "Capture stopped", pt: "Captura parada",
+        es: "Captura detenida", fr: "Capture arrêtée", de: "Erfassung angehalten",
+        it: "Acquisizione ferma", ja: "キャプチャ停止", zh: "捕获已停止", ko: "캡처 멈춤",
+        ru: "Захват остановлен" }
+    /// Project bar pill in state C.
+    capture_pill_stale { en: "Nothing arriving", pt: "Nada chega", es: "No llega nada",
+        fr: "Rien n’arrive", de: "Nichts kommt an", it: "Non arriva nulla",
+        ja: "何も届いていません", zh: "没有新内容", ko: "도착한 것 없음", ru: "Ничего не приходит" }
 }
 
 formats! {
@@ -174,4 +255,95 @@ formats! {
         de: "xemnas {version} · {commit} · {licence}", it: "xemnas {version} · {commit} · {licence}",
         ja: "xemnas {version} · {commit} · {licence}", zh: "xemnas {version} · {commit} · {licence}",
         ko: "xemnas {version} · {commit} · {licence}", ru: "xemnas {version} · {commit} · {licence}" }
+    /// Capture state A: listening, last capture less than a day ago.
+    capture_ok(when: &str) { en: "Capture active · last capture: {when}",
+        pt: "Captura ativa · última captura: {when}",
+        es: "Captura activa · última captura: {when}",
+        fr: "Capture active · dernière capture : {when}",
+        de: "Erfassung aktiv · letzte Erfassung: {when}",
+        it: "Acquisizione attiva · ultima acquisizione: {when}",
+        ja: "キャプチャ有効 · 最後のキャプチャ: {when}",
+        zh: "捕获已开启 · 最近一次捕获：{when}", ko: "캡처 켜짐 · 마지막 캡처: {when}",
+        ru: "Захват включён · последний захват: {when}" }
+    /// Title of state C: nothing arrived for a day or more.
+    capture_stale_title(when: &str) { en: "Nothing has arrived for {when}.",
+        pt: "Nada chega há {when}.", es: "No llega nada desde hace {when}.",
+        fr: "Rien n’est arrivé depuis {when}.", de: "Seit {when} ist nichts angekommen.",
+        it: "Non arriva nulla da {when}.", ja: "{when} 何も届いていません。",
+        zh: "已有 {when} 没有新内容。", ko: "{when} 동안 도착한 것이 없어요.",
+        ru: "Ничего не приходит уже {when}." }
+}
+
+/// Captures of the project whose analysis failed (state E of the empty queue).
+pub fn capture_not_analysed(n: usize) -> String {
+    counted(
+        n,
+        [
+            [
+                "capture wasn’t analysed",
+                "captures weren’t analysed",
+                "captures weren’t analysed",
+            ],
+            [
+                "captura não foi analisada",
+                "capturas não foram analisadas",
+                "capturas não foram analisadas",
+            ],
+            [
+                "captura no se analizó",
+                "capturas no se analizaron",
+                "capturas no se analizaron",
+            ],
+            [
+                "capture n’a pas été analysée",
+                "captures n’ont pas été analysées",
+                "captures n’ont pas été analysées",
+            ],
+            [
+                "Erfassung wurde nicht analysiert",
+                "Erfassungen wurden nicht analysiert",
+                "Erfassungen wurden nicht analysiert",
+            ],
+            [
+                "acquisizione non è stata analizzata",
+                "acquisizioni non sono state analizzate",
+                "acquisizioni non sono state analizzate",
+            ],
+            [
+                "件のキャプチャが未分析です",
+                "件のキャプチャが未分析です",
+                "件のキャプチャが未分析です",
+            ],
+            ["个捕获未被分析", "个捕获未被分析", "个捕获未被分析"],
+            [
+                "개의 캡처가 분석되지 않았어요",
+                "개의 캡처가 분석되지 않았어요",
+                "개의 캡처가 분석되지 않았어요",
+            ],
+            [
+                "захват не проанализирован",
+                "захвата не проанализированы",
+                "захватов не проанализированы",
+            ],
+        ],
+    )
+}
+
+/// Project bar pill in state E: failed analyses of the project's captures.
+pub fn capture_pill_failed(n: usize) -> String {
+    counted(
+        n,
+        [
+            ["failure", "failures", "failures"],
+            ["falha", "falhas", "falhas"],
+            ["fallo", "fallos", "fallos"],
+            ["échec", "échecs", "échecs"],
+            ["Fehler", "Fehler", "Fehler"],
+            ["errore", "errori", "errori"],
+            ["件の失敗", "件の失敗", "件の失敗"],
+            ["个失败", "个失败", "个失败"],
+            ["건 실패", "건 실패", "건 실패"],
+            ["сбой", "сбоя", "сбоев"],
+        ],
+    )
 }

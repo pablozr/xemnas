@@ -8,7 +8,8 @@ use chrono::{DateTime, Datelike, Local, Timelike};
 
 use crate::i18n::format::{self as t, Elapsed};
 
-fn local(value: &str) -> Option<DateTime<Local>> {
+/// An RFC 3339 instant in the local zone, or nothing when it does not parse.
+pub(super) fn local(value: &str) -> Option<DateTime<Local>> {
     DateTime::parse_from_rfc3339(value)
         .ok()
         .map(|date| date.with_timezone(&Local))

@@ -19,9 +19,9 @@ use std::sync::Arc;
 use xemnas_desktop::app::{
     ActivitySource, AdjustItem, CaptureStatus, ConfirmItem, FocusSearch, GoContext, GoDecisions,
     GoMap, GoOverview, GoReview, NextItem, OpenProof, PaletteClose, PaletteDown, PaletteRun,
-    PaletteUp, PrevItem, RejectItem, ReviewAccepted, ReviewClose, ReviewEffect, ReviewNextSource,
-    ReviewPrevSource, ReviewToday, SaveEditor, Shell, SnoozeItem, TabNext, TabPrev,
-    ToggleFocusMode, TogglePalette, ToggleQueue,
+    PaletteUp, PickerClose, PickerDown, PickerRun, PickerUp, PrevItem, RejectItem, ReviewAccepted,
+    ReviewClose, ReviewEffect, ReviewNextSource, ReviewPrevSource, ReviewToday, SaveEditor, Shell,
+    SnoozeItem, TabNext, TabPrev, ToggleFocusMode, TogglePalette, ToggleProjectPicker, ToggleQueue,
 };
 use xemnas_desktop::screens::settings::SettingsServices;
 use xemnas_desktop::startup_error::StartupError;
@@ -98,7 +98,7 @@ fn main() {
                 Arc::new(ai_provider::ChatGptSession::default()),
             ),
             true,
-            CaptureStatus::Demo,
+            demo_capture_status(),
             None,
         );
         return;
@@ -820,55 +820,7 @@ fn run_shell_mode(
     });
     application().run(move |cx: &mut App| {
         xemnas_desktop::fonts::register_embedded(cx);
-        cx.bind_keys([
-            KeyBinding::new("tab", TabNext, None),
-            KeyBinding::new("shift-tab", TabPrev, None),
-            KeyBinding::new("ctrl-k", TogglePalette, Some("xemnas")),
-            KeyBinding::new("ctrl-\\", ToggleFocusMode, Some("xemnas")),
-            KeyBinding::new("ctrl-f", FocusSearch, Some("xemnas")),
-            // Single-key shortcuts never fire while a text field has focus.
-            KeyBinding::new("j", NextItem, Some("xemnas && !SearchField")),
-            KeyBinding::new("down", NextItem, Some("xemnas && !SearchField")),
-            KeyBinding::new("k", PrevItem, Some("xemnas && !SearchField")),
-            KeyBinding::new("up", PrevItem, Some("xemnas && !SearchField")),
-            KeyBinding::new("c", ConfirmItem, Some("xemnas && !SearchField")),
-            KeyBinding::new("r", RejectItem, Some("xemnas && !SearchField")),
-            KeyBinding::new("s", SnoozeItem, Some("xemnas && !SearchField")),
-            KeyBinding::new("a", AdjustItem, Some("xemnas && !SearchField")),
-            KeyBinding::new("tab", ToggleQueue, Some("ReviewHome")),
-            KeyBinding::new("enter", OpenProof, Some("ReviewHome")),
-            KeyBinding::new("e", ReviewEffect, Some("xemnas && !SearchField")),
-            KeyBinding::new("l", ReviewAccepted, Some("xemnas && !SearchField")),
-            KeyBinding::new("d", ReviewToday, Some("xemnas && !SearchField")),
-            KeyBinding::new("escape", ReviewClose, Some("xemnas && !SearchField")),
-            KeyBinding::new("left", ReviewPrevSource, Some("xemnas && !SearchField")),
-            KeyBinding::new("right", ReviewNextSource, Some("xemnas && !SearchField")),
-            KeyBinding::new("ctrl-enter", SaveEditor, Some("Editor")),
-            KeyBinding::new("ctrl-1", GoReview, Some("xemnas")),
-            KeyBinding::new("ctrl-2", GoDecisions, Some("xemnas")),
-            KeyBinding::new("ctrl-3", GoContext, Some("xemnas")),
-            KeyBinding::new("ctrl-4", GoMap, Some("xemnas")),
-            KeyBinding::new("ctrl-0", GoOverview, Some("xemnas")),
-            KeyBinding::new("backspace", Backspace, Some("SearchField")),
-            KeyBinding::new("delete", Delete, Some("SearchField")),
-            KeyBinding::new("left", Left, Some("SearchField")),
-            KeyBinding::new("right", Right, Some("SearchField")),
-            KeyBinding::new("shift-left", SelectLeft, Some("SearchField")),
-            KeyBinding::new("shift-right", SelectRight, Some("SearchField")),
-            KeyBinding::new("ctrl-a", SelectAll, Some("SearchField")),
-            KeyBinding::new("ctrl-v", Paste, Some("SearchField")),
-            KeyBinding::new("ctrl-c", Copy, Some("SearchField")),
-            KeyBinding::new("ctrl-x", Cut, Some("SearchField")),
-            KeyBinding::new("home", Home, Some("SearchField")),
-            KeyBinding::new("end", End, Some("SearchField")),
-            KeyBinding::new("escape", Clear, Some("SearchField")),
-            // Declared after Clear so the palette closes instead of clearing.
-            KeyBinding::new("escape", PaletteClose, Some("Palette > SearchField")),
-            KeyBinding::new("escape", PaletteClose, Some("Palette")),
-            KeyBinding::new("down", PaletteDown, Some("Palette")),
-            KeyBinding::new("up", PaletteUp, Some("Palette")),
-            KeyBinding::new("enter", PaletteRun, Some("Palette")),
-        ]);
+        cx.bind_keys(key_bindings());
 
         let compact = demo && std::env::args().any(|argument| argument == "--compact");
         // Demo-only capture aids: a route to open, the second palette and a
@@ -883,11 +835,21 @@ fn run_shell_mode(
         };
         let route = demo.then(|| argument_after("--open")).flatten();
         let background = demo && std::env::args().any(|argument| argument == "--background");
-        let dimensions = if compact {
-            size(px(1180.0), px(760.0))
-        } else {
-            size(px(1440.0), px(1024.0))
+        // `--size WxH` sets the demo window for captures; `--compact` is
+        // `--size 1180x760`. A size the app cannot show stops the demo.
+        let requested = demo
+            .then(|| argument_after("--size"))
+            .flatten()
+            .or_else(|| compact.then(|| COMPACT_SIZE.to_owned()));
+        let (width, height) = match requested.as_deref().map(parse_window_size) {
+            Some(Ok(dimensions)) => dimensions,
+            Some(Err(error)) => {
+                eprintln!("{error}");
+                std::process::exit(2);
+            }
+            None => (1440.0, 1024.0),
         };
+        let dimensions = size(px(width), px(height));
         // Off every monitor: the window renders for PrintWindow and never
         // covers anything on screen.
         let bounds = if background {
@@ -1046,10 +1008,12 @@ fn run_shell_mode(
                     ..Default::default()
                 }),
                 app_id: Some("com.xemnas.desktop".into()),
-                window_min_size: Some(if compact {
+                // A sized capture checked its size already; its window
+                // frame must not push the client area past WxH.
+                window_min_size: Some(if requested.is_some() {
                     size(px(960.0), px(640.0))
                 } else {
-                    size(px(1180.0), px(760.0))
+                    size(px(MIN_WINDOW.0), px(MIN_WINDOW.1))
                 }),
                 // Opaque unless `XEMNAS_BACKDROP` asks for a material.
                 window_background: backdrop,
@@ -1075,6 +1039,26 @@ fn run_shell_mode(
 
 /// Maps the storage failure to the cause the screen explains; the raw text
 /// stays in the variant for the log and "Copy details".
+/// The smallest window the app supports (its `window_min_size`).
+const MIN_WINDOW: (f32, f32) = (1180.0, 760.0);
+/// What `--compact` stands for.
+const COMPACT_SIZE: &str = "1180x760";
+
+/// Reads `--size WxH` (whole pixels, at least [`MIN_WINDOW`]).
+fn parse_window_size(value: &str) -> Result<(f32, f32), String> {
+    let invalid = || format!("--size {value}: expected WxH, such as 1280x800");
+    let (width, height) = value.split_once(['x', 'X']).ok_or_else(invalid)?;
+    let width: u16 = width.parse().map_err(|_| invalid())?;
+    let height: u16 = height.parse().map_err(|_| invalid())?;
+    let (width, height) = (f32::from(width), f32::from(height));
+    if width < MIN_WINDOW.0 || height < MIN_WINDOW.1 {
+        return Err(format!(
+            "--size {value}: below the minimum window, {COMPACT_SIZE}"
+        ));
+    }
+    Ok((width, height))
+}
+
 fn startup_error(error: StorageError) -> StartupError {
     match error {
         StorageError::Migration(detail) => StartupError::Migration { detail },
@@ -1090,6 +1074,17 @@ fn demo_startup_error() -> Option<StartupError> {
         "migration" => Some(StartupError::Migration { detail }),
         "open" => Some(StartupError::CannotOpen { detail }),
         _ => None,
+    }
+}
+
+/// Capture aid for the demo only: `XEMNAS_DEMO_CAPTURE=listening|unavailable`
+/// shows the capture states of Revisão and of the project bar without a
+/// real local API; anything else keeps the demo state.
+fn demo_capture_status() -> CaptureStatus {
+    match std::env::var("XEMNAS_DEMO_CAPTURE").as_deref() {
+        Ok("listening") => CaptureStatus::Listening,
+        Ok("unavailable") => CaptureStatus::Unavailable,
+        _ => CaptureStatus::Demo,
     }
 }
 
@@ -1204,9 +1199,113 @@ fn start_local_api(
     local_api::ApiServer::start(config)
 }
 
+/// Every shortcut of the shell, in precedence order (later wins among equal
+/// contexts). A function so the tests can resolve keys without a window.
+fn key_bindings() -> Vec<KeyBinding> {
+    vec![
+        KeyBinding::new("tab", TabNext, None),
+        KeyBinding::new("shift-tab", TabPrev, None),
+        KeyBinding::new("ctrl-k", TogglePalette, Some("xemnas")),
+        KeyBinding::new("ctrl-\\", ToggleFocusMode, Some("xemnas")),
+        KeyBinding::new("ctrl-f", FocusSearch, Some("xemnas")),
+        // Single-key shortcuts never fire while a text field has focus.
+        KeyBinding::new("j", NextItem, Some("xemnas && !SearchField")),
+        KeyBinding::new("down", NextItem, Some("xemnas && !SearchField")),
+        KeyBinding::new("k", PrevItem, Some("xemnas && !SearchField")),
+        KeyBinding::new("up", PrevItem, Some("xemnas && !SearchField")),
+        KeyBinding::new("c", ConfirmItem, Some("xemnas && !SearchField")),
+        KeyBinding::new("r", RejectItem, Some("xemnas && !SearchField")),
+        KeyBinding::new("s", SnoozeItem, Some("xemnas && !SearchField")),
+        KeyBinding::new("a", AdjustItem, Some("xemnas && !SearchField")),
+        KeyBinding::new("tab", ToggleQueue, Some("ReviewHome")),
+        KeyBinding::new("enter", OpenProof, Some("ReviewHome")),
+        KeyBinding::new("e", ReviewEffect, Some("xemnas && !SearchField")),
+        KeyBinding::new("l", ReviewAccepted, Some("xemnas && !SearchField")),
+        KeyBinding::new("d", ReviewToday, Some("xemnas && !SearchField")),
+        KeyBinding::new("escape", ReviewClose, Some("xemnas && !SearchField")),
+        KeyBinding::new("left", ReviewPrevSource, Some("xemnas && !SearchField")),
+        KeyBinding::new("right", ReviewNextSource, Some("xemnas && !SearchField")),
+        KeyBinding::new("ctrl-enter", SaveEditor, Some("Editor")),
+        KeyBinding::new("ctrl-1", GoReview, Some("xemnas")),
+        KeyBinding::new("ctrl-2", GoDecisions, Some("xemnas")),
+        KeyBinding::new("ctrl-3", GoContext, Some("xemnas")),
+        KeyBinding::new("ctrl-4", GoMap, Some("xemnas")),
+        KeyBinding::new("ctrl-0", GoOverview, Some("xemnas")),
+        KeyBinding::new("backspace", Backspace, Some("SearchField")),
+        KeyBinding::new("delete", Delete, Some("SearchField")),
+        KeyBinding::new("left", Left, Some("SearchField")),
+        KeyBinding::new("right", Right, Some("SearchField")),
+        KeyBinding::new("shift-left", SelectLeft, Some("SearchField")),
+        KeyBinding::new("shift-right", SelectRight, Some("SearchField")),
+        KeyBinding::new("ctrl-a", SelectAll, Some("SearchField")),
+        KeyBinding::new("ctrl-v", Paste, Some("SearchField")),
+        KeyBinding::new("ctrl-c", Copy, Some("SearchField")),
+        KeyBinding::new("ctrl-x", Cut, Some("SearchField")),
+        KeyBinding::new("home", Home, Some("SearchField")),
+        KeyBinding::new("end", End, Some("SearchField")),
+        KeyBinding::new("escape", Clear, Some("SearchField")),
+        // Declared after Clear so the palette closes instead of clearing.
+        KeyBinding::new("escape", PaletteClose, Some("Palette > SearchField")),
+        KeyBinding::new("escape", PaletteClose, Some("Palette")),
+        KeyBinding::new("down", PaletteDown, Some("Palette")),
+        KeyBinding::new("up", PaletteUp, Some("Palette")),
+        KeyBinding::new("enter", PaletteRun, Some("Palette")),
+        KeyBinding::new("ctrl-p", ToggleProjectPicker, Some("xemnas")),
+        KeyBinding::new("escape", PickerClose, Some("ProjectPicker > SearchField")),
+        KeyBinding::new("escape", PickerClose, Some("ProjectPicker")),
+        KeyBinding::new("down", PickerDown, Some("ProjectPicker")),
+        KeyBinding::new("up", PickerUp, Some("ProjectPicker")),
+        KeyBinding::new("enter", PickerRun, Some("ProjectPicker")),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The action a key fires with focus inside `contexts` (root first).
+    fn fired(keymap: &gpui::Keymap, key: &str, contexts: &[&str]) -> Box<dyn gpui::Action> {
+        let stack: Vec<gpui::KeyContext> = contexts
+            .iter()
+            .map(|context| gpui::KeyContext::parse(context).unwrap())
+            .collect();
+        let (bindings, _) =
+            keymap.bindings_for_input(&[gpui::Keystroke::parse(key).unwrap()], &stack);
+        bindings
+            .first()
+            .unwrap_or_else(|| panic!("{key} fires nothing in {contexts:?}"))
+            .action()
+            .boxed_clone()
+    }
+
+    /// Without the projects column (lote 2, §2.1) the project list, its
+    /// filter, Abrir pasta and the properties live in the crumb's picker and
+    /// the palette, reached from any window width by these keys.
+    #[test]
+    fn project_actions_stay_reachable_without_the_column() {
+        let keymap = gpui::Keymap::new(key_bindings());
+        let shell = ["xemnas"];
+        let picker = ["xemnas", "ProjectPicker"];
+        let filter = ["xemnas", "ProjectPicker", "SearchField"];
+        assert!(fired(&keymap, "ctrl-p", &shell).partial_eq(&ToggleProjectPicker));
+        assert!(fired(&keymap, "ctrl-k", &shell).partial_eq(&TogglePalette));
+        assert!(fired(&keymap, "down", &filter).partial_eq(&PickerDown));
+        assert!(fired(&keymap, "up", &filter).partial_eq(&PickerUp));
+        assert!(fired(&keymap, "enter", &filter).partial_eq(&PickerRun));
+        assert!(fired(&keymap, "escape", &filter).partial_eq(&PickerClose));
+        assert!(fired(&keymap, "escape", &picker).partial_eq(&PickerClose));
+    }
+
+    #[test]
+    fn window_size_parses_and_respects_the_minimum() {
+        assert_eq!(parse_window_size("1280x800"), Ok((1280.0, 800.0)));
+        assert_eq!(parse_window_size(COMPACT_SIZE), Ok(MIN_WINDOW));
+        for invalid in [
+            "0x1", "abc", "1179x760", "1180x759", "1280x", "x800", "-1x800",
+        ] {
+            assert!(parse_window_size(invalid).is_err(), "{invalid}");
+        }
+    }
 
     #[test]
     fn storage_failures_map_to_their_startup_cause() {

@@ -1,4 +1,4 @@
-//! Copy for the app area: the window shell, sidebar, command palette and
+//! Copy for the app area: the window shell, status bar, command palette and
 //! window controls. See [`crate::i18n`] for how entries are declared.
 
 use super::common::counted;
@@ -147,6 +147,11 @@ strings! {
         de: "Projekteigenschaften", it: "Proprietà del progetto",
         ja: "プロジェクトのプロパティ", zh: "项目属性", ko: "프로젝트 속성",
         ru: "Свойства проекта" }
+    /// Tooltip of the project crumb, and its palette item.
+    switch_project { en: "Switch project", pt: "Trocar de projeto",
+        es: "Cambiar de proyecto", fr: "Changer de projet", de: "Projekt wechseln",
+        it: "Cambia progetto", ja: "プロジェクトを切り替え", zh: "切换项目",
+        ko: "프로젝트 전환", ru: "Сменить проект" }
     /// Palette item: open a folder.
     open_folder { en: "Open folder…", pt: "Abrir pasta…", es: "Abrir carpeta…",
         fr: "Ouvrir un dossier…", de: "Ordner öffnen…", it: "Apri cartella…",
@@ -157,20 +162,21 @@ strings! {
         de: "Ein neues Projekt verfolgen", it: "Segui un nuovo progetto",
         ja: "新しいプロジェクトを追跡", zh: "跟踪新项目", ko: "새 프로젝트 추적",
         ru: "Отслеживать новый проект" }
-    /// Palette item: show the sidebar again.
-    show_sidebar { en: "Show the sidebar", pt: "Mostrar a lateral",
-        es: "Mostrar la barra lateral", fr: "Afficher la barre latérale",
-        de: "Seitenleiste anzeigen", it: "Mostra la barra laterale",
-        ja: "サイドバーを表示", zh: "显示侧边栏", ko: "사이드바 표시",
-        ru: "Показать боковую панель" }
+    /// Palette item: show the status bar again.
+    show_status_bar { en: "Show the status bar", pt: "Mostrar a barra de status",
+        es: "Mostrar la barra de estado", fr: "Afficher la barre d’état",
+        de: "Statusleiste anzeigen", it: "Mostra la barra di stato",
+        ja: "ステータスバーを表示", zh: "显示状态栏", ko: "상태 표시줄 표시",
+        ru: "Показать строку состояния" }
     /// Palette item: focus mode.
-    focus_mode { en: "Focus mode: hide the sidebar", pt: "Modo foco: esconder a lateral",
-        es: "Modo enfoque: ocultar la barra lateral",
-        fr: "Mode focus : masquer la barre latérale",
-        de: "Fokusmodus: Seitenleiste ausblenden",
-        it: "Modalità focus: nascondi la barra laterale",
-        ja: "集中モード: サイドバーを隠す", zh: "专注模式：隐藏侧边栏",
-        ko: "집중 모드: 사이드바 숨기기", ru: "Режим фокуса: скрыть боковую панель" }
+    focus_mode { en: "Focus mode: hide the status bar",
+        pt: "Modo foco: esconder a barra de status",
+        es: "Modo enfoque: ocultar la barra de estado",
+        fr: "Mode focus : masquer la barre d’état",
+        de: "Fokusmodus: Statusleiste ausblenden",
+        it: "Modalità focus: nascondi la barra di stato",
+        ja: "集中モード: ステータスバーを隠す", zh: "专注模式：隐藏状态栏",
+        ko: "집중 모드: 상태 표시줄 숨기기", ru: "Режим фокуса: скрыть строку состояния" }
     /// Palette item: open the assistant.
     talk_to_assistant { en: "Talk to Xemnas, the assistant",
         pt: "Falar com o Xemnas, o assistente", es: "Hablar con Xemnas, el asistente",
@@ -375,7 +381,7 @@ strings! {
 }
 
 formats! {
-    /// Accessible name of the sidebar status line.
+    /// Accessible name of the status bar's line.
     open_details(label: &str) {
         en: "{label}. Open details", pt: "{label}. Abrir detalhes",
         es: "{label}. Abrir detalles", fr: "{label}. Ouvrir les détails",
@@ -402,13 +408,13 @@ formats! {
         de: "Entscheidungen zu {name}", it: "Decisioni su {name}",
         ja: "{name}に関する決定", zh: "关于 {name} 的决策", ko: "{name}에 대한 결정",
         ru: "Решения о {name}" }
-    /// Accessible name of the project breadcrumb.
-    project_properties_aria(name: &str) {
-        en: "{name}: project properties", pt: "{name}: propriedades do projeto",
-        es: "{name}: propiedades del proyecto", fr: "{name} : propriétés du projet",
-        de: "{name}: Projekteigenschaften", it: "{name}: proprietà del progetto",
-        ja: "{name}：プロジェクトのプロパティ", zh: "{name}：项目属性",
-        ko: "{name}: 프로젝트 속성", ru: "{name}: свойства проекта" }
+    /// Accessible name of the project breadcrumb (it opens the picker).
+    switch_project_aria(name: &str) {
+        en: "{name}: switch project", pt: "{name}: trocar de projeto",
+        es: "{name}: cambiar de proyecto", fr: "{name} : changer de projet",
+        de: "{name}: Projekt wechseln", it: "{name}: cambia progetto",
+        ja: "{name}：プロジェクトを切り替え", zh: "{name}：切换项目",
+        ko: "{name}: 프로젝트 전환", ru: "{name}: сменить проект" }
     /// Palette item: switch the theme.
     use_theme(theme: &str) {
         en: "Use {theme} theme", pt: "Usar tema {theme}", es: "Usar el tema {theme}",
@@ -436,7 +442,7 @@ formats! {
         ko: "{name} · {destination} — xemnas", ru: "{name} · {destination} — xemnas" }
 }
 
-/// Count of failed jobs in the sidebar status.
+/// Count of failed jobs in the status bar.
 pub fn failures(n: usize) -> String {
     counted(
         n,

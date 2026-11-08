@@ -69,6 +69,10 @@ struct Palette {
     accent_default: Tone,
     accent_emphasis: Tone,
     accent_hover: Tone,
+    /// The flat primary button: rest, hover (+6% lightness) and pressed.
+    button_primary: Tone,
+    button_primary_hover: Tone,
+    button_primary_pressed: Tone,
 }
 
 /// Blue graphite: the original Quiet Glass palette.
@@ -82,7 +86,7 @@ const QUIET_GLASS: Palette = Palette {
     floating_glass: Tone(0x181E2A, 0.94),
     surface: Tone::solid(0x181E2A),
     surface_hover: Tone::solid(0x202634),
-    selection: Tone::solid(0x1C1A28),
+    selection: Tone::solid(0x342F45),
     glass_surface_lavender: Tone::solid(0x1C1A28),
     glass_edge_lavender: Tone::solid(0x514A63),
     hairline_divider: Tone(0xCDC7DC, 0.10),
@@ -97,6 +101,9 @@ const QUIET_GLASS: Palette = Palette {
     accent_default: Tone::solid(0x9188A8),
     accent_emphasis: Tone::solid(0xA89EBA),
     accent_hover: Tone::solid(0xB3A5CB),
+    button_primary: Tone::solid(0xA89EBA),
+    button_primary_hover: Tone::solid(0xB3AAC4),
+    button_primary_pressed: Tone::solid(0x9A90AD),
 };
 
 /// Neutral charcoal: the editorial palette.
@@ -110,7 +117,7 @@ const CHARCOAL: Palette = Palette {
     floating_glass: Tone(0x26262C, 0.95),
     surface: Tone::solid(0x26262C),
     surface_hover: Tone::solid(0x302B39),
-    selection: Tone::solid(0x302B39),
+    selection: Tone::solid(0x3E3849),
     glass_surface_lavender: Tone::solid(0x26262C),
     glass_edge_lavender: Tone::solid(0x49434F),
     hairline_divider: Tone::solid(0x35353D),
@@ -125,6 +132,9 @@ const CHARCOAL: Palette = Palette {
     accent_default: Tone::solid(0x9188A8),
     accent_emphasis: Tone::solid(0xA89EBA),
     accent_hover: Tone::solid(0xB3A5CB),
+    button_primary: Tone::solid(0xA89EBA),
+    button_primary_hover: Tone::solid(0xB3AAC4),
+    button_primary_pressed: Tone::solid(0x9A90AD),
 };
 
 /// The Organization: near-black with cold silver; the mascot's amber stays a
@@ -139,7 +149,7 @@ const ORGANIZATION: Palette = Palette {
     floating_glass: Tone(0x16161B, 0.95),
     surface: Tone::solid(0x16161B),
     surface_hover: Tone::solid(0x1E1E25),
-    selection: Tone::solid(0x1C1D23),
+    selection: Tone::solid(0x303138),
     glass_surface_lavender: Tone::solid(0x1C1D23),
     glass_edge_lavender: Tone::solid(0x4D5260),
     hairline_divider: Tone(0xD4D8E2, 0.09),
@@ -154,6 +164,9 @@ const ORGANIZATION: Palette = Palette {
     accent_default: Tone::solid(0x9DA3B1),
     accent_emphasis: Tone::solid(0xC3C8D4),
     accent_hover: Tone::solid(0xD5D9E3),
+    button_primary: Tone::solid(0xA89EBA),
+    button_primary_hover: Tone::solid(0xB3AAC4),
+    button_primary_pressed: Tone::solid(0x9A90AD),
 };
 
 /// Moss: green ink with a sage accent; quiet, botanical.
@@ -167,7 +180,7 @@ const MOSS: Palette = Palette {
     floating_glass: Tone(0x18201C, 0.95),
     surface: Tone::solid(0x18201C),
     surface_hover: Tone::solid(0x202A25),
-    selection: Tone::solid(0x1B2620),
+    selection: Tone::solid(0x2B3731),
     glass_surface_lavender: Tone::solid(0x1B2620),
     glass_edge_lavender: Tone::solid(0x4A5E52),
     hairline_divider: Tone(0xC9D8CF, 0.10),
@@ -182,6 +195,9 @@ const MOSS: Palette = Palette {
     accent_default: Tone::solid(0x86A391),
     accent_emphasis: Tone::solid(0xA3BDAB),
     accent_hover: Tone::solid(0xB5CDBC),
+    button_primary: Tone::solid(0xA89EBA),
+    button_primary_hover: Tone::solid(0xB3AAC4),
+    button_primary_pressed: Tone::solid(0x9A90AD),
 };
 
 /// Midnight: deep navy with a cold, muted cyan.
@@ -195,7 +211,7 @@ const MIDNIGHT: Palette = Palette {
     floating_glass: Tone(0x141C2E, 0.95),
     surface: Tone::solid(0x141C2E),
     surface_hover: Tone::solid(0x1B2539),
-    selection: Tone::solid(0x16233A),
+    selection: Tone::solid(0x233350),
     glass_surface_lavender: Tone::solid(0x16233A),
     glass_edge_lavender: Tone::solid(0x3F5776),
     hairline_divider: Tone(0xC4D2E6, 0.10),
@@ -210,12 +226,27 @@ const MIDNIGHT: Palette = Palette {
     accent_default: Tone::solid(0x7699B0),
     accent_emphasis: Tone::solid(0x93B8CC),
     accent_hover: Tone::solid(0xA6C8DA),
+    button_primary: Tone::solid(0xA89EBA),
+    button_primary_hover: Tone::solid(0xB3AAC4),
+    button_primary_pressed: Tone::solid(0x9A90AD),
 };
 
 /// A token at another opacity: status tints and soft backgrounds are derived
 /// from their token instead of being new literals.
 pub fn tint(color: Rgba, alpha: f32) -> Rgba {
     Rgba { a: alpha, ..color }
+}
+
+/// `over` at `alpha` already composited onto `base`, as one opaque color: a
+/// tinted background that hides what is drawn behind it.
+pub fn mix(base: Rgba, over: Rgba, alpha: f32) -> Rgba {
+    let blend = |b: f32, o: f32| o * alpha + b * (1.0 - alpha);
+    Rgba {
+        r: blend(base.r, over.r),
+        g: blend(base.g, over.g),
+        b: blend(base.b, over.b),
+        a: 1.0,
+    }
 }
 
 /// Color tokens from the Quiet Glass design system.
@@ -306,7 +337,7 @@ impl ColorTokens {
     }
 
     /// `color.chrome` — the window frame: painted once on the shell root, so
-    /// title bar, sidebar and the gutter around the content card share it.
+    /// title bar, status bar and the gutter around the content card share it.
     ///
     /// With the system material (Mica Alt or Acrylic) behind the window this is
     /// a translucent tint of the rail, so the blurred desktop reads through the
@@ -525,6 +556,21 @@ impl ColorTokens {
         self.palette.accent_hover.rgba()
     }
 
+    /// `button.primary` — the flat fill of the primary button.
+    pub fn button_primary(&self) -> Rgba {
+        self.palette.button_primary.rgba()
+    }
+
+    /// `button.primary-hover` — the primary button under the pointer.
+    pub fn button_primary_hover(&self) -> Rgba {
+        self.palette.button_primary_hover.rgba()
+    }
+
+    /// `button.primary-pressed` — the primary button while pressed.
+    pub fn button_primary_pressed(&self) -> Rgba {
+        self.palette.button_primary_pressed.rgba()
+    }
+
     /// `accent.on-emphasis` — text over light lavender.
     pub fn accent_on_emphasis(&self) -> Rgba {
         rgb(0x15141B)
@@ -722,6 +768,9 @@ pub struct TypeScale;
 impl TypeScale {
     /// `type.display` — 26 / 34, weight 500: the decision title.
     pub const DISPLAY: TypeToken = TypeToken::new(26.0, 34.0, 500.0);
+    /// `type.reading-title` — Inter 24 / 32, weight 600: the decision title
+    /// in Revisão and Decisões (`patterns::reading_title`).
+    pub const READING_TITLE: TypeToken = TypeToken::new(24.0, 32.0, 600.0);
     /// `type.heading-1` — 20 / 28, weight 600: the title of a reading pane.
     pub const HEADING_1: TypeToken = TypeToken::new(20.0, 28.0, 600.0);
     /// `type.heading-2` — 16 / 24, weight 500: a proposed choice, empty states.
@@ -779,6 +828,9 @@ impl ControlSize {
     pub const SM: f32 = 28.0;
     /// `control.md` = 32: tabs, toolbar buttons, fields and review actions.
     pub const MD: f32 = 32.0;
+    /// `control.row` = 56: a dense list row, the question over one line of
+    /// meta (the review queue).
+    pub const ROW: f32 = 56.0;
 }
 
 /// Corner radii (`radius.control` … `radius.round`).
@@ -850,6 +902,38 @@ impl MotionTokens {
     }
 }
 
+/// The night palette of the ASCII scenes (the lake, the sky, the garden and
+/// the river), `spec-lote2.md` §4: the same in every theme.
+pub mod night {
+    /// A colour of the scenes, as red, green and blue bytes.
+    pub type Rgb = [u8; 3];
+
+    /// Faint glyphs: stars, dust, labels.
+    pub const MUTED: Rgb = [0x85, 0x8C, 0x9D];
+    /// Lavender: halo, strokes, open lanterns.
+    pub const LAV: Rgb = [0xA8, 0x9E, 0xBA];
+    /// Amber: what is new or waiting.
+    pub const AMBER: Rgb = [0xD4, 0xB5, 0x6E];
+    /// Glow: lit eyes and flames.
+    pub const GLOW: Rgb = [0xF2, 0xD3, 0x7A];
+    /// Pale: the moon, hair and highlights.
+    pub const PALE: Rgb = [0xE6, 0xE1, 0xF0];
+    /// Slate: water and the sky's flows.
+    pub const SLATE: Rgb = [0x7F, 0x8F, 0xB5];
+    /// Weed green.
+    pub const WEED: Rgb = [0x5E, 0x7D, 0x72];
+    /// Rock: the cliff, the hill and the pier.
+    pub const ROCK: Rgb = [0x3A, 0x41, 0x55];
+    /// The mascot's hood.
+    pub const HOOD: Rgb = [0x5B, 0x55, 0x86];
+    /// Dark glyphs over pale tiles.
+    pub const DARK: Rgb = [0x0D, 0x11, 0x1A];
+    /// The void inside the hood.
+    pub const VOID: Rgb = [0x05, 0x06, 0x0B];
+    /// White, for the koi's highlights.
+    pub const WHITE: Rgb = [0xFF, 0xFF, 0xFF];
+}
+
 #[cfg(test)]
 mod tests {
     use gpui::Rgba;
@@ -895,6 +979,71 @@ mod tests {
 
     fn opaque(color: Rgba) -> Opaque {
         (color.r as f64, color.g as f64, color.b as f64)
+    }
+
+    #[test]
+    fn mix_is_the_tint_composited_and_opaque() {
+        let colors = ColorTokens::quiet_glass();
+        let (canvas, warning) = (colors.canvas(), colors.status_warning());
+        let mixed = super::mix(canvas, warning, 0.08);
+        assert_eq!(mixed.a, 1.0);
+        let expected = composite_over(super::tint(warning, 0.08), canvas);
+        let got = opaque(mixed);
+        for (a, b) in [
+            (got.0, expected.0),
+            (got.1, expected.1),
+            (got.2, expected.2),
+        ] {
+            assert!((a - b).abs() < 1e-6, "{got:?} != {expected:?}");
+        }
+        assert_eq!(super::mix(canvas, warning, 0.0), canvas);
+    }
+
+    /// The selected row reads at a glance against its neighbours on the rail
+    /// (1.5:1) and keeps its text legible.
+    #[test]
+    fn selection_stands_out_and_keeps_text_legible() {
+        for (name, colors) in [
+            ("quiet_glass", ColorTokens::quiet_glass()),
+            ("charcoal", ColorTokens::charcoal()),
+            ("organization", ColorTokens::organization()),
+            ("moss", ColorTokens::moss()),
+            ("midnight", ColorTokens::midnight()),
+        ] {
+            let selection = opaque(colors.selection());
+            let rail = contrast_ratio(selection, opaque(colors.rail()));
+            assert!(rail >= 1.5, "{name}: selection / rail {rail:.2}");
+            for (text, color) in [
+                ("primary", colors.text_primary()),
+                ("secondary", colors.text_secondary()),
+            ] {
+                let ratio = contrast_ratio(composite_over(color, colors.selection()), selection);
+                assert!(ratio >= 4.5, "{name}: text {text} / selection {ratio:.2}");
+            }
+        }
+        let charcoal = ColorTokens::charcoal();
+        assert_ne!(charcoal.selection(), charcoal.surface_hover());
+    }
+
+    /// The R/S/A/C letters of the review pill: C on the lavender Confirm and
+    /// the others on the pill's surface.
+    #[test]
+    fn shortcut_letters_meet_wcag_aa() {
+        for colors in [
+            ColorTokens::quiet_glass(),
+            ColorTokens::charcoal(),
+            ColorTokens::organization(),
+            ColorTokens::moss(),
+            ColorTokens::midnight(),
+        ] {
+            let canvas = colors.canvas();
+            let confirm = composite_over(colors.accent_emphasis(), canvas);
+            let letter_c = contrast_ratio(opaque(colors.accent_on_emphasis()), confirm);
+            assert!(letter_c >= 4.5, "C on Confirm: {letter_c:.2}");
+            let surface = composite_over(colors.surface(), canvas);
+            let others = contrast_ratio(composite_over(colors.text_muted(), canvas), surface);
+            assert!(others >= 4.5, "R/S/A on the pill: {others:.2}");
+        }
     }
 
     #[test]

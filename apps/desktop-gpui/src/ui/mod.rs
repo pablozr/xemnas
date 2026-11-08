@@ -17,6 +17,7 @@ pub mod night_field;
 pub mod patterns;
 pub mod perf;
 pub mod popup;
+pub mod scene;
 pub mod search_edit;
 pub mod search_field;
 pub mod theme;

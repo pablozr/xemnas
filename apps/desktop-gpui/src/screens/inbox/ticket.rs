@@ -11,10 +11,12 @@ use gpui::{canvas, App, FontWeight};
 use super::*;
 use crate::app::{OpenProof, ToggleQueue};
 use crate::i18n::inbox_ticket as tt;
+use crate::screens::capture_health::CaptureHealth;
 use crate::ui::material::{elevation, Elevation};
-use crate::ui::night_field::strip_dims;
+use crate::ui::night_field::{full_columns, strip_dims, Clearings};
 use crate::ui::theme::code_style;
 use crate::ui::tokens::TypeToken;
+use crate::ui::tokens::{mix, tint};
 
 /// Width of the ticket card and of the column above and below it.
 const TICKET_WIDTH: f32 = 760.0;
@@ -33,7 +35,7 @@ const REASON_CHARS: usize = 220;
 /// Height of the colophon line at the bottom.
 const COLOPHON_HEIGHT: f32 = 28.0;
 /// Gap between the "see the proof" line and the night under it.
-const NIGHT_GAP: f32 = 24.0;
+const NIGHT_GAP: f32 = 20.0;
 /// Columns and rows of the strip before the room for it is measured.
 const NIGHT_FIRST: (usize, usize) = (198, 18);
 /// Widest the "next" line gets: the width of the quiet hole behind it.
@@ -62,6 +64,12 @@ const WHERE_FILE: TypeToken = TypeToken::new(13.0, 19.0, 400.0);
 pub(super) struct NightSlot {
     measured: Cell<(usize, usize)>,
     drawn: Cell<(usize, usize)>,
+    /// Columns of the full lake that fit the empty queue's pane (0 before
+    /// the first measure).
+    full_columns: Cell<usize>,
+    /// Where "next" (0) and the pill (1) were last painted, in the window:
+    /// the lake keeps them clear.
+    clearings: Clearings,
 }
 
 /// What fills the screen for the selected candidate.
@@ -371,7 +379,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
     }
 
     /// The day's cycle as (accepted by the AI, done, total), at most
-    /// `DASHES` long: the dashes and the stars of the night share it.
+    /// `DASHES` long: the dashes share it.
     fn cycle(&self) -> (usize, usize, usize) {
         let ai = self.accepted_by_ai();
         let total = (ai + self.decided + self.rows.len()).clamp(2, DASHES);
@@ -381,10 +389,33 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
     /// The night over the whole empty queue, behind everything and deaf to
     /// the mouse.
     fn night(&self, cx: &mut Context<Self>) -> AnyElement {
-        let (_, done, total) = self.cycle();
-        self.night_full
-            .update(cx, |field, _| field.set_today(done, total));
+        let clearings = self.night_slot.clearings.clone();
+        let mascot = !self.status_bar;
+        let columns = self.night_slot.full_columns.get();
+        self.night_full.update(cx, |field, _| {
+            field.set_waiting(0);
+            field.set_clearings(&clearings);
+            field.set_mascot(mascot);
+            if columns > 0 {
+                field.set_columns(columns);
+            }
+        });
         let (width, height) = self.night_full.read(cx).size();
+        let slot = self.night_slot.clone();
+        let screen = cx.entity_id();
+        // A pane narrower than the lake would cut the cliff and the pier:
+        // measure it and repaint once with the columns that fit.
+        let measure = canvas(
+            move |bounds, _, cx| {
+                let fits = full_columns(f32::from(bounds.size.width));
+                if slot.full_columns.replace(fits) != fits {
+                    cx.defer(move |cx| cx.notify(screen));
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full();
         div()
             .absolute()
             .left_0()
@@ -395,6 +426,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             .flex()
             .justify_center()
             .overflow_hidden()
+            .child(measure)
             .child(
                 div()
                     .w(px(width))
@@ -405,11 +437,10 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
     }
 
     /// The night under the ticket: the room between the "see the proof" line
-    /// (24 px below it) and the colophon, with a strip as tall as fits in it,
+    /// (20 px below it) and the colophon, with a strip as tall as fits in it,
     /// resting on the bottom. The room is measured while painting; when the
     /// grid that fits changes, the screen repaints once with it.
     fn night_strip(&self, cx: &mut Context<Self>) -> Div {
-        let (_, done, total) = self.cycle();
         let measured = self.night_slot.measured.get();
         let (columns, rows) = if measured == (0, 0) {
             NIGHT_FIRST
@@ -443,8 +474,11 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
         if rows == 0 {
             return room;
         }
+        let waiting = self.rows.len();
+        let clearings = self.night_slot.clearings.clone();
         self.night.update(cx, |field, _| {
-            field.set_today(done, total);
+            field.set_waiting(waiting);
+            field.set_clearings(&clearings);
             field.set_size(columns, rows);
         });
         let (width, height) = self.night.read(cx).size();
@@ -1037,15 +1071,37 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                         .child(
                             text_style(div(), TypeScale::META)
                                 .flex_none()
-                                .text_color(if index == 3 && !self.busy {
-                                    colors.accent_subtle()
-                                } else {
+                                .text_color(if self.busy {
                                     colors.text_disabled()
+                                } else if index == 3 {
+                                    colors.accent_on_emphasis()
+                                } else {
+                                    colors.text_muted()
                                 })
                                 .child(["R", "S", "A", "C"][index]),
                         )
                 }),
             );
+        let screen = cx.entity_id();
+        // The lake reads these while it paints, in the same frame: the
+        // prepaint of the whole tree runs before any paint.
+        let measure = |slot: usize| {
+            let clearings = self.night_slot.clearings.clone();
+            canvas(
+                move |bounds, _, cx| {
+                    let before = clearings.borrow_mut()[slot].replace(bounds);
+                    if before != Some(bounds) {
+                        cx.defer(move |cx| cx.notify(screen));
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .size_full()
+        };
+        if next.is_none() {
+            self.night_slot.clearings.borrow_mut()[0] = None;
+        }
         div()
             .absolute()
             .left_0()
@@ -1057,12 +1113,14 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             .gap(px(SpacingScale::S3))
             .children(next.map(|question| {
                 text_style(div(), TypeScale::LABEL)
+                    .relative()
                     .max_w(px(NEXT_WIDTH))
                     .truncate()
                     .text_color(colors.text_muted())
                     .child(tt::next_up(&question))
+                    .child(measure(0))
             }))
-            .child(pill)
+            .child(pill.relative().child(measure(1)))
     }
 
     /// The proof: where the choice came from, read in the sources.
@@ -1188,15 +1246,40 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             .into_any_element()
     }
 
-    /// The empty queue: the day in one line and the ways on.
+    /// The empty queue: the day in one line, whether captures still arrive,
+    /// and the ways on.
     fn empty_queue(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let colors = theme.colors;
         let ai = self.accepted_by_ai();
         let you = self.decided;
+        let view = self.capture_view();
+        let parts = empty_parts(ai, you, view.as_ref());
+        let capture = self.capture_block(theme, view.as_ref(), parts, cx);
         let mut shortcut =
-            |id: &'static str, key: &'static str, label: &'static str, view: ReviewView| {
-                self.view_hint(theme, id, key, label, view, cx)
+            |id: &'static str, key: &'static str, label: &'static str, target: ReviewView| {
+                self.view_hint(theme, id, key, label, target, cx)
             };
+        let shortcuts = (parts.decided || parts.accepted).then(|| {
+            div()
+                .flex()
+                .gap(px(SpacingScale::S6))
+                .when(parts.decided, |row| {
+                    row.child(shortcut(
+                        "zero-today",
+                        "D",
+                        tt::zero_decisions(),
+                        ReviewView::Today,
+                    ))
+                })
+                .when(parts.accepted, |row| {
+                    row.child(shortcut(
+                        "zero-accepted",
+                        "L",
+                        tt::zero_accepted(),
+                        ReviewView::Accepted,
+                    ))
+                })
+        });
         div()
             .size_full()
             .flex()
@@ -1208,32 +1291,209 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                 text_style(div(), BIG_VALUE)
                     .font_family(Theme::font_display())
                     .text_color(colors.text_primary())
-                    .child(tt::zero_title()),
+                    .child(if parts.decided {
+                        tt::zero_title()
+                    } else {
+                        tt::empty_title_sentence()
+                    }),
             )
-            .child(
-                text_style(div(), TypeScale::BODY)
-                    .text_color(colors.text_secondary())
-                    .child(tt::zero_summary(ai + you, ai, you)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .gap(px(SpacingScale::S6))
-                    .child(shortcut(
-                        "zero-today",
-                        "D",
-                        tt::zero_decisions(),
-                        ReviewView::Today,
-                    ))
-                    .child(shortcut(
-                        "zero-accepted",
-                        "L",
-                        tt::zero_accepted(),
-                        ReviewView::Accepted,
-                    )),
-            )
+            .when(parts.decided, |column| {
+                column.child(
+                    text_style(div(), TypeScale::BODY)
+                        .text_color(colors.text_secondary())
+                        .child(tt::zero_summary(ai + you, ai, you)),
+                )
+            })
+            .children(capture)
+            .children(shortcuts)
             .children(self.activity_line(theme, cx))
             .into_any_element()
+    }
+
+    /// Whether captures reach the project: a quiet line when they do (or in
+    /// the demo), an opaque warning card when they stopped or nothing arrives,
+    /// and a line for failed analyses. Nothing before the status is known.
+    fn capture_block(
+        &self,
+        theme: &Theme,
+        view: Option<&CaptureView>,
+        parts: EmptyParts,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let view = view?;
+        let block = parts.block?;
+        let colors = theme.colors;
+        let dot = |color| div().size(px(DOT)).flex_none().rounded_full().bg(color);
+        let main = match block {
+            BlockKind::Line => {
+                let (color, text) = match view.health {
+                    CaptureHealth::Demo => {
+                        (colors.status_info(), tt::capture_demo_line().to_owned())
+                    }
+                    CaptureHealth::Waiting => {
+                        (colors.status_success(), tt::capture_none_title().to_owned())
+                    }
+                    _ => (
+                        colors.status_success(),
+                        tt::capture_ok(&view.last_relative()),
+                    ),
+                };
+                div()
+                    .max_w(px(CAPTURE_WIDTH))
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap(px(SpacingScale::S1))
+                    .child(
+                        text_style(div(), TypeScale::BODY_SMALL)
+                            .flex()
+                            .items_center()
+                            .gap(px(SpacingScale::S2))
+                            .text_color(colors.text_secondary())
+                            .child(dot(color))
+                            .child(text),
+                    )
+                    .when(view.health == CaptureHealth::Waiting, |line| {
+                        line.child(
+                            text_style(div(), TypeScale::BODY_SMALL)
+                                .text_color(colors.text_muted())
+                                .child(tt::capture_none_body()),
+                        )
+                    })
+                    .into_any_element()
+            }
+            BlockKind::Warning => {
+                let (title, body) = view.warning()?;
+                let warning = colors.status_warning();
+                div()
+                    .w(px(CAPTURE_WIDTH))
+                    .p(px(SpacingScale::S4))
+                    .flex()
+                    .flex_col()
+                    .gap(px(SpacingScale::S2))
+                    .rounded(theme.radius.surface())
+                    .border_1()
+                    .border_color(tint(warning, 0.28))
+                    // Opaque: the night field must not show through the card.
+                    .bg(mix(colors.canvas(), warning, 0.08))
+                    .child(
+                        text_style(div(), TypeScale::ROW_TITLE)
+                            .flex()
+                            .items_center()
+                            .gap(px(SpacingScale::S2))
+                            .text_color(colors.text_primary())
+                            .child(dot(warning))
+                            .child(title),
+                    )
+                    .child(
+                        text_style(div(), TypeScale::BODY_SMALL)
+                            // Aligned with the title, past the dot and the gap.
+                            .pl(px(DOT + SpacingScale::S2))
+                            .text_color(colors.text_secondary())
+                            .child(body),
+                    )
+                    .child(
+                        div().flex().justify_end().child(
+                            action_button(
+                                theme,
+                                "review-capture-diagnostics",
+                                ButtonKind::Secondary,
+                                true,
+                            )
+                            .aria_label(tt::open_diagnostics())
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(OpenDiagnostics)))
+                            .child(tt::open_diagnostics()),
+                        ),
+                    )
+                    .into_any_element()
+            }
+        };
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap(px(SpacingScale::S3))
+                .child(main)
+                .when(parts.failures, |column| {
+                    column.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(SpacingScale::S2))
+                            .child(dot(colors.status_danger()))
+                            .child(
+                                text_style(div(), TypeScale::BODY_SMALL)
+                                    .text_color(colors.status_danger())
+                                    .child(tt::capture_not_analysed(view.failed)),
+                            )
+                            .child(
+                                action_button(
+                                    theme,
+                                    "review-capture-failures",
+                                    ButtonKind::Ghost,
+                                    true,
+                                )
+                                .aria_label(tt::open_diagnostics())
+                                .on_click(cx.listener(|_, _, _, cx| cx.emit(OpenDiagnostics)))
+                                .child(tt::open_diagnostics()),
+                            ),
+                    )
+                })
+                .into_any_element(),
+        )
+    }
+}
+
+/// Widest the capture line and card get under the empty queue.
+const CAPTURE_WIDTH: f32 = 520.0;
+
+/// The status dot of the capture line, card and failures.
+const DOT: f32 = 8.0;
+
+/// How the capture shows on the empty queue.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BlockKind {
+    /// One quiet line: active, waiting for a first capture, or the demo.
+    Line,
+    /// A warning card: the capture stopped or nothing arrives.
+    Warning,
+}
+
+/// Which pieces the empty queue shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct EmptyParts {
+    /// Something was decided today: "Queue cleared.", the summary and the
+    /// D shortcut, instead of "Nothing waiting for review.".
+    decided: bool,
+    /// The AI accepted something today: the L shortcut.
+    accepted: bool,
+    block: Option<BlockKind>,
+    /// A line for the captures whose analysis failed.
+    failures: bool,
+}
+
+/// Decides the empty queue from what the AI (`ai`) and the user (`you`)
+/// decided today and the capture state: a day with no decision does not
+/// celebrate, and failures add a line only when the capture is not stopped
+/// nor the demo.
+fn empty_parts(ai: usize, you: usize, view: Option<&CaptureView>) -> EmptyParts {
+    let block = view.map(|view| match view.health {
+        CaptureHealth::Stale | CaptureHealth::Stopped => BlockKind::Warning,
+        CaptureHealth::Active | CaptureHealth::Waiting | CaptureHealth::Demo => BlockKind::Line,
+    });
+    let failures = view.is_some_and(|view| {
+        view.failed > 0
+            && matches!(
+                view.health,
+                CaptureHealth::Active | CaptureHealth::Waiting | CaptureHealth::Stale
+            )
+    });
+    EmptyParts {
+        decided: ai + you > 0,
+        accepted: ai > 0,
+        block,
+        failures,
     }
 }
 
@@ -1274,5 +1534,60 @@ mod tests {
         assert_eq!(value_token(52), NEW_VALUE);
         assert_eq!(value_token(60), NEW_VALUE);
         assert_eq!(value_token(80), SMALL_VALUE);
+    }
+
+    fn view(health: CaptureHealth, failed: usize) -> CaptureView {
+        CaptureView {
+            health,
+            last: Some("2026-10-02T11:43:00Z".into()),
+            failed,
+        }
+    }
+
+    #[test]
+    fn zero_day_does_not_celebrate() {
+        let parts = empty_parts(0, 0, None);
+        assert!(!parts.decided);
+        assert!(!parts.accepted);
+        assert_eq!(parts.block, None);
+        assert!(!parts.failures);
+    }
+
+    #[test]
+    fn ai_only_shows_l_and_d() {
+        let parts = empty_parts(3, 0, None);
+        assert!(parts.decided && parts.accepted);
+        let you_only = empty_parts(0, 2, None);
+        assert!(you_only.decided && !you_only.accepted);
+    }
+
+    #[test]
+    fn stopped_shows_warning_card() {
+        let parts = empty_parts(0, 0, Some(&view(CaptureHealth::Stopped, 2)));
+        assert_eq!(parts.block, Some(BlockKind::Warning));
+        assert!(!parts.failures);
+    }
+
+    #[test]
+    fn stale_shows_warning_card() {
+        let parts = empty_parts(0, 0, Some(&view(CaptureHealth::Stale, 1)));
+        assert_eq!(parts.block, Some(BlockKind::Warning));
+        assert!(parts.failures);
+    }
+
+    #[test]
+    fn failures_add_a_line_to_active() {
+        let parts = empty_parts(1, 0, Some(&view(CaptureHealth::Active, 2)));
+        assert_eq!(parts.block, Some(BlockKind::Line));
+        assert!(parts.failures);
+        let clean = empty_parts(1, 0, Some(&view(CaptureHealth::Active, 0)));
+        assert!(!clean.failures);
+    }
+
+    #[test]
+    fn demo_shows_demo_line() {
+        let parts = empty_parts(0, 0, Some(&view(CaptureHealth::Demo, 3)));
+        assert_eq!(parts.block, Some(BlockKind::Line));
+        assert!(!parts.failures);
     }
 }

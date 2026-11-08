@@ -267,6 +267,33 @@ pub fn word_wrapped(text: &str, token: TypeToken, max_lines: Option<usize>) -> D
     let words = text
         .split_whitespace()
         .map(|word| div().flex_none().child(word.to_owned()));
+    word_row(token, max_lines).children(words)
+}
+
+/// Word-wrapped text that ends in `tail` (source numbers, a mark): the last
+/// word and the tail are one unit, so the tail never starts a line alone.
+pub fn word_wrapped_with(text: &str, token: TypeToken, tail: impl IntoElement) -> Div {
+    let (head, last) = split_tail(text);
+    let words = head
+        .into_iter()
+        .map(|word| div().flex_none().child(word.to_owned()));
+    let end = div()
+        .flex_none()
+        .flex()
+        .children(last.map(str::to_owned))
+        .child(tail);
+    word_row(token, None).children(words).child(end)
+}
+
+/// The words of `text` before the last one, and the last one (kept with
+/// whatever follows it).
+fn split_tail(text: &str) -> (Vec<&str>, Option<&str>) {
+    let mut words: Vec<&str> = text.split_whitespace().collect();
+    let last = words.pop();
+    (words, last)
+}
+
+fn word_row(token: TypeToken, max_lines: Option<usize>) -> Div {
     text_style(div(), token)
         .w_full()
         .min_w(px(0.0))
@@ -277,16 +304,13 @@ pub fn word_wrapped(text: &str, token: TypeToken, max_lines: Option<usize>) -> D
             text.max_h(px(token.line_height * lines as f32))
                 .overflow_hidden()
         })
-        .children(words)
 }
 
-/// The title of a reading pane: display face, word-wrapped.
+/// The title of a reading pane: Inter 24/600, word-wrapped.
 pub fn reading_title(text: &str) -> Div {
-    // 500 is a named instance of the variable face; an in-between weight such
-    // as 560 made the text system fall back to the interface family.
-    word_wrapped(text, TypeScale::DISPLAY, None)
-        .font_family(Theme::font_display())
-        .font_weight(gpui::FontWeight::MEDIUM)
+    word_wrapped(text, TypeScale::READING_TITLE, None)
+        .font_family(Theme::font_interface())
+        .font_weight(gpui::FontWeight::SEMIBOLD)
 }
 
 /// The reading column width shared by Revisão, Decisões and the editors.
@@ -310,6 +334,59 @@ pub fn reading_page(id: impl Into<ElementId>, column: impl IntoElement) -> State
                 .flex_col()
                 .gap(px(SpacingScale::S6))
                 .child(column),
+        )
+}
+
+/// The reading zone between a text and a scene, and between a scene and the
+/// status bar, in pixels.
+pub const SCENE_GAP: f32 = 40.0;
+
+/// A reading page with a scene under the column (`spec-lote2.md` §3.1): the
+/// scene is the column's sibling, never behind it. It takes the room left
+/// under the column, after the reading zone, and gets none when the column
+/// is taller than the pane.
+pub fn scene_page(
+    id: impl Into<ElementId>,
+    column: impl IntoElement,
+    scene: impl IntoElement,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex_1()
+        .min_h(px(0.0))
+        .overflow_y_scroll()
+        .child(
+            div()
+                .min_h(gpui::relative(1.0))
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .flex_none()
+                        .px(px(SpacingScale::S8))
+                        .pt(px(SpacingScale::S8))
+                        .child(
+                            div()
+                                .w_full()
+                                .max_w(px(READING_WIDTH))
+                                .mx_auto()
+                                .flex()
+                                .flex_col()
+                                .gap(px(SpacingScale::S6))
+                                .child(column),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .px(px(SpacingScale::S8))
+                        .pt(px(SCENE_GAP))
+                        .pb(px(SCENE_GAP))
+                        .flex()
+                        .flex_col()
+                        .child(scene),
+                ),
         )
 }
 
@@ -850,74 +927,6 @@ pub fn menu_item(
         }))
 }
 
-/// Width of the index rail beside a reading column (Mapa, Contexto).
-pub const INDEX_WIDTH: f32 = 296.0;
-
-/// The index rail: a fixed-width pane at the left of a destination, with a
-/// hairline on its right edge.
-pub fn index_rail(theme: &Theme) -> Div {
-    div()
-        .w(px(INDEX_WIDTH))
-        .flex_none()
-        .h_full()
-        .flex()
-        .flex_col()
-        .bg(theme.colors.pane())
-        .border_r_1()
-        .border_color(theme.colors.hairline_divider())
-}
-
-/// One entry of an [`index_rail`]: glyph, label and an optional count,
-/// selected with [`mark_selected`]. The caller adds focus and handlers.
-pub fn index_row(
-    theme: &Theme,
-    id: impl Into<ElementId>,
-    selected: bool,
-    glyph: IconName,
-    label: &'static str,
-    badge: Option<String>,
-) -> Stateful<Div> {
-    let colors = theme.colors;
-    let row = div()
-        .id(id)
-        .relative()
-        .flex()
-        .items_center()
-        .gap(px(SpacingScale::S3))
-        .px(px(SpacingScale::S3))
-        .py(px(SpacingScale::S2))
-        .rounded(theme.radius.control())
-        .cursor_pointer()
-        .role(gpui::Role::Button)
-        .aria_label(label)
-        .focus_visible(crate::ui::controls::focus_ring(theme))
-        .when(!selected, |row| {
-            row.hover(move |style| style.bg(colors.glass_fill_medium()))
-                .active(move |style| style.bg(colors.glass_fill_strong()))
-        })
-        .child(icon(
-            glyph,
-            16.0,
-            if selected {
-                colors.text_primary()
-            } else {
-                colors.text_muted()
-            },
-        ))
-        .child(
-            text_style(div(), TypeScale::ROW_TITLE)
-                .flex_1()
-                .text_color(if selected {
-                    colors.text_primary()
-                } else {
-                    colors.text_secondary()
-                })
-                .child(label),
-        )
-        .children(badge.map(|badge| count_chip(theme, badge)));
-    mark_selected(row, theme, selected)
-}
-
 /// The track of a segmented switch between views of the same content
 /// ("Blocos | Grafo"): a recessed pill holding [`segment`]s.
 pub fn segmented(theme: &Theme) -> Div {
@@ -1101,6 +1110,15 @@ pub fn fade_in(content: Div, key: impl Into<ElementId>) -> AnimationElement<Div>
 // for whoever does not see it.
 // ---------------------------------------------------------------------------
 
+/// One ↑/↓ step through `count` rows, wrapping at both ends; an index past
+/// the end (the list shrank) steps from the last row. An empty list stays put.
+pub fn wrap_step(index: usize, step: isize, count: usize) -> usize {
+    if count == 0 {
+        return index;
+    }
+    (index.min(count - 1) as isize + step).rem_euclid(count as isize) as usize
+}
+
 /// Share of `value` in `of`, kept in 0 to 1 (an empty whole is 0).
 pub fn share(value: usize, of: usize) -> f32 {
     if of == 0 {
@@ -1274,6 +1292,15 @@ pub fn ring(theme: &Theme, fraction: f32, side: f32, color: Rgba) -> impl IntoEl
 #[cfg(test)]
 mod form_tests {
     use super::*;
+
+    #[test]
+    fn the_wrap_never_separates_the_last_word_from_its_tail() {
+        let (head, last) = split_tail("O mapa vem das decisões  aceitas.\n");
+        assert_eq!(head, ["O", "mapa", "vem", "das", "decisões"]);
+        assert_eq!(last, Some("aceitas."));
+        assert_eq!(split_tail("única"), (vec![], Some("única")));
+        assert_eq!(split_tail("   "), (vec![], None));
+    }
 
     #[test]
     fn share_is_kept_between_zero_and_one() {

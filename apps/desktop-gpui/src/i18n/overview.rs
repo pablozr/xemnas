@@ -152,6 +152,10 @@ strings! {
     summary_section { en: "Summary", pt: "Resumo", es: "Resumen", fr: "Résumé",
         de: "Zusammenfassung", it: "Riepilogo", ja: "要約", zh: "摘要", ko: "요약",
         ru: "Сводка" }
+    /// Label of the numbered list of sources under the summary.
+    sources { en: "Sources", pt: "Fontes", es: "Fuentes", fr: "Sources",
+        de: "Quellen", it: "Fonti", ja: "出典", zh: "来源", ko: "출처",
+        ru: "Источники" }
     /// Label (icon caption) of the empty state.
     empty_label { en: "Overview", pt: "Visão", es: "Visión general", fr: "Vue d’ensemble",
         de: "Übersicht", it: "Panoramica", ja: "概要", zh: "概览", ko: "개요", ru: "Обзор" }

@@ -1,7 +1,7 @@
 //! Native review surface backed by the Inbox application port.
 //! Storage runs in the background; technical failures never reach the view.
 
-use application::capture_progress::{AssessmentReason, CaptureProgress, CaptureState};
+use application::capture_progress::{CaptureProgress, CaptureState};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -30,10 +30,12 @@ mod conflict;
 mod ticket;
 pub use ticket::{OpenDecisions, ReviewView};
 
+use super::capture_health::{self, CaptureView};
 use super::context::OpenDecision;
 use super::evidence;
 use super::format::{relative, short_date};
 use super::review_editor::{EditorEvent, ReviewEditor};
+use crate::app::CaptureStatus;
 use crate::i18n::inbox as t;
 use crate::ui::controls::{action_button, button_foreground, ButtonKind};
 use crate::ui::glass::focus_ring;
@@ -42,13 +44,14 @@ use crate::ui::night_field::{NightField, Scene};
 use crate::ui::patterns::{
     action_footer, count_chip, error_banner, fade_in, hover_tint, kbd, mark_selected, meter,
     panel_title, reading_title, section_header, section_label, skeleton_list, status_pill, tag,
-    toast_with, track_hover, word_wrapped, READING_WIDTH, TOAST_DURATION,
+    toast_with, track_hover, READING_WIDTH, TOAST_DURATION,
 };
 use crate::ui::search_field::SearchField;
 use crate::ui::theme::{text_style, Theme};
-use crate::ui::tokens::{SpacingScale, TypeScale};
+use crate::ui::tokens::{ControlSize, SpacingScale, TypeScale};
 use crate::ui::tooltip::tooltip;
 use crate::ui::visits;
+use chrono::Local;
 
 /// What a person can take back from the last action.
 #[derive(Clone)]
@@ -188,6 +191,10 @@ pub struct InboxScreen<S: InboxStore + ReviewExceptionStore + Send + 'static> {
     progress_read: Option<ProgressRead>,
     progress: Vec<CaptureProgress>,
     progress_busy: bool,
+    /// Whether captures can reach the app, as the shell knows it.
+    capture: Option<CaptureStatus>,
+    /// `capture` read against `progress` ([`Self::refresh_capture_view`]).
+    capture_view: Option<CaptureView>,
     /// The previous visit to the project, read once to build the briefing.
     since_visit: Option<String>,
     /// What changed since that visit, shown as one quiet line.
@@ -221,6 +228,9 @@ pub struct InboxScreen<S: InboxStore + ReviewExceptionStore + Send + 'static> {
     pane: ticket::Pane,
     /// Whether the queue is open over the ticket (the queue is not a column).
     queue_open: bool,
+    /// The demo route `review:queue` asked for the queue open: each page that
+    /// loads keeps it open instead of closing it over the first candidate.
+    queue_route: bool,
     /// Candidates decided by the person since this screen opened.
     decided: usize,
     /// Focus of the screen itself, so Tab can open the queue from it.
@@ -230,6 +240,9 @@ pub struct InboxScreen<S: InboxStore + ReviewExceptionStore + Send + 'static> {
     night_full: Entity<NightField>,
     /// The room under the ticket, as the layout last measured it.
     night_slot: Rc<ticket::NightSlot>,
+    /// The shell's status bar shows the mascot, so the empty queue's lake
+    /// leaves its own out.
+    status_bar: bool,
 }
 
 /// Confirmations in a row, each within `STREAK_GAP`, that read as a reflex.
@@ -439,9 +452,36 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             .into_any_element()
     }
 
+    /// Opens the queue over the ticket and keeps it open as pages load (the
+    /// demo route `review:queue`, to capture the list without a key press).
+    pub fn open_queue(&mut self) {
+        self.queue_open = true;
+        self.queue_route = true;
+    }
+
     /// Installs the capture read behind the empty queue's activity line.
     pub fn set_progress(&mut self, read: ProgressRead) {
         self.progress_read = Some(read);
+    }
+
+    /// Whether captures can reach the app, for the empty queue's capture state.
+    pub fn set_capture(&mut self, status: CaptureStatus) {
+        self.capture = Some(status);
+        self.refresh_capture_view();
+    }
+
+    /// The capture state of the project from the captures last read; nothing
+    /// until the shell says whether captures can arrive.
+    pub(crate) fn capture_view(&self) -> Option<CaptureView> {
+        self.capture_view.clone()
+    }
+
+    /// Recomputes the capture state when the status or the captures change,
+    /// not on every frame; "nothing arrives" (24 h) is re-read on each poll.
+    fn refresh_capture_view(&mut self) {
+        self.capture_view = self
+            .capture
+            .map(|status| capture_health::capture_view(status, &self.progress, Local::now()));
     }
 
     fn poll_progress(&mut self, cx: &mut Context<Self>) {
@@ -468,6 +508,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                 if let Ok(rows) = result {
                     this.progress = rows;
                 }
+                this.refresh_capture_view();
                 cx.notify();
             });
         })
@@ -666,6 +707,8 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             generation: 0,
             progress_read: None,
             progress: Vec::new(),
+            capture: None,
+            capture_view: None,
             progress_busy: false,
             search: None,
             total: None,
@@ -696,11 +739,21 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
             streak: Vec::new(),
             pane: ticket::Pane::Ticket,
             queue_open: false,
+            queue_route: false,
             decided: 0,
             root_focus: cx.focus_handle(),
             night: cx.new(|_| NightField::new(Scene::strip())),
             night_full: cx.new(|_| NightField::new(Scene::full())),
             night_slot: Rc::default(),
+            status_bar: true,
+        }
+    }
+
+    /// Whether the shell's status bar (and its mascot) is showing.
+    pub fn set_status_bar(&mut self, visible: bool, cx: &mut Context<Self>) {
+        if self.status_bar != visible {
+            self.status_bar = visible;
+            cx.notify();
         }
     }
 
@@ -735,6 +788,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
         self.project_id = project_id;
         self.generation += 1;
         self.progress.clear();
+        self.refresh_capture_view();
         self.poll_progress(cx);
         self.briefing = None;
         self.briefing_hidden = false;
@@ -1039,7 +1093,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                                 .or_else(|| this.rows.first().map(|row| row.id.clone()));
                             this.selected = None;
                             if let Some(id) = next {
-                                this.queue_open = false;
+                                this.queue_open = this.queue_route;
                                 this.select(id, cx);
                             }
                         }
@@ -1091,15 +1145,6 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                         this.undo = this.pending_undo.take();
                         this.note_confirmation(decided);
                         this.decided = decided.count(this.decided);
-                        if decided == Decided::Confirmed {
-                            // Only the scene on screen shoots; the other is not mounted.
-                            let field = if this.rows.is_empty() {
-                                &this.night_full
-                            } else {
-                                &this.night
-                            };
-                            field.update(cx, |field, cx| field.shoot(cx));
-                        }
                         this.page(false, cx);
                     }
                     Outcome::Page(Err(error), _)
@@ -1456,19 +1501,27 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
         let hover_key = id.clone();
         let hovered = self.hovered.as_deref() == Some(row.id.as_str());
         let rule = row.kind == CandidateKind::Rule;
+        // The meta line lifts one step on the selected row, which sits on a
+        // lighter plate.
+        let meta = if selected {
+            theme.colors.text_secondary()
+        } else {
+            theme.colors.text_muted()
+        };
         // A rule is blue, as on the timeline; a decision not yet confirmed
         // stays neutral.
         let tone = if rule {
             theme.colors.status_info()
         } else {
-            theme.colors.text_muted()
+            meta
         };
         let element = div()
             .id((ElementId::from("candidate"), row.id.clone()))
             .relative()
+            .h(px(ControlSize::ROW))
             .px(px(SpacingScale::S4))
-            .py(px(SpacingScale::S3))
             .flex()
+            .items_center()
             .gap(px(SpacingScale::S3))
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                 if track_hover(&mut this.hovered, hover_key.clone(), *hovered) {
@@ -1502,67 +1555,59 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
                     cx.stop_propagation();
                 }
             }))
-            .child(
-                div()
-                    .size(px(22.0))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_full()
-                    .bg(crate::ui::tokens::tint(tone, 0.14))
-                    .child(icon(
-                        if rule {
-                            IconName::Shield
-                        } else {
-                            IconName::Decision
-                        },
-                        12.0,
-                        tone,
-                    )),
-            )
+            .child(div().w(px(16.0)).flex_none().child(icon(
+                if rule {
+                    IconName::Shield
+                } else {
+                    IconName::Decision
+                },
+                12.0,
+                tone,
+            )))
             .child(
                 div()
                     .flex_1()
                     .min_w(px(0.0))
                     .flex()
                     .flex_col()
-                    .gap(px(SpacingScale::S1))
+                    // The spec's 2 px between the question and the meta line;
+                    // the spacing scale starts at 4.
+                    .gap(px(2.0))
                     .child(
-                        div()
+                        text_style(div(), TypeScale::ROW_TITLE)
+                            .truncate()
+                            .text_color(theme.colors.text_primary())
+                            .child(row.question.clone()),
+                    )
+                    .child(
+                        text_style(div(), TypeScale::META)
                             .flex()
                             .items_center()
-                            .justify_between()
                             .gap(px(SpacingScale::S2))
+                            .text_color(meta)
                             .child(
-                                text_style(div(), TypeScale::META)
-                                    .text_color(theme.colors.text_muted())
-                                    .child(relative(&row.received_at)),
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .truncate()
+                                    .child(row.choice.clone()),
                             )
                             .child(
                                 div()
+                                    .flex_none()
                                     .flex()
                                     .items_center()
                                     .gap(px(SpacingScale::S2))
+                                    .child(relative(&row.received_at))
                                     .when(row.status != CandidateStatus::Pending, |line| {
                                         line.child(status_badge(row.status, theme))
                                     })
                                     .children(self.left_for_you(&row.id).map(|_| {
-                                        text_style(div(), TypeScale::META)
+                                        div()
                                             .text_color(theme.colors.status_info())
                                             .child(t::left_for_you_tag())
                                     })),
                             ),
-                    )
-                    .child(
-                        word_wrapped(&row.question, TypeScale::ROW_TITLE, Some(2))
-                            .text_color(theme.colors.text_primary()),
-                    )
-                    .child(
-                        text_style(div(), TypeScale::BODY_SMALL)
-                            .text_color(theme.colors.text_muted())
-                            .line_clamp(2)
-                            .child(row.choice.clone()),
                     ),
             );
         let mut element = mark_selected(element, &theme, selected);
@@ -2000,7 +2045,7 @@ impl<S: InboxStore + ReviewExceptionStore + Send + 'static> InboxScreen<S> {
     /// parts, and the way to the list that lives in Diagnostics. Nothing when
     /// no capture was read.
     fn activity_line(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let summary = capture_summary(&self.progress);
+        let summary = summary_of(&self.progress, false);
         if summary.is_empty() {
             return None;
         }
@@ -2538,8 +2583,7 @@ fn selected_change(
 /// Pill colour and label of a capture's state.
 pub(crate) fn capture_pill(theme: &Theme, capture: &CaptureProgress) -> (gpui::Rgba, &'static str) {
     let colors = &theme.colors;
-    let failed =
-        capture.state == CaptureState::Completed && capture.reason == AssessmentReason::Failed;
+    let failed = capture_health::analysis_failed(capture);
     match capture.state {
         CaptureState::Queued => (colors.status_info(), t::capture_state_queued()),
         CaptureState::Running => (colors.accent_default(), t::capture_state_running()),
@@ -2559,10 +2603,20 @@ fn dot_joined(parts: Vec<String>) -> String {
 
 /// One line over the loaded captures: only the non-zero parts.
 pub(crate) fn capture_summary(captures: &[CaptureProgress]) -> String {
+    summary_of(captures, true)
+}
+
+/// The summary line; `with_failed` is off on the empty queue, where the
+/// capture state shows failures on a line of their own.
+fn summary_of(captures: &[CaptureProgress], with_failed: bool) -> String {
     let count = |keep: fn(&CaptureProgress) -> bool| captures.iter().filter(|c| keep(c)).count();
     let waiting = count(|c| matches!(c.state, CaptureState::Queued | CaptureState::Running));
     let analysed = count(|c| c.state == CaptureState::Completed);
-    let failed = count(|c| c.state == CaptureState::Failed);
+    let failed = if with_failed {
+        count(|c| c.state == CaptureState::Failed)
+    } else {
+        0
+    };
     let proposals: usize = captures.iter().map(|c| c.candidates.pending).sum();
     let parts = [
         (waiting, t::capture_waiting as fn(usize) -> String),
@@ -2715,6 +2769,7 @@ fn failure_copy(error: &InboxError) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use application::capture_progress::AssessmentReason;
 
     #[test]
     fn reading_member_evidence_does_not_replace_confirmation_snapshot() {

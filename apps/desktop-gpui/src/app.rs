@@ -26,9 +26,11 @@ use crate::screens::context::{ContextScreen, ContextServices, ContextStores, Ope
 use crate::screens::decisions::DecisionsScreen;
 use crate::screens::inbox::{InboxScreen, OpenDecisions, OpenDiagnostics, ReviewView};
 use crate::screens::map::OpenSuggestions;
-use crate::screens::map::{MapScreen, MapServices};
+use crate::screens::map::{MapPage, MapScreen, MapServices};
 use crate::screens::overview::OverviewScreen;
-use crate::screens::projects::{ProjectChanged, ProjectsScreen};
+use crate::screens::projects::{
+    PickerKey, ProjectChanged, ProjectPropertiesRequested, ProjectsScreen,
+};
 use crate::screens::settings::{CloseSettings, SettingsScreen, SettingsSection, SettingsServices};
 use crate::startup_error::{self, StartupError};
 use crate::ui::controls::icon_action;
@@ -37,7 +39,7 @@ use crate::ui::icons::{icon, IconName};
 use crate::ui::motion::glide::SlideIndicator;
 use crate::ui::motion::{menu_in, menu_out};
 use crate::ui::patterns::{
-    count_chip, fade_in, kbd, section_label, toast, track_hover, TOAST_DURATION,
+    count_chip, fade_in, kbd, section_label, toast, track_hover, wrap_step, TOAST_DURATION,
 };
 use crate::ui::popup::{reap, Popup};
 use crate::ui::search_field::{SearchChanged, SearchField};
@@ -97,7 +99,7 @@ actions!(
         GoOverview,
         /// Opens or closes the command palette.
         TogglePalette,
-        /// Hides or shows the projects sidebar (focus mode).
+        /// Hides or shows the status bar (focus mode).
         ToggleFocusMode,
         /// Moves the palette highlight down.
         PaletteDown,
@@ -106,16 +108,35 @@ actions!(
         /// Runs the highlighted palette item.
         PaletteRun,
         /// Closes the palette.
-        PaletteClose
+        PaletteClose,
+        /// Opens or closes the project picker under the crumb.
+        ToggleProjectPicker,
+        /// Moves the project picker's highlight down.
+        PickerDown,
+        /// Moves the project picker's highlight up.
+        PickerUp,
+        /// Switches to the highlighted project.
+        PickerRun,
+        /// Closes the project picker.
+        PickerClose
     ]
 );
+
+/// What the popover under the project crumb shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProjectPopover {
+    /// The project picker: filter, list, Abrir pasta.
+    Picker,
+    /// One project's properties and removal.
+    Properties,
+}
 
 /// Height of the custom title bar (brand, theme and caption controls).
 const TITLE_BAR_HEIGHT: f32 = 40.0;
 /// Height of the project bar that carries the breadcrumb and destinations.
 const PROJECT_BAR_HEIGHT: f32 = 44.0;
-/// Width of the projects sidebar (`ProjectsScreen::render_sidebar`).
-const SIDEBAR_WIDTH: f32 = 248.0;
+/// Height of the status bar at the foot of the window (mascot dock + status).
+const STATUS_BAR_HEIGHT: f32 = 48.0;
 /// Grain tiles laid over a background: enough for a 4K-wide window.
 const GRAIN_TILES: usize = 16 * 10;
 /// How long the opening mark stays, its fade included.
@@ -164,6 +185,10 @@ enum Command {
     Project(String),
     Candidate(String),
     Decision(String),
+    /// A page of the Mapa (overview, file lens, timeline).
+    MapPage(MapPage),
+    /// A component or technology of the Mapa, by id.
+    MapEntity(String),
     ProjectPanel,
     OpenFolder,
     ToggleTheme,
@@ -171,6 +196,37 @@ enum Command {
     SettingsAt(SettingsSection),
     Assistant,
     FocusMode,
+}
+
+/// Where `Ctrl F` puts the cursor: the Decisões and the Mapa have their own
+/// search; everywhere else it is the Revisão's.
+fn search_target(destination: Destination) -> Destination {
+    match destination {
+        Destination::Decisions | Destination::Map => destination,
+        _ => Destination::Review,
+    }
+}
+
+/// The palette's Mapa group: its pages, then every component and
+/// technology (id, name, glyph).
+fn map_palette_items(entities: Vec<(String, String, IconName)>) -> Vec<PaletteItem<Command>> {
+    let pages = MapPage::ALL.into_iter().map(|page| PaletteItem {
+        group: t::nav_map(),
+        label: page.label().to_owned(),
+        detail: None,
+        glyph: page.glyph(),
+        shortcut: None,
+        command: Command::MapPage(page),
+    });
+    let entities = entities.into_iter().map(|(id, name, glyph)| PaletteItem {
+        group: t::nav_map(),
+        label: name,
+        detail: None,
+        glyph,
+        shortcut: None,
+        command: Command::MapEntity(id),
+    });
+    pages.chain(entities).collect()
 }
 
 fn context_surface_visible(destination: Destination, settings_open: bool) -> bool {
@@ -273,6 +329,8 @@ pub struct Shell<
     search: Entity<SearchField>,
     _search_subscription: Subscription,
     _project_subscription: Option<Subscription>,
+    /// A picker row's `⋯` turns the popover into that project's properties.
+    _properties_subscription: Option<Subscription>,
     _inbox_subscription: Option<Subscription>,
     _inbox_opens: Option<Subscription>,
     _inbox_diagnostics: Option<Subscription>,
@@ -305,13 +363,13 @@ pub struct Shell<
     hovered_tab: Option<Destination>,
     theme_focus: FocusHandle,
     project_focus: FocusHandle,
-    /// Whether the project panel under the breadcrumb is open.
-    project_panel: Popup<()>,
+    /// The popover under the breadcrumb: the picker or a project's properties.
+    project_panel: Popup<ProjectPopover>,
     /// The quick theme menu under the title bar's contrast button.
     theme_menu: Popup<()>,
-    /// Focus mode: the projects sidebar folded away.
+    /// Focus mode: the status bar folded away.
     focus_mode: bool,
-    /// How many times focus mode was toggled: 0 draws the sidebar still
+    /// How many times focus mode was toggled: 0 draws the status bar still
     /// (no slide on launch); each toggle keys a fresh slide.
     focus_toggles: u32,
     /// When the window opened, for the brief opening mark.
@@ -327,7 +385,7 @@ pub struct Shell<
     backdrop: bool,
     /// Demo-only destination to open once projects load (`--open`).
     route: Option<String>,
-    /// Xemnas, the mascot at the foot of the sidebar and its panel.
+    /// Xemnas, the mascot docked in the status bar, and its panel.
     assistant: Entity<AssistantScreen>,
     _assistant_subscription: Subscription,
     _assistant_toggled: Subscription,
@@ -392,6 +450,14 @@ impl<
                     screen.update(cx, |screen, cx| screen.set_query(&event.0, cx));
                 }
             }
+        });
+        let properties_subscription = screen.as_ref().map(|screen| {
+            cx.subscribe(screen, |shell, _, _: &ProjectPropertiesRequested, cx| {
+                if let Some(popover) = shell.project_panel.open_mut() {
+                    *popover = ProjectPopover::Properties;
+                }
+                cx.notify();
+            })
         });
         let project_subscription = screen.as_ref().map(|screen| {
             cx.subscribe(screen, |shell, _, event: &ProjectChanged, cx| {
@@ -526,6 +592,7 @@ impl<
             _activation: None,
             _search_subscription: search_subscription,
             _project_subscription: project_subscription,
+            _properties_subscription: properties_subscription,
             _inbox_subscription: inbox_subscription,
             _inbox_opens: inbox_opens,
             _inbox_diagnostics: inbox_diagnostics,
@@ -588,6 +655,9 @@ impl<
         cx: &mut Context<Self>,
     ) {
         self.capture = Some(capture);
+        if let Some(inbox) = &self.inbox {
+            inbox.update(cx, |inbox, _| inbox.set_capture(capture));
+        }
         let Some(source) = source else {
             return;
         };
@@ -637,8 +707,9 @@ impl<
         }
     }
 
-    /// The status line at the foot of the sidebar: whether captures arrive
-    /// and what the extractor is doing. Only real states, never a guess.
+    /// The status line at the right of the status bar: whether captures
+    /// arrive and what the extractor is doing. Only real states, never a
+    /// guess. The label truncates on narrow windows; the tooltip keeps it whole.
     fn status_line(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let theme = self.theme;
         let capture = self.capture?;
@@ -664,18 +735,17 @@ impl<
         Some(
             text_style(div(), TypeScale::META)
                 .id("activity-status")
-                .flex_none()
-                .px(px(SpacingScale::S4))
-                .py(px(SpacingScale::S3))
+                .min_w(px(0.0))
+                .h(px(ControlSize::MD))
+                .px(px(SpacingScale::S2))
                 .flex()
                 .items_center()
                 .gap(px(SpacingScale::S2))
-                .border_t_1()
-                .border_color(theme.colors.hairline_divider())
+                .rounded(theme.radius.control())
                 .text_color(theme.colors.text_muted())
                 .role(Role::Button)
                 .aria_label(t::open_details(label))
-                .tooltip(tooltip(hint, None))
+                .tooltip(tooltip(format!("{label} — {hint}"), None))
                 .when(self.settings.is_some(), |line| {
                     let hover = theme.colors.glass_fill_medium();
                     let section = if summary.failed > 0 {
@@ -690,22 +760,130 @@ impl<
                         )
                 })
                 .child(div().size(px(6.0)).flex_none().rounded_full().bg(dot))
-                .child(div().flex_1().truncate().child(label))
+                .child(div().min_w(px(0.0)).truncate().child(label))
                 .when(working > 0, |line| {
                     line.child(icon(
                         IconName::Activity,
                         12.0,
                         theme.colors.accent_default(),
                     ))
-                    .child(t::extracting(working))
+                    .child(div().flex_none().child(t::extracting(working)))
                 })
                 .when(summary.failed > 0, |line| {
                     line.child(
                         div()
+                            .flex_none()
                             .text_color(theme.colors.status_danger())
                             .child(t::failures(summary.failed)),
                     )
                 })
+                .into_any_element(),
+        )
+    }
+
+    /// The 48 px bar at the foot of the window: the mascot dock at the left,
+    /// the status line at the right. It folds away in focus mode: the outer
+    /// height slides, the bar inside keeps its height.
+    fn status_bar(&self, status: Option<gpui::AnyElement>, theme: &Theme) -> gpui::AnyElement {
+        let bar = div()
+            .h(px(STATUS_BAR_HEIGHT))
+            .w_full()
+            .px(px(SpacingScale::S3))
+            .flex()
+            .items_center()
+            .gap(px(SpacingScale::S3))
+            .bg(theme.colors.pane())
+            .border_t_1()
+            .border_color(theme.colors.hairline_divider())
+            .child(self.assistant.clone())
+            .child(div().flex_1())
+            .children(status);
+        let (from, to) = if self.focus_mode {
+            (STATUS_BAR_HEIGHT, 0.0)
+        } else {
+            (0.0, STATUS_BAR_HEIGHT)
+        };
+        let outer = div()
+            .id("status-bar")
+            .w_full()
+            .flex_none()
+            .overflow_hidden()
+            .h(px(to))
+            .child(bar);
+        if self.focus_toggles == 0 {
+            outer.into_any_element()
+        } else {
+            outer
+                .with_animation(
+                    ElementId::Name(format!("status-bar-fold-{}", self.focus_toggles).into()),
+                    crate::ui::motion::spec::FOLD.animation(),
+                    move |outer, t| outer.h(px(from + (to - from) * t)),
+                )
+                .into_any_element()
+        }
+    }
+
+    /// The pill at the right of the project bar: shown only when the capture
+    /// of the project needs a look (stalled, stopped or failed analyses). It
+    /// reads what Review last read, so no new poll runs for it.
+    fn capture_pill(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        use crate::i18n::inbox_ticket as tt;
+        use crate::screens::capture_health::{pill_kind, PillKind};
+        use crate::ui::tokens::tint;
+
+        let theme = self.theme;
+        let view = self.inbox.as_ref()?.read(cx).capture_view()?;
+        let kind = pill_kind(&view)?;
+        let (color, fill, label) = match kind {
+            PillKind::Stale => (
+                theme.colors.status_warning(),
+                0.12,
+                tt::capture_pill_stale().to_owned(),
+            ),
+            PillKind::Stopped => (
+                theme.colors.status_warning(),
+                0.12,
+                tt::capture_pill_stopped().to_owned(),
+            ),
+            PillKind::Failed => (
+                theme.colors.status_danger(),
+                0.10,
+                tt::capture_pill_failed(view.failed),
+            ),
+        };
+        let failed = (view.failed > 0).then(|| tt::capture_not_analysed(view.failed));
+        // Stale and stopped carry their own copy; failures alone say only that.
+        let (title, hint) = match (view.warning(), failed) {
+            (Some((title, body)), Some(failed)) => (title, format!("{body}\n{failed}")),
+            (Some((title, body)), None) => (title, body.to_owned()),
+            (None, failed) => {
+                let failed = failed.unwrap_or_default();
+                (failed.clone(), failed)
+            }
+        };
+        Some(
+            text_style(div(), TypeScale::LABEL)
+                .id("capture-pill")
+                .flex_none()
+                .h(px(ControlSize::SM))
+                .px(px(SpacingScale::S3))
+                .flex()
+                .items_center()
+                .gap(px(SpacingScale::S2))
+                .rounded_full()
+                .bg(tint(color, fill))
+                .text_color(color)
+                .role(Role::Button)
+                .aria_label(title)
+                .tooltip(tooltip(hint, None))
+                .cursor_pointer()
+                .hover(|style| style.opacity(0.85))
+                .focus_visible(focus_ring(&theme))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.open_settings_at(SettingsSection::Diagnostics, cx)
+                }))
+                .child(div().size(px(6.0)).flex_none().rounded_full().bg(color))
+                .child(label)
                 .into_any_element(),
         )
     }
@@ -777,7 +955,17 @@ impl<
             return;
         };
         projects.update(cx, |screen, cx| screen.select_project(project, window, cx));
-        self.go_route(&route, window, cx);
+        // `project-picker[:route]` opens the crumb's picker over that place.
+        match route.strip_prefix("project-picker") {
+            Some(rest) => {
+                self.go_route(rest.trim_start_matches(':'), window, cx);
+                // After the selection's ProjectChanged, which closes popovers.
+                cx.defer_in(window, |this, window, cx| {
+                    this.toggle_project_picker(window, cx)
+                });
+            }
+            None => self.go_route(&route, window, cx),
+        }
         if self.demo && route == "context:knowledge-review-results" {
             if let Some(screen) = &self.context {
                 screen.update(cx, |screen, cx| {
@@ -832,6 +1020,13 @@ impl<
                 _ => SettingsSection::Ai,
             };
             self.open_settings_at(section, cx);
+            return;
+        }
+        if route == "review:queue" {
+            self.switch_to(Destination::Review, window, cx);
+            if let Some(inbox) = &self.inbox {
+                inbox.update(cx, |screen, _| screen.open_queue());
+            }
             return;
         }
         if matches!(route, "map:suggestions" | "review:ties") {
@@ -1050,11 +1245,18 @@ impl<
     }
 
     /// Focuses the actual next action rather than an inert path field.
+    /// With a project that is its crumb (the picker); without one, the
+    /// empty state's Abrir pasta.
     pub fn initial_focus(&self, cx: &App) -> FocusHandle {
-        self.projects
-            .as_ref()
-            .map(|screen| screen.read(cx).initial_focus())
-            .unwrap_or_else(|| self.focus.clone())
+        let Some(projects) = &self.projects else {
+            return self.focus.clone();
+        };
+        let projects = projects.read(cx);
+        if projects.selected_project().is_some() {
+            self.project_focus.clone()
+        } else {
+            projects.initial_focus()
+        }
     }
 
     fn on_tab_next(&mut self, _: &TabNext, window: &mut Window, cx: &mut Context<Self>) {
@@ -1078,16 +1280,24 @@ impl<
             window.focus(&self.initial_focus(cx), cx);
             return;
         }
-        if self.destination == Destination::Decisions {
-            if let Some(screen) = &self.decisions {
-                screen.update(cx, |screen, cx| screen.focus_search(window, cx));
+        match search_target(self.destination) {
+            Destination::Decisions => {
+                if let Some(screen) = &self.decisions {
+                    screen.update(cx, |screen, cx| screen.focus_search(window, cx));
+                }
             }
-            return;
+            Destination::Map => {
+                if let Some(screen) = &self.map {
+                    screen.update(cx, |screen, cx| screen.focus_search(window, cx));
+                }
+            }
+            _ => {
+                if self.destination != Destination::Review {
+                    self.switch_to(Destination::Review, window, cx);
+                }
+                window.focus(&self.search.read(cx).focus_handle(cx), cx);
+            }
         }
-        if self.destination != Destination::Review {
-            self.switch_to(Destination::Review, window, cx);
-        }
-        window.focus(&self.search.read(cx).focus_handle(cx), cx);
     }
 
     fn toggle_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1127,10 +1337,13 @@ impl<
         cx.notify();
     }
 
-    /// Starts the project panel's exit (no focus change).
+    /// Starts the project popover's exit (no focus change).
     fn dismiss_project_panel(&mut self, cx: &mut Context<Self>) {
         if self.project_panel.begin_close() {
             reap(cx, |shell: &mut Self| &mut shell.project_panel);
+            if let Some(projects) = &self.projects {
+                projects.update(cx, |projects, _| projects.picker_dismissed());
+            }
         }
     }
 
@@ -1220,6 +1433,9 @@ impl<
                 });
             }
         }
+        if let (true, Some(map)) = (selected.is_some(), &self.map) {
+            items.extend(map_palette_items(map.read(cx).palette_entities()));
+        }
         if let Some(projects) = &self.projects {
             for (id, name, location) in projects.read(cx).palette_projects() {
                 items.push(PaletteItem {
@@ -1262,7 +1478,7 @@ impl<
         items.push(PaletteItem {
             group: t::group_actions(),
             label: if self.focus_mode {
-                t::show_sidebar().to_owned()
+                t::show_status_bar().to_owned()
             } else {
                 t::focus_mode().to_owned()
             },
@@ -1349,10 +1565,7 @@ impl<
     fn move_palette(&mut self, delta: isize, cx: &mut Context<Self>) {
         let count = self.visible_palette_items(cx).len();
         if let Some(palette) = self.palette.open_mut() {
-            if count > 0 {
-                palette.highlighted =
-                    (palette.highlighted as isize + delta).rem_euclid(count as isize) as usize;
-            }
+            palette.highlighted = wrap_step(palette.highlighted, delta, count);
             cx.notify();
         }
     }
@@ -1395,11 +1608,19 @@ impl<
                     decisions.update(cx, |screen, cx| screen.open_decision(id, cx));
                 }
             }
-            Command::ProjectPanel => {
-                if !self.project_panel.is_open() {
-                    self.toggle_project_panel(window, cx);
+            Command::MapPage(page) => {
+                self.switch_to(Destination::Map, window, cx);
+                if let Some(map) = &self.map {
+                    map.update(cx, |screen, cx| screen.show_page(page, cx));
                 }
             }
+            Command::MapEntity(id) => {
+                self.switch_to(Destination::Map, window, cx);
+                if let Some(map) = &self.map {
+                    map.update(cx, |screen, cx| screen.show_entity(id, cx));
+                }
+            }
+            Command::ProjectPanel => self.open_project_properties(window, cx),
             Command::OpenFolder => {
                 if let Some(projects) = &self.projects {
                     projects.update(cx, |screen, cx| screen.open_folder_dialog(cx));
@@ -1707,16 +1928,45 @@ impl<
         cx.notify();
     }
 
-    fn toggle_project_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // The press that dismissed the panel (outside click on the crumb)
+    /// The crumb and `Ctrl P`: opens or closes the project picker.
+    fn toggle_project_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // The press that dismissed the popover (outside click on the crumb)
         // must not reopen it on the same click.
         if self.project_panel.take_press_was_open() || self.project_panel.is_open() {
             self.close_project_panel(window, cx);
             return;
         }
-        self.project_panel.open(());
-        if let Some(projects) = &self.projects {
-            window.focus(&projects.read(cx).panel_focus(), cx);
+        let Some(projects) = self.projects.clone() else {
+            return;
+        };
+        if self.palette.is_open() {
+            self.close_palette(window, cx);
+        }
+        self.project_panel.open(ProjectPopover::Picker);
+        let crumb = self.project_focus.clone();
+        projects.update(cx, |projects, cx| projects.open_picker(crumb, window, cx));
+        cx.notify();
+    }
+
+    /// The palette's "Propriedades do projeto": the current project's panel.
+    fn open_project_properties(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(projects) = self.projects.clone() else {
+            return;
+        };
+        projects.update(cx, |projects, _| projects.show_current_properties());
+        self.project_panel.open(ProjectPopover::Properties);
+        window.focus(&projects.read(cx).panel_focus(), cx);
+        cx.notify();
+    }
+
+    /// One key in the open picker; a pick or Esc closes it (focus goes back
+    /// to the crumb from the picker itself).
+    fn picker_key(&mut self, key: PickerKey, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(projects) = self.projects.clone() else {
+            return;
+        };
+        if projects.update(cx, |projects, cx| projects.picker_key(key, window, cx)) {
+            self.dismiss_project_panel(cx);
         }
         cx.notify();
     }
@@ -1729,7 +1979,7 @@ impl<
         cx.notify();
     }
 
-    /// The project name as a quiet button: it opens the project panel.
+    /// The project name as a quiet button: it opens the project picker.
     fn project_crumb(&self, name: String, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let open = self.project_panel.is_open();
@@ -1747,9 +1997,9 @@ impl<
                 crumb.hover(move |style| style.bg(theme.colors.hover_veil()))
             })
             .role(Role::Button)
-            .aria_label(t::project_properties_aria(&name))
+            .aria_label(t::switch_project_aria(&name))
             .aria_expanded(open)
-            .tooltip(tooltip(t::project_properties(), None))
+            .tooltip(tooltip(t::switch_project(), Some("Ctrl P")))
             .track_focus(&self.project_focus)
             .focus_visible(focus_ring(&theme))
             .cursor_pointer()
@@ -1757,10 +2007,10 @@ impl<
                 gpui::MouseButton::Left,
                 cx.listener(|this, _, _, _| this.project_panel.note_trigger_press()),
             )
-            .on_click(cx.listener(|this, _, window, cx| this.toggle_project_panel(window, cx)))
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_project_picker(window, cx)))
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                    this.toggle_project_panel(window, cx);
+                    this.toggle_project_picker(window, cx);
                     cx.stop_propagation();
                 }
             }))
@@ -1944,6 +2194,12 @@ impl<
     fn toggle_focus_mode(&mut self, cx: &mut Context<Self>) {
         self.focus_mode = !self.focus_mode;
         self.focus_toggles = self.focus_toggles.wrapping_add(1);
+        // Without the bar its mascot is gone, so the empty queue's lake
+        // shows its own again.
+        let status_bar = !self.focus_mode;
+        if let Some(inbox) = &self.inbox {
+            inbox.update(cx, |inbox, cx| inbox.set_status_bar(status_bar, cx));
+        }
         cx.notify();
     }
 
@@ -2098,7 +2354,7 @@ impl<
     }
 
     /// Opens the app-level settings page, or returns to the projects.
-    /// Opens the settings page on `section` (the sidebar status line leads to
+    /// Opens the settings page on `section` (the status bar's line leads to
     /// the integration or to the failures behind its counts).
     fn open_settings_at(&mut self, section: SettingsSection, cx: &mut Context<Self>) {
         if self.settings.is_some() {
@@ -2309,14 +2565,7 @@ impl<
             };
             self.assistant
                 .update(cx, |assistant, cx| assistant.set_briefing(briefing, cx));
-            let dock = self.assistant.clone();
-            let footer = div()
-                .flex()
-                .flex_col()
-                .child(dock)
-                .children(status)
-                .into_any_element();
-            let sidebar = projects.update(cx, |screen, cx| screen.render_sidebar(Some(footer), cx));
+            let status_bar = self.status_bar(status, &theme);
             let panel_exit = self.project_panel.exit_progress();
             let tab_frame = self.tab_indicator.frame(
                 TAB_ORDER
@@ -2329,10 +2578,32 @@ impl<
                 window.request_animation_frame();
             }
             let measure_tabs = self.tab_indicator.measure(cx.entity_id());
-            let mut panel = if self.project_panel.get().is_some() {
-                projects.update(cx, |screen, cx| screen.render_project_panel(cx))
-            } else {
-                None
+            let mut panel = match self.project_panel.get() {
+                Some(ProjectPopover::Picker) => {
+                    let picker = projects.update(cx, |screen, cx| screen.render_picker(cx));
+                    Some(
+                        div()
+                            .key_context("ProjectPicker")
+                            .on_action(cx.listener(|this, _: &PickerDown, window, cx| {
+                                this.picker_key(PickerKey::Down, window, cx)
+                            }))
+                            .on_action(cx.listener(|this, _: &PickerUp, window, cx| {
+                                this.picker_key(PickerKey::Up, window, cx)
+                            }))
+                            .on_action(cx.listener(|this, _: &PickerRun, window, cx| {
+                                this.picker_key(PickerKey::Enter, window, cx)
+                            }))
+                            .on_action(cx.listener(|this, _: &PickerClose, window, cx| {
+                                this.picker_key(PickerKey::Escape, window, cx)
+                            }))
+                            .child(picker)
+                            .into_any_element(),
+                    )
+                }
+                Some(ProjectPopover::Properties) => {
+                    projects.update(cx, |screen, cx| screen.render_project_panel(cx))
+                }
+                None => None,
             };
             let content = if selected.is_some() && self.destination == Destination::Overview {
                 self.overview
@@ -2379,170 +2650,150 @@ impl<
             } else {
                 projects.update(cx, |screen, cx| screen.render_details(cx))
             };
-            // The sidebar folds away in focus mode: the outer width slides,
-            // the sidebar inside keeps its width so nothing reflows mid-way.
-            let (from, to) = if self.focus_mode {
-                (SIDEBAR_WIDTH, 0.0)
-            } else {
-                (0.0, SIDEBAR_WIDTH)
-            };
-            let sidebar = div()
-                .h_full()
-                .flex_none()
-                .overflow_hidden()
-                .w(px(to))
-                .child(div().w(px(SIDEBAR_WIDTH)).h_full().child(sidebar));
-            let sidebar = if self.focus_toggles == 0 {
-                sidebar.into_any_element()
-            } else {
-                sidebar
-                    .with_animation(
-                        ElementId::Name(format!("sidebar-fold-{}", self.focus_toggles).into()),
-                        crate::ui::motion::spec::FOLD.animation(),
-                        move |sidebar, t| sidebar.w(px(from + (to - from) * t)),
-                    )
-                    .into_any_element()
-            };
+            // No projects column (lote 2, §2.1): the crumb's picker and the
+            // palette carry the list, so the content spans the window.
+            let row = div().flex_1().min_h(px(0.0)).w_full().flex().child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .bg(theme.colors.content())
+                    // Over the material the content is a card: margins on
+                    // the free sides, 10 px radius, hairline edge and a
+                    // card shadow (Fluent's card pattern; Arc and Zen
+                    // frame content the same way).
+                    .when(theme.colors.is_glass(), |content| {
+                        content
+                            .mx(px(SpacingScale::S2))
+                            .mb(px(SpacingScale::S2))
+                            .rounded(theme.radius.surface())
+                            .border_1()
+                            .border_color(theme.colors.glass_border_card())
+                            .overflow_hidden()
+                            .shadow(vec![
+                                BoxShadow::new(px(0.0), px(8.0), theme.colors.shadow_low().into())
+                                    .blur_radius(px(24.0)),
+                                BoxShadow::new(
+                                    px(0.0),
+                                    px(1.0),
+                                    theme.colors.inset_highlight().alpha(0.06).into(),
+                                )
+                                .inset(),
+                            ])
+                    })
+                    // One bar: the project as breadcrumb (it opens the
+                    // project picker), then its destinations.
+                    .children(selected.as_ref().map(|project| {
+                        div()
+                            .relative()
+                            .h(px(PROJECT_BAR_HEIGHT))
+                            .flex_none()
+                            .px(px(SpacingScale::S3))
+                            .flex()
+                            .items_center()
+                            .gap(px(SpacingScale::S1))
+                            .border_b_1()
+                            .border_color(theme.colors.hairline_divider())
+                            .child(self.project_crumb(project.name().to_owned(), cx))
+                            .child(
+                                text_style(div(), TypeScale::BODY_SMALL)
+                                    .text_color(theme.colors.text_disabled())
+                                    .child("/"),
+                            )
+                            .child(
+                                // The selection is one plate behind the
+                                // row, gliding to the chosen tab.
+                                div()
+                                    .relative()
+                                    .flex_none()
+                                    .children(tab_frame.map(|frame| {
+                                        div()
+                                            .absolute()
+                                            .top_0()
+                                            .h(px(ControlSize::SM))
+                                            .left(px(frame.left))
+                                            .w(px(frame.width))
+                                            .rounded(theme.radius.control())
+                                            .bg(theme.colors.selection())
+                                    }))
+                                    .child(
+                                        div()
+                                            .on_children_prepainted(measure_tabs)
+                                            .id("project-destinations")
+                                            .flex()
+                                            .gap(px(SpacingScale::S1))
+                                            .role(Role::TabList)
+                                            .children(
+                                                TAB_ORDER.iter().map(|destination| {
+                                                    self.nav_tab(*destination, cx)
+                                                }),
+                                            ),
+                                    ),
+                            )
+                            .child(div().flex_1())
+                            .children(self.capture_pill(cx))
+                            .children(panel.take().map(|panel| {
+                                deferred(
+                                    div()
+                                        .id("project-panel")
+                                        .absolute()
+                                        .top(px(PROJECT_BAR_HEIGHT - 4.0))
+                                        .left(px(SpacingScale::S3))
+                                        .rounded(theme.radius.surface())
+                                        .border_1()
+                                        .border_color(theme.colors.hairline_divider())
+                                        .bg(theme.colors.floating())
+                                        .shadow(crate::ui::material::elevation(
+                                            &theme,
+                                            crate::ui::material::Elevation::Floating,
+                                        ))
+                                        .occlude()
+                                        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                                            this.dismiss_project_panel(cx);
+                                            cx.notify();
+                                        }))
+                                        .child(match panel_exit {
+                                            None => menu_in(
+                                                "project-panel-in",
+                                                -4.0,
+                                                div().child(panel),
+                                            )
+                                            .into_any_element(),
+                                            Some(t) => menu_out(
+                                                "project-panel-out",
+                                                -4.0,
+                                                t,
+                                                div().child(panel),
+                                            )
+                                            .into_any_element(),
+                                        }),
+                                )
+                                .with_priority(1)
+                            }))
+                    }))
+                    .child(fade_in(
+                        div().flex_1().min_h(px(0.0)).child(content),
+                        ElementId::Name(
+                            format!(
+                                "content-{:?}-{}",
+                                self.destination,
+                                selected
+                                    .as_ref()
+                                    .map(|project| project.id().as_str())
+                                    .unwrap_or("none")
+                            )
+                            .into(),
+                        ),
+                    )),
+            );
             div()
                 .size_full()
                 .flex()
-                .child(sidebar)
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .h_full()
-                        .flex()
-                        .flex_col()
-                        .bg(theme.colors.content())
-                        // Over the material the content is a card: margins on
-                        // the free sides, flush against the sidebar, 10 px
-                        // radius, hairline edge and a card shadow (Fluent's
-                        // card pattern; Arc and Zen frame content the same way).
-                        .when(theme.colors.is_glass(), |content| {
-                            content
-                                .mr(px(SpacingScale::S2))
-                                .mb(px(SpacingScale::S2))
-                                .rounded(theme.radius.surface())
-                                .border_1()
-                                .border_color(theme.colors.glass_border_card())
-                                .overflow_hidden()
-                                .shadow(vec![
-                                    BoxShadow::new(
-                                        px(0.0),
-                                        px(8.0),
-                                        theme.colors.shadow_low().into(),
-                                    )
-                                    .blur_radius(px(24.0)),
-                                    BoxShadow::new(
-                                        px(0.0),
-                                        px(1.0),
-                                        theme.colors.inset_highlight().alpha(0.06).into(),
-                                    )
-                                    .inset(),
-                                ])
-                        })
-                        // One bar: the project as breadcrumb (its properties open
-                        // in a panel from there), then its destinations.
-                        .children(selected.as_ref().map(|project| {
-                            div()
-                                .relative()
-                                .h(px(PROJECT_BAR_HEIGHT))
-                                .flex_none()
-                                .px(px(SpacingScale::S3))
-                                .flex()
-                                .items_center()
-                                .gap(px(SpacingScale::S1))
-                                .border_b_1()
-                                .border_color(theme.colors.hairline_divider())
-                                .child(self.project_crumb(project.name().to_owned(), cx))
-                                .child(
-                                    text_style(div(), TypeScale::BODY_SMALL)
-                                        .text_color(theme.colors.text_disabled())
-                                        .child("/"),
-                                )
-                                .child(
-                                    // The selection is one plate behind the
-                                    // row, gliding to the chosen tab.
-                                    div()
-                                        .relative()
-                                        .flex_none()
-                                        .children(tab_frame.map(|frame| {
-                                            div()
-                                                .absolute()
-                                                .top_0()
-                                                .h(px(ControlSize::SM))
-                                                .left(px(frame.left))
-                                                .w(px(frame.width))
-                                                .rounded(theme.radius.control())
-                                                .bg(theme.colors.selection())
-                                        }))
-                                        .child(
-                                            div()
-                                                .on_children_prepainted(measure_tabs)
-                                                .id("project-destinations")
-                                                .flex()
-                                                .gap(px(SpacingScale::S1))
-                                                .role(Role::TabList)
-                                                .children(TAB_ORDER.iter().map(|destination| {
-                                                    self.nav_tab(*destination, cx)
-                                                })),
-                                        ),
-                                )
-                                .children(panel.take().map(|panel| {
-                                    deferred(
-                                        div()
-                                            .id("project-panel")
-                                            .absolute()
-                                            .top(px(PROJECT_BAR_HEIGHT - 4.0))
-                                            .left(px(SpacingScale::S3))
-                                            .rounded(theme.radius.surface())
-                                            .border_1()
-                                            .border_color(theme.colors.hairline_divider())
-                                            .bg(theme.colors.floating())
-                                            .shadow(crate::ui::material::elevation(
-                                                &theme,
-                                                crate::ui::material::Elevation::Floating,
-                                            ))
-                                            .occlude()
-                                            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                                                this.dismiss_project_panel(cx);
-                                                cx.notify();
-                                            }))
-                                            .child(match panel_exit {
-                                                None => menu_in(
-                                                    "project-panel-in",
-                                                    -4.0,
-                                                    div().child(panel),
-                                                )
-                                                .into_any_element(),
-                                                Some(t) => menu_out(
-                                                    "project-panel-out",
-                                                    -4.0,
-                                                    t,
-                                                    div().child(panel),
-                                                )
-                                                .into_any_element(),
-                                            }),
-                                    )
-                                    .with_priority(1)
-                                }))
-                        }))
-                        .child(fade_in(
-                            div().flex_1().min_h(px(0.0)).child(content),
-                            ElementId::Name(
-                                format!(
-                                    "content-{:?}-{}",
-                                    self.destination,
-                                    selected
-                                        .as_ref()
-                                        .map(|project| project.id().as_str())
-                                        .unwrap_or("none")
-                                )
-                                .into(),
-                            ),
-                        )),
-                )
+                .flex_col()
+                .child(row)
+                .child(status_bar)
                 .into_any_element()
         } else {
             match self.startup_error.clone() {
@@ -2566,7 +2817,7 @@ impl<
                         .object_fit(gpui::ObjectFit::Cover),
                 )
                 // The frame's tint, once, over the whole image: title bar,
-                // sidebar and the gutter around the content card share it.
+                // status bar and the gutter around the content card share it.
                 .child(div().absolute().inset_0().bg(chrome))
                 // A fine grain over the image (tiled; GPUI has no repeat).
                 .child(
@@ -2588,12 +2839,12 @@ impl<
             .assistant
             .update(cx, |assistant, cx| assistant.render_panel(cx))
             .map(|panel| {
-                // Beside the sidebar, rising from the mascot's corner.
+                // Rising from the mascot's corner, over the status bar.
                 deferred(
                     div()
                         .absolute()
-                        .left(px(SIDEBAR_WIDTH + SpacingScale::S3))
-                        .bottom(px(SpacingScale::S3))
+                        .left(px(SpacingScale::S3))
+                        .bottom(px(STATUS_BAR_HEIGHT + SpacingScale::S2))
                         .child(panel),
                 )
                 .with_priority(2)
@@ -2606,7 +2857,7 @@ impl<
             .flex()
             .flex_col()
             // Over the material the frame tint is painted once, for the whole
-            // window: title bar, sidebar and the gutter around the content card
+            // window: title bar, status bar and the gutter around the content card
             // are one surface, so no strip shows raw material beside a tinted one.
             .bg(if wallpaper.is_some() {
                 // Under the image: the canvas, never the translucent chrome.
@@ -2626,6 +2877,9 @@ impl<
             .on_action(
                 cx.listener(|this, _: &TogglePalette, window, cx| this.toggle_palette(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &ToggleProjectPicker, window, cx| {
+                this.toggle_project_picker(window, cx)
+            }))
             .on_action(cx.listener(|this, _: &ToggleFocusMode, _, cx| this.toggle_focus_mode(cx)))
             .on_action(cx.listener(|this, _: &GoReview, window, cx| {
                 this.switch_to(Destination::Review, window, cx)
@@ -2767,5 +3021,37 @@ mod navigation_lifecycle_tests {
         assert!(!context_surface_visible(Destination::Context, true));
         assert!(!context_surface_visible(Destination::Decisions, false));
         assert!(!context_surface_visible(Destination::Map, false));
+    }
+
+    #[test]
+    fn ctrl_f_on_the_map_goes_to_the_map_search() {
+        assert_eq!(search_target(Destination::Map), Destination::Map);
+        assert_eq!(
+            search_target(Destination::Decisions),
+            Destination::Decisions
+        );
+        assert_eq!(search_target(Destination::Context), Destination::Review);
+        assert_eq!(search_target(Destination::Overview), Destination::Review);
+    }
+
+    #[test]
+    fn every_map_entity_and_page_reaches_the_palette() {
+        let entities = vec![
+            ("c1".to_owned(), "jobs".to_owned(), IconName::Component),
+            ("t1".to_owned(), "Rust".to_owned(), IconName::Cpu),
+        ];
+        let items = map_palette_items(entities.clone());
+        for page in MapPage::ALL {
+            assert!(items
+                .iter()
+                .any(|item| matches!(item.command, Command::MapPage(p) if p == page)));
+        }
+        for (id, name, _) in entities {
+            let item = items
+                .iter()
+                .find(|item| matches!(&item.command, Command::MapEntity(found) if *found == id))
+                .expect("entity in the palette");
+            assert_eq!(item.label, name);
+        }
     }
 }

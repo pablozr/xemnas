@@ -54,7 +54,7 @@ Pacote distribuível (ZIP versionado em `dist\`):
 | `XEMNAS_CLAUDE_CODE` | Caminho do executável do Claude Code quando não está no `PATH` (provedor de IA) |
 | `XEMNAS_DISCOVERY`, `XEMNAS_ADAPTER_STATE_DIR`, `XEMNAS_ADAPTER_*` | Ajustes do adapter OpenCode (descoberta da API, estado, debounce, limites de mensagens/artefatos/diff, timeout); `XEMNAS_CONTEXT_TIMEOUT_MS` ajusta a injeção |
 | `XEMNAS_PERF=1` | Registra o tempo de render das telas ([desempenho](../arquitetura/desempenho-e-escala.md)) |
-| `XEMNAS_DEMO_*` (`SCALE`, `ARCH`, `APPROVAL`, `CLAUDE`, `CALIBRATION`, `STARTUP_ERROR`) | Cenários do modo `--demo` |
+| `XEMNAS_DEMO_*` (`SCALE`, `ARCH`, `APPROVAL`, `CLAUDE`, `CALIBRATION`, `STARTUP_ERROR`, `CAPTURE`, `EMPTY_REVIEW`) | Cenários do modo `--demo` (`CAPTURE=listening\|unavailable` troca o estado da captura; `EMPTY_REVIEW=1` esvazia a fila do projeto de exemplo; a rota `review:queue` abre a fila) |
 | `XEMNAS_BACKDROP`, `XEMNAS_GRAPH_RENDER` | Material da janela (`mica-alt`/`mica`/`acrylic`) e modo de render do grafo, para diagnóstico visual |
 | `XEMNAS_DOGFOOD_DB`, `XEMNAS_DOGFOOD_CASES` | Entradas do teste ignorado `dogfood_context` (banco real e casos fora do repositório) |
 

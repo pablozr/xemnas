@@ -67,7 +67,7 @@ pub const MENU_OUT: MotionSpec = MotionSpec::new(100, EASE_IN);
 pub const PANEL_IN: MotionSpec = MotionSpec::new(200, EASE_OUT_EXPO);
 /// A selection indicator gliding to its new place.
 pub const SLIDE: MotionSpec = MotionSpec::new(180, EASE_OUT_QUINT);
-/// The sidebar folding away or back (focus mode).
+/// The status bar folding away or back (focus mode).
 pub const FOLD: MotionSpec = MotionSpec::new(220, EASE_OUT_QUINT);
 /// The opening mark lifting away.
 pub const OPENING_OUT: MotionSpec = MotionSpec::new(300, EASE_IN);

@@ -9,7 +9,9 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use application::overview::{Citation, OverviewApi, OverviewError, OverviewView};
+use application::overview::{
+    Citation, OverviewApi, OverviewError, OverviewParagraph, OverviewView,
+};
 use gpui::prelude::*;
 use gpui::{
     div, px, AnyElement, Context, Div, EventEmitter, FocusHandle, Render, Role, SharedString,
@@ -17,12 +19,13 @@ use gpui::{
 };
 
 use super::context::OpenDecision;
-use super::format::{clipped, short_date};
+use super::format::short_date;
 use crate::i18n::overview as t;
 use crate::ui::controls::{action_button, ButtonKind};
 use crate::ui::icons::{icon, IconName};
 use crate::ui::patterns::{
-    empty_panel, error_banner, reading_page, section_label, skeleton_list, toast, TOAST_DURATION,
+    empty_panel, error_banner, reading_page, section_label, skeleton_list, toast,
+    word_wrapped_with, TOAST_DURATION,
 };
 use crate::ui::theme::{text_style, Theme};
 use crate::ui::tokens::{RadiusScale, SpacingScale, TypeScale};
@@ -333,71 +336,110 @@ impl OverviewScreen {
         )
     }
 
-    /// Small chips for the records a sentence or step rests on.
-    fn citations(
+    /// A cited record, given its tooltip and accessible name; a decision
+    /// also opens in Decisões on click, Enter or Space.
+    fn cited(
+        &mut self,
+        theme: &Theme,
+        element: Stateful<Div>,
+        id: &str,
+        citation: &Citation,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let label = source_label(citation);
+        let element = element.aria_label(label.clone());
+        let Some(open) = opens(citation).map(str::to_owned) else {
+            return element.tooltip(tooltip(label, None));
+        };
+        let title = source_title(citation);
+        let colors = theme.colors;
+        let element = element
+            .cursor_pointer()
+            .hover(move |style| style.bg(colors.glass_fill_low()))
+            .role(Role::Link)
+            .tooltip(tooltip(t::open_in_decisions(&title), None))
+            .focus_visible(crate::ui::controls::focus_ring(theme));
+        self.pressable(
+            element,
+            id,
+            move |_, cx| cx.emit(OpenDecision(open.clone())),
+            cx,
+        )
+    }
+
+    /// The small raised numbers after a paragraph, one per record it rests
+    /// on, numbered as in the page's list of sources.
+    fn source_marks(
         &mut self,
         theme: &Theme,
         prefix: &str,
         citations: &[Citation],
+        sources: &[Citation],
         cx: &mut Context<Self>,
     ) -> Div {
-        let colors = theme.colors;
-        let mut row = div().flex().flex_wrap().gap(px(SpacingScale::S1));
-        for (index, citation) in citations.iter().enumerate() {
-            let decision = citation.kind == "decision";
-            let title = if citation.title.is_empty() {
-                citation.label.clone()
-            } else {
-                citation.title.clone()
+        let mut marks = div().flex().gap(px(1.0));
+        for citation in unique(citations) {
+            let Some(number) = source_number(sources, citation) else {
+                continue;
             };
-            let chip = div()
-                .id(SharedString::from(format!("{prefix}-cite-{index}")))
-                .flex()
-                .items_center()
-                .gap(px(SpacingScale::S1))
-                .px(px(SpacingScale::S2))
+            let id = format!("{prefix}-src-{number}");
+            let mark = text_style(div(), TypeScale::META)
+                .id(SharedString::from(id.clone()))
+                .relative()
+                .top(px(-5.0))
+                .px(px(3.0))
                 .py(px(2.0))
                 .rounded(theme.radius.control())
-                .bg(colors.glass_fill_low())
-                .child(icon(
-                    match citation.kind.as_str() {
-                        "decision" => IconName::Decision,
-                        "document" => IconName::Book,
-                        _ => IconName::Shield,
-                    },
+                .text_size(px(10.0))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(theme.colors.accent_default())
+                .child(number.to_string());
+            marks = marks.child(self.cited(theme, mark, &id, citation, cx));
+        }
+        marks
+    }
+
+    /// The numbered list of the page's sources, with their whole titles.
+    fn source_list(&mut self, theme: &Theme, sources: &[Citation], cx: &mut Context<Self>) -> Div {
+        let colors = theme.colors;
+        let mut list = div().flex().flex_col().gap(px(SpacingScale::S1));
+        for (index, citation) in sources.iter().enumerate() {
+            let id = format!("overview-source-{}", index + 1);
+            let row = div()
+                .id(SharedString::from(id.clone()))
+                .flex()
+                .items_start()
+                .gap(px(SpacingScale::S2))
+                .px(px(SpacingScale::S1))
+                .py(px(2.0))
+                .rounded(theme.radius.control())
+                .child(
+                    text_style(div(), TypeScale::BODY_SMALL)
+                        .w(px(20.0))
+                        .flex_none()
+                        .text_color(colors.accent_default())
+                        .child(format!("{}.", index + 1)),
+                )
+                .child(div().pt(px(4.0)).flex_none().child(icon(
+                    source_icon(citation),
                     11.0,
                     colors.text_muted(),
-                ))
+                )))
                 .child(
-                    text_style(div(), TypeScale::META)
+                    text_style(div(), TypeScale::BODY_SMALL)
+                        .flex_1()
+                        .min_w(px(0.0))
                         .text_color(colors.text_secondary())
-                        .child(clipped(&title, CHIP_CHARS)),
+                        .child(source_title(citation)),
                 );
-            if decision {
-                let id = citation.id.clone();
-                let chip = chip
-                    .cursor_pointer()
-                    .hover(move |style| style.bg(colors.glass_fill_medium()))
-                    .role(Role::Link)
-                    .aria_label(t::open_decision(&title))
-                    .tooltip(tooltip(t::open_in_decisions(&title), None))
-                    .focus_visible(crate::ui::controls::focus_ring(theme));
-                row = row.child(self.pressable(
-                    chip,
-                    &format!("{prefix}-cite-{index}"),
-                    move |_, cx| cx.emit(OpenDecision(id.clone())),
-                    cx,
-                ));
-            } else {
-                let label = if citation.kind == "document" {
-                    t::cite_document(&title, &citation.id)
-                } else {
-                    t::cite_rule(&title)
-                };
-                row = row.child(chip.aria_label(label.clone()).tooltip(tooltip(label, None)));
-            }
+            list = list.child(self.cited(theme, row, &id, citation, cx));
         }
-        row
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(SpacingScale::S2))
+            .child(section_label(theme, t::sources()))
+            .child(list)
     }
 
     fn render_summary(
@@ -449,19 +491,14 @@ impl OverviewScreen {
                     .child(meta),
             )
             .children(stale);
+        let sources = sources(&overview.summary);
         let mut summary = div().flex().flex_col().gap(px(SpacingScale::S4));
         for (index, paragraph) in overview.summary.iter().enumerate() {
             let prefix = format!("overview-p{index}");
-            let citations = self.citations(theme, &prefix, &paragraph.citations, cx);
-            summary = summary.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(SpacingScale::S2))
-                    .child(text_style(div(), TypeScale::BODY).child(paragraph.text.clone()))
-                    .child(citations),
-            );
+            let marks = self.source_marks(theme, &prefix, &paragraph.citations, &sources, cx);
+            summary = summary.child(word_wrapped_with(&paragraph.text, TypeScale::BODY, marks));
         }
+        let sources = (!sources.is_empty()).then(|| self.source_list(theme, &sources, cx));
         div()
             .flex()
             .flex_col()
@@ -482,6 +519,7 @@ impl OverviewScreen {
                     .child(section_label(theme, t::summary_section()))
                     .child(summary),
             )
+            .children(sources)
             .child(page)
             .child(
                 text_style(div(), TypeScale::META)
@@ -547,8 +585,70 @@ impl Render for OverviewScreen {
     }
 }
 
-/// Longest source title shown on a chip; the tooltip has the rest.
-const CHIP_CHARS: usize = 48;
+/// Every record the page cites, once, in order of first appearance; a
+/// record's number is its place in this list plus one.
+fn sources(summary: &[OverviewParagraph]) -> Vec<Citation> {
+    unique(summary.iter().flat_map(|paragraph| &paragraph.citations))
+        .into_iter()
+        .cloned()
+        .collect()
+}
+
+/// The citations without repeats of the same record, in order.
+fn unique<'a>(citations: impl IntoIterator<Item = &'a Citation>) -> Vec<&'a Citation> {
+    let mut seen: Vec<&Citation> = Vec::new();
+    for citation in citations {
+        if !seen.iter().any(|known| same_record(known, citation)) {
+            seen.push(citation);
+        }
+    }
+    seen
+}
+
+fn same_record(a: &Citation, b: &Citation) -> bool {
+    a.kind == b.kind && a.id == b.id
+}
+
+/// The number shown for `citation` (1-based), from the page's sources.
+fn source_number(sources: &[Citation], citation: &Citation) -> Option<usize> {
+    sources
+        .iter()
+        .position(|source| same_record(source, citation))
+        .map(|index| index + 1)
+}
+
+/// What pressing a source does: a decision opens in Decisões; documents and
+/// rules only explain themselves.
+fn opens(citation: &Citation) -> Option<&str> {
+    (citation.kind == "decision").then_some(citation.id.as_str())
+}
+
+fn source_title(citation: &Citation) -> String {
+    if citation.title.is_empty() {
+        citation.label.clone()
+    } else {
+        citation.title.clone()
+    }
+}
+
+/// The accessible name of a source number or row (also the tooltip of
+/// documents and rules).
+fn source_label(citation: &Citation) -> String {
+    let title = source_title(citation);
+    match citation.kind.as_str() {
+        "decision" => t::open_decision(&title),
+        "document" => t::cite_document(&title, &citation.id),
+        _ => t::cite_rule(&title),
+    }
+}
+
+fn source_icon(citation: &Citation) -> IconName {
+    match citation.kind.as_str() {
+        "decision" => IconName::Decision,
+        "document" => IconName::Book,
+        _ => IconName::Shield,
+    }
+}
 
 /// Product copy for an overview failure; storage detail goes to the log.
 fn product(error: OverviewError) -> String {
@@ -566,8 +666,75 @@ fn product(error: OverviewError) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::product;
-    use application::overview::OverviewError;
+    use super::*;
+
+    fn cite(kind: &str, id: &str) -> Citation {
+        Citation {
+            kind: kind.into(),
+            id: id.into(),
+            label: format!("L:{id}"),
+            title: format!("Título {id}"),
+        }
+    }
+
+    fn paragraph(citations: Vec<Citation>) -> OverviewParagraph {
+        OverviewParagraph {
+            text: "Texto do parágrafo.".into(),
+            citations,
+        }
+    }
+
+    fn summary() -> Vec<OverviewParagraph> {
+        vec![
+            paragraph(vec![cite("decision", "d1"), cite("document", "doc.md")]),
+            paragraph(vec![
+                cite("claim", "r1"),
+                cite("decision", "d1"),
+                cite("decision", "d1"),
+            ]),
+            paragraph(vec![cite("decision", "d2")]),
+        ]
+    }
+
+    #[test]
+    fn enter_on_the_first_number_opens_its_decision() {
+        let sources = sources(&summary());
+        let first = summary()[0].citations[0].clone();
+        assert_eq!(source_number(&sources, &first), Some(1));
+        assert_eq!(opens(&sources[0]), Some("d1"));
+        assert!(opens(&cite("document", "doc.md")).is_none());
+        assert!(opens(&cite("claim", "r1")).is_none());
+    }
+
+    #[test]
+    fn the_list_has_one_row_per_source_in_order_of_first_appearance() {
+        let summary = summary();
+        let sources = sources(&summary);
+        let ids: Vec<&str> = sources.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, ["d1", "doc.md", "r1", "d2"]);
+        // The second paragraph repeats d1 twice: one number, the same as before.
+        let marks = unique(&summary[1].citations);
+        assert_eq!(marks.len(), 2);
+        assert_eq!(source_number(&sources, marks[1]), Some(1));
+    }
+
+    #[test]
+    fn documents_and_rules_explain_themselves() {
+        let document = cite("document", "doc.md");
+        assert_eq!(
+            source_label(&document),
+            t::cite_document("Título doc.md", "doc.md")
+        );
+        assert_eq!(
+            source_label(&cite("claim", "r1")),
+            t::cite_rule("Título r1")
+        );
+        let untitled = Citation {
+            title: String::new(),
+            ..cite("decision", "d9")
+        };
+        assert_eq!(source_title(&untitled), "L:d9");
+    }
 
     #[test]
     fn failures_read_as_sentences_and_hide_storage_detail() {
