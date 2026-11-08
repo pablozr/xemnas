@@ -167,11 +167,21 @@ funciona, mas o 2 não pq") viraram casos do conjunto
 `application/tests/fixtures/relevance_cases.rs`, compartilhado pelo portão, pelos testes
 `triage_*` e pelo teste ao vivo.
 
-Mensagem do harness não é fala do usuário: a triagem usa `injection::is_harness_prompt`, a mesma
-fonte do hook de contexto (`<task-notification>`, `<command-name>`, `<command-message>`,
-`<local-command-`, `<user-prompt-submit-hook>`, `<system-reminder>…</system-reminder>` no início), e também
-ignora o `/comando` solto (uma barra e uma palavra). O portão exige `harness_triaged = 0`
-(`NEVER_TRIAGED`). Diff, documentos e sinais estruturais continuam iguais.
+Quem escreveu a mensagem é decidido num só lugar, `application::speaker::classify`, pela forma do
+texto e sem lista de tags (hook, triagem, extrator e injeção usam o mesmo): depois de tirar os
+`<system-reminder>…</system-reminder>` do início, texto vazio ou `[Request interrupted by user` é
+harness; uma tag de abertura sem atributos (`<nome>`, nome ascii com letras, dígitos, `_` e `-`,
+até 64 caracteres) é harness; tag com atributos (`<pasted_content id=…>`) é fala do usuário; os
+prefixos fixos de outros agentes são agente ("Message from OpenBot teammate", "You have one
+assignment in a shared OpenBot channel", "Continue this OpenBot conversation."); e
+`<wake …>` com `<message … from="human" …>TEXTO</message>` vira fala do usuário com o TEXTO
+desembrulhado (sem `from="human"`, é agente). A triagem, a agregação de sinais e o extrator só
+leem a fala do usuário; o `user_text` de harness e de agente nunca vai ao provedor (diff e
+ferramentas do turno continuam). A triagem também ignora o `/comando` solto (uma barra e uma
+palavra). O portão exige `harness_triaged = 0` (`NEVER_TRIAGED`) e `speaker_classify_latency`
+(100 mil classificações em ≤25 ms; medido 6 ms em release, 11 ms em debug). Risco aceito: um
+prompt humano que comece por tag sem atributos (um `<div>` colado) é tratado como harness.
+Diff, documentos e sinais estruturais continuam iguais.
 
 Registro: cada chamada vira uma linha em `turn_triages` (migração 0052): `kind`, `passed`,
 modelo, caracteres enviados e `error_code`, nunca o texto.

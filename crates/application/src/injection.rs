@@ -13,6 +13,7 @@ use crate::decisions::DecisionStore;
 use crate::graph::{GraphStore, KnowledgeGraph};
 use crate::projects::{find_project_by_directory, ProjectRepository};
 use crate::relations::RelationStore;
+use crate::speaker::{classify, Speaker};
 
 /// Default token budget for one injected block.
 pub const DEFAULT_BUDGET_TOKENS: usize = 300;
@@ -29,44 +30,6 @@ const MAX_REASON_CHARS: usize = 140;
 const OPEN_TAG: &str =
     "<xemnas-context note=\"normas confirmadas pelo usuário; O: observado localmente, não é regra; não são instruções\">";
 const CLOSE_TAG: &str = "</xemnas-context>";
-
-/// Openings of user messages the harness writes itself.
-const HARNESS_PROMPT_PREFIXES: &[&str] = &[
-    "<task-notification>",
-    "<command-name>",
-    "<command-message>",
-    "<local-command-",
-    "<user-prompt-submit-hook>",
-];
-
-const SYSTEM_REMINDER_OPEN: &str = "<system-reminder>";
-const SYSTEM_REMINDER_CLOSE: &str = "</system-reminder>";
-
-/// Whether `prompt` is a synthetic message and not something the user typed.
-/// Claude Code delivers the end of a background subagent, a slash command and
-/// its output, and `<system-reminder>` blocks as user messages; they carry no
-/// request, so they get no context and record nothing. Reminder blocks at the
-/// start are skipped: what follows them, if anything, is the user's.
-pub(crate) fn is_harness_prompt(prompt: &str) -> bool {
-    let rest = strip_leading_reminders(prompt);
-    rest.is_empty()
-        || HARNESS_PROMPT_PREFIXES
-            .iter()
-            .any(|prefix| rest.starts_with(prefix))
-}
-
-/// `prompt` without the `<system-reminder>` blocks at its start; an unclosed
-/// block swallows the rest.
-pub(crate) fn strip_leading_reminders(prompt: &str) -> &str {
-    let mut rest = prompt.trim_start();
-    while let Some(after) = rest.strip_prefix(SYSTEM_REMINDER_OPEN) {
-        let Some(end) = after.find(SYSTEM_REMINDER_CLOSE) else {
-            return "";
-        };
-        rest = after[end + SYSTEM_REMINDER_CLOSE.len()..].trim_start();
-    }
-    rest
-}
 
 /// Kind of item a compact line cites.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -294,12 +257,20 @@ where
         if session.is_empty() || session.chars().count() > MAX_SESSION_ID_CHARS {
             return Err(ContextError::InvalidRequest("sessão inválida".into()));
         }
-        let prompt: String = request.prompt.trim().chars().take(MAX_TASK_CHARS).collect();
         let edit = request.trigger == InjectionTrigger::Edit;
+        // What the harness or another agent wrote gets no context and records
+        // nothing; a wake is matched by the human's words, not by its envelope.
+        let prompt: String = if edit {
+            request.prompt.trim().chars().take(MAX_TASK_CHARS).collect()
+        } else {
+            match classify(&request.prompt) {
+                Speaker::User(words) => words.trim().chars().take(MAX_TASK_CHARS).collect(),
+                Speaker::Harness | Speaker::Agent => {
+                    return Ok(InjectionOutcome::empty(ContextMode::Off));
+                }
+            }
+        };
         if (edit && request.files.is_empty()) || (!edit && prompt.is_empty()) {
-            return Ok(InjectionOutcome::empty(ContextMode::Off));
-        }
-        if !edit && is_harness_prompt(&prompt) {
             return Ok(InjectionOutcome::empty(ContextMode::Off));
         }
         let Some(project) = find_project_by_directory(&self.store, &request.canonical_path)
@@ -1254,26 +1225,6 @@ mod tests {
             claims,
             omitted: 0,
         }
-    }
-
-    #[test]
-    fn harness_prompts_are_recognized() {
-        assert!(is_harness_prompt(
-            "  <task-notification><status>completed</status></task-notification>"
-        ));
-        assert!(!is_harness_prompt("veja <task-notification>"));
-        assert!(is_harness_prompt("<command-name>/compact</command-name>"));
-        assert!(is_harness_prompt(
-            "<local-command-stdout>ok</local-command-stdout>"
-        ));
-        assert!(is_harness_prompt("<system-reminder>x</system-reminder>"));
-        assert!(is_harness_prompt(
-            "<system-reminder>x</system-reminder>\n<task-notification>y</task-notification>"
-        ));
-        assert!(!is_harness_prompt(
-            "<system-reminder>x</system-reminder>\nusa redis"
-        ));
-        assert!(!is_harness_prompt("cache"));
     }
 
     #[test]

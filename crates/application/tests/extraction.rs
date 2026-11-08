@@ -1136,6 +1136,38 @@ fn triage_never_sees_what_the_harness_wrote() {
     }
 }
 
+/// An extractor that keeps the kinds of artifacts the provider would be sent.
+struct Spy {
+    seen: Mutex<Vec<(String, String)>>,
+}
+
+impl CandidateExtractor for Spy {
+    fn extract(
+        &self,
+        input: &DecisionEvidence,
+        signals: &[RelevanceSignal],
+    ) -> Result<Vec<CandidateProposal>, ExtractError> {
+        *self.seen.lock().expect("lock") = input
+            .artifacts
+            .iter()
+            .map(|artifact| (artifact.kind.clone(), artifact.content.clone()))
+            .collect();
+        Ok(vec![valid_proposal(input, signals)])
+    }
+}
+
+#[test]
+fn the_provider_is_never_sent_what_the_harness_wrote() {
+    let spy = Spy {
+        seen: Mutex::new(Vec::new()),
+    };
+    let (_, result) = run_with("notification-with-migration.json", &spy);
+    result.expect("extraction runs");
+    let seen = spy.seen.lock().expect("lock");
+    assert!(seen.iter().all(|(kind, _)| kind != "user_text"), "{seen:?}");
+    assert!(seen.iter().any(|(kind, _)| kind == "diff_hunk"));
+}
+
 #[test]
 fn triage_a_choice_in_free_words_reaches_the_extractor_and_is_recorded() {
     let extractor = Triaging::says(true, TriageKind::Choice);

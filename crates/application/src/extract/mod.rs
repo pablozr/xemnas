@@ -494,6 +494,7 @@ where
     };
     let evidence = normalize(evidence);
     let hash = input_hash(capture_id, &evidence);
+    let evidence = only_user_speech(evidence);
     let signals = match assess_relevance(&evidence) {
         Relevance::Pass(signals) => signals,
         Relevance::Empty => {
@@ -879,6 +880,28 @@ pub(crate) fn normalize(mut evidence: DecisionEvidence) -> DecisionEvidence {
     for artifact in &mut evidence.artifacts {
         artifact.content = truncate_content(&artifact.content, MAX_EVIDENCE_CONTENT_BYTES);
     }
+    evidence
+}
+
+/// Drops the `user_text` artifacts the harness or another agent wrote and
+/// leaves the others as the user's words (see [`crate::speaker`]), so the
+/// provider is never sent text that is not the user's. Diffs and tool
+/// summaries stay.
+fn only_user_speech(mut evidence: DecisionEvidence) -> DecisionEvidence {
+    evidence.artifacts.retain_mut(|artifact| {
+        if artifact.kind != "user_text" {
+            return true;
+        }
+        match crate::speaker::classify(&artifact.content) {
+            crate::speaker::Speaker::User(words) => {
+                if words != artifact.content {
+                    artifact.content = words.into_owned();
+                }
+                true
+            }
+            _ => false,
+        }
+    });
     evidence
 }
 

@@ -1,11 +1,13 @@
 //! Cheap, deterministic relevance filter (MVP-SPEC §6).
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use serde_json::json;
 
 use super::triage::{TriageInput, MIN_SPEECH_ALNUM, TRIAGE_ASSISTANT_CHARS, TRIAGE_USER_CHARS};
 use super::{DecisionEvidence, EvidenceArtifact};
+use crate::speaker::{classify, Speaker};
 
 /// Metadata source the adapter gives to the answer of an `AskUserQuestion`.
 pub const ASK_USER_QUESTION_SOURCE: &str = "ask_user_question";
@@ -262,16 +264,11 @@ pub fn assess_relevance(evidence: &DecisionEvidence) -> Relevance {
 /// call: the speech of the turn (without the harness's reminders and the
 /// project context delivered to the user) and the end of the assistant's text.
 pub fn triage_input(evidence: &DecisionEvidence) -> Option<TriageInput> {
-    let speech: Vec<&str> = evidence
-        .artifacts
-        .iter()
-        .filter(|artifact| is_user_speech(artifact))
-        .map(|artifact| crate::injection::strip_leading_reminders(&artifact.content))
-        .collect();
+    let speech: Vec<Cow<'_, str>> = evidence.artifacts.iter().filter_map(user_words).collect();
     let speech: Vec<String> = speech
         .into_iter()
         .map(|text| {
-            crate::injection::strip_context_blocks(text)
+            crate::injection::strip_context_blocks(&text)
                 .trim()
                 .to_string()
         })
@@ -413,13 +410,17 @@ fn is_normative_path(path: &str) -> bool {
         || matches!(classify(path), DocumentKind::Adr | DocumentKind::Spec)
 }
 
-/// Whether the artifact is something the user said: not a message the harness
-/// wrote (task notification, command echo, `<system-reminder>`) and not a bare
-/// `/command`, which names an action and states no choice.
-fn is_user_speech(artifact: &EvidenceArtifact) -> bool {
-    artifact.kind == "user_text"
-        && !crate::injection::is_harness_prompt(&artifact.content)
-        && !is_bare_command(&artifact.content)
+/// What the user said in the artifact: nothing when it is not a user message,
+/// when the harness or another agent wrote it (see [`crate::speaker`]) or when
+/// it is a bare `/command`, which names an action and states no choice.
+fn user_words(artifact: &EvidenceArtifact) -> Option<Cow<'_, str>> {
+    if artifact.kind != "user_text" {
+        return None;
+    }
+    match classify(&artifact.content) {
+        Speaker::User(words) if !is_bare_command(&words) => Some(words),
+        _ => None,
+    }
 }
 
 /// `/compact`, `/clear`: a slash and one word, nothing else.
@@ -436,9 +437,17 @@ fn is_bare_command(content: &str) -> bool {
 fn aggregate_text(evidence: &DecisionEvidence) -> String {
     let mut text = String::new();
     for artifact in &evidence.artifacts {
+        let content = if artifact.kind == "user_text" {
+            match user_words(artifact) {
+                Some(words) => words,
+                None => continue,
+            }
+        } else {
+            Cow::Borrowed(artifact.content.as_str())
+        };
         text.push_str(&artifact.kind.to_lowercase());
         text.push('\n');
-        text.push_str(&artifact.content.to_lowercase());
+        text.push_str(&content.to_lowercase());
         text.push('\n');
         text.push_str(&artifact.metadata.to_lowercase());
         text.push('\n');

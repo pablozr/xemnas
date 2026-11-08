@@ -15,12 +15,15 @@ use cases::{artifact, corpus};
 const RELEVANCE_RECALL_FLOOR: f64 = 1.0;
 /// Ceiling for trivial captures that reach the extractor (wasted AI calls); zero, so the gate is exact.
 const RELEVANCE_FALSE_PASSES_CEILING: usize = 0;
-/// Ceiling for captures sent to the turn triage in this set (one small AI call each).
-const RELEVANCE_TRIAGE_CALLS_CEILING: usize = 50;
+/// Ceiling for captures sent to the turn triage in this set (one small AI call each):
+/// the 50 of the original set plus the 4 speech cases added with the speaker classifier.
+const RELEVANCE_TRIAGE_CALLS_CEILING: usize = 54;
 /// Ceiling for the characters one triage call sends (instructions plus content).
 const TRIAGE_INPUT_CHARS_CEILING: usize = 2_800;
 /// Ceiling for assessing 2,000 realistic captures.
 const RELEVANCE_LATENCY_CEILING_MS: u128 = 800;
+/// Ceiling for classifying the speaker of 100,000 messages (measured 6 ms release, 11 ms debug).
+const SPEAKER_LATENCY_CEILING_MS: u128 = 25;
 
 /// Captures the harness wrote or a bare command: never worth a triage call.
 const NEVER_TRIAGED: &[&str] = &[
@@ -28,6 +31,13 @@ const NEVER_TRIAGED: &[&str] = &[
     "real-task-notification.json",
     "real-task-notification-short.json",
     "notificacao-com-frase-de-rumo",
+    "openbot-teammate",
+    "openbot-assignment",
+    "openbot-saved-memories",
+    "openbot-memories-update",
+    "openbot-continue",
+    "request-interrupted",
+    "wake-sem-humano",
 ];
 
 fn fixtures_dir() -> std::path::PathBuf {
@@ -158,5 +168,33 @@ fn relevance_filter_latency() {
     assert!(
         elapsed_ms <= RELEVANCE_LATENCY_CEILING_MS,
         "assessing took {elapsed_ms} ms"
+    );
+}
+
+#[test]
+fn speaker_classify_latency() {
+    let messages = [
+        "sim pode",
+        "esquece o redis por enquanto, vamos focar no sqlite local e revisar o plano depois",
+        "<system-reminder>lembrete</system-reminder>
+usa sqlite",
+        "<task-notification><summary>feito</summary></task-notification>",
+        "Message from OpenBot teammate Agente A: segue o resultado",
+        "<pasted_content id=\"1\">log</pasted_content> troca o cache",
+        "<wake reason=\"message\"><message from=\"human\">usa sqlite</message></wake>",
+        "[Request interrupted by user for tool use]",
+    ];
+    let start = Instant::now();
+    let mut users = 0usize;
+    for index in 0..100_000usize {
+        let speaker = application::speaker::classify(messages[index % messages.len()]);
+        users += usize::from(matches!(speaker, application::speaker::Speaker::User(_)));
+    }
+    let elapsed_ms = start.elapsed().as_millis();
+    println!("latency speaker_classify messages=100000 elapsed_ms={elapsed_ms} users={users}");
+    assert_eq!(users, 62_500, "the classifier changed its verdicts");
+    assert!(
+        elapsed_ms <= SPEAKER_LATENCY_CEILING_MS,
+        "classifying took {elapsed_ms} ms"
     );
 }
