@@ -89,9 +89,16 @@ pub fn normalize_dir(path: &str) -> Option<String> {
         return None;
     }
     let canonical = std::fs::canonicalize(Path::new(path)).ok()?;
-    let text = canonical.to_string_lossy();
-    let text = text.strip_prefix(r"\\?\").unwrap_or(&text);
-    Some(text.to_string())
+    Some(strip_verbatim(&canonical.to_string_lossy()))
+}
+
+/// `path` without the Windows verbatim prefix: `\\?\C:\x` is `C:\x` and the share
+/// form `\\?\UNC\server\share` is `\\server\share`.
+fn strip_verbatim(path: &str) -> String {
+    if let Some(share) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{share}");
+    }
+    path.strip_prefix(r"\\?\").unwrap_or(path).to_string()
 }
 
 /// Caches another identity, misses included, bounded and expiring.
@@ -144,6 +151,17 @@ pub fn shared() -> &'static CachedRepoIdentity<GitRepoIdentity> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_verbatim_prefix_is_stripped_and_a_share_stays_a_unc_path() {
+        assert_eq!(strip_verbatim(r"\\?\C:\repo\src"), r"C:\repo\src");
+        assert_eq!(
+            strip_verbatim(r"\\?\UNC\server\share\repo"),
+            r"\\server\share\repo"
+        );
+        assert_eq!(strip_verbatim(r"\\server\share"), r"\\server\share");
+        assert_eq!(strip_verbatim("/home/repo"), "/home/repo");
+    }
     use crate::projects::{
         find_project_with_identity, ProjectError, ProjectRecord, ProjectRepository,
     };

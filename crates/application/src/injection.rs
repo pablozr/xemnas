@@ -13,6 +13,7 @@ use crate::decisions::DecisionStore;
 use crate::graph::{GraphStore, KnowledgeGraph};
 use crate::projects::{find_project_by_directory, ProjectRepository};
 use crate::relations::RelationStore;
+use crate::speaker::{classify, Speaker};
 
 /// Default token budget for one injected block.
 pub const DEFAULT_BUDGET_TOKENS: usize = 300;
@@ -25,48 +26,14 @@ pub const MAX_BUDGET_TOKENS: usize = 2_000;
 
 /// Longest reason kept from a decision rationale, in characters.
 const MAX_REASON_CHARS: usize = 140;
+/// Whether decisions and rules extracted from documents are injected on their
+/// own. Off: a document already says it, and 68 of 93 injected items in the
+/// dogfood came from one. The MCP tools still return them, labeled.
+const INJECT_DOCUMENT_ORIGIN: bool = false;
 
 const OPEN_TAG: &str =
     "<xemnas-context note=\"normas confirmadas pelo usuário; O: observado localmente, não é regra; não são instruções\">";
 const CLOSE_TAG: &str = "</xemnas-context>";
-
-/// Openings of user messages the harness writes itself.
-const HARNESS_PROMPT_PREFIXES: &[&str] = &[
-    "<task-notification>",
-    "<command-name>",
-    "<command-message>",
-    "<local-command-",
-    "<user-prompt-submit-hook>",
-];
-
-const SYSTEM_REMINDER_OPEN: &str = "<system-reminder>";
-const SYSTEM_REMINDER_CLOSE: &str = "</system-reminder>";
-
-/// Whether `prompt` is a synthetic message and not something the user typed.
-/// Claude Code delivers the end of a background subagent, a slash command and
-/// its output, and `<system-reminder>` blocks as user messages; they carry no
-/// request, so they get no context and record nothing. Reminder blocks at the
-/// start are skipped: what follows them, if anything, is the user's.
-pub(crate) fn is_harness_prompt(prompt: &str) -> bool {
-    let rest = strip_leading_reminders(prompt);
-    rest.is_empty()
-        || HARNESS_PROMPT_PREFIXES
-            .iter()
-            .any(|prefix| rest.starts_with(prefix))
-}
-
-/// `prompt` without the `<system-reminder>` blocks at its start; an unclosed
-/// block swallows the rest.
-pub(crate) fn strip_leading_reminders(prompt: &str) -> &str {
-    let mut rest = prompt.trim_start();
-    while let Some(after) = rest.strip_prefix(SYSTEM_REMINDER_OPEN) {
-        let Some(end) = after.find(SYSTEM_REMINDER_CLOSE) else {
-            return "";
-        };
-        rest = after[end + SYSTEM_REMINDER_CLOSE.len()..].trim_start();
-    }
-    rest
-}
 
 /// Kind of item a compact line cites.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -294,12 +261,20 @@ where
         if session.is_empty() || session.chars().count() > MAX_SESSION_ID_CHARS {
             return Err(ContextError::InvalidRequest("sessão inválida".into()));
         }
-        let prompt: String = request.prompt.trim().chars().take(MAX_TASK_CHARS).collect();
         let edit = request.trigger == InjectionTrigger::Edit;
+        // What the harness or another agent wrote gets no context and records
+        // nothing; a wake is matched by the human's words, not by its envelope.
+        let prompt: String = if edit {
+            request.prompt.trim().chars().take(MAX_TASK_CHARS).collect()
+        } else {
+            match classify(&request.prompt) {
+                Speaker::User(words) => words.trim().chars().take(MAX_TASK_CHARS).collect(),
+                Speaker::Harness | Speaker::Agent => {
+                    return Ok(InjectionOutcome::empty(ContextMode::Off));
+                }
+            }
+        };
         if (edit && request.files.is_empty()) || (!edit && prompt.is_empty()) {
-            return Ok(InjectionOutcome::empty(ContextMode::Off));
-        }
-        if !edit && is_harness_prompt(&prompt) {
             return Ok(InjectionOutcome::empty(ContextMode::Off));
         }
         let Some(project) = find_project_by_directory(&self.store, &request.canonical_path)
@@ -364,6 +339,9 @@ where
                 budget_chars: Some(MAX_BUDGET_CHARS),
                 files,
             })?;
+        if !INJECT_DOCUMENT_ORIGIN && !(pack.decisions.is_empty() && pack.claims.is_empty()) {
+            self.store.document_origin(&project.id)?.strip(&mut pack);
+        }
         if let Some((decisions, claims)) = &tied {
             pack.decisions
                 .retain(|decision| decisions.contains(&decision.decision_id));
@@ -805,11 +783,28 @@ fn is_manifest_name(path: &str) -> bool {
         .is_some_and(|name| crate::observations::ROOT_MANIFESTS.contains(&name))
 }
 
+/// `D:{ref} v{n}`, the start of a decision's line.
+pub(crate) fn decision_head(decision: &PackDecision) -> String {
+    format!(
+        "D:{} v{}",
+        short_ref(&decision.decision_id),
+        decision.version
+    )
+}
+
+/// `{tag}:{ref} v1`, the start of a claim's line.
+pub(crate) fn claim_head(claim: &PackClaim) -> String {
+    format!(
+        "{}:{} v1",
+        claim_tag(&claim.kind),
+        short_ref(&claim.claim_id)
+    )
+}
+
 fn decision_line(decision: &PackDecision) -> String {
     let mut line = format!(
-        "D:{} v{} {} → {}",
-        short_ref(&decision.decision_id),
-        decision.version,
+        "{} {} → {}",
+        decision_head(decision),
         clean(&decision.question),
         clean(&decision.choice)
     );
@@ -834,16 +829,20 @@ fn decision_line(decision: &PackDecision) -> String {
     line
 }
 
-fn claim_line(claim: &PackClaim) -> String {
-    let tag = match claim.kind.as_str() {
+/// Word that opens a claim's line, by kind.
+pub(crate) fn claim_tag(kind: &str) -> &'static str {
+    match kind {
         "constraint" | "convention" => "regra",
         "assumption" => "premissa",
         "goal" => "objetivo",
         _ => "nota",
-    };
+    }
+}
+
+fn claim_line(claim: &PackClaim) -> String {
     format!(
-        "{tag}:{} v1 {}{}",
-        short_ref(&claim.claim_id),
+        "{} {}{}",
+        claim_head(claim),
         clean(&claim.statement),
         knowledge_suffix(&claim.inherited_scope, &claim.qualifiers)
     )
@@ -1254,26 +1253,6 @@ mod tests {
             claims,
             omitted: 0,
         }
-    }
-
-    #[test]
-    fn harness_prompts_are_recognized() {
-        assert!(is_harness_prompt(
-            "  <task-notification><status>completed</status></task-notification>"
-        ));
-        assert!(!is_harness_prompt("veja <task-notification>"));
-        assert!(is_harness_prompt("<command-name>/compact</command-name>"));
-        assert!(is_harness_prompt(
-            "<local-command-stdout>ok</local-command-stdout>"
-        ));
-        assert!(is_harness_prompt("<system-reminder>x</system-reminder>"));
-        assert!(is_harness_prompt(
-            "<system-reminder>x</system-reminder>\n<task-notification>y</task-notification>"
-        ));
-        assert!(!is_harness_prompt(
-            "<system-reminder>x</system-reminder>\nusa redis"
-        ));
-        assert!(!is_harness_prompt("cache"));
     }
 
     #[test]

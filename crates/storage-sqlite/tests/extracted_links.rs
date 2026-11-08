@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use application::adoption::Adoption;
 use application::analysis::ExtractorFactory;
-use application::documents::{Documents, DOCUMENT_ADAPTER};
+use application::captures::{CaptureApi, CaptureIngest};
 use application::extract::{
     run_extraction, CandidateExtractor, CandidateKind, CandidateProposal, DecisionEvidence,
     ExtractError, ProposedComponent, RelevanceSignal, RunContext,
@@ -23,7 +23,10 @@ use application::profile::{
     build_preview, grant_consent, offline_default_profile, AiProfile, AiSettings, ProfileError,
     ProfileKind, ProfileStore, SecretStore,
 };
-use application::projects::{ProjectRecord, ProjectRepository};
+use application::projects::{canonicalize_location, ProjectRecord, ProjectRepository};
+use application::{
+    artifact_fingerprint, ArtifactKind, CaptureEnvelope, CaptureSource, ProjectRef, SourceArtifact,
+};
 use domain::entities::{EdgeActor, EntityKind};
 use rusqlite::Connection;
 
@@ -210,16 +213,11 @@ fn run(tag: &str, components: Vec<ProposedComponent>, edits: Option<CandidateEdi
 fn run_case(tag: &str, case: Case) -> Outcome {
     let test = support::open(tag, &[]);
     let repo = test.root.join("repo");
-    std::fs::create_dir_all(repo.join("docs/adr")).expect("docs");
-    std::fs::write(
-        repo.join("docs/adr/0001-fila.md"),
-        format!("# Fila\n\n## Decisão\n{}\n", case.text.choice),
-    )
-    .expect("adr");
+    std::fs::create_dir_all(&repo).expect("repo");
     test.store
         .insert(&ProjectRecord::new(
             "docs-p".into(),
-            repo.to_string_lossy().replace('\\', "/"),
+            canonicalize_location(&repo.to_string_lossy()).expect("location"),
             "2026-01-01T00:00:00Z".into(),
         ))
         .expect("project");
@@ -243,21 +241,47 @@ fn run_case(tag: &str, case: Case) -> Outcome {
         })
         .collect();
 
-    let documents = Documents::new(test.store.clone());
-    documents.index("docs-p").expect("index");
-    documents.propose("docs-p", 10).expect("propose");
-    let connection = Connection::open(test.root.join("app.db")).expect("raw");
-    let capture: String = connection
-        .query_row(
-            "SELECT capture_id FROM adapter_checkpoints WHERE adapter = ?1",
-            [DOCUMENT_ADAPTER],
-            |row| row.get(0),
+    let content = format!(
+        "diff --git a/docs/adr/0001-fila.md b/docs/adr/0001-fila.md
++## Decisão
++{}
+",
+        case.text.choice
+    );
+    CaptureIngest::new(test.store.clone())
+        .ingest(
+            &CaptureEnvelope {
+                schema_version: 1,
+                capture_id: "adr-capture".into(),
+                idempotency_key: "adr-key".into(),
+                source: CaptureSource {
+                    adapter: "opencode".into(),
+                    adapter_version: "1".into(),
+                    session_id: "session".into(),
+                    message_id: "message".into(),
+                },
+                project: ProjectRef {
+                    canonical_path: canonicalize_location(&repo.to_string_lossy())
+                        .expect("location"),
+                },
+                observed_at: "2026-01-01T00:00:00Z".into(),
+                artifacts: vec![SourceArtifact {
+                    artifact_id: "adr-diff".into(),
+                    kind: ArtifactKind::DiffHunk,
+                    content: content.clone(),
+                    metadata: serde_json::Map::new(),
+                    fingerprint: artifact_fingerprint(&content),
+                }],
+            },
+            "adr-key",
         )
-        .expect("capture");
+        .expect("ingest");
+    let connection = Connection::open(test.root.join("app.db")).expect("raw");
+    let capture = "adr-capture";
     let report = run_extraction(
         &test.store,
         &Scripted(case.text, case.components),
-        &capture,
+        capture,
         &RunContext::for_tests(),
     )
     .expect("extract");

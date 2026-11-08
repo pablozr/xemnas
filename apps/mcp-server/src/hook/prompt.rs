@@ -1,19 +1,23 @@
 //! `hook prompt`: asks the running app for a context block for the prompt.
 
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
 use super::envelope::relative_inside;
+use super::root::Roots;
 use super::transcript::recent_files;
 use crate::backend::endpoint;
 
-/// Total time for the context call; the turn proceeds without context after it.
+/// Total time for the whole hook, the root included; the turn proceeds without context after it.
 const CONTEXT_TIMEOUT: Duration = Duration::from_millis(300);
 
 /// Files sent with the prompt (the server accepts 50).
 const MAX_FILES: usize = 8;
+
+/// Folders resolved for the root, inside the same time budget.
+const MAX_ROOT_LOOKUPS: usize = 16;
 
 /// Hook output line for the `UserPromptSubmit` event, or `None` when there is
 /// nothing to inject (app closed, no context). `Err` carries a sanitized reason.
@@ -22,26 +26,36 @@ pub fn execute(event: &Value, runtime_dir: &Path) -> Result<Option<String>, &'st
     else {
         return Err("invalid input");
     };
+    let deadline = Instant::now() + CONTEXT_TIMEOUT;
     let Some((port, token)) = endpoint(runtime_dir) else {
         return Ok(None);
     };
 
-    let files: Vec<String> = event["transcript_path"]
+    let recent = event["transcript_path"]
         .as_str()
         .map(|path| recent_files(Path::new(path), MAX_FILES))
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let root = Roots::new(cwd, MAX_ROOT_LOOKUPS)
+        .until(deadline)
+        .root_for(&[], &recent);
+    let files: Vec<String> = recent
         .iter()
-        .map(|file| relative_inside(file, cwd).unwrap_or_else(|| file.replace('\\', "/")))
+        .map(|file| relative_inside(file, &root).unwrap_or_else(|| file.replace('\\', "/")))
         .collect();
     let body = json!({
-        "canonical_path": cwd,
+        "canonical_path": root,
         "session_id": session_id,
         "prompt": event["prompt"].as_str().unwrap_or_default(),
         "files": files,
     });
 
+    // One deadline for the whole hook: the HTTP call gets what the root left.
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err("timeout");
+    }
     let client = reqwest::blocking::Client::builder()
-        .timeout(CONTEXT_TIMEOUT)
+        .timeout(remaining)
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|_| "client unavailable")?;

@@ -49,6 +49,7 @@ pub mod relations;
 pub mod repo_identity;
 pub mod review_exception;
 pub mod search_terms;
+pub mod speaker;
 
 pub use agent_access::{AgentAccess, AgentAccessError, AgentApi, AgentStore};
 pub use analysis::{AnalysisOutcome, AnalyzeCapture, ExtractorFactory};

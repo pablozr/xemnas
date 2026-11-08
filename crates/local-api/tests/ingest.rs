@@ -1329,6 +1329,54 @@ fn raw_secrets_posted_to_the_api_are_redacted_before_persistence() {
 }
 
 #[test]
+fn outbox_quarantines_an_unregistered_folder_and_imports_it_once_registered() {
+    let root = temporary_directory("outbox-quarantine");
+    let database = root.join("app.db");
+    let store = SqliteStore::open(&database).expect("open store");
+    let directory = root.join("project");
+    std::fs::create_dir_all(&directory).expect("create project dir");
+    let envelope = envelope_for(&directory.to_string_lossy());
+    let filename = format!("{}.json", sha256_hex(&envelope_key(&envelope)));
+    let body = body_of(&envelope);
+
+    let outbox = root.join("outbox");
+    let pending = outbox.join("pending");
+    std::fs::create_dir_all(&pending).expect("create pending");
+    std::fs::write(pending.join(&filename), &body).expect("write pending envelope");
+
+    let retention = Duration::from_secs(7 * 24 * 60 * 60);
+    let ingest = CaptureIngest::new(store.clone());
+    let parked = application::outbox::drain(&outbox, &ingest, retention).expect("first drain");
+    assert_eq!(
+        (parked.accepted, parked.quarantined, parked.released),
+        (0, 1, 0)
+    );
+    assert!(parked.rejected.is_empty(), "{:?}", parked.rejected);
+    assert_eq!(
+        std::fs::read(outbox.join("unregistered").join(&filename)).expect("parked payload"),
+        body,
+        "the capture is kept as it arrived"
+    );
+    let connection = rusqlite::Connection::open(&database).expect("open raw connection");
+    assert_eq!(table_count(&connection, "capture_receipts"), 0);
+
+    let idle = application::outbox::drain(&outbox, &ingest, retention).expect("idle drain");
+    assert_eq!((idle.quarantined, idle.released, idle.accepted), (1, 0, 0));
+
+    register_project(&store, &root);
+    let released = application::outbox::drain(&outbox, &ingest, retention).expect("third drain");
+    assert_eq!(
+        (released.released, released.accepted, released.quarantined),
+        (1, 1, 0)
+    );
+    assert!(outbox.join("accepted").join(&filename).exists());
+    assert!(!outbox.join("unregistered").join(&filename).exists());
+    assert_eq!(table_count(&connection, "capture_receipts"), 1);
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn raw_secrets_imported_from_the_outbox_are_redacted_before_persistence() {
     let root = temporary_directory("redact-outbox");
     let database = root.join("app.db");

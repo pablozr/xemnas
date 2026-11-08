@@ -8,19 +8,23 @@ mod cases;
 use std::path::Path;
 use std::time::Instant;
 
-use application::extract::{assess_relevance, DecisionEvidence, Relevance};
+use application::extract::{assess_relevance, user_speech, DecisionEvidence, Relevance};
 use cases::{artifact, corpus};
 
 /// Floor for the share of decisions that reach the extractor or the triage.
 const RELEVANCE_RECALL_FLOOR: f64 = 1.0;
 /// Ceiling for trivial captures that reach the extractor (wasted AI calls); zero, so the gate is exact.
 const RELEVANCE_FALSE_PASSES_CEILING: usize = 0;
-/// Ceiling for captures sent to the turn triage in this set (one small AI call each).
-const RELEVANCE_TRIAGE_CALLS_CEILING: usize = 50;
+/// Ceiling for captures sent to the turn triage in this set (one small AI call each):
+/// the 50 of the original set, the 4 speech cases added with the speaker classifier and
+/// the 4 pasted-markup and wake cases of the harness-tag criterion (58 measured).
+const RELEVANCE_TRIAGE_CALLS_CEILING: usize = 62;
 /// Ceiling for the characters one triage call sends (instructions plus content).
 const TRIAGE_INPUT_CHARS_CEILING: usize = 2_800;
 /// Ceiling for assessing 2,000 realistic captures.
 const RELEVANCE_LATENCY_CEILING_MS: u128 = 800;
+/// Ceiling for classifying the speaker of 100,000 messages (10 messages, measured 3 ms release, 8 ms debug).
+const SPEAKER_LATENCY_CEILING_MS: u128 = 25;
 
 /// Captures the harness wrote or a bare command: never worth a triage call.
 const NEVER_TRIAGED: &[&str] = &[
@@ -28,6 +32,14 @@ const NEVER_TRIAGED: &[&str] = &[
     "real-task-notification.json",
     "real-task-notification-short.json",
     "notificacao-com-frase-de-rumo",
+    "openbot-teammate",
+    "openbot-assignment",
+    "openbot-saved-memories",
+    "openbot-memories-update",
+    "openbot-continue",
+    "request-interrupted",
+    "wake-sem-humano",
+    "bash-stdout-com-frase-de-rumo",
 ];
 
 fn fixtures_dir() -> std::path::PathBuf {
@@ -42,7 +54,7 @@ fn relevance_quality_gate() {
     let (mut positives, mut negatives, mut reached, mut false_passes) = (0, 0, 0, 0);
     let (mut triage_calls, mut chars_max, mut chars_sum, mut harness_triaged) = (0, 0, 0, 0);
     for (name, evidence, relevant) in corpus(&fixtures_dir()) {
-        let relevance = assess_relevance(&evidence);
+        let relevance = assess_relevance(&user_speech(evidence));
         let (passes, triaged) = match &relevance {
             Relevance::Pass(_) => (true, false),
             Relevance::Triage(_) => (false, true),
@@ -150,7 +162,8 @@ fn relevance_filter_latency() {
 
     let start = Instant::now();
     let passed = captures
-        .iter()
+        .into_iter()
+        .map(user_speech)
         .filter(|evidence| !matches!(assess_relevance(evidence), Relevance::Empty))
         .count();
     let elapsed_ms = start.elapsed().as_millis();
@@ -158,5 +171,35 @@ fn relevance_filter_latency() {
     assert!(
         elapsed_ms <= RELEVANCE_LATENCY_CEILING_MS,
         "assessing took {elapsed_ms} ms"
+    );
+}
+
+#[test]
+fn speaker_classify_latency() {
+    let messages = [
+        "sim pode",
+        "esquece o redis por enquanto, vamos focar no sqlite local e revisar o plano depois",
+        "<system-reminder>lembrete</system-reminder>
+usa sqlite",
+        "<task-notification><summary>feito</summary></task-notification>",
+        "Message from OpenBot teammate Agente A: segue o resultado",
+        "<pasted_content id=\"1\">log</pasted_content> troca o cache",
+        "<wake reason=\"message\"><message from=\"human\">usa sqlite</message></wake>",
+        "[Request interrupted by user for tool use]",
+        "<template>\n<div>{{ total }}</div>\n</template>\nesse componente fica de lado",
+        "<bash-stdout>ok</bash-stdout>",
+    ];
+    let start = Instant::now();
+    let mut users = 0usize;
+    for index in 0..100_000usize {
+        let speaker = application::speaker::classify(messages[index % messages.len()]);
+        users += usize::from(matches!(speaker, application::speaker::Speaker::User(_)));
+    }
+    let elapsed_ms = start.elapsed().as_millis();
+    println!("latency speaker_classify messages=100000 elapsed_ms={elapsed_ms} users={users}");
+    assert_eq!(users, 60_000, "the classifier changed its verdicts");
+    assert!(
+        elapsed_ms <= SPEAKER_LATENCY_CEILING_MS,
+        "classifying took {elapsed_ms} ms"
     );
 }

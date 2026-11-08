@@ -44,6 +44,12 @@ const SCRIPT: &[Turn] = &[
         harness: true,
     },
     Turn {
+        prompt: "<bash-input>melhorar o cache da API</bash-input>",
+        files: &["src/api.ts"],
+        wants: &[],
+        harness: true,
+    },
+    Turn {
         prompt: "rodar os testes de novo",
         files: &["src/index.ts"],
         wants: &[],
@@ -72,6 +78,38 @@ const SCRIPT: &[Turn] = &[
         files: &[],
         wants: &["O:"],
         harness: false,
+    },
+    // Prompts written by other agents or by the harness, even when they name a
+    // known topic: no block, no record.
+    Turn {
+        prompt: "Message from OpenBot teammate Agente A: melhorar o cache da API",
+        files: &["src/api.ts"],
+        wants: &[],
+        harness: true,
+    },
+    Turn {
+        prompt: "You have one assignment in a shared OpenBot channel.\nmelhorar o cache da API",
+        files: &["src/api.ts"],
+        wants: &[],
+        harness: true,
+    },
+    Turn {
+        prompt: "Continue this OpenBot conversation.\nmelhorar o cache da API",
+        files: &["src/api.ts"],
+        wants: &[],
+        harness: true,
+    },
+    Turn {
+        prompt: "<openbot_saved_memories>cache da API</openbot_saved_memories>\n\nmelhorar o cache da API",
+        files: &["src/api.ts"],
+        wants: &[],
+        harness: true,
+    },
+    Turn {
+        prompt: "[Request interrupted by user for tool use]",
+        files: &["src/api.ts"],
+        wants: &[],
+        harness: true,
     },
 ];
 
@@ -172,6 +210,57 @@ fn rows(test: &support::TestStore) -> i64 {
         .expect("count")
 }
 
+/// Text only the decision and the rule taken from a document carry.
+const DOCUMENT_DECISION: &str = "Cache da API com Redis compartilhado";
+const DOCUMENT_RULE: &str = "O cache da API expira em sessenta segundos";
+
+/// A decision and a rule on the same topic as the turn, both extracted from a
+/// document: the block must never carry them.
+fn add_document_origin(test: &support::TestStore) {
+    let decision = support::decision(
+        &test.store,
+        "p1",
+        "doc",
+        "Como fazer cache da API?",
+        DOCUMENT_DECISION,
+    );
+    let connection = Connection::open(test.root.join("app.db")).expect("raw");
+    connection
+        .execute(
+            "INSERT INTO capture_receipts              (capture_id, idempotency_key, canonical_path, received_at, artifact_count)              VALUES ('capture-doc', 'key-doc', 'C:/synthetic/p1', '2026-01-01T00:00:00Z', 1)",
+            [],
+        )
+        .expect("receipt");
+    connection
+        .execute(
+            "INSERT INTO capture_artifacts              (capture_id, artifact_id, kind, content, metadata, fingerprint)              VALUES ('capture-doc', 'art-doc', 'document', '# ADR',                      '{\"file\":\"docs/adr/0001-cache.md\"}', ?1)",
+            [format!("{:0>64}", 7)],
+        )
+        .expect("artifact");
+    connection
+        .execute(
+            "UPDATE decision_candidates SET capture_id = 'capture-doc' WHERE id = 'cand-doc'",
+            [],
+        )
+        .expect("tie the candidate to the document");
+    Claims::new(test.store.clone())
+        .create(NewClaim {
+            source_version: None,
+            qualifiers: vec![application::qualifiers::KnowledgeQualifier {
+                kind: application::qualifiers::QualifierKind::Scope,
+                text: application::context::GLOBAL_SCOPE.into(),
+                artifact_id: None,
+            }],
+            project_id: "p1".to_string(),
+            kind: ClaimKind::Convention,
+            statement: DOCUMENT_RULE.to_string(),
+            valid_from: Some("2020-01-01".to_string()),
+            valid_until: None,
+            source_decision_id: Some(decision),
+        })
+        .expect("document rule");
+}
+
 fn fixture() -> (support::TestStore, String) {
     let test = support::open("inject-corpus", &["p1"]);
     let path = register_directory(&test);
@@ -198,6 +287,7 @@ fn fixture() -> (support::TestStore, String) {
             source_decision_id: None,
         })
         .expect("claim");
+    add_document_origin(&test);
     ContextSettings::new(test.store.clone())
         .set("p1", ContextMode::Inject, None)
         .expect("inject mode");
@@ -210,6 +300,7 @@ struct Measure {
     blocks: usize,
     filler: usize,
     harness: usize,
+    document: usize,
     found: usize,
     wanted: usize,
     tokens: usize,
@@ -248,6 +339,9 @@ fn run_session(
         };
         measure.blocks += 1;
         measure.tokens += outcome.tokens;
+        if block.contains(DOCUMENT_DECISION) || block.contains(DOCUMENT_RULE) {
+            measure.document += 1;
+        }
         let found = turn
             .wants
             .iter()
@@ -271,10 +365,12 @@ fn quality() -> Measure {
     let mut latency = Vec::new();
     let measure = run_session(&test, &path, "s0", &mut latency);
     println!(
-        "gate injection blocks={} filler={} harness={} recall={}/{} avg_tokens={} total_tokens={}",
+        "gate injection blocks={} filler={} harness={} document={} recall={}/{} \
+         avg_tokens={} total_tokens={}",
         measure.blocks,
         measure.filler,
         measure.harness,
+        measure.document,
         measure.found,
         measure.wanted,
         measure.tokens.checked_div(measure.blocks).unwrap_or(0),
@@ -312,6 +408,10 @@ fn injection_quality_gate() {
     );
     assert_eq!(measure.harness, 0, "synthetic prompts must get nothing");
     assert_eq!(
+        measure.document, 0,
+        "what a document says is not injected on its own"
+    );
+    assert_eq!(
         measure.found, measure.wanted,
         "a requested item was not delivered"
     );
@@ -320,6 +420,61 @@ fn injection_quality_gate() {
         average <= AVG_TOKENS_CEILING,
         "average block {average} tokens above {AVG_TOKENS_CEILING}"
     );
+}
+
+/// A wake carries the human's words in an envelope; the block must be the one
+/// the raw words would get, not a match on the envelope's terms.
+#[test]
+fn wake_uses_human_text() {
+    let (test, path) = fixture();
+    let injection = ContextInjection::new(test.store.clone());
+    let prepare = |session: &str, prompt: &str| {
+        injection
+            .prepare(InjectionRequest {
+                canonical_path: path.clone(),
+                session_id: session.to_string(),
+                prompt: prompt.to_string(),
+                files: vec!["src/api.ts".to_string()],
+                ..InjectionRequest::default()
+            })
+            .expect("prepare")
+    };
+    let raw = prepare("raw", "melhorar o cache da API");
+    let wake = prepare(
+        "wake",
+        "<wake reason=\"message\"><message id=\"00000000-0000-0000-0000-000000000001\" \
+         from=\"human\" at=\"2026-01-01T00:00:00Z\">melhorar o cache da API</message></wake>",
+    );
+    assert!(raw.block.is_some());
+    assert_eq!(wake.block, raw.block);
+    let no_human = prepare(
+        "agent",
+        "<wake reason=\"timer\"><message from=\"agent\">melhorar o cache da API</message></wake>",
+    );
+    assert!(no_human.block.is_none());
+}
+
+/// A turn with nothing new to deliver (everything it matches was already
+/// delivered in the session) leaves `context_injections` as it was.
+#[test]
+fn no_record_without_items() {
+    let (test, path) = fixture();
+    let injection = ContextInjection::new(test.store.clone());
+    let turn = || {
+        injection
+            .prepare(InjectionRequest {
+                canonical_path: path.clone(),
+                session_id: "s-none".to_string(),
+                prompt: "melhorar o cache da API".to_string(),
+                files: vec!["src/api.ts".to_string()],
+                ..InjectionRequest::default()
+            })
+            .expect("prepare")
+    };
+    assert!(turn().block.is_some());
+    let before = rows(&test);
+    assert!(turn().block.is_none());
+    assert_eq!(rows(&test), before);
 }
 
 #[test]
@@ -471,5 +626,32 @@ fn compact_density_gate() {
     assert!(
         chars_per_item <= MAX_CHARS_PER_ITEM,
         "{chars_per_item} chars per item"
+    );
+}
+
+/// A prompt that opens with a plain tag is the user's; one that opens with a
+/// harness-shaped tag is not.
+#[test]
+fn a_common_tag_opening_is_the_users() {
+    let (test, path) = fixture();
+    let injection = ContextInjection::new(test.store.clone());
+    let prepare = |session: &str, prompt: &str| {
+        injection
+            .prepare(InjectionRequest {
+                canonical_path: path.clone(),
+                session_id: session.to_string(),
+                prompt: prompt.to_string(),
+                files: vec!["src/api.ts".to_string()],
+                ..InjectionRequest::default()
+            })
+            .expect("prepare")
+    };
+    assert!(prepare("div", "<div>\nmelhorar o cache da API")
+        .block
+        .is_some());
+    assert!(
+        prepare("tag", "<bash-stdout>melhorar o cache da API</bash-stdout>")
+            .block
+            .is_none()
     );
 }

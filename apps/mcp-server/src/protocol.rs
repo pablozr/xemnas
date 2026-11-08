@@ -2,6 +2,9 @@
 
 use serde_json::{json, Value};
 
+use crate::hook::envelope::relative_inside;
+use crate::hook::root::{absolute, locate_directory, resolve, toplevel_of_path, Commons};
+
 /// Protocol version answered when the client does not ask for one.
 pub const DEFAULT_PROTOCOL_VERSION: &str = "2025-06-18";
 
@@ -45,15 +48,21 @@ impl BackendError {
 
 /// What the tools need from the running app.
 pub trait Backend {
-    /// Full decision text for a short reference.
-    fn decision(&self, reference: &str) -> Result<String, BackendError>;
+    /// Full decision text for a short reference. `project` is the repository
+    /// the agent works in; `None` is the server's own directory.
+    fn decision(&self, reference: &str, project: Option<&str>) -> Result<String, BackendError>;
 
     /// Compact block for a query (and a file it touches), or `None` when
     /// nothing is relevant.
-    fn search(&self, query: &str, path: Option<&str>) -> Result<Option<String>, BackendError>;
+    fn search(
+        &self,
+        query: &str,
+        path: Option<&str>,
+        project: Option<&str>,
+    ) -> Result<Option<String>, BackendError>;
 
     /// Compact block of what holds for one file, or `None` when nothing does.
-    fn file(&self, path: &str) -> Result<Option<String>, BackendError>;
+    fn file(&self, path: &str, project: Option<&str>) -> Result<Option<String>, BackendError>;
 }
 
 /// Handles one JSON-RPC message; notifications return `None`.
@@ -102,12 +111,14 @@ fn tools() -> Value {
             "name": "get_decision",
             "description": "Abre uma decisão do projeto pela referência D:<ref> dos blocos \
                 <xemnas-context>: motivo completo, premissas, relações e regras derivadas. \
-                Parâmetro reference (alias aceito: ref).",
+                Parâmetro reference (alias aceito: ref). \
+                Fora da pasta do projeto, passe project (caminho absoluto do repo).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "reference": { "type": "string", "description": "Ex.: D:bbbbcccc" },
-                    "ref": { "type": "string", "description": "Alias de reference" }
+                    "ref": { "type": "string", "description": "Alias de reference" },
+                    "project": { "type": "string", "description": "Raiz do repo (absoluta)" }
                 },
                 "required": ["reference"],
                 "additionalProperties": false
@@ -121,7 +132,8 @@ fn tools() -> Value {
                 "type": "object",
                 "properties": {
                     "query": { "type": "string", "description": "Assunto ou tarefa" },
-                    "path": { "type": "string", "description": "Arquivo envolvido (opcional)" }
+                    "path": { "type": "string", "description": "Arquivo envolvido (opcional)" },
+                    "project": { "type": "string", "description": "Raiz do repo (absoluta)" }
                 },
                 "required": ["query"],
                 "additionalProperties": false
@@ -133,12 +145,40 @@ fn tools() -> Value {
                 Use antes de editar um arquivo.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "path": { "type": "string", "description": "Ex.: src/app.rs" } },
+                "properties": {
+                    "path": { "type": "string", "description": "Caminho absoluto, ou relativo ao project" },
+                    "project": { "type": "string", "description": "Raiz do repo (absoluta)" }
+                },
                 "required": ["path"],
                 "additionalProperties": false
             }
         }
     ])
+}
+
+/// Whether the repository of `project` is the one of `path` (relative to `project`
+/// when it is not absolute), aliases and worktrees of one repository included.
+/// Unknown places (nothing on disk, no repository) cannot disagree.
+fn project_matches_path(project: &str, path: Option<&str>) -> bool {
+    let Some(of_project) = locate_directory(project) else {
+        return true;
+    };
+    let Some(of_path) = path.and_then(|path| resolve(path, project)) else {
+        return true;
+    };
+    Commons::default().same(&of_project.top, &of_path.top)
+}
+
+/// `path` relative to the repository root `project` when it lies there by the disk
+/// but not by its text (an alias, a `subst` drive, a sibling worktree).
+fn relative_in_repository(project: &str, path: &str) -> Option<String> {
+    let of_project = locate_directory(project)?;
+    if !of_project.relative.is_empty() {
+        return None;
+    }
+    let of_path = resolve(path, project)?;
+    let same = Commons::default().same(&of_project.top, &of_path.top);
+    (same && !of_path.relative.is_empty()).then_some(of_path.relative)
 }
 
 fn call_tool(params: &Value, backend: &dyn Backend) -> Result<Value, (i64, &'static str)> {
@@ -150,24 +190,49 @@ fn call_tool(params: &Value, backend: &dyn Backend) -> Result<Value, (i64, &'sta
             .and_then(Value::as_str)
             .map(str::to_string)
     };
+    // The server is shared by agents working in different repositories: the project
+    // is the `project` argument, else the repository of an absolute `path`, else
+    // the server's own directory.
+    let path_argument = argument("path");
+    let project = match argument("project") {
+        Some(project) => {
+            if absolute(&project).is_none() {
+                return Err((-32602, "project deve ser um caminho absoluto"));
+            }
+            if !project_matches_path(&project, path_argument.as_deref()) {
+                return Err((-32602, "project não é o repositório do path"));
+            }
+            Some(project)
+        }
+        None => path_argument.as_deref().and_then(toplevel_of_path),
+    };
+    let project = project.as_deref();
+    let in_project = |path: &str| match project {
+        Some(root) => relative_inside(path, root)
+            .or_else(|| relative_in_repository(root, path))
+            .unwrap_or_else(|| path.to_string()),
+        None => path.to_string(),
+    };
     let outcome = match name {
         "get_decision" => {
             let reference = argument("reference")
                 .or_else(|| argument("ref"))
                 .ok_or((-32602, "informe reference"))?;
-            backend.decision(&reference)
+            backend.decision(&reference, project)
         }
         "search_context" => {
             let query = argument("query").ok_or((-32602, "informe query"))?;
-            let path = argument("path");
-            backend.search(&query, path.as_deref()).map(|found| {
-                found.unwrap_or_else(|| "Nada registrado sobre isso neste projeto.".to_string())
-            })
+            let path = path_argument.as_deref().map(in_project);
+            backend
+                .search(&query, path.as_deref(), project)
+                .map(|found| {
+                    found.unwrap_or_else(|| "Nada registrado sobre isso neste projeto.".to_string())
+                })
         }
         "file_context" => {
-            let path = argument("path").ok_or((-32602, "informe path"))?;
+            let path = path_argument.as_deref().ok_or((-32602, "informe path"))?;
             backend
-                .file(&path)
+                .file(&in_project(path), project)
                 .map(|found| found.unwrap_or_else(|| NOTHING_FOR_FILE.to_string()))
         }
         _ => return Err((-32602, "ferramenta desconhecida")),
@@ -188,20 +253,34 @@ mod tests {
     struct Fake;
 
     impl Backend for Fake {
-        fn decision(&self, reference: &str) -> Result<String, BackendError> {
+        fn decision(&self, reference: &str, project: Option<&str>) -> Result<String, BackendError> {
             match reference {
                 "D:bbbbcccc" => Ok("pergunta: Qual banco?".to_string()),
                 "D:closed00" => Err(BackendError::AppClosed),
+                "D:where000" => Ok(format!("project={project:?}")),
                 _ => Err(BackendError::NotFound),
             }
         }
 
-        fn file(&self, path: &str) -> Result<Option<String>, BackendError> {
-            Ok((path == "src/db.rs").then(|| "D:bbbbcccc Qual banco? → SQLite".to_string()))
+        fn file(&self, path: &str, project: Option<&str>) -> Result<Option<String>, BackendError> {
+            Ok(match path {
+                "src/db.rs" => Some("D:bbbbcccc Qual banco? → SQLite".to_string()),
+                "src/where.rs" => Some(format!("project={project:?} path={path}")),
+                _ => None,
+            })
         }
 
-        fn search(&self, query: &str, _path: Option<&str>) -> Result<Option<String>, BackendError> {
-            Ok((query == "banco").then(|| "D:bbbbcccc v1 Qual banco? → SQLite".to_string()))
+        fn search(
+            &self,
+            query: &str,
+            path: Option<&str>,
+            project: Option<&str>,
+        ) -> Result<Option<String>, BackendError> {
+            Ok(match query {
+                "banco" => Some("D:bbbbcccc v1 Qual banco? → SQLite".to_string()),
+                "onde" => Some(format!("project={project:?} path={path:?}")),
+                _ => None,
+            })
         }
     }
 
@@ -322,5 +401,134 @@ mod tests {
         assert_eq!(handle(&notification, &Fake), None);
         let ping = handle(&request("ping", Value::Null), &Fake).expect("response");
         assert_eq!(ping["result"], json!({}));
+    }
+    fn text(response: &Value) -> String {
+        response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    #[test]
+    fn the_project_is_the_argument_then_the_repo_of_an_absolute_path_then_the_servers_own() {
+        // 1. Explicit `project`: relative paths stay relative, absolute ones are made relative to it.
+        let explicit = call(
+            "file_context",
+            json!({ "project": "C:/repo", "path": "src/where.rs" }),
+        );
+        assert_eq!(
+            text(&explicit),
+            "project=Some(\"C:/repo\") path=src/where.rs"
+        );
+        let absolute = call(
+            "file_context",
+            json!({ "project": "C:/repo", "path": r"C:\repo\src\where.rs" }),
+        );
+        assert_eq!(
+            text(&absolute),
+            "project=Some(\"C:/repo\") path=src/where.rs"
+        );
+        let decision = call(
+            "get_decision",
+            json!({ "reference": "D:where000", "project": "C:/repo" }),
+        );
+        assert_eq!(text(&decision), "project=Some(\"C:/repo\")");
+
+        // 2. No `project`, absolute `path`: the git work tree of the path (this very repository).
+        let here = env!("CARGO_MANIFEST_DIR").replace('\\', "/");
+        if let Some(top) = toplevel_of_path(&format!("{here}/src/protocol.rs")) {
+            let found = text(&call(
+                "search_context",
+                json!({ "query": "onde", "path": format!("{here}/src/protocol.rs") }),
+            ));
+            assert_eq!(
+                found,
+                format!(
+                    "project=Some({top:?}) path=Some({:?})",
+                    relative_inside(&format!("{here}/src/protocol.rs"), &top).unwrap()
+                )
+            );
+        }
+
+        // 3. Neither: the server's own directory.
+        let own = call("file_context", json!({ "path": "src/where.rs" }));
+        assert_eq!(text(&own), "project=None path=src/where.rs");
+        let own_search = call("search_context", json!({ "query": "onde" }));
+        assert_eq!(text(&own_search), "project=None path=None");
+    }
+
+    #[test]
+    fn a_project_that_is_not_an_absolute_path_is_refused() {
+        for project in ["", "repo", "./repo", "C:repo"] {
+            let response = call(
+                "file_context",
+                json!({ "path": "src/where.rs", "project": project }),
+            );
+            assert_eq!(response["error"]["code"], json!(-32602), "{project:?}");
+        }
+    }
+
+    #[test]
+    fn a_project_of_another_repository_than_the_absolute_path_is_refused() {
+        let here = env!("CARGO_MANIFEST_DIR").replace('\\', "/");
+        let file = format!("{here}/src/protocol.rs");
+        let Some(top) = toplevel_of_path(&file) else {
+            return;
+        };
+        let other = std::env::temp_dir().join(format!("xemnas-proto-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&other);
+        std::fs::create_dir_all(&other).expect("dir");
+        let started = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&other)
+            .args(["init", "-q"])
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+        if started {
+            let refused = call(
+                "file_context",
+                json!({ "path": file, "project": other.to_string_lossy() }),
+            );
+            assert_eq!(refused["error"]["code"], json!(-32602));
+        }
+        // The repository's own root, and a subfolder of it, agree with the path.
+        for project in [top.clone(), here.clone()] {
+            let ok = call("file_context", json!({ "path": file, "project": project }));
+            assert!(ok.get("error").is_none(), "{ok}");
+        }
+        let _ = std::fs::remove_dir_all(&other);
+    }
+
+    #[test]
+    fn a_relative_path_into_another_repository_than_the_project_is_refused() {
+        let base = std::env::temp_dir().join(format!("xemnas-proto-rel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let project = base.join("a");
+        let nested = project.join("nested");
+        std::fs::create_dir_all(&nested).expect("dir");
+        let started = [&project, &nested].iter().all(|folder| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(folder)
+                .args(["init", "-q"])
+                .output()
+                .map(|output| output.status.success())
+                .unwrap_or(false)
+        });
+        if started {
+            let project = project.to_string_lossy().into_owned();
+            let refused = call(
+                "file_context",
+                json!({ "path": "nested/two.rs", "project": project }),
+            );
+            assert_eq!(refused["error"]["code"], json!(-32602));
+            let ok = call(
+                "file_context",
+                json!({ "path": "src/one.rs", "project": project }),
+            );
+            assert!(ok.get("error").is_none(), "{ok}");
+        }
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

@@ -13,8 +13,8 @@
 use std::collections::HashMap;
 
 use super::{
-    documentation_stamp, CaptureRepository, DocumentError, DocumentStore, Documents,
-    ProjectRepository, PROPOSE_PER_RUN,
+    documentation_stamp, DocumentError, DocumentStore, Documents, ProjectRepository,
+    PROPOSE_PER_RUN,
 };
 
 /// What one pass over a project did.
@@ -26,7 +26,7 @@ pub enum WatchOutcome {
     Settling,
     /// Nothing changed since the last pass.
     Unchanged,
-    /// The folder was read again; this many analyses were queued.
+    /// The folder was read again and the index kept current; `queued` is always 0.
     Refreshed {
         /// Documents queued for analysis.
         queued: usize,
@@ -59,7 +59,7 @@ impl DocumentWatch {
         project_id: &str,
     ) -> Result<WatchOutcome, DocumentError>
     where
-        S: DocumentStore + ProjectRepository + CaptureRepository,
+        S: DocumentStore + ProjectRepository,
     {
         let root = match documents.location(project_id) {
             Ok(root) if root.is_dir() => root,

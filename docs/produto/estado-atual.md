@@ -13,14 +13,14 @@ apareceram nele, guarda as que você confirma e devolve essas decisões ao agent
 
 **Captura.** O plugin do OpenCode e os hooks do Claude Code enviam a sessão à API local
 (só loopback, com token). Segredos são mascarados no adapter e de novo no motor. Com o app
-fechado, a captura espera numa outbox de arquivos e entra quando o app abre.
+fechado, a captura espera numa outbox de arquivos e entra quando o app abre. A captura de uma pasta que não é projeto cadastrado não se perde: fica intacta numa quarentena da outbox, com contagem por pasta no relatório do dogfood, e entra quando a pasta é cadastrada (a tela da quarentena ainda não existe).
 
 **Análise.** Um job em segundo plano lê a captura e propõe candidatos: decisões e regras
 (uma regra vira claim). Detalhes de implementação são descartados. Cada candidato traz
-relevância, evidências e, quando há, ressalvas de alcance. O extrator padrão é offline. Uma captura chega direto ao extrator só por estrutura: migração ou segurança, dependência nova, edição de ADR, especificação, `AGENTS.md` ou `CLAUDE.md`, a resposta a uma pergunta do assistente (AskUserQuestion) ou um documento. Quando o usuário falou e nada disso aconteceu, uma triagem mínima de IA (só a fala e o fim da resposta do assistente) decide se há uma decisão durável, como uma escolha, uma alternativa recusada, uma prioridade ou uma mudança de rumo, inclusive num turno que só mexeu em testes; só então o extrator roda. Com o extrator offline, esses turnos ficam de fora. Mensagens do próprio Claude Code (notificações de subagente, `<system-reminder>`, `/compact`) não contam como fala do usuário. Fatos
+relevância, evidências e, quando há, ressalvas de alcance. O extrator padrão é offline. Uma captura chega direto ao extrator só por estrutura: migração ou segurança, dependência nova, edição de ADR, especificação, `AGENTS.md` ou `CLAUDE.md`, a resposta a uma pergunta do assistente (AskUserQuestion) ou um documento. Quando o usuário falou e nada disso aconteceu, uma triagem mínima de IA (só a fala e o fim da resposta do assistente) decide se há uma decisão durável, como uma escolha, uma alternativa recusada, uma prioridade ou uma mudança de rumo, inclusive num turno que só mexeu em testes; só então o extrator roda. Com o extrator offline, esses turnos ficam de fora. Mensagens do próprio Claude Code (notificações de subagente, `<system-reminder>`, `/compact`, interrupção) e de outros agentes (OpenBot) não contam como fala do usuário; texto que começa com tag comum (`<div>`, `<template>`, `<br>`) conta como fala; um `<wake>` com mensagem humana conta, com o texto do humano. Fatos
 de manifests (`Cargo.toml`, `package.json`) viram observações descritivas locais, que nunca
-entram na fila de revisão. Documentação do projeto (README, ADRs, `docs/`) é indexada e pode
-gerar candidatos. O mapa do projeto existe desde a primeira análise: ao registrar o projeto
+entram na fila de revisão. Documentação do projeto (README, ADRs, `docs/`) é indexada (títulos, seções e
+resumo, citáveis na Visão), mas não gera candidatos nem entra na injeção automática. O mapa do projeto existe desde a primeira análise: ao registrar o projeto
 e ao indexar ou importar documentos, os componentes declarados nos manifests são criados e as
 sugestões derivadas (o que a tela Mapa já fazia ao abrir). As sugestões de IA depois de uma adoção
 (vínculos com o mapa, relações, regras e termos de busca) rodam em lotes de até 10 decisões por
@@ -81,7 +81,8 @@ escritos pela IA no idioma da interface, cada parágrafo com números de fonte q
 
 **Contexto para o agente.** Decisões e regras em vigor voltam ao agente de três formas:
 - *Injeção* no prompt, dentro de um orçamento de tokens, por projeto: Desligado, Medir (só
-  registra) ou Injetar.
+  registra) ou Injetar. O que foi extraído de documento do projeto não entra sozinho na injeção
+  (o documento já diz); as ferramentas do MCP devolvem esses itens com o rótulo `de documento: <caminho>`.
 - *Depois de editar arquivos*, no OpenCode: só o que o mapa liga aos arquivos editados.
 - *MCP* somente leitura: `get_decision`, `search_context` e `file_context`.
 

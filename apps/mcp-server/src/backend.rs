@@ -54,10 +54,10 @@ impl HttpBackend {
 }
 
 impl Backend for HttpBackend {
-    fn decision(&self, reference: &str) -> Result<String, BackendError> {
+    fn decision(&self, reference: &str, project: Option<&str>) -> Result<String, BackendError> {
         let body = self.post(
             "/v1/agent/decision",
-            json!({ "canonical_path": self.directory, "reference": reference }),
+            json!({ "canonical_path": project.unwrap_or(&self.directory), "reference": reference }),
         )?;
         body["text"]
             .as_str()
@@ -65,8 +65,14 @@ impl Backend for HttpBackend {
             .ok_or(BackendError::Failed)
     }
 
-    fn search(&self, query: &str, path: Option<&str>) -> Result<Option<String>, BackendError> {
-        let mut request = json!({ "canonical_path": self.directory, "query": query });
+    fn search(
+        &self,
+        query: &str,
+        path: Option<&str>,
+        project: Option<&str>,
+    ) -> Result<Option<String>, BackendError> {
+        let mut request =
+            json!({ "canonical_path": project.unwrap_or(&self.directory), "query": query });
         if let Some(path) = path {
             request["path"] = json!(path);
         }
@@ -74,10 +80,10 @@ impl Backend for HttpBackend {
         Ok(body["text"].as_str().map(str::to_string))
     }
 
-    fn file(&self, path: &str) -> Result<Option<String>, BackendError> {
+    fn file(&self, path: &str, project: Option<&str>) -> Result<Option<String>, BackendError> {
         let body = self.post(
             "/v1/agent/file",
-            json!({ "canonical_path": self.directory, "path": path }),
+            json!({ "canonical_path": project.unwrap_or(&self.directory), "path": path }),
         )?;
         Ok(body["text"].as_str().map(str::to_string))
     }

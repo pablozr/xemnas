@@ -70,17 +70,30 @@ impl CaptureProgressStore for SqliteStore {
                 .optional()
                 .map_err(|e| e.to_string())?
             };
-            // Bounded read: one indexed row, only the head of the prompt.
-            let title = tx
-                .query_row(
-                    "SELECT substr(content,1,400) FROM capture_artifacts
-                    WHERE capture_id=?1 AND kind='user_text' ORDER BY artifact_id LIMIT 1",
-                    params![capture_id],
-                    |r| r.get::<_, String>(0),
-                )
-                .optional()
-                .map_err(|e| e.to_string())?
-                .and_then(|text| title_of(&text));
+            // Bounded read: a few indexed rows, only the head of each prompt. The
+            // first one that is the user's words names the capture.
+            let title = {
+                let mut prompts = tx
+                    .prepare(
+                        "SELECT substr(content,1,2000),metadata FROM capture_artifacts
+                        WHERE capture_id=?1 AND kind='user_text' ORDER BY artifact_id LIMIT 4",
+                    )
+                    .map_err(|e| e.to_string())?;
+                let mut rows = prompts
+                    .query(params![capture_id])
+                    .map_err(|e| e.to_string())?;
+                let mut title = None;
+                while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+                    let text: String = row.get(0).map_err(|e| e.to_string())?;
+                    let metadata: String = row.get(1).map_err(|e| e.to_string())?;
+                    title = application::extract::spoken_words(&text, &metadata)
+                        .and_then(|words| title_of(&words));
+                    if title.is_some() {
+                        break;
+                    }
+                }
+                title
+            };
             let adapter = tx
                 .query_row(
                     "SELECT json_extract(provenance,'$.adapter') FROM capture_episode_sources

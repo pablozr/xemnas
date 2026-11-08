@@ -7,6 +7,8 @@ mod relevance;
 mod triage;
 mod validation;
 
+use std::borrow::Cow;
+
 use integration_contracts::capture::artifact_fingerprint;
 
 use crate::clock::now_rfc3339;
@@ -22,8 +24,8 @@ pub use connection_test::{
 };
 pub use fake::FakeCandidateExtractor;
 pub use relevance::{
-    assess_relevance, filter_relevant, triage_input, Relevance, RelevanceSignal,
-    ASK_USER_QUESTION_SOURCE,
+    assess_relevance, filter_relevant, has_adapter_source, triage_input, Relevance,
+    RelevanceSignal, ASK_USER_QUESTION_SOURCE, WAKE_SOURCE,
 };
 pub use triage::{
     ask_triage, triage_input_chars, triage_schema, triage_user_content, TriageInput, TriageKind,
@@ -494,6 +496,7 @@ where
     };
     let evidence = normalize(evidence);
     let hash = input_hash(capture_id, &evidence);
+    let evidence = user_speech(evidence);
     let signals = match assess_relevance(&evidence) {
         Relevance::Pass(signals) => signals,
         Relevance::Empty => {
@@ -882,6 +885,43 @@ pub(crate) fn normalize(mut evidence: DecisionEvidence) -> DecisionEvidence {
     evidence
 }
 
+/// The one place that tells the user's words apart in a capture: drops the
+/// `user_text` artifacts the harness or another agent wrote and reduces the
+/// others to the user's words (see [`crate::speaker`]), so the provider is never
+/// sent text that is not the user's. An artifact the adapter or the hook marked
+/// with a `source` (a wake, the answer to a question) already holds the user's
+/// words and is kept as it is. Diffs and tool summaries stay.
+pub fn user_speech(mut evidence: DecisionEvidence) -> DecisionEvidence {
+    evidence.artifacts.retain_mut(|artifact| {
+        if artifact.kind != "user_text" {
+            return true;
+        }
+        let Some(words) = spoken_words(&artifact.content, &artifact.metadata) else {
+            return false;
+        };
+        // A borrowed answer is a suffix of the content (leading reminders
+        // cut), so a length check tells whether it changed.
+        if words.len() != artifact.content.len() {
+            let words = words.into_owned();
+            artifact.content = words;
+        }
+        true
+    });
+    evidence
+}
+
+/// The user's words in one `user_text` artifact, `None` when the harness or
+/// another agent wrote it: the rule [`user_speech`] applies to each artifact.
+pub fn spoken_words<'a>(content: &'a str, metadata: &str) -> Option<Cow<'a, str>> {
+    if has_adapter_source(metadata) {
+        return Some(Cow::Borrowed(content));
+    }
+    match crate::speaker::classify(content) {
+        crate::speaker::Speaker::User(words) => Some(words),
+        _ => None,
+    }
+}
+
 /// Truncates `value` to at most `max_bytes`, respecting char boundaries.
 pub fn truncate_content(value: &str, max_bytes: usize) -> String {
     if value.len() <= max_bytes {
@@ -914,8 +954,9 @@ fn dedup_hash(
 mod tests {
     use super::{
         assess_relevance, filter_relevant, reconcile_with_evidence, resolve_components,
-        truncate_content, CandidateKind, CandidateProposal, ComponentTally, DecisionEvidence,
-        EvidenceArtifact, MapComponent, ProposedComponent, Relevance, RelevanceSignal,
+        truncate_content, user_speech, CandidateKind, CandidateProposal, ComponentTally,
+        DecisionEvidence, EvidenceArtifact, MapComponent, ProposedComponent, Relevance,
+        RelevanceSignal,
     };
 
     fn proposal(refs: &[&str]) -> CandidateProposal {
@@ -1062,6 +1103,47 @@ Applies to the Claude Code adapter only.",
             observed_at: Some("2026-01-01T00:00:00Z".to_string()),
             artifacts,
         }
+    }
+
+    fn with_source(content: &str, source: &str) -> EvidenceArtifact {
+        EvidenceArtifact {
+            metadata: format!("{{\"source\":\"{source}\"}}"),
+            ..artifact("a", "user_text", content)
+        }
+    }
+
+    fn contents(capture: DecisionEvidence) -> Vec<String> {
+        capture
+            .artifacts
+            .into_iter()
+            .map(|artifact| artifact.content)
+            .collect()
+    }
+
+    #[test]
+    fn user_speech_keeps_what_an_adapter_already_took_out() {
+        let kept = "<task-notification>x</task-notification>";
+        for source in ["wake", "ask_user_question"] {
+            let capture = user_speech(evidence(vec![with_source(kept, source)]));
+            assert_eq!(contents(capture), [kept], "{source}");
+        }
+    }
+
+    #[test]
+    fn user_speech_drops_the_harness_and_cuts_the_reminders() {
+        let capture = user_speech(evidence(vec![
+            artifact("a", "user_text", "<bash-stdout>x</bash-stdout>"),
+            artifact(
+                "b",
+                "user_text",
+                "<system-reminder>r</system-reminder>\n<div>x</div>",
+            ),
+            artifact("c", "diff_hunk", "diff --git a/x b/x\n+1\n"),
+            artifact("d", "tool_summary", ""),
+        ]));
+        let kinds: Vec<_> = capture.artifacts.iter().map(|a| a.kind.as_str()).collect();
+        assert_eq!(kinds, ["user_text", "diff_hunk", "tool_summary"]);
+        assert_eq!(capture.artifacts[0].content, "<div>x</div>");
     }
 
     #[test]

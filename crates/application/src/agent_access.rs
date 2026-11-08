@@ -4,13 +4,14 @@ use std::collections::BTreeSet;
 
 use crate::claims::ClaimStore;
 use crate::context::{
-    ContextError, ContextPacks, ContextProvider, ContextRequest, ContextStore, MAX_BUDGET_CHARS,
-    MAX_TASK_CHARS,
+    ContextError, ContextPack, ContextPacks, ContextProvider, ContextRequest, ContextStore,
+    DocumentOrigin, MAX_BUDGET_CHARS, MAX_TASK_CHARS,
 };
 use crate::decisions::{DecisionStatus, DecisionStore, Decisions};
 use crate::graph::GraphStore;
 use crate::injection::{
-    clean, render_compact, short_ref, DEFAULT_BUDGET_TOKENS, MAX_BUDGET_TOKENS, MIN_BUDGET_TOKENS,
+    claim_head, clean, decision_head, render_compact, short_ref, DEFAULT_BUDGET_TOKENS,
+    MAX_BUDGET_TOKENS, MIN_BUDGET_TOKENS,
 };
 use crate::projects::{find_project_by_directory, ProjectRepository};
 use crate::relations::RelationStore;
@@ -328,7 +329,9 @@ where
                 budget_chars: Some(MAX_BUDGET_CHARS),
                 files,
             })?;
-        let text = render_compact(&pack, budget, &BTreeSet::new()).map(|block| block.text);
+        let origin = self.store.document_origin(&project)?;
+        let text = render_compact(&pack, budget, &BTreeSet::new())
+            .map(|block| label_document_origin(block.text, &pack, &origin));
         let (outcome, chars) = match &text {
             Some(text) => (AgentOutcome::Answered, text.chars().count()),
             None => (AgentOutcome::Empty, 0),
@@ -355,10 +358,14 @@ where
         };
         let mut lines = vec![
             format!(
-                "D:{} v{} ({status}) confirmada {}",
+                "D:{} v{} ({status}) confirmada {}{}",
                 short_ref(id),
                 summary.version,
-                summary.confirmed_at
+                summary.confirmed_at,
+                self.store
+                    .document_origin(project)?
+                    .path(id)
+                    .map_or_else(String::new, |path| format!(" ({})", document_label(path)))
             ),
             format!("pergunta: {}", clean(&summary.question)),
             format!("escolha: {}", clean(&summary.choice)),
@@ -462,6 +469,34 @@ where
     ) -> Result<Option<String>, AgentAccessError> {
         AgentAccess::file_context(self, directory, path, budget_tokens)
     }
+}
+
+/// Marks the lines of items extracted from a document with their file, right
+/// after `D:{ref} v{n}` (or the rule's tag): the agent asked for them, so they
+/// stay, but it should know they restate a document.
+fn label_document_origin(text: String, pack: &ContextPack, origin: &DocumentOrigin) -> String {
+    if origin.path_of.is_empty() {
+        return text;
+    }
+    let mut labeled = text;
+    let heads = pack
+        .decisions
+        .iter()
+        .filter_map(|decision| Some((decision_head(decision), origin.path(&decision.decision_id)?)))
+        .chain(
+            pack.claims
+                .iter()
+                .filter_map(|claim| Some((claim_head(claim), origin.path(&claim.claim_id)?))),
+        );
+    for (head, path) in heads {
+        labeled = labeled.replacen(&head, &format!("{head} ({})", document_label(path)), 1);
+    }
+    labeled
+}
+
+/// `de documento: <path>`, how the MCP tools mark an item a document gave.
+fn document_label(path: &str) -> String {
+    format!("de documento: {}", clean(path))
 }
 
 fn alphanumeric(text: &str) -> String {

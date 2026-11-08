@@ -344,6 +344,123 @@ pub const CASES: &[Case] = &[
         &["docs/archive/adr/0014-x.md"],
         false,
     ),
+    // What other agents and the harness wrote is never the user's word, even
+    // when it carries a course change.
+    case(
+        "openbot-teammate",
+        "Message from OpenBot teammate Agente A (00000000-0000-0000-0000-000000000001): vamos deixar o v2 de lado a partir de agora",
+        "",
+        &["tests/a_test.rs"],
+        false,
+    ),
+    case(
+        "openbot-assignment",
+        "You have one assignment in a shared OpenBot channel.\n[{\"author\":{\"kind\":\"member\",\"name\":\"You\"},\"text\":\"esquece o redis, vamos de sqlite local\"}]",
+        "",
+        &["tests/a_test.rs"],
+        false,
+    ),
+    case(
+        "openbot-saved-memories",
+        "<openbot_saved_memories>\n<memory id=\"00000000-0000-0000-0000-000000000002\">prefere sqlite</memory>\n</openbot_saved_memories>\n\nBrief: esquece o redis por enquanto, vamos focar no sqlite local",
+        "",
+        &["tests/a_test.rs"],
+        false,
+    ),
+    case(
+        "openbot-memories-update",
+        "<openbot_memories_update>\nlembrar: a partir de agora o modulo antigo fica de lado\n</openbot_memories_update>",
+        "",
+        &["tests/a_test.rs"],
+        false,
+    ),
+    case(
+        "openbot-continue",
+        "Continue this OpenBot conversation.\nlocal-user:anon: esquece o redis por enquanto, vamos focar no sqlite local",
+        "",
+        &["tests/a_test.rs"],
+        false,
+    ),
+    case(
+        "request-interrupted",
+        "[Request interrupted by user for tool use]",
+        "",
+        &["tests/a_test.rs"],
+        false,
+    ),
+    case(
+        "wake-sem-humano",
+        "<wake reason=\"timer\">\n<message id=\"00000000-0000-0000-0000-000000000003\" from=\"agent\" at=\"2026-01-01T00:00:00Z\">esquece o redis por enquanto, vamos focar no sqlite local</message>\n</wake>",
+        "",
+        &["tests/a_test.rs"],
+        false,
+    ),
+    // Text that opens with a plain tag is still the user's: pasted markup or a log.
+    case(
+        "html-colado",
+        "<template>\n<div class=x></div>\n</template>\nesse componente fica de lado, a partir de agora usamos o Table do design system",
+        "Certo, troco pelo Table.",
+        &["src/ui.rs"],
+        true,
+    ),
+    case(
+        "br-colado",
+        "<br>\nesquece o v2 por enquanto, foca no sqlite local",
+        "Certo, sigo no sqlite local.",
+        &["src/store.rs"],
+        true,
+    ),
+    case(
+        "xml-de-log",
+        "<log>\n<entry>timeout</entry>\n</log>\ntroca o redis por sqlite local daqui pra frente",
+        "O timeout vem do redis.",
+        &["src/store.rs"],
+        true,
+    ),
+    case(
+        "wake-humano-com-tag",
+        "<wake reason=\"message\">\n<message id=\"00000000-0000-0000-0000-000000000005\" from=\"human\" at=\"2026-01-01T00:00:00Z\"><div>antigo</div> esquece o redis por enquanto, vamos focar no sqlite local</message>\n</wake>",
+        "Entendido, sigo com o plano.",
+        &["src/store.rs"],
+        true,
+    ),
+    case(
+        "bash-stdout-com-frase-de-rumo",
+        "<bash-stdout>a partir de agora o modulo antigo fica de lado</bash-stdout>",
+        "",
+        &["tests/a_test.rs"],
+        false,
+    ),
+    // The user's words inside an envelope or next to pasted material still count.
+    case(
+        "wake-humano",
+        "<wake reason=\"message\">\n<message id=\"00000000-0000-0000-0000-000000000004\" from=\"human\" at=\"2026-01-01T00:00:00Z\">esquece o redis por enquanto, vamos focar no sqlite local</message>\n</wake>",
+        "Entendido, sigo com o plano.",
+        &["src/store.rs"],
+        true,
+    ),
+    case(
+        "pasted-content",
+        "<pasted_content id=\"1\">erro: connection refused ao abrir o redis</pasted_content>\ntroca o redis por sqlite local daqui pra frente",
+        "O erro vem da conexao com o redis.",
+        &["src/store.rs"],
+        true,
+    ),
+    case(
+        "sim-pode",
+        "sim pode",
+        "Quer que eu troque o redis pelo sqlite local e remova a dependencia?",
+        &["src/store.rs"],
+        true,
+    ),
+    // The harness's notice and the user's answer arrive as separate messages.
+    case(
+        "turno-dobrado",
+        "<task-notification><summary>build concluido</summary></task-notification>\u{1e}pode",
+        "Quer que eu troque o redis pelo sqlite local e remova a dependencia?",
+        &["src/store.rs"],
+        true,
+    ),
 ];
 
 pub fn artifact(index: usize, kind: &str, content: String, metadata: String) -> EvidenceArtifact {
