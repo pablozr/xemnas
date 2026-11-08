@@ -6,6 +6,7 @@ Usage:
   python tools/dogfood-report.py --write    rewrite the block in the diary
   --db PATH   database (default: $XEMNAS_DATA_DIR or %LOCALAPPDATA%/xemnas, then state/app.db)
   --doc PATH  diary (default: docs/operacao/dogfood-log.md)
+  --outbox PATH  capture outbox (default: `outbox/` next to the database's `state/`)
 
 The block between `<!-- dogfood:auto:start -->` and `<!-- dogfood:auto:end -->`
 is regenerated from scratch on every run, so running it once or ten times gives
@@ -16,11 +17,16 @@ Metric definitions follow the in-app Diagnostics (storage-sqlite/src/diagnostics
 latency is candidate `created_at` minus capture `received_at`; review time is
 decision `confirmed_at` minus candidate `created_at`; noise is dismissed over
 decided (accepted, edited_and_accepted, dismissed); losses are failed jobs and
-failed/skipped assessments. Percentiles use the same nearest-rank rule
+failed/skipped assessments. Rejected counts the files in `outbox/rejected/` per local
+day of their `rejected_at` (captures the app refused, never in the database); the line
+below the table gives the outbox right now: pending files (waiting for the app to open,
+oldest by `observed_at`, else file mtime) and rejected files per reason code. Only
+counts and codes are read from the outbox. Percentiles use the same nearest-rank rule
 (index = round((n - 1) * p)). Days are local-time days; the database stores UTC.
 """
 
 import argparse
+import json
 import os
 import sqlite3
 import sys
@@ -36,7 +42,7 @@ DASH = "—"
 HEADER = [
     "Dia", "Capturas", "Candidatos", "Confirmados", "Descartados", "Ruído",
     "Auto", "Desfeitos", "Latência p50/p95", "Revisão p50/p95",
-    "Injeções", "Tokens", "Omitidos", "MCP", "MCP respondidas", "Perdas",
+    "Injeções", "Tokens", "Omitidos", "MCP", "MCP respondidas", "Rejeitadas", "Perdas",
 ]
 
 
@@ -137,8 +143,67 @@ def collect(db, tz):
     return days, lists
 
 
-def render(db, tz, now):
+def outbox_files(outbox, folder):
+    """The `*.json` files of an outbox folder, or [] when it does not exist."""
+    try:
+        return sorted(Path(outbox, folder).glob("*.json"))
+    except OSError:
+        return []
+
+
+def read_json(path):
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def count_rejected(outbox, tz, days):
+    """Rejected files per local day of `rejected_at`; unreadable ones have no day."""
+    for path in outbox_files(outbox, "rejected"):
+        stamp = read_json(path).get("rejected_at")
+        day = day_of(stamp, tz) if isinstance(stamp, str) else None
+        if day:
+            days[day]["rejected"] += 1
+
+
+def oldest_pending(files, tz):
+    """Local date of the oldest pending capture: `observed_at`, else the file mtime."""
+    dates = []
+    for path in files:
+        stamp = read_json(path).get("observed_at")
+        day = day_of(stamp, tz) if isinstance(stamp, str) else None
+        if day is None:
+            try:
+                day = datetime.fromtimestamp(path.stat().st_mtime, tz).date().isoformat()
+            except OSError:
+                continue
+        dates.append(day)
+    return min(dates) if dates else None
+
+
+def outbox_line(outbox, tz):
+    """One summary line of the outbox right now, or None when there is no outbox."""
+    if not Path(outbox).is_dir():
+        return None
+    pending = outbox_files(outbox, "pending")
+    codes = defaultdict(int)
+    for path in outbox_files(outbox, "rejected"):
+        code = read_json(path).get("code")
+        codes[code if isinstance(code, str) and code else "desconhecido"] += 1
+    oldest = oldest_pending(pending, tz)
+    since = f" (mais antiga de {oldest})" if oldest else ""
+    reasons = ", ".join(f"{code}={n}" for code, n in sorted(codes.items())) or "nenhuma"
+    rejected = sum(codes.values())
+    return (f"Outbox agora: {len(pending)} pendentes{since} e {rejected} rejeitadas "
+            f"por motivo: {reasons}.")
+
+
+def render(db, tz, now, outbox=None):
     days, lists = collect(db, tz)
+    if outbox is not None:
+        count_rejected(outbox, tz, days)
     has_mcp = has_table(db, "agent_queries")
     # A day exists only when something happened in it.
     active = sorted(day for day, data in days.items() if any(data.values()))
@@ -154,7 +219,7 @@ def render(db, tz, now):
             data["auto"], data["undone"], spread(series["latency"]), spread(series["review"]),
             data["injections"], data["tokens"], data["omitted"],
             data["mcp"] if has_mcp else DASH, data["mcp_answered"] if has_mcp else DASH,
-            data["lost"],
+            data["rejected"], data["lost"],
         ])
         for key, value in data.items():
             totals[key] += value
@@ -168,13 +233,16 @@ def render(db, tz, now):
         totals["accepted"], totals["dismissed"], noise, totals["auto"], totals["undone"],
         spread(all_latency), spread(all_review), totals["injections"], totals["tokens"],
         totals["omitted"], totals["mcp"] if has_mcp else DASH,
-        totals["mcp_answered"] if has_mcp else DASH, totals["lost"],
+        totals["mcp_answered"] if has_mcp else DASH, totals["rejected"], totals["lost"],
     ]
     lines = [START, "", "| " + " | ".join(HEADER) + " |", "|" + " --- |" * len(HEADER)]
     for row in rows + ([total_row] if rows else []):
         lines.append("| " + " | ".join(str(cell) for cell in row) + " |")
     if not rows:
         lines.append("| " + " | ".join([DASH] * len(HEADER)) + " |")
+    summary = outbox_line(outbox, tz) if outbox is not None else None
+    if summary:
+        lines += ["", summary]
     lines += ["", f"Atualizado em {now.strftime('%Y-%m-%d %H:%M')} (hora local).", "", END]
     return "\n".join(lines)
 
@@ -202,6 +270,7 @@ def main(argv=None):
     parser.add_argument("--write", action="store_true", help="atualiza o documento")
     parser.add_argument("--db", type=Path, default=None)
     parser.add_argument("--doc", type=Path, default=DEFAULT_DOC)
+    parser.add_argument("--outbox", type=Path, default=None)
     args = parser.parse_args(argv)
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
@@ -217,11 +286,12 @@ def main(argv=None):
             print(f"Documento inválido: {error}", file=sys.stderr)
             return 2
 
+    outbox = args.outbox or db_path.parent.parent / "outbox"
     now = datetime.now().astimezone()
     try:
         db = open_readonly(db_path)
         try:
-            block = render(db, now.tzinfo, now)
+            block = render(db, now.tzinfo, now, outbox)
         finally:
             db.close()
     except sqlite3.Error as error:

@@ -1,6 +1,8 @@
 import importlib.util
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import json
+import os
 import sqlite3
 import tempfile
 import unittest
@@ -54,6 +56,28 @@ def make_db(path, with_queries=False):
     return db
 
 
+def make_outbox(root):
+    """Two rejections on the 5th (UTC-3), one on the 6th, one broken, two pending."""
+    outbox = root / "outbox"
+    for folder in ("pending", "rejected"):
+        (outbox / folder).mkdir(parents=True)
+
+    def rejected(name, code, stamp):
+        body = {"filename": name, "code": code, "detail": SECRET, "rejected_at": stamp}
+        (outbox / "rejected" / name).write_text(json.dumps(body), encoding="utf-8")
+
+    rejected("a.json", "project_not_registered", "2026-10-06T01:00:00Z")
+    rejected("b.json", "project_not_registered", "2026-10-06T02:00:00Z")
+    rejected("c.json", "other", "2026-10-06T12:00:00Z")
+    (outbox / "rejected" / "broken.json").write_text("{nao e json", encoding="utf-8")
+    (outbox / "rejected" / "note.txt").write_text("ignorado", encoding="utf-8")
+    (outbox / "pending" / "p1.json").write_text(
+        json.dumps({"observed_at": "2026-10-04T15:00:00Z"}), encoding="utf-8")
+    (outbox / "pending" / "p2.json").write_text(
+        json.dumps({"observed_at": "2026-10-06T15:00:00Z"}), encoding="utf-8")
+    return outbox
+
+
 def rows_of(block):
     return [line.split(" | ") for line in block.splitlines() if line.startswith("| 2026")]
 
@@ -79,7 +103,8 @@ class DogfoodReportTests(unittest.TestCase):
             self.assertEqual(second[6:8], ["1", "1"])  # auto resolved, undone
             self.assertEqual(second[10:13], ["1", "300", "4"])
             self.assertEqual(second[13:15], ["—", "—"])
-            self.assertEqual(second[15].rstrip(" |"), "2")  # failed job + skipped assessment
+            self.assertEqual(second[15], "0")  # rejected, no outbox given
+            self.assertEqual(second[16].rstrip(" |"), "2")  # failed job + skipped assessment
             self.assertIn("Atualizado em 2026-10-07 12:00", block)
 
     def test_agent_queries_when_present(self):
@@ -95,6 +120,54 @@ class DogfoodReportTests(unittest.TestCase):
             output = report.render(db, TZ, NOW)
             db.close()
             self.assertNotIn(SECRET, output)
+
+    def test_rejected_per_day_and_outbox_line(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = make_db(root / "app.db")
+            block = report.render(db, TZ, NOW, make_outbox(root))
+            db.close()
+            first, second = rows_of(block)
+            self.assertEqual(first[15], "2")
+            self.assertEqual(second[15], "1")
+            self.assertIn("| 3 | 2 |", block.split("**Total")[1])
+            self.assertIn("Outbox agora: 2 pendentes (mais antiga de 2026-10-04) e 4 rejeitadas "
+                          "por motivo: desconhecido=1, other=1, project_not_registered=2.", block)
+            self.assertLess(block.index("Outbox agora"), block.index("Atualizado em"))
+            self.assertNotIn(SECRET, block)
+
+    def test_missing_outbox_is_omitted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = make_db(root / "app.db")
+            block = report.render(db, TZ, NOW, root / "outbox")
+            db.close()
+            self.assertNotIn("Outbox agora", block)
+            self.assertEqual(rows_of(block)[1][15], "0")
+
+    def test_broken_pending_falls_back_to_mtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            outbox = Path(directory) / "outbox"
+            (outbox / "pending").mkdir(parents=True)
+            broken = outbox / "pending" / "x.json"
+            broken.write_text("{", encoding="utf-8")
+            stamp = datetime(2026, 10, 3, 12, 0, tzinfo=TZ).timestamp()
+            os.utime(broken, (stamp, stamp))
+            self.assertEqual(report.outbox_line(outbox, TZ),
+                             "Outbox agora: 1 pendentes (mais antiga de 2026-10-03) e 0 "
+                             "rejeitadas por motivo: nenhuma.")
+
+    def test_default_outbox_is_sibling_of_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "state").mkdir()
+            make_db(root / "state" / "app.db").close()
+            make_outbox(root)
+            doc = root / "log.md"
+            doc.write_text(f"{report.START}\n{report.END}\n", encoding="utf-8")
+            self.assertEqual(report.main(["--write", "--db", str(root / "state" / "app.db"),
+                                          "--doc", str(doc)]), 0)
+            self.assertIn("Outbox agora: 2 pendentes", doc.read_text(encoding="utf-8"))
 
     def test_write_is_idempotent_and_keeps_line_endings(self):
         with tempfile.TemporaryDirectory() as directory:
