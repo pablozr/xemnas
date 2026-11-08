@@ -45,11 +45,18 @@ pub fn build_envelope(
         });
     };
 
-    keep(
-        ArtifactKind::UserText,
-        cleaned(&turn.user_text, MAX_ARTIFACT_BYTES),
-        Map::new(),
-    );
+    // One artifact per prompt, so the server classifies each message alone.
+    for prompt in &turn.prompts {
+        let mut metadata = Map::new();
+        if let Some(source) = prompt.source {
+            metadata.insert("source".to_string(), json!(source));
+        }
+        keep(
+            ArtifactKind::UserText,
+            cleaned(&prompt.text, MAX_ARTIFACT_BYTES),
+            metadata,
+        );
+    }
     // The user's choice among options the assistant offered is their word,
     // even though the transcript carries it as a tool result.
     for answer in &turn.answers {
@@ -208,14 +215,21 @@ pub fn now_rfc3339() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hook::transcript::{FileEdit, ToolCall};
+    use crate::hook::transcript::{FileEdit, Prompt, ToolCall};
 
     const CWD: &str = "C:/proj";
+
+    fn prompt(text: &str) -> Prompt {
+        Prompt {
+            text: text.to_string(),
+            source: None,
+        }
+    }
 
     fn turn() -> Turn {
         Turn {
             prompt_uuid: "p1".to_string(),
-            user_text: "faça isso".to_string(),
+            prompts: vec![prompt("faça isso")],
             assistant_texts: vec!["feito".to_string(), "mais".to_string()],
             tools: vec![
                 ToolCall {
@@ -328,9 +342,9 @@ mod tests {
     #[test]
     fn redacts_secrets_and_strips_context_blocks() {
         let mut turn = turn();
-        turn.user_text =
-            "chave sk-abcdEFGH1234 e <xemnas-context>segredo interno</xemnas-context> ok"
-                .to_string();
+        turn.prompts = vec![prompt(
+            "chave sk-abcdEFGH1234 e <xemnas-context>segredo interno</xemnas-context> ok",
+        )];
         let envelope = build(&turn).expect("envelope");
         let text = &envelope.artifacts[0].content;
         assert!(!text.contains("sk-abcd"), "{text}");
@@ -341,7 +355,7 @@ mod tests {
     fn the_key_ignores_text_but_follows_the_diff() {
         let first = build(&turn()).expect("envelope");
         let mut changed = turn();
-        changed.user_text = "outro texto".to_string();
+        changed.prompts = vec![prompt("outro texto")];
         assert_eq!(
             build(&changed).expect("envelope").idempotency_key,
             first.idempotency_key
@@ -357,7 +371,7 @@ mod tests {
     fn an_empty_turn_has_no_envelope() {
         let empty = Turn {
             prompt_uuid: "p".to_string(),
-            user_text: "  ".to_string(),
+            prompts: vec![prompt("  ")],
             ..Turn::default()
         };
         assert!(build(&empty).is_none());
@@ -366,7 +380,7 @@ mod tests {
     #[test]
     fn limits_bound_artifacts_bytes_and_diff() {
         let mut big = turn();
-        big.user_text = "é".repeat(MAX_ARTIFACT_BYTES);
+        big.prompts = vec![prompt(&"é".repeat(MAX_ARTIFACT_BYTES))];
         big.tools = (0..100)
             .map(|index| ToolCall {
                 name: format!("T{index}"),

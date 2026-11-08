@@ -388,7 +388,7 @@ mod tests {
         assert_eq!(first.edits.len(), 2);
         assert_eq!(first.edits[0].hunks, "@@ -1,1 +1,1 @@\n-a\n+b\n");
         assert_eq!(first.edits[1].hunks, "@@ -0,0 +1,2 @@\n+um\n+dois\n");
-        assert_eq!(scanned.turns[1].user_text, "segundo");
+        assert_eq!(scanned.turns[1].prompts[0].text, "segundo");
         assert_eq!(scan(&transcript, 0, 1).expect("scan").turns.len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -415,12 +415,14 @@ mod tests {
             let text = std::fs::read_to_string(entry.expect("entry").path()).expect("read");
             let envelope: Value = serde_json::from_str(&text).expect("json");
             let artifact = |kind: &str| {
-                envelope["artifacts"]
+                let contents: Vec<&str> = envelope["artifacts"]
                     .as_array()
-                    .and_then(|all| all.iter().find(|a| a["kind"] == kind))
-                    .and_then(|a| a["content"].as_str())
-                    .unwrap_or_default()
-                    .to_string()
+                    .into_iter()
+                    .flatten()
+                    .filter(|a| a["kind"] == kind)
+                    .filter_map(|a| a["content"].as_str())
+                    .collect();
+                contents.join("\n\n")
             };
             let message_id = envelope["source"]["message_id"].as_str();
             found.push((

@@ -10,7 +10,8 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
-use application::speaker::{classify, Speaker};
+use application::extract::WAKE_SOURCE;
+use application::speaker::{classify, opens_with_harness_tag, Speaker};
 use serde_json::Value;
 
 /// Bytes read from the end of the transcript to find recently touched files.
@@ -30,6 +31,16 @@ pub const TRIVIAL_PROMPT_CHARS: usize = 80;
 
 /// Longest assistant text (chars) of a trivial turn; longer answers carry content worth analysing.
 pub const TRIVIAL_ASSISTANT_CHARS: usize = 600;
+
+/// What a user prompt sends to the server: its text and, when the hook took
+/// the words out of an envelope, where they came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Prompt {
+    /// The text as it goes in the artifact.
+    pub text: String,
+    /// `Some("wake")` when `text` is the human part of a wake.
+    pub source: Option<&'static str>,
+}
 
 /// One `tool_use` block of the turn and how it ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,8 +69,11 @@ pub struct Turn {
     pub prompt_uuid: String,
     /// Byte offset of the prompt line in the transcript.
     pub start_offset: u64,
-    /// Text blocks of the prompt.
-    pub user_text: String,
+    /// The prompts of the turn, one per user message: the server classifies each.
+    pub prompts: Vec<Prompt>,
+    /// Trimmed length (chars) of what the user said in the prompts, as the
+    /// turn's trivial check reads it: zero for the harness and other agents.
+    pub said_chars: usize,
     /// Assistant `text` blocks, in order; `thinking` is never kept.
     pub assistant_texts: Vec<String>,
     /// Tool calls, in order.
@@ -79,7 +93,7 @@ impl Turn {
     pub fn is_trivial(&self) -> bool {
         let answer: usize = self.assistant_texts.iter().map(|t| t.chars().count()).sum();
         self.tools.is_empty()
-            && self.user_text.trim().chars().count() <= TRIVIAL_PROMPT_CHARS
+            && self.said_chars <= TRIVIAL_PROMPT_CHARS
             && answer <= TRIVIAL_ASSISTANT_CHARS
     }
 
@@ -90,19 +104,15 @@ impl Turn {
         }
     }
 
-    /// Appends `other`'s prompt and answer after this turn's, separated by a
-    /// blank line. The identity (uuid, offset) stays this turn's.
+    /// Appends `other`'s prompts and answer after this turn's. Each prompt stays
+    /// its own message, so a notification and the "pode" after it never mix. The
+    /// identity (uuid, offset) stays this turn's.
     pub fn fold(&mut self, other: &Turn) {
         self.answers.extend(other.answers.iter().cloned());
         for path in &other.touched {
             self.touch(path);
         }
-        if !other.user_text.trim().is_empty() {
-            if !self.user_text.trim().is_empty() {
-                self.user_text.push_str("\n\n");
-            }
-            self.user_text.push_str(&other.user_text);
-        }
+        self.prompts.extend(other.prompts.iter().cloned());
         if other.assistant_texts.is_empty() {
             return;
         }
@@ -159,14 +169,15 @@ pub fn scan(path: &Path, offset: u64, max_turns: usize) -> io::Result<Scan> {
         }
         match entry["type"].as_str() {
             Some("user") => {
-                if let Some((uuid, text)) = prompt_of(&entry) {
+                if let Some((uuid, prompt, said_chars)) = prompt_of(&entry) {
                     if scan.turns.len() == max_turns {
                         break;
                     }
                     scan.turns.push(Turn {
                         prompt_uuid: uuid,
                         start_offset: start,
-                        user_text: text,
+                        prompts: prompt.into_iter().collect(),
+                        said_chars,
                         ..Turn::default()
                     });
                 } else if let Some(turn) = scan.turns.last_mut() {
@@ -184,14 +195,18 @@ pub fn scan(path: &Path, offset: u64, max_turns: usize) -> io::Result<Scan> {
     Ok(scan)
 }
 
-/// `(uuid, text)` when `entry` starts a turn: not meta, not the summary Claude
-/// Code writes when it compacts a conversation, not made of tool results and
-/// not a slash-command echo. `text` is what the user said: empty when the
-/// harness or another agent wrote the message (the turn still counts, for its
-/// diffs and tools), and the human's words when a wake carried them. It is
-/// decided here, before turns are folded, so a notification and the "pode" that
-/// follows it never mix.
-fn prompt_of(entry: &Value) -> Option<(String, String)> {
+/// `(uuid, prompt, said_chars)` when `entry` starts a turn: not meta, not the
+/// summary Claude Code writes when it compacts a conversation, not made of tool
+/// results and not a slash-command echo. The turn always counts (for its diffs
+/// and tools); `prompt` is what goes to the server and `said_chars` what the
+/// user said, for the trivial check. A prompt is dropped only by fact: a
+/// `promptSource` of `system`, nothing but reminders, an interruption, a fixed
+/// agent opening or a wake without a human. When only the shape of a tag made
+/// the classifier say harness, the raw text goes and the server decides, so a
+/// pasted `<div>` is never lost. A wake sends the human's words with their
+/// source. It is decided per message, before turns are folded, so a
+/// notification and the "pode" that follows it never mix.
+fn prompt_of(entry: &Value) -> Option<(String, Option<Prompt>, usize)> {
     let flagged = |field: &str| entry[field].as_bool() == Some(true);
     if flagged("isMeta") || flagged("isCompactSummary") || flagged("isVisibleInTranscriptOnly") {
         return None;
@@ -219,16 +234,32 @@ fn prompt_of(entry: &Value) -> Option<(String, String)> {
     {
         return None;
     }
-    let said = if entry["promptSource"].as_str() == Some("system") {
-        String::new()
-    } else {
-        match classify(&text) {
-            Speaker::User(Cow::Owned(words)) => words,
-            Speaker::User(Cow::Borrowed(_)) => text,
-            Speaker::Harness | Speaker::Agent => String::new(),
+    let uuid = uuid.to_string();
+    if entry["promptSource"].as_str() == Some("system") {
+        return Some((uuid, None, 0));
+    }
+    let (prompt, said_chars) = match classify(&text) {
+        Speaker::User(Cow::Owned(words)) => {
+            let said_chars = words.trim().chars().count();
+            let source = Some(WAKE_SOURCE);
+            (
+                Some(Prompt {
+                    text: words,
+                    source,
+                }),
+                said_chars,
+            )
+        }
+        Speaker::User(Cow::Borrowed(_)) => {
+            let said_chars = text.trim().chars().count();
+            (Some(Prompt { text, source: None }), said_chars)
+        }
+        Speaker::Harness | Speaker::Agent => {
+            let kept = opens_with_harness_tag(&text).then_some(Prompt { text, source: None });
+            (kept, 0)
         }
     };
-    Some((uuid.to_string(), said))
+    Some((uuid, prompt, said_chars))
 }
 
 fn add_assistant(turn: &mut Turn, entry: &Value) {
@@ -438,7 +469,11 @@ mod tests {
     fn turn(prompt: &str, answer: &str) -> Turn {
         Turn {
             prompt_uuid: prompt.to_string(),
-            user_text: prompt.to_string(),
+            prompts: vec![Prompt {
+                text: prompt.to_string(),
+                source: None,
+            }],
+            said_chars: prompt.trim().chars().count(),
             assistant_texts: vec![answer.to_string()],
             ..Turn::default()
         }
@@ -508,14 +543,15 @@ mod tests {
     }
 
     #[test]
-    fn folding_appends_with_a_blank_line_and_keeps_the_identity() {
+    fn folding_keeps_each_prompt_and_the_identity() {
         let mut head = turn("proposta", "faço X?");
         head.start_offset = 7;
         head.fold(&turn("pode", "feito"));
 
         assert_eq!(head.prompt_uuid, "proposta");
         assert_eq!(head.start_offset, 7);
-        assert_eq!(head.user_text, "proposta\n\npode");
+        let texts: Vec<&str> = head.prompts.iter().map(|p| p.text.as_str()).collect();
+        assert_eq!(texts, ["proposta", "pode"]);
         assert_eq!(head.assistant_texts.join("\n"), "faço X?\n\nfeito");
     }
 
