@@ -22,8 +22,8 @@ pub use connection_test::{
 };
 pub use fake::FakeCandidateExtractor;
 pub use relevance::{
-    assess_relevance, filter_relevant, triage_input, Relevance, RelevanceSignal,
-    ASK_USER_QUESTION_SOURCE, WAKE_SOURCE,
+    assess_relevance, filter_relevant, has_adapter_source, triage_input, Relevance,
+    RelevanceSignal, ASK_USER_QUESTION_SOURCE, WAKE_SOURCE,
 };
 pub use triage::{
     ask_triage, triage_input_chars, triage_schema, triage_user_content, TriageInput, TriageKind,
@@ -891,7 +891,7 @@ pub(crate) fn normalize(mut evidence: DecisionEvidence) -> DecisionEvidence {
 /// words and is kept as it is. Diffs and tool summaries stay.
 pub fn user_speech(mut evidence: DecisionEvidence) -> DecisionEvidence {
     evidence.artifacts.retain_mut(|artifact| {
-        if artifact.kind != "user_text" || relevance::from_adapter_source(artifact) {
+        if artifact.kind != "user_text" || has_adapter_source(&artifact.metadata) {
             return true;
         }
         match crate::speaker::classify(&artifact.content) {

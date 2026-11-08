@@ -384,14 +384,14 @@ fn answers_a_question(artifact: &EvidenceArtifact) -> bool {
 /// Whether the adapter or the hook already took the user's words out of what
 /// the harness wrote: the answer to a question or the human text of a wake.
 /// Such an artifact is not classified again, whatever it opens with.
-pub(super) fn from_adapter_source(artifact: &EvidenceArtifact) -> bool {
-    if artifact.metadata == "{}" {
+pub fn has_adapter_source(metadata: &str) -> bool {
+    if metadata == "{}" {
         return false;
     }
     [ASK_USER_QUESTION_SOURCE, WAKE_SOURCE]
         .into_iter()
-        .any(|source| artifact.metadata.contains(source))
-        && serde_json::from_str::<serde_json::Value>(&artifact.metadata).is_ok_and(|value| {
+        .any(|source| metadata.contains(source))
+        && serde_json::from_str::<serde_json::Value>(metadata).is_ok_and(|value| {
             value["source"] == ASK_USER_QUESTION_SOURCE || value["source"] == WAKE_SOURCE
         })
 }

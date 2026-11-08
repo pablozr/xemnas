@@ -70,17 +70,24 @@ impl CaptureProgressStore for SqliteStore {
                 .optional()
                 .map_err(|e| e.to_string())?
             };
-            // Bounded read: one indexed row, only the head of the prompt.
-            let title = tx
-                .query_row(
-                    "SELECT substr(content,1,400) FROM capture_artifacts
-                    WHERE capture_id=?1 AND kind='user_text' ORDER BY artifact_id LIMIT 1",
-                    params![capture_id],
-                    |r| r.get::<_, String>(0),
+            // Bounded read: a few indexed rows, only the head of each prompt. The
+            // first one that is the user's words names the capture.
+            let mut prompts = tx
+                .prepare(
+                    "SELECT substr(content,1,2000),metadata FROM capture_artifacts
+                    WHERE capture_id=?1 AND kind='user_text' ORDER BY artifact_id LIMIT 4",
                 )
-                .optional()
+                .map_err(|e| e.to_string())?;
+            let title = prompts
+                .query_map(params![capture_id], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                })
                 .map_err(|e| e.to_string())?
-                .and_then(|text| title_of(&text));
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .find_map(|(text, metadata)| spoken_title(&text, &metadata));
+            drop(prompts);
             let adapter = tx
                 .query_row(
                     "SELECT json_extract(provenance,'$.adapter') FROM capture_episode_sources
@@ -166,6 +173,18 @@ impl CaptureProgressStore for SqliteStore {
         }
         tx.commit().map_err(|e| e.to_string())?;
         Ok(result)
+    }
+}
+
+/// The title of a prompt when it is the user's words: an artifact with an
+/// adapter source already is; any other goes through the speaker classifier.
+fn spoken_title(text: &str, metadata: &str) -> Option<String> {
+    if application::extract::has_adapter_source(metadata) {
+        return title_of(text);
+    }
+    match application::speaker::classify(text) {
+        application::speaker::Speaker::User(words) => title_of(&words),
+        _ => None,
     }
 }
 
