@@ -700,3 +700,141 @@ fn with_the_app_closed_the_envelope_is_queued_for_the_repo_edited() {
     assert_eq!(diff_files(&envelope), ["src/x.rs"]);
     let _ = std::fs::remove_dir_all(&data_dir);
 }
+
+/// The `user_text` of an envelope body, or `None` when it has none.
+fn user_text(body: &Value) -> Option<String> {
+    body["artifacts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|artifact| artifact["kind"] == "user_text")
+        .and_then(|artifact| artifact["content"].as_str().map(str::to_string))
+}
+
+/// A prompt line, an assistant answer of `answer` and no tools.
+fn prompt_lines(uuid: &str, prompt: &Value, extra: Value, answer: &str) -> Vec<Value> {
+    let mut entry = json!({ "type": "user", "uuid": uuid, "message": { "content": prompt } });
+    if let (Some(entry), Some(extra)) = (entry.as_object_mut(), extra.as_object()) {
+        entry.extend(extra.clone());
+    }
+    vec![
+        entry,
+        json!({ "type": "assistant", "uuid": format!("{uuid}-a"),
+            "message": { "content": [{ "type": "text", "text": answer }] } }),
+    ]
+}
+
+#[test]
+fn a_notification_never_mixes_with_the_answer_folded_into_its_turn() {
+    let data_dir = temporary_directory("speaker-a");
+    let transcript = data_dir.join("t.jsonl");
+    let mut lines = prompt_lines("p1", &json!("edite a"), json!({}), "feito");
+    lines.extend(prompt_lines(
+        "p2",
+        &json!("<task-notification><task-id>a1</task-id><summary>concluido</summary></task-notification>"),
+        json!({ "promptSource": "system" }),
+        &"o subagente terminou e o resultado esta no relatorio. ".repeat(20),
+    ));
+    lines.extend(prompt_lines("p3", &json!("pode"), json!({}), "ok"));
+    write_lines(&transcript, &lines);
+    let (port, seen) = fake_api("202 Accepted", json!({ "capture_id": "c" }));
+    write_runtime(&data_dir, port);
+    let event = json!({ "session_id": "sess-1", "transcript_path": transcript,
+        "cwd": "C:/proj", "hook_event_name": "SessionEnd", "reason": "other" });
+
+    hook(&data_dir, "session-end", &event);
+
+    let posted = bodies(&seen);
+    assert_eq!(posted.len(), 2, "p3 folds into the notification's turn");
+    assert_eq!(user_text(&posted[0]).as_deref(), Some("edite a"));
+    assert_eq!(user_text(&posted[1]).as_deref(), Some("pode"));
+    assert!(!posted[1].to_string().contains("task-notification"));
+    let _ = std::fs::remove_dir_all(&data_dir);
+}
+
+#[test]
+fn a_teammate_message_keeps_its_diff_and_loses_its_user_text() {
+    if !git_available() {
+        return;
+    }
+    let data_dir = temporary_directory("speaker-b");
+    let a = repo(&data_dir, "a");
+    let transcript = data_dir.join("t.jsonl");
+    let mut lines = turn_lines("p1", &[&format!("{a}/src/x.rs")], &[]);
+    lines[0] = json!({ "type": "user", "uuid": "p1", "message": { "content":
+        "Message from OpenBot teammate Agente A: deixe o v2 de lado a partir de agora" } });
+    write_lines(&transcript, &lines);
+    let (port, seen) = fake_api("200 OK", json!({}));
+    write_runtime(&data_dir, port);
+
+    hook(
+        &data_dir,
+        "session-end",
+        &session_event(&transcript, Path::new(&a), "SessionEnd"),
+    );
+
+    let posted = bodies(&seen);
+    assert_eq!(posted.len(), 1);
+    assert_eq!(user_text(&posted[0]), None);
+    assert_eq!(diff_files(&posted[0]), ["src/x.rs"]);
+    let _ = std::fs::remove_dir_all(&data_dir);
+}
+
+#[test]
+fn a_wake_is_captured_as_the_human_words() {
+    let data_dir = temporary_directory("speaker-c");
+    let transcript = data_dir.join("t.jsonl");
+    let wake = "<wake reason=\"message\"><message id=\"00000000-0000-0000-0000-000000000001\" \
+                from=\"human\" at=\"2026-01-01T00:00:00Z\">esquece o redis, vamos de sqlite</message></wake>";
+    write_lines(
+        &transcript,
+        &prompt_lines("p1", &json!(wake), json!({}), "entendido"),
+    );
+    let (port, seen) = fake_api("202 Accepted", json!({ "capture_id": "c" }));
+    write_runtime(&data_dir, port);
+    let event = json!({ "session_id": "sess-1", "transcript_path": transcript,
+        "cwd": "C:/proj", "hook_event_name": "SessionEnd", "reason": "other" });
+
+    hook(&data_dir, "session-end", &event);
+
+    let posted = bodies(&seen);
+    assert_eq!(posted.len(), 1);
+    assert_eq!(
+        user_text(&posted[0]).as_deref(),
+        Some("esquece o redis, vamos de sqlite")
+    );
+    let _ = std::fs::remove_dir_all(&data_dir);
+}
+
+#[test]
+fn a_cwd_in_a_subfolder_of_a_repo_roots_at_the_toplevel() {
+    if !git_available() {
+        return;
+    }
+    let data_dir = temporary_directory("root-top");
+    let a = repo(&data_dir, "a");
+    let sub = format!("{a}/src");
+    let transcript = data_dir.join("t.jsonl");
+    write_lines(
+        &transcript,
+        &turn_lines("p1", &[&format!("{a}/src/x.rs")], &[]),
+    );
+    let (port, seen) = fake_api("200 OK", json!({ "context": "ctx" }));
+    write_runtime(&data_dir, port);
+
+    hook(
+        &data_dir,
+        "session-end",
+        &session_event(&transcript, Path::new(&sub), "SessionEnd"),
+    );
+    let mut event = session_event(&transcript, Path::new(&sub), "UserPromptSubmit");
+    event["prompt"] = json!("segue");
+    hook(&data_dir, "prompt", &event);
+
+    let posted = bodies(&seen);
+    assert_eq!(posted.len(), 2);
+    assert_eq!(posted[0]["project"]["canonical_path"], json!(a));
+    assert_eq!(diff_files(&posted[0]), ["src/x.rs"]);
+    assert_eq!(posted[1]["canonical_path"], json!(a));
+    let _ = std::fs::remove_dir_all(&data_dir);
+}

@@ -5,10 +5,12 @@
 //! tens of MB, so the reader streams from a byte offset and keeps only the
 //! compact [`Turn`] summary, never the raw entries.
 
+use std::borrow::Cow;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
+use application::speaker::{classify, Speaker};
 use serde_json::Value;
 
 /// Bytes read from the end of the transcript to find recently touched files.
@@ -182,9 +184,13 @@ pub fn scan(path: &Path, offset: u64, max_turns: usize) -> io::Result<Scan> {
     Ok(scan)
 }
 
-/// `(uuid, text)` when `entry` is a real user prompt: not meta, not the
-/// summary Claude Code writes when it compacts a conversation, not made of
-/// tool results and not a slash-command echo.
+/// `(uuid, text)` when `entry` starts a turn: not meta, not the summary Claude
+/// Code writes when it compacts a conversation, not made of tool results and
+/// not a slash-command echo. `text` is what the user said: empty when the
+/// harness or another agent wrote the message (the turn still counts, for its
+/// diffs and tools), and the human's words when a wake carried them. It is
+/// decided here, before turns are folded, so a notification and the "pode" that
+/// follows it never mix.
 fn prompt_of(entry: &Value) -> Option<(String, String)> {
     let flagged = |field: &str| entry[field].as_bool() == Some(true);
     if flagged("isMeta") || flagged("isCompactSummary") || flagged("isVisibleInTranscriptOnly") {
@@ -213,7 +219,16 @@ fn prompt_of(entry: &Value) -> Option<(String, String)> {
     {
         return None;
     }
-    Some((uuid.to_string(), text))
+    let said = if entry["promptSource"].as_str() == Some("system") {
+        String::new()
+    } else {
+        match classify(&text) {
+            Speaker::User(Cow::Owned(words)) => words,
+            Speaker::User(Cow::Borrowed(_)) => text,
+            Speaker::Harness | Speaker::Agent => String::new(),
+        }
+    };
+    Some((uuid.to_string(), said))
 }
 
 fn add_assistant(turn: &mut Turn, entry: &Value) {

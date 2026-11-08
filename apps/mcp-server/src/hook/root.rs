@@ -231,7 +231,8 @@ pub struct Roots {
     /// Most folders resolved for paths; beyond it the best repository found so far wins.
     max_lookups: usize,
     deadline: Option<Instant>,
-    cwd_in_worktree: Option<bool>,
+    /// Top of the work tree the cwd lies in (`None` inside: the cwd lies in none), once asked.
+    cwd_top: Option<Option<String>>,
     resolver: Resolver,
 }
 
@@ -242,7 +243,7 @@ impl Roots {
             cwd: cwd.to_string(),
             max_lookups,
             deadline: None,
-            cwd_in_worktree: None,
+            cwd_top: None,
             resolver: Resolver::new(cwd),
         }
     }
@@ -254,25 +255,29 @@ impl Roots {
         self
     }
 
-    /// Whether the cwd really lies inside a git work tree (a `.git` folder or file
-    /// at or above it, links resolved). No process, so a session inside a
-    /// repository pays nothing for the root.
-    fn cwd_in_worktree(&mut self) -> bool {
+    /// The top of the git work tree the cwd really lies in (a `.git` folder or
+    /// file at or above it, links resolved), or `None` when it lies in none. No
+    /// process, so a session inside a repository pays nothing for the root.
+    fn cwd_top(&mut self) -> Option<String> {
         let cwd = &self.cwd;
-        *self
-            .cwd_in_worktree
-            .get_or_insert_with(|| locate_directory(cwd).is_some())
+        self.cwd_top
+            .get_or_insert_with(|| locate_directory(cwd).map(|located| located.top))
+            .clone()
     }
 
     /// The root of a turn that edited `edits` and read `touched`. A cwd inside a
-    /// work tree is the root. Otherwise the repository with the highest score wins
+    /// work tree gives that work tree's top, even from a subfolder: one repository,
+    /// one project. Otherwise the repository with the highest score wins
     /// (each distinct edited file 3, each other distinct read file 1; a file is
     /// distinct by where it really lies, so aliases of one file count once;
     /// relative paths are taken from the cwd); a tie goes to the one met first,
     /// edits before reads. When the lookups run out the best repository found so
     /// far wins. No repository keeps the cwd.
     pub fn root_for(&mut self, edits: &[String], touched: &[String]) -> String {
-        if (edits.is_empty() && touched.is_empty()) || self.cwd_in_worktree() {
+        if let Some(top) = self.cwd_top() {
+            return top;
+        }
+        if edits.is_empty() && touched.is_empty() {
             return self.cwd.clone();
         }
         let mut seen: HashSet<String> = HashSet::new();
@@ -564,7 +569,7 @@ pub(crate) mod tests {
     fn a_cwd_in_a_link_to_a_repository_is_inside_it_whatever_its_text() {
         let base = scratch("cwdlink");
         let a = repo(&base.join("a"));
-        repo(&base.join("b"));
+        let b = repo(&base.join("b"));
         std::fs::create_dir_all(base.join("b").join("src")).expect("src");
         let home = base.join("agent");
         std::fs::create_dir_all(&home).expect("home");
@@ -573,9 +578,9 @@ pub(crate) mod tests {
             return;
         }
         let cwd = text(&home.join("alias"));
-        // The cwd's text climbs to no repository, its disk lies in B: it stays the root.
+        // The cwd's text climbs to no repository, its disk lies in B: B's top is the root.
         let root = Roots::new(&cwd, 16).root_for(&[format!("{a}/one.rs")], &[]);
-        assert_eq!(root, cwd);
+        assert_eq!(root, b);
         let _ = std::fs::remove_dir_all(&base);
     }
 
