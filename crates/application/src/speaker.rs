@@ -68,7 +68,7 @@ pub fn classify(text: &str) -> Speaker<'_> {
 
 /// `prompt` without the `<system-reminder>` blocks at its start; an unclosed
 /// block swallows the rest.
-pub fn strip_leading_reminders(prompt: &str) -> &str {
+fn strip_leading_reminders(prompt: &str) -> &str {
     let mut rest = prompt.trim_start();
     while let Some(after) = rest.strip_prefix(SYSTEM_REMINDER_OPEN) {
         let Some(end) = after.find(SYSTEM_REMINDER_CLOSE) else {

@@ -475,12 +475,6 @@ pub struct ProjectOverviews<S, P, K, F> {
     documents: Option<Documents<S>>,
 }
 
-/// `AGENTS.md` or `CLAUDE.md`, at any depth: instructions for agents.
-fn is_agent_instructions(path: &str) -> bool {
-    let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
-    name.eq_ignore_ascii_case("AGENTS.md") || name.eq_ignore_ascii_case("CLAUDE.md")
-}
-
 /// Lowercase text with the whitespace collapsed, to compare titles and excerpts.
 fn same_text(text: &str) -> String {
     text.split_whitespace()
@@ -827,14 +821,15 @@ where
         // Agent instructions are not the project's documentation, and the same
         // title and opening paragraph under two names (README, SPEC, AGENTS,
         // SECURITY copies) is read once.
-        documents.retain(|document| !is_agent_instructions(&document.path));
+        documents.retain(|document| !crate::documents::is_agent_instructions(&document.path));
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         documents.retain(|document| {
-            seen.insert(format!(
-                "{}|{}",
-                same_text(&document.title),
-                same_text(&document.excerpt)
-            )) || document.excerpt.is_empty()
+            document.excerpt.is_empty()
+                || seen.insert(format!(
+                    "{}|{}",
+                    same_text(&document.title),
+                    same_text(&document.excerpt)
+                ))
         });
         for document in documents.iter().take(MAX_DOCUMENTS) {
             let label = format!("F:{}", document_ref(&document.path));

@@ -893,8 +893,10 @@ fn only_user_speech(mut evidence: DecisionEvidence) -> DecisionEvidence {
             return true;
         }
         match crate::speaker::classify(&artifact.content) {
+            // A borrowed answer is a suffix of the content (leading
+            // reminders cut), so a length check tells whether it changed.
             crate::speaker::Speaker::User(words) => {
-                if words != artifact.content {
+                if words.len() != artifact.content.len() {
                     artifact.content = words.into_owned();
                 }
                 true

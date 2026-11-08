@@ -339,7 +339,7 @@ where
                 budget_chars: Some(MAX_BUDGET_CHARS),
                 files,
             })?;
-        if !INJECT_DOCUMENT_ORIGIN {
+        if !INJECT_DOCUMENT_ORIGIN && !(pack.decisions.is_empty() && pack.claims.is_empty()) {
             self.store.document_origin(&project.id)?.strip(&mut pack);
         }
         if let Some((decisions, claims)) = &tied {
@@ -783,11 +783,28 @@ fn is_manifest_name(path: &str) -> bool {
         .is_some_and(|name| crate::observations::ROOT_MANIFESTS.contains(&name))
 }
 
+/// `D:{ref} v{n}`, the start of a decision's line.
+pub(crate) fn decision_head(decision: &PackDecision) -> String {
+    format!(
+        "D:{} v{}",
+        short_ref(&decision.decision_id),
+        decision.version
+    )
+}
+
+/// `{tag}:{ref} v1`, the start of a claim's line.
+pub(crate) fn claim_head(claim: &PackClaim) -> String {
+    format!(
+        "{}:{} v1",
+        claim_tag(&claim.kind),
+        short_ref(&claim.claim_id)
+    )
+}
+
 fn decision_line(decision: &PackDecision) -> String {
     let mut line = format!(
-        "D:{} v{} {} → {}",
-        short_ref(&decision.decision_id),
-        decision.version,
+        "{} {} → {}",
+        decision_head(decision),
         clean(&decision.question),
         clean(&decision.choice)
     );
@@ -824,9 +841,8 @@ pub(crate) fn claim_tag(kind: &str) -> &'static str {
 
 fn claim_line(claim: &PackClaim) -> String {
     format!(
-        "{}:{} v1 {}{}",
-        claim_tag(&claim.kind),
-        short_ref(&claim.claim_id),
+        "{} {}{}",
+        claim_head(claim),
         clean(&claim.statement),
         knowledge_suffix(&claim.inherited_scope, &claim.qualifiers)
     )

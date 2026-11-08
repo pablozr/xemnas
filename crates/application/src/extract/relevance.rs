@@ -401,13 +401,13 @@ fn normative_document_edited(evidence: &DecisionEvidence) -> bool {
 }
 
 fn is_normative_path(path: &str) -> bool {
-    use crate::documents::{classify, is_archived_path, is_documentation_path, DocumentKind};
+    use crate::documents::{
+        classify, is_agent_instructions, is_archived_path, is_documentation_path, DocumentKind,
+    };
     if !is_documentation_path(path) || is_archived_path(path) {
         return false;
     }
-    let file = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
-    matches!(file.as_str(), "agents.md" | "claude.md")
-        || matches!(classify(path), DocumentKind::Adr | DocumentKind::Spec)
+    is_agent_instructions(path) || matches!(classify(path), DocumentKind::Adr | DocumentKind::Spec)
 }
 
 /// What the user said in the artifact: nothing when it is not a user message,
@@ -438,10 +438,10 @@ fn aggregate_text(evidence: &DecisionEvidence) -> String {
     let mut text = String::new();
     for artifact in &evidence.artifacts {
         let content = if artifact.kind == "user_text" {
-            match user_words(artifact) {
-                Some(words) => words,
-                None => continue,
-            }
+            let Some(words) = user_words(artifact) else {
+                continue;
+            };
+            words
         } else {
             Cow::Borrowed(artifact.content.as_str())
         };

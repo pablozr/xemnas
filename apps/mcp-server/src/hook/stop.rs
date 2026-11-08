@@ -208,7 +208,9 @@ pub fn capture(
             now_rfc3339(),
         ) {
             if unregistered.contains(&root) {
-                sender.park(&envelope);
+                if sender.park(&envelope).is_err() {
+                    return Err("capture could not be stored");
+                }
                 report.skipped += 1;
                 done += 1;
                 continue;

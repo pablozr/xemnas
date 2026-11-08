@@ -57,8 +57,8 @@ impl Sender {
 
     /// Parks `envelope` in `outbox/pending` without a request, for a folder the
     /// app already refused in this run.
-    pub fn park(&self, envelope: &CaptureEnvelope) {
-        let _ = write_pending(&self.pending_dir, envelope);
+    pub fn park(&self, envelope: &CaptureEnvelope) -> std::io::Result<()> {
+        write_pending(&self.pending_dir, envelope)
     }
 
     /// Delivers `envelope`: 2xx advances, 4xx stops, anything else is queued.
@@ -72,9 +72,13 @@ impl Sender {
                 .send();
             match response.map(|response| response.status().as_u16()) {
                 Ok(200..=299) => return Outcome::Sent,
+                // The app quarantines it on the next drain; if it cannot be
+                // stored, the turn is not consumed.
                 Ok(403) => {
-                    let _ = write_pending(&self.pending_dir, envelope);
-                    return Outcome::Rejected(403);
+                    return match self.park(envelope) {
+                        Ok(()) => Outcome::Rejected(403),
+                        Err(_) => Outcome::Failed,
+                    };
                 }
                 Ok(status @ 400..=499) => return Outcome::Rejected(status),
                 _ => self.endpoint = None,

@@ -418,6 +418,12 @@ where
     }
 }
 
+/// `AGENTS.md` or `CLAUDE.md`, at any depth: instructions for agents.
+pub fn is_agent_instructions(path: &str) -> bool {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    name.eq_ignore_ascii_case("AGENTS.md") || name.eq_ignore_ascii_case("CLAUDE.md")
+}
+
 /// Whether a document sits in an archive folder (`archive`, `arquivados`,
 /// `archive-2026-10-14`...). Only folder segments count: a file named
 /// `archive.md` is an ordinary document.

@@ -278,11 +278,9 @@ impl DocumentOrigin {
             .retain(|claim| !self.claims.contains(&claim.claim_id));
     }
 
-    /// `de documento: <path>` for an item that came from one.
-    pub fn label(&self, id: &str) -> Option<String> {
-        self.path_of
-            .get(id)
-            .map(|path| format!("de documento: {}", crate::injection::clean(path)))
+    /// File an item came from, when it came from a document.
+    pub fn path(&self, id: &str) -> Option<&str> {
+        self.path_of.get(id).map(String::as_str)
     }
 }
 

@@ -10,8 +10,8 @@ use crate::context::{
 use crate::decisions::{DecisionStatus, DecisionStore, Decisions};
 use crate::graph::GraphStore;
 use crate::injection::{
-    claim_tag, clean, render_compact, short_ref, DEFAULT_BUDGET_TOKENS, MAX_BUDGET_TOKENS,
-    MIN_BUDGET_TOKENS,
+    claim_head, clean, decision_head, render_compact, short_ref, DEFAULT_BUDGET_TOKENS,
+    MAX_BUDGET_TOKENS, MIN_BUDGET_TOKENS,
 };
 use crate::projects::{find_project_by_directory, ProjectRepository};
 use crate::relations::RelationStore;
@@ -364,8 +364,8 @@ where
                 summary.confirmed_at,
                 self.store
                     .document_origin(project)?
-                    .label(id)
-                    .map_or_else(String::new, |label| format!(" ({label})"))
+                    .path(id)
+                    .map_or_else(String::new, |path| format!(" ({})", document_label(path)))
             ),
             format!("pergunta: {}", clean(&summary.question)),
             format!("escolha: {}", clean(&summary.choice)),
@@ -475,36 +475,28 @@ where
 /// after `D:{ref} v{n}` (or the rule's tag): the agent asked for them, so they
 /// stay, but it should know they restate a document.
 fn label_document_origin(text: String, pack: &ContextPack, origin: &DocumentOrigin) -> String {
+    if origin.path_of.is_empty() {
+        return text;
+    }
     let mut labeled = text;
     let heads = pack
         .decisions
         .iter()
-        .map(|decision| {
-            (
-                format!(
-                    "D:{} v{}",
-                    short_ref(&decision.decision_id),
-                    decision.version
-                ),
-                &decision.decision_id,
-            )
-        })
-        .chain(pack.claims.iter().map(|claim| {
-            (
-                format!(
-                    "{}:{} v1",
-                    claim_tag(&claim.kind),
-                    short_ref(&claim.claim_id)
-                ),
-                &claim.claim_id,
-            )
-        }));
-    for (head, id) in heads {
-        if let Some(label) = origin.label(id) {
-            labeled = labeled.replacen(&head, &format!("{head} ({label})"), 1);
-        }
+        .filter_map(|decision| Some((decision_head(decision), origin.path(&decision.decision_id)?)))
+        .chain(
+            pack.claims
+                .iter()
+                .filter_map(|claim| Some((claim_head(claim), origin.path(&claim.claim_id)?))),
+        );
+    for (head, path) in heads {
+        labeled = labeled.replacen(&head, &format!("{head} ({})", document_label(path)), 1);
     }
     labeled
+}
+
+/// `de documento: <path>`, how the MCP tools mark an item a document gave.
+fn document_label(path: &str) -> String {
+    format!("de documento: {}", clean(path))
 }
 
 fn alphanumeric(text: &str) -> String {

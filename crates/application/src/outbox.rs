@@ -156,6 +156,7 @@ pub fn drain_with(
     remove_orphan_tmp(&pending_dir)?;
 
     let mut accepted_now: BTreeSet<String> = BTreeSet::new();
+    let mut parked_roots: BTreeSet<String> = BTreeSet::new();
 
     for path in json_files(&pending_dir)? {
         let Some(filename) = file_name(&path) else {
@@ -233,9 +234,9 @@ pub fn drain_with(
             // refusal, but the capture is the user's work: it waits intact in
             // `unregistered/` until the folder is registered.
             Err(IngestError::Forbidden) => {
-                let canonical_path = envelope.project.canonical_path.clone();
+                let canonical_path = envelope.project.canonical_path;
                 if park_unregistered(root, &filename, &claimed, &canonical_path, &mut quarantine) {
-                    evict_over_cap(root, &canonical_path, &mut quarantine, &mut report);
+                    parked_roots.insert(canonical_path);
                 } else {
                     let _ = restore_to_pending(root, &filename, &claimed);
                 }
@@ -270,6 +271,10 @@ pub fn drain_with(
         }
     }
 
+    // Once per root after the loop: evicting per parked item rescans the index.
+    for canonical_path in &parked_roots {
+        evict_over_cap(root, canonical_path, &mut quarantine, &mut report);
+    }
     save_quarantine(root, &quarantine);
     summarize_quarantine(&quarantine, &mut report);
     report.pending_remaining = json_files(&pending_dir)?.len();
@@ -293,12 +298,8 @@ pub fn retry_stalled(root: &Path) -> Result<usize, OutboxError> {
         let Some(filename) = file_name(&path) else {
             continue;
         };
-        match move_no_replace(&path, &root.join(PENDING).join(&filename)) {
-            Ok(true) => restored += 1,
-            Ok(false) => {
-                let _ = fs::remove_file(&path);
-            }
-            Err(_) => {}
+        if let Ok(true) = move_or_drop_duplicate(&path, &root.join(PENDING).join(&filename)) {
+            restored += 1;
         }
     }
     Ok(restored)
@@ -329,18 +330,18 @@ fn load_quarantine(root: &Path) -> QuarantineIndex {
         if index.contains_key(&name) {
             continue;
         }
-        let root_of = fs::read_to_string(directory.join(&name))
+        let path = directory.join(&name);
+        let root_of = fs::read_to_string(&path)
             .ok()
             .and_then(|text| serde_json::from_str::<CaptureEnvelope>(&text).ok())
             .map(|envelope| envelope.project.canonical_path);
         if let Some(root_of) = root_of {
-            index.insert(
-                name,
-                QuarantineEntry {
-                    root: root_of,
-                    at: unix_seconds(),
-                },
-            );
+            // The file age keeps a rebuilt index evicting the oldest first.
+            let at = fs::metadata(&path)
+                .and_then(|metadata| metadata.modified())
+                .map(seconds_since_epoch)
+                .unwrap_or_else(|_| unix_seconds());
+            index.insert(name, QuarantineEntry { root: root_of, at });
         }
     }
     index
@@ -357,6 +358,10 @@ fn save_quarantine(root: &Path, index: &QuarantineIndex) {
     let Ok(text) = serde_json::to_string(index) else {
         return;
     };
+    // Every app start drains; an unchanged index is not rewritten.
+    if fs::read_to_string(&target).is_ok_and(|current| current == text) {
+        return;
+    }
     let temporary = unique_temporary(&directory, UNREGISTERED_INDEX);
     if fs::write(&temporary, text).is_err() || fs::rename(&temporary, &target).is_err() {
         let _ = fs::remove_file(&temporary);
@@ -375,12 +380,8 @@ fn park_unregistered(
     if fs::create_dir_all(&directory).is_err() {
         return false;
     }
-    match move_no_replace(claimed, &directory.join(filename)) {
-        Ok(true) => {}
-        Ok(false) => {
-            let _ = fs::remove_file(claimed);
-        }
-        Err(_) => return false,
+    if move_or_drop_duplicate(claimed, &directory.join(filename)).is_err() {
+        return false;
     }
     index.insert(
         filename.to_string(),
@@ -447,13 +448,9 @@ fn release_registered(root: &Path, api: &dyn CaptureApi, index: &mut QuarantineI
             return true;
         }
         let from = root.join(UNREGISTERED).join(name);
-        match move_no_replace(&from, &root.join(PENDING).join(name)) {
-            Ok(true) => {
-                released += 1;
-                false
-            }
-            Ok(false) => {
-                let _ = fs::remove_file(&from);
+        match move_or_drop_duplicate(&from, &root.join(PENDING).join(name)) {
+            Ok(moved) => {
+                released += usize::from(moved);
                 false
             }
             Err(_) => true,
@@ -483,8 +480,11 @@ fn summarize_quarantine(index: &QuarantineIndex, report: &mut DrainReport) {
 }
 
 fn unix_seconds() -> u64 {
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
+    seconds_since_epoch(SystemTime::now())
+}
+
+fn seconds_since_epoch(time: SystemTime) -> u64 {
+    time.duration_since(SystemTime::UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or_default()
 }
@@ -649,6 +649,16 @@ fn file_name(path: &Path) -> Option<String> {
     path.file_name()
         .and_then(|name| name.to_str())
         .map(str::to_string)
+}
+
+/// Moves `from` to `to`; when `to` already holds the same item, `from` is the
+/// duplicate and is removed. `Ok(true)` only when `from` actually moved.
+fn move_or_drop_duplicate(from: &Path, to: &Path) -> io::Result<bool> {
+    let moved = move_no_replace(from, to)?;
+    if !moved {
+        let _ = fs::remove_file(from);
+    }
+    Ok(moved)
 }
 
 /// Renames `from` to `to` without deleting an existing destination.
