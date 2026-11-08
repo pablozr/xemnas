@@ -20,7 +20,9 @@ pub enum Outcome {
     Sent,
     /// The app was unavailable; it waits in `outbox/pending`.
     Queued,
-    /// The app refused it (4xx): retrying the same envelope cannot help.
+    /// The app refused it (4xx): retrying the same envelope cannot help. A 403
+    /// (folder not registered) is also parked in `outbox/pending`, where the next
+    /// drain moves it to the quarantine until the folder is registered.
     Rejected(u16),
     /// Neither the app nor the outbox took it.
     Failed,
@@ -53,6 +55,12 @@ impl Sender {
         }
     }
 
+    /// Parks `envelope` in `outbox/pending` without a request, for a folder the
+    /// app already refused in this run.
+    pub fn park(&self, envelope: &CaptureEnvelope) {
+        let _ = write_pending(&self.pending_dir, envelope);
+    }
+
     /// Delivers `envelope`: 2xx advances, 4xx stops, anything else is queued.
     pub fn send(&mut self, envelope: &CaptureEnvelope) -> Outcome {
         if let (Some((port, token)), Some(client)) = (&self.endpoint, &self.client) {
@@ -64,6 +72,10 @@ impl Sender {
                 .send();
             match response.map(|response| response.status().as_u16()) {
                 Ok(200..=299) => return Outcome::Sent,
+                Ok(403) => {
+                    let _ = write_pending(&self.pending_dir, envelope);
+                    return Outcome::Rejected(403);
+                }
                 Ok(status @ 400..=499) => return Outcome::Rejected(status),
                 _ => self.endpoint = None,
             }

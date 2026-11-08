@@ -13,7 +13,7 @@ apareceram nele, guarda as que você confirma e devolve essas decisões ao agent
 
 **Captura.** O plugin do OpenCode e os hooks do Claude Code enviam a sessão à API local
 (só loopback, com token). Segredos são mascarados no adapter e de novo no motor. Com o app
-fechado, a captura espera numa outbox de arquivos e entra quando o app abre.
+fechado, a captura espera numa outbox de arquivos e entra quando o app abre. A captura de uma pasta que não é projeto cadastrado não se perde: fica intacta numa quarentena da outbox, com contagem por pasta no relatório do dogfood, e entra quando a pasta é cadastrada (a tela da quarentena ainda não existe).
 
 **Análise.** Um job em segundo plano lê a captura e propõe candidatos: decisões e regras
 (uma regra vira claim). Detalhes de implementação são descartados. Cada candidato traz

@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 use integration_contracts::capture::{validate_envelope, CaptureEnvelope, EnvelopeValidationError};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::captures::{CaptureApi, IngestError};
@@ -25,6 +26,15 @@ const REJECTED: &str = "rejected";
 /// Subdirectory with intact items parked by older versions after repeated refusals;
 /// `retry_stalled` restores them. Nothing parks new items here anymore.
 const STALLED: &str = "stalled";
+/// Subdirectory with intact captures of folders that are not registered projects.
+/// Nothing here is deleted by age: registering the folder releases them, and the
+/// only other way out is the per-root cap.
+const UNREGISTERED: &str = "unregistered";
+/// Index of `unregistered/`: which root each item belongs to, so a drain counts
+/// and releases without reading the payloads again.
+const UNREGISTERED_INDEX: &str = "index.json";
+/// Most captures kept per unregistered root; past it the oldest is rejected.
+pub const QUARANTINE_CAP_PER_ROOT: usize = 2000;
 
 /// Default retention of `rejected/` diagnostics: long enough to outlive a
 /// dogfood week, short enough that diagnostics cannot pile up forever.
@@ -87,7 +97,26 @@ pub struct DrainReport {
     pub pruned: usize,
     /// Rejected diagnostics removed by retention.
     pub pruned_rejected: usize,
+    /// Captures waiting in `unregistered/` after this pass.
+    pub quarantined: usize,
+    /// Quarantined captures per root, most first. Counts only, no content.
+    pub quarantined_by_root: Vec<(String, usize)>,
+    /// Quarantined captures whose folder no longer exists.
+    pub vanished: usize,
+    /// Quarantined captures released back to `pending/` because their folder
+    /// is now a registered project.
+    pub released: usize,
 }
+
+/// Where a quarantined capture came from, kept in `unregistered/index.json`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct QuarantineEntry {
+    root: String,
+    /// Unix seconds when it was parked; orders the eviction past the cap.
+    at: u64,
+}
+
+type QuarantineIndex = BTreeMap<String, QuarantineEntry>;
 
 /// Drains the outbox under `root` into `api` with [`DrainPolicy::new`].
 pub fn drain(
@@ -113,6 +142,8 @@ pub fn drain_with(
     }
 
     let mut report = DrainReport::default();
+    let mut quarantine = load_quarantine(root);
+    report.released = release_registered(root, api, &mut quarantine);
 
     for path in json_files(&sending_dir)? {
         if let Some(filename) = file_name(&path) {
@@ -198,17 +229,17 @@ pub fn drain_with(
                 }
             }
             // `Forbidden` means the folder is not a registered project (or its path
-            // cannot be resolved). The ingest has no other cause for it, so the
-            // refusal is final: retrying every drain only piles up envelopes that
-            // the Claude Code hook writes for unregistered folders.
-            Err(IngestError::Forbidden) => reject(
-                root,
-                &filename,
-                &claimed,
-                "project_not_registered",
-                "the project is not registered or its path cannot be resolved",
-                &mut report,
-            ),
+            // cannot be resolved). Retrying every drain would only repeat the
+            // refusal, but the capture is the user's work: it waits intact in
+            // `unregistered/` until the folder is registered.
+            Err(IngestError::Forbidden) => {
+                let canonical_path = envelope.project.canonical_path.clone();
+                if park_unregistered(root, &filename, &claimed, &canonical_path, &mut quarantine) {
+                    evict_over_cap(root, &canonical_path, &mut quarantine, &mut report);
+                } else {
+                    let _ = restore_to_pending(root, &filename, &claimed);
+                }
+            }
             Err(IngestError::Storage(_)) => {
                 let _ = restore_to_pending(root, &filename, &claimed);
             }
@@ -239,6 +270,8 @@ pub fn drain_with(
         }
     }
 
+    save_quarantine(root, &quarantine);
+    summarize_quarantine(&quarantine, &mut report);
     report.pending_remaining = json_files(&pending_dir)?.len();
     report.pruned = prune_older(&accepted_dir, policy.accepted_retention, &accepted_now)?;
     report.pruned_rejected =
@@ -269,6 +302,191 @@ pub fn retry_stalled(root: &Path) -> Result<usize, OutboxError> {
         }
     }
     Ok(restored)
+}
+
+/// Reads `unregistered/index.json` and reconciles it with the folder: entries
+/// whose file is gone are dropped, files the index does not know are read once.
+fn load_quarantine(root: &Path) -> QuarantineIndex {
+    let directory = root.join(UNREGISTERED);
+    if !directory.is_dir() {
+        return QuarantineIndex::new();
+    }
+    let mut index: QuarantineIndex = fs::read_to_string(directory.join(UNREGISTERED_INDEX))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+    let Ok(entries) = fs::read_dir(&directory) else {
+        return index;
+    };
+    // Names only: the listing is the hot part of a drain with a full quarantine.
+    let present: BTreeSet<String> = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.ends_with(".json") && name != UNREGISTERED_INDEX)
+        .collect();
+    index.retain(|name, _| present.contains(name));
+    for name in present {
+        if index.contains_key(&name) {
+            continue;
+        }
+        let root_of = fs::read_to_string(directory.join(&name))
+            .ok()
+            .and_then(|text| serde_json::from_str::<CaptureEnvelope>(&text).ok())
+            .map(|envelope| envelope.project.canonical_path);
+        if let Some(root_of) = root_of {
+            index.insert(
+                name,
+                QuarantineEntry {
+                    root: root_of,
+                    at: unix_seconds(),
+                },
+            );
+        }
+    }
+    index
+}
+
+/// Writes the index back; an empty quarantine leaves no index behind.
+fn save_quarantine(root: &Path, index: &QuarantineIndex) {
+    let directory = root.join(UNREGISTERED);
+    let target = directory.join(UNREGISTERED_INDEX);
+    if index.is_empty() {
+        let _ = fs::remove_file(&target);
+        return;
+    }
+    let Ok(text) = serde_json::to_string(index) else {
+        return;
+    };
+    let temporary = unique_temporary(&directory, UNREGISTERED_INDEX);
+    if fs::write(&temporary, text).is_err() || fs::rename(&temporary, &target).is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+}
+
+/// Moves a claimed item, untouched, into `unregistered/` and indexes it.
+fn park_unregistered(
+    root: &Path,
+    filename: &str,
+    claimed: &Path,
+    canonical_path: &str,
+    index: &mut QuarantineIndex,
+) -> bool {
+    let directory = root.join(UNREGISTERED);
+    if fs::create_dir_all(&directory).is_err() {
+        return false;
+    }
+    match move_no_replace(claimed, &directory.join(filename)) {
+        Ok(true) => {}
+        Ok(false) => {
+            let _ = fs::remove_file(claimed);
+        }
+        Err(_) => return false,
+    }
+    index.insert(
+        filename.to_string(),
+        QuarantineEntry {
+            root: canonical_path.to_string(),
+            at: unix_seconds(),
+        },
+    );
+    true
+}
+
+/// Keeps one root at [`QUARANTINE_CAP_PER_ROOT`] items: the oldest ones are
+/// rejected with `quarantine_full`, the only way a quarantined capture is lost.
+fn evict_over_cap(
+    root: &Path,
+    canonical_path: &str,
+    index: &mut QuarantineIndex,
+    report: &mut DrainReport,
+) {
+    let mut of_root: Vec<(u64, &String)> = index
+        .iter()
+        .filter(|(_, entry)| entry.root == canonical_path)
+        .map(|(name, entry)| (entry.at, name))
+        .collect();
+    if of_root.len() <= QUARANTINE_CAP_PER_ROOT {
+        return;
+    }
+    of_root.sort();
+    let excess = of_root.len() - QUARANTINE_CAP_PER_ROOT;
+    let evicted: Vec<String> = of_root
+        .into_iter()
+        .take(excess)
+        .map(|(_, name)| name.clone())
+        .collect();
+    for name in evicted {
+        let path = root.join(UNREGISTERED).join(&name);
+        reject(
+            root,
+            &name,
+            &path,
+            "quarantine_full",
+            "too many captures of an unregistered project; the oldest was dropped",
+            report,
+        );
+        index.remove(&name);
+    }
+}
+
+/// Moves back to `pending/` every quarantined item whose root is now a
+/// registered project: one lookup per distinct root, no payload read.
+fn release_registered(root: &Path, api: &dyn CaptureApi, index: &mut QuarantineIndex) -> usize {
+    let roots: BTreeSet<&str> = index.values().map(|entry| entry.root.as_str()).collect();
+    let registered: BTreeSet<String> = roots
+        .into_iter()
+        .filter(|candidate| api.is_registered(candidate))
+        .map(str::to_string)
+        .collect();
+    if registered.is_empty() {
+        return 0;
+    }
+    let mut released = 0;
+    index.retain(|name, entry| {
+        if !registered.contains(&entry.root) {
+            return true;
+        }
+        let from = root.join(UNREGISTERED).join(name);
+        match move_no_replace(&from, &root.join(PENDING).join(name)) {
+            Ok(true) => {
+                released += 1;
+                false
+            }
+            Ok(false) => {
+                let _ = fs::remove_file(&from);
+                false
+            }
+            Err(_) => true,
+        }
+    });
+    released
+}
+
+/// Counts per root and how many captures belong to roots missing on disk.
+fn summarize_quarantine(index: &QuarantineIndex, report: &mut DrainReport) {
+    let mut by_root: BTreeMap<&str, usize> = BTreeMap::new();
+    for entry in index.values() {
+        *by_root.entry(entry.root.as_str()).or_insert(0) += 1;
+    }
+    report.quarantined = index.len();
+    report.vanished = by_root
+        .iter()
+        .filter(|(path, _)| !Path::new(path).exists())
+        .map(|(_, count)| count)
+        .sum();
+    let mut sorted: Vec<(String, usize)> = by_root
+        .into_iter()
+        .map(|(path, count)| (path.to_string(), count))
+        .collect();
+    sorted.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    report.quarantined_by_root = sorted;
+}
+
+fn unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default()
 }
 
 /// Moves an accepted item and stamps the acceptance time on it.
@@ -843,19 +1061,177 @@ mod tests {
         let _ = DrainReport::default();
     }
 
+    /// Accepts only the paths in `registered`; refuses the rest as `Forbidden`.
+    #[derive(Default)]
+    struct RegistryApi {
+        registered: Mutex<Vec<String>>,
+        accepting: AcceptingApi,
+    }
+
+    impl RegistryApi {
+        fn register(&self, path: &str) {
+            self.registered
+                .lock()
+                .expect("registry")
+                .push(path.to_string());
+        }
+    }
+
+    impl CaptureApi for RegistryApi {
+        fn ingest(
+            &self,
+            envelope: &CaptureEnvelope,
+            idempotency_key: &str,
+        ) -> Result<IngestOutcome, IngestError> {
+            if !self.is_registered(&envelope.project.canonical_path) {
+                return Err(IngestError::Forbidden);
+            }
+            self.accepting.ingest(envelope, idempotency_key)
+        }
+
+        fn receipt(&self, _capture_id: &str) -> Result<Receipt, IngestError> {
+            Err(IngestError::NotFound)
+        }
+
+        fn is_registered(&self, canonical_path: &str) -> bool {
+            self.registered
+                .lock()
+                .expect("registry")
+                .iter()
+                .any(|path| path == canonical_path)
+        }
+    }
+
+    fn numbered(n: usize) -> String {
+        format!("{n:064x}.json")
+    }
+
     #[test]
-    fn unregistered_project_is_rejected_on_the_first_drain() {
+    fn unregistered_project_waits_intact_in_quarantine() {
         let root = temporary_directory("unregistered");
         let name = filename();
-        write_pending(&root, &name, &valid_envelope_json("key-1", "C:/proj"));
+        let payload = valid_envelope_json("key-1", "C:/proj");
+        write_pending(&root, &name, &payload);
 
         let report = drain(&root, &FailingApi(IngestError::Forbidden), RETENTION).expect("drain");
-        assert_eq!(report.rejected.get("project_not_registered"), Some(&1));
+        assert!(report.rejected.is_empty(), "nothing is rejected");
         assert_eq!((report.accepted, report.pending_remaining), (0, 0));
-        let diagnostic = fs::read_to_string(root.join("rejected").join(&name)).expect("diagnostic");
-        assert!(diagnostic.contains("project_not_registered"));
+        assert_eq!(report.quarantined, 1);
+        assert_eq!(report.quarantined_by_root, [("C:/proj".to_string(), 1)]);
+        assert_eq!(
+            fs::read_to_string(root.join("unregistered").join(&name)).expect("payload"),
+            payload,
+            "the payload is kept as it was"
+        );
         assert!(!root.join("pending").join(&name).exists());
-        assert!(!root.join("stalled").join(&name).exists());
+        assert!(!root.join("rejected").join(&name).exists());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn registering_the_folder_releases_and_imports_the_captures() {
+        let root = temporary_directory("release");
+        let api = RegistryApi::default();
+        write_pending(&root, &numbered(1), &valid_envelope_json("k1", "C:/a"));
+        write_pending(&root, &numbered(2), &valid_envelope_json("k2", "C:/b"));
+
+        let first = drain(&root, &api, RETENTION).expect("drain");
+        assert_eq!((first.quarantined, first.released), (2, 0));
+
+        api.register("C:/a");
+        let second = drain(&root, &api, RETENTION).expect("drain");
+        assert_eq!(second.released, 1);
+        assert_eq!(second.accepted, 1);
+        assert_eq!(second.quarantined_by_root, [("C:/b".to_string(), 1)]);
+        assert!(root.join("accepted").join(numbered(1)).exists());
+        assert!(root.join("unregistered").join(numbered(2)).exists());
+        assert!(!root.join("unregistered").join(numbered(1)).exists());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_folder_that_vanished_stays_in_quarantine_and_is_counted() {
+        let root = temporary_directory("vanished");
+        let missing = root
+            .join("gone")
+            .to_string_lossy()
+            .replace(char::from(92), "/");
+        let present = root.to_string_lossy().replace(char::from(92), "/");
+        write_pending(&root, &numbered(1), &valid_envelope_json("k1", &missing));
+        write_pending(&root, &numbered(2), &valid_envelope_json("k2", &present));
+
+        let report = drain(&root, &RegistryApi::default(), RETENTION).expect("drain");
+        assert_eq!((report.quarantined, report.vanished), (2, 1));
+        assert!(root.join("unregistered").join(numbered(1)).exists());
+        assert!(report.rejected.is_empty());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_root_over_the_cap_rejects_its_oldest_captures() {
+        let root = temporary_directory("cap");
+        let api = RegistryApi::default();
+        let total = super::QUARANTINE_CAP_PER_ROOT + 3;
+        for n in 0..total {
+            write_pending(&root, &numbered(n), &valid_envelope_json("k", "C:/a"));
+        }
+        write_pending(
+            &root,
+            &numbered(total),
+            &valid_envelope_json("k", "C:/other"),
+        );
+
+        let report = drain(&root, &api, RETENTION).expect("drain");
+        assert_eq!(report.rejected.get("quarantine_full"), Some(&3));
+        assert_eq!(
+            report.quarantined_by_root,
+            [
+                ("C:/a".to_string(), super::QUARANTINE_CAP_PER_ROOT),
+                ("C:/other".to_string(), 1)
+            ]
+        );
+        assert_eq!(report.quarantined, super::QUARANTINE_CAP_PER_ROOT + 1);
+        let diagnostic =
+            fs::read_to_string(root.join("rejected").join(report_oldest_rejected(&root)))
+                .expect("diagnostic");
+        assert!(diagnostic.contains("quarantine_full"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn report_oldest_rejected(root: &Path) -> String {
+        let mut names: Vec<String> = fs::read_dir(root.join("rejected"))
+            .expect("rejected dir")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names.remove(0)
+    }
+
+    #[test]
+    fn a_full_quarantine_with_no_registration_costs_little_to_drain() {
+        let root = temporary_directory("quarantine-latency");
+        let api = RegistryApi::default();
+        for n in 0..super::QUARANTINE_CAP_PER_ROOT {
+            write_pending(&root, &numbered(n), &valid_envelope_json("k", "C:/a"));
+        }
+        let first = drain(&root, &api, RETENTION).expect("fill the quarantine");
+        assert_eq!(first.quarantined, super::QUARANTINE_CAP_PER_ROOT);
+
+        let started = std::time::Instant::now();
+        let again = drain(&root, &api, RETENTION).expect("drain again");
+        let elapsed = started.elapsed();
+        assert_eq!(again.quarantined, super::QUARANTINE_CAP_PER_ROOT);
+        assert_eq!(again.released, 0);
+        eprintln!("quarantine drain with 2000 parked: {elapsed:?}");
+        assert!(
+            elapsed < Duration::from_millis(200),
+            "draining an unchanged quarantine of 2000 took {elapsed:?}"
+        );
 
         let _ = fs::remove_dir_all(&root);
     }

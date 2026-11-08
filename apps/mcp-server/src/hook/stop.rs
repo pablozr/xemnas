@@ -192,15 +192,13 @@ pub fn capture(
     let mut roots = Roots::new(cwd, MAX_ROOT_LOOKUPS);
     let mut worktrees: HashMap<String, Worktrees> = HashMap::new();
     // A 403 means the root is not a registered project; it will not become one
-    // mid-run, so its remaining turns are passed over without a POST.
+    // mid-run, so its remaining turns are parked in the outbox without a POST.
     let mut unregistered: HashSet<String> = HashSet::new();
     for group in &groups[..limit] {
         let turn = &group.turn;
         let edited: Vec<String> = turn.edits.iter().map(|edit| edit.path.clone()).collect();
         let root = roots.root_for(&edited, &turn.touched);
-        if unregistered.contains(&root) {
-            report.skipped += 1;
-        } else if let Some(envelope) = build_envelope(
+        if let Some(envelope) = build_envelope(
             session_id,
             &root,
             worktrees
@@ -209,6 +207,12 @@ pub fn capture(
             turn,
             now_rfc3339(),
         ) {
+            if unregistered.contains(&root) {
+                sender.park(&envelope);
+                report.skipped += 1;
+                done += 1;
+                continue;
+            }
             match sender.send(&envelope) {
                 Outcome::Sent => report.sent += 1,
                 Outcome::Queued => report.queued += 1,

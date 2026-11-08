@@ -136,6 +136,20 @@ class DogfoodReportTests(unittest.TestCase):
             self.assertLess(block.index("Outbox agora"), block.index("Atualizado em"))
             self.assertNotIn(SECRET, block)
 
+    def test_quarantine_is_listed_by_folder_name_and_count(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = make_db(root / "app.db")
+            outbox = make_outbox(root)
+            (outbox / "unregistered").mkdir()
+            index = {f"{n}.json": {"root": "C:/work/alpha", "at": 1} for n in range(3)}
+            index["x.json"] = {"root": "C:/work/beta/", "at": 1}
+            (outbox / "unregistered" / "index.json").write_text(json.dumps(index), encoding="utf-8")
+            block = report.render(db, TZ, NOW, outbox)
+            db.close()
+            self.assertIn("Aguardando registro: alpha (3), beta (1).", block)
+            self.assertNotIn("C:/work", block)
+
     def test_missing_outbox_is_omitted(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

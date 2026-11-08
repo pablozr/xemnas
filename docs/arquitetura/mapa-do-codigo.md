@@ -68,7 +68,8 @@ local é somente leitura; veja o [fluxo consultivo](../operacao/operacao-e-refer
 → [storage-sqlite/store.rs](../../crates/storage-sqlite/src/store.rs).
 Com desktop fechado, [adapter/outbox.ts](../../adapters/opencode/src/outbox.ts)
 grava o envelope; [application/outbox.rs](../../crates/application/src/outbox.rs)
-o importa pela mesma ingestão (testes unitários nesse arquivo).
+o importa pela mesma ingestão (testes unitários nesse arquivo); pasta não cadastrada vai para a
+quarentena `unregistered/` (`park_unregistered`, `release_registered`, teto por raiz).
 
 No Claude Code, os hooks do módulo [mcp-server/src/hook](../../apps/mcp-server/src/hook/mod.rs)
 (`prompt.rs` injeção, `transcript.rs` leitura incremental do transcript, `envelope.rs`,

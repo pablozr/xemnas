@@ -21,7 +21,8 @@ failed/skipped assessments. Rejected counts the files in `outbox/rejected/` per 
 day of their `rejected_at` (captures the app refused, never in the database); the line
 below the table gives the outbox right now: pending files (waiting for the app to open,
 oldest by `observed_at`, else file mtime) and rejected files per reason code. Only
-counts and codes are read from the outbox. Percentiles use the same nearest-rank rule
+counts and codes are read from the outbox; the quarantine (`unregistered/`) adds
+"Aguardando registro: <folder name> (N)" per root. Percentiles use the same nearest-rank rule
 (index = round((n - 1) * p)). Days are local-time days; the database stores UTC.
 """
 
@@ -197,7 +198,24 @@ def outbox_line(outbox, tz):
     reasons = ", ".join(f"{code}={n}" for code, n in sorted(codes.items())) or "nenhuma"
     rejected = sum(codes.values())
     return (f"Outbox agora: {len(pending)} pendentes{since} e {rejected} rejeitadas "
-            f"por motivo: {reasons}.")
+            f"por motivo: {reasons}.{quarantine_text(outbox)}")
+
+
+def quarantine_text(outbox):
+    """` Aguardando registro: <pasta> (N), ...` from `unregistered/index.json`, or ''.
+
+    Only the last path component of each root and a count are written, never the
+    whole path; the app keeps the captures intact until the folder is registered."""
+    index = read_json(Path(outbox, "unregistered", "index.json"))
+    counts = defaultdict(int)
+    for entry in index.values():
+        root = entry.get("root") if isinstance(entry, dict) else None
+        if isinstance(root, str) and root:
+            counts[root.replace(chr(92), "/").rstrip("/").rsplit("/", 1)[-1] or root] += 1
+    if not counts:
+        return ""
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    return " Aguardando registro: " + ", ".join(f"{name} ({n})" for name, n in ranked) + "."
 
 
 def render(db, tz, now, outbox=None):

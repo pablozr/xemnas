@@ -345,7 +345,10 @@ fn hook_stop_passes_over_unregistered_projects_without_jamming() {
         2,
         "the flush tries p2 once"
     );
-    assert!(!data_dir.join("outbox").join("pending").exists());
+    let parked = std::fs::read_dir(data_dir.join("outbox").join("pending"))
+        .expect("refused turns are parked for the quarantine")
+        .count();
+    assert_eq!(parked, 2, "p1 and p2 wait in the outbox, none is dropped");
     let checkpoint = data_dir
         .join("adapter")
         .join("claude-code")
@@ -634,9 +637,16 @@ fn a_403_for_one_repo_does_not_stop_the_next_turn_of_another() {
         .iter()
         .map(|body| body["project"]["canonical_path"].clone())
         .collect();
-    // p1 (a) is refused, p2 (b) is accepted, p3 (a) is passed over without a POST.
+    // p1 (a) is refused, p2 (b) is accepted, p3 (a) is parked without a POST.
     assert_eq!(roots.len(), 2, "{roots:?}");
     assert_eq!(roots[1], json!(b));
+    let parked = std::fs::read_dir(data_dir.join("outbox").join("pending"))
+        .expect("refused turns are parked")
+        .count();
+    assert_eq!(
+        parked, 2,
+        "p1 and p3 of the refused repo wait in the outbox"
+    );
     let _ = std::fs::remove_dir_all(&data_dir);
 }
 

@@ -17,6 +17,9 @@ Em ordem de prioridade:
    - [28](tickets/28-documentos-por-inteiro.md) — documentos por inteiro (teto de propostas, seções de refinamento).
    - [29](tickets/29-observacoes-de-manifest-sem-churn.md) — observações de manifest sem churn e com a raiz.
    - [30](tickets/30-grafo-verificacao-e-descricoes-vivas.md) — grafo: verificação e descrições vivas.
+   - [31](tickets/31-quarentena-na-interface.md) — quarentena de capturas na interface.
+   - [32](tickets/32-reenvio-das-capturas-rejeitadas.md) — reenvio das capturas rejeitadas (depende de decisão do usuário).
+   - [33](tickets/33-ponteiros-de-documentos-na-injecao.md) — ponteiros de documentos na injeção (depois do dogfood).
 3. **Resto da fase 4** — [24](tickets/24-grafo-injecao-por-arquivo-e-conflitos.md): injeção por arquivo, conflitos e padrões de caminho obsoletos.
 
 ## Entregue
