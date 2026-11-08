@@ -194,6 +194,12 @@ pub trait CaptureApi: Send + Sync {
 
     /// Returns the receipt for a capture identifier.
     fn receipt(&self, capture_id: &str) -> Result<Receipt, IngestError>;
+
+    /// Whether `canonical_path` resolves to a registered project now. The outbox
+    /// uses it to release the captures it parked for an unregistered folder.
+    fn is_registered(&self, _canonical_path: &str) -> bool {
+        false
+    }
 }
 
 /// Concrete capture ingest use case over the Project and Capture ports.
@@ -341,6 +347,13 @@ where
             Err(CaptureError::ProjectNotRegistered) => Err(IngestError::Forbidden),
             Err(CaptureError::Storage(message)) => Err(IngestError::Storage(message)),
         }
+    }
+
+    fn is_registered(&self, canonical_path: &str) -> bool {
+        matches!(
+            find_project_by_directory(&self.repository, canonical_path),
+            Ok(Some(_))
+        )
     }
 
     fn receipt(&self, capture_id: &str) -> Result<Receipt, IngestError> {

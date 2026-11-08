@@ -17,6 +17,9 @@ Em ordem de prioridade:
    - [28](tickets/28-documentos-por-inteiro.md) — documentos por inteiro (teto de propostas, seções de refinamento).
    - [29](tickets/29-observacoes-de-manifest-sem-churn.md) — observações de manifest sem churn e com a raiz.
    - [30](tickets/30-grafo-verificacao-e-descricoes-vivas.md) — grafo: verificação e descrições vivas.
+   - [31](tickets/31-quarentena-na-interface.md) — quarentena de capturas na interface.
+   - [32](tickets/32-reenvio-das-capturas-rejeitadas.md) — reenvio das capturas rejeitadas (depende de decisão do usuário).
+   - [33](tickets/33-ponteiros-de-documentos-na-injecao.md) — ponteiros de documentos na injeção (depois do dogfood).
 3. **Resto da fase 4** — [24](tickets/24-grafo-injecao-por-arquivo-e-conflitos.md): injeção por arquivo, conflitos e padrões de caminho obsoletos.
 
 ## Entregue
@@ -48,6 +51,7 @@ Em ordem de prioridade:
 | Vínculos por estrutura e menção afirmativa | Menção que ignora o que o texto só cita para excluir, nome do projeto e nome dentro de outro caminho; índice limitado de arquivos (o caminho citado precisa existir); dono por manifest e por símbolo; raiz e CI como componentes; quem confirmou cada vínculo (migração 0047); religar, herança só do confirmado, juiz de vínculos à parte, revalidação e fantasmas ([ADR-0016](../arquitetura/adr/0016-vinculos-por-estrutura-e-mencao-afirmativa.md); commits `af6d807`..`1fb0115` da branch `fix/vinculos-por-estrutura`). |
 | Fase 5 — MCP de leitura | Binário `xemnas-mcp` (stdio) com `get_decision`, `search_context` e `file_context`, mais os hooks do Claude Code. Falta confirmar a configuração no OpenCode real. |
 | Polaridade como alarme, componentes na extração e idioma da saída | O léxico de negação só decide o inequívoco em inglês e português e qualquer outro gatilho marca o vínculo como polaridade duvidosa (as regras nunca aceitam; vai ao juiz ou à pessoa); o extrator indica os componentes com citação literal e a adoção os grava como sugestão da IA, sem a chamada separada; a Visão sai no idioma do app; raiz e CI sem descrição fixa no banco. [ADR-0017](../arquitetura/adr/0017-polaridade-como-alarme-componentes-na-extracao-e-idioma-da-saida.md); commits `43dc0fe`, `7170b24`, `6f0e67d`, `118cc9e`, `01f6b3f`, `49c5005`, `325c1a4`. |
+| Contexto limpo no dogfood (08/11/2026) | Classificador de falante por forma (85e36da, d2290f2, 583d159): prompts do harness e de agentes não recebem contexto nem viram triagem; quarentena da outbox para pastas não cadastradas (f83764e); documentos só indexados, sem candidatos (d01a8ee); itens de origem documental fora da injeção automática e rotulados no MCP (e77b6d9). Pendentes: tickets 31, 32 e 33. |
 
 ## Como usar esta pasta
 

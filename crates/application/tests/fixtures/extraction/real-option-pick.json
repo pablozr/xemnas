@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "capture_id": "01a14ca2-4e1e-7422-83e0-9bed65610ef8",
+  "idempotency_key": "claude-code:real:01a14ca2",
+  "source": {
+    "adapter": "claude-code",
+    "adapter_version": "0.0.0",
+    "session_id": "session-real",
+    "message_id": "msg-01a14ca2"
+  },
+  "project": {
+    "canonical_path": "C:/synthetic/projects/jevguard"
+  },
+  "observed_at": "2026-10-18T01:31:07Z",
+  "artifacts": [
+    {
+      "artifact_id": "01a14ca2-4e1d-701d-a614-4d8cfed44b52",
+      "kind": "user_text",
+      "content": "ok o 1 funciona, mas o 2 nao pq dai todo usuario teria q ter isso, qual a forma de pormos isso incluso na regra do jevguard para que n fique dando esse erro chato",
+      "metadata": {},
+      "fingerprint": "25f54db18d790d8104745de4f76f5335bae76a6afe954db9c4c0e52c04854b1f"
+    },
+    {
+      "artifact_id": "01a14ca2-4e1d-701d-a614-4d8def8eeb95",
+      "kind": "assistant_text",
+      "content": "A ideia certa é mudar como o JevGuard atribui as mudanças feitas por shell. Hoje ele confia no estado do git (HEAD e índice) e em arquivos que já estavam limpos antes. O caminho é passar a comparar o **conteúdo dos arquivos** antes e depois de cada comando.\n\n**Proposta: diff de shell baseado em conteúdo**\n- **No PreToolUse do shell:** guardar o SHA do HEAD e um snapshot (hash + conteúdo, dentro dos limites que já existem) dos arquivos que já estão sujos no working tree.\n- **No PostToolUse:** o patch atribuído ao comando é a diferença de conteúdo entre o antes e o depois, mais nada. A base de um arquivo limpo é o blob do **HEAD anterior**, não o índice atual.\n\nO que isso muda em cada caso:\n\n| Operação | Hoje | Com o diff por conteúdo |\n|---|---|---|\n| `git commit`, `push`, `merge --ff`, `stash` sem mudar arquivo | UNAVAILABLE (HEAD/índice mudou) | o conteúdo não mudou, então não há patch e o resultado é SKIPPED |\n| `pnpm format` em arquivo já sujo | UNAVAILABLE (fora do universo) | revisa a diferença real do formato |\n| `git checkout --`, que descarta mudanças | UNAVAILABLE | vira um patch de reversão atribuído ao agente, o que é correto, porque foi ele que descartou |\n| `git switch` para outra branch | UNAVAILABLE | patch grande, revisado se couber nos limites; senão `SLICE_LIMIT_EXCEEDED` |\n\nIsso respeita as invariantes: continua sem fallback para o diff do repositório e sem evidência parcial, e UNAVAILABLE só sobra quando o conteúdo realmente não dá para provar (limite estourado ou leitura que falha). Vale para todo usuário, sem nenhuma regra de uso.\n\nO custo fica no hook do shell: um snapshot dos arquivos sujos a cada comando. Ele cabe no orçamento atual (16 MiB de conteúdo, 3 s); um repo com muita coisa suja cai em `SHELL_DIFF_LIMIT_EXCEEDED`, como já acontece hoje. A mudança é no contrato de aquisição do ADR 0014 (normativo), então pede uma emenda do ADR e do SPEC, além do código em `claude-code-adapter/capture` e `acquisition`.\n\nEnquanto você decide, já apliquei o item 1:\nAinda não limpou. Como os 215 arquivos têm o mesmo blob do índice, um `git add` neles só renova o stat, sem mudar conteúdo. Vou fazer isso só com esses arquivos.\nAgora o status está com 23 entradas, e o `git add` foi neutro (0 diferenças staged). Vou refazer o stage do rename e confirmar que o `pnpm format` não volta a sujar o status.\nO item 1 está aplicado e funcionando. O `.gitattributes` com `* text=auto eol=lf` está na raiz, o `pnpm format` já não suja o status (\"No fixes applied\") e só aparecem as 22 entradas do trabalho real.\n\nEsta unidade também vai sair UNAVAILABLE, porque precisei mexer no índice para tirar o stat velho dos 217 arquivos. É a última vez desse problema: o `git add` neles não mudou nenhum conteúdo (0 diferenças staged).\n\n**Como resolver para todo usuário, sem regra de uso**\n\nO problema não está nos comandos. Está em como o JevGuard atribui as mudanças de shell: hoje ele exige que HEAD e índice fiquem parados e que o arquivo esteja limpo antes. A correção é passar a **atribuir pelo conteúdo**:\n\n- **Antes de cada shell:** guardar o SHA do HEAD e o conteúdo dos arquivos já sujos, dentro dos limites atuais (16 MiB, 3 s).\n- **Depois:** o patch do comando é só o que mudou de conteúdo. A base de um arquivo limpo é o blob do HEAD anterior, não o índice atual.\n\nO que muda na prática:\n- `git commit`, `push` e `merge --ff` não mudam conteúdo, então o resultado é **SKIPPED**, sem erro.\n- `git switch` gera um patch real; se for grande demais, cai no limite de slices, como qualquer patch grande.\n- `pnpm format` ou `git checkout --` em arquivo já sujo passam a ser revisados pelo diff real, em vez de dar UNAVAILABLE.\n- UNAVAILABLE só sobra quando o conteúdo não dá para ler dentro dos limites.\n\nIsso não quebra as invariantes: continua sem fallback para o diff do repositório, sem evidência parcial, e sem \"pular\" comando.\n\nÉ uma emenda no contrato de aquisição do ADR 0014, que é normativo e decisão sua. Sigo com o fluxo (planejador, executor, `/simplificar`, testes), incluindo a emenda do ADR e do SPEC?",
+      "metadata": {},
+      "fingerprint": "f3b8e49e8e41ae099a013dda6ccf791a8dd925d72c02237929870ee298f606c1"
+    },
+    {
+      "artifact_id": "01a14ca2-4e1e-7422-83e0-9be39d117938",
+      "kind": "diff_hunk",
+      "content": "diff --git a/.gitattributes b/.gitattributes\n@@ -0,0 +1,1 @@\n+* text=auto eol=lf\n",
+      "metadata": {
+        "file": ".gitattributes"
+      },
+      "fingerprint": "f5a1ca3700d684e74d416190658328b5492fcc713a63de4488607137784ed8ee"
+    },
+    {
+      "artifact_id": "01a14ca2-4e1e-7422-83e0-9be44898a430",
+      "kind": "tool_summary",
+      "content": "{\"tool\":\"Write\",\"status\":\"ok\"}",
+      "metadata": {
+        "tool": "Write",
+        "status": "ok"
+      },
+      "fingerprint": "f10f6ebc100bb6083a77ba4dc4f076ae83f181f83f78ff24013b65426edce437"
+    },
+    {
+      "artifact_id": "01a14ca2-4e1e-7422-83e0-9be54d1db8e6",
+      "kind": "tool_summary",
+      "content": "{\"tool\":\"Bash\",\"status\":\"ok\"}",
+      "metadata": {
+        "tool": "Bash",
+        "status": "ok"
+      },
+      "fingerprint": "afdc1d8f687b01fc09ca0c55f0bc830831c32537695d781642f09affc8a81ce7"
+    }
+  ]
+}

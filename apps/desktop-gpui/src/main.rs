@@ -18,9 +18,10 @@ use storage_sqlite::{SqliteStore, StorageError};
 use std::sync::Arc;
 use xemnas_desktop::app::{
     ActivitySource, AdjustItem, CaptureStatus, ConfirmItem, FocusSearch, GoContext, GoDecisions,
-    GoMap, GoOverview, GoReview, NextItem, PaletteClose, PaletteDown, PaletteRun, PaletteUp,
-    PrevItem, RejectItem, SaveEditor, Shell, SnoozeItem, TabNext, TabPrev, ToggleFocusMode,
-    TogglePalette,
+    GoMap, GoOverview, GoReview, NextItem, OpenProof, PaletteClose, PaletteDown, PaletteRun,
+    PaletteUp, PrevItem, RejectItem, ReviewAccepted, ReviewClose, ReviewEffect, ReviewNextSource,
+    ReviewPrevSource, ReviewToday, SaveEditor, Shell, SnoozeItem, TabNext, TabPrev,
+    ToggleFocusMode, TogglePalette, ToggleQueue,
 };
 use xemnas_desktop::screens::settings::SettingsServices;
 use xemnas_desktop::startup_error::StartupError;
@@ -411,7 +412,10 @@ fn main() {
             (
                 Some(jobs.spawn_workers(usize::from(parallel))),
                 Some(local_jobs.spawn_workers(1)),
-                Some(ObservationReconciler::spawn(store.clone())),
+                Some(ObservationReconciler::spawn(
+                    store.clone(),
+                    settings.clone(),
+                )),
             )
         }
         Err(error) => {
@@ -557,12 +561,14 @@ struct ObservationReconciler {
 }
 
 impl ObservationReconciler {
-    fn spawn(store: SqliteStore) -> Self {
+    fn spawn(store: SqliteStore, settings: AiSettings) -> Self {
         let stop = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
         let signal = stop.clone();
         let thread = std::thread::spawn(move || {
             let mut cursor = None;
             let mut gate = application::observations::reconcile::ReconcileGate::default();
+            let documents = application::graph::prepared_documents(store.clone());
+            let mut watch = application::documents::watch::DocumentWatch::default();
             loop {
                 if *signal.0.lock().unwrap_or_else(|error| error.into_inner()) {
                     break;
@@ -570,6 +576,8 @@ impl ObservationReconciler {
                 match application::projects::ProjectRepository::list(&store) {
                     Ok(projects) => {
                         let ids = projects.into_iter().map(|project| project.id).collect();
+                        // Edited documents reach Revisão only through the provider.
+                        let documents_ready = settings.external_extraction_enabled();
                         for project_id in refresh_batch(ids, &mut cursor) {
                             if *signal.0.lock().unwrap_or_else(|error| error.into_inner()) {
                                 break;
@@ -577,6 +585,21 @@ impl ObservationReconciler {
                             if let Err(error) = gate.reconcile(&store, &project_id) {
                                 tracing::error!(error = %error, operation = "observation_refresh",
                                     "could not schedule refresh");
+                            }
+                            if !documents_ready {
+                                continue;
+                            }
+                            match watch.tick(&documents, &project_id) {
+                                Ok(application::documents::watch::WatchOutcome::Refreshed {
+                                    queued,
+                                }) if queued > 0 => tracing::info!(
+                                    queued,
+                                    operation = "document_watch",
+                                    "queued edited documents"
+                                ),
+                                Ok(_) => {}
+                                Err(error) => tracing::error!(error = %error,
+                                    operation = "document_watch", "could not watch documents"),
                             }
                         }
                     }
@@ -812,6 +835,14 @@ fn run_shell_mode(
             KeyBinding::new("r", RejectItem, Some("xemnas && !SearchField")),
             KeyBinding::new("s", SnoozeItem, Some("xemnas && !SearchField")),
             KeyBinding::new("a", AdjustItem, Some("xemnas && !SearchField")),
+            KeyBinding::new("tab", ToggleQueue, Some("ReviewHome")),
+            KeyBinding::new("enter", OpenProof, Some("ReviewHome")),
+            KeyBinding::new("e", ReviewEffect, Some("xemnas && !SearchField")),
+            KeyBinding::new("l", ReviewAccepted, Some("xemnas && !SearchField")),
+            KeyBinding::new("d", ReviewToday, Some("xemnas && !SearchField")),
+            KeyBinding::new("escape", ReviewClose, Some("xemnas && !SearchField")),
+            KeyBinding::new("left", ReviewPrevSource, Some("xemnas && !SearchField")),
+            KeyBinding::new("right", ReviewNextSource, Some("xemnas && !SearchField")),
             KeyBinding::new("ctrl-enter", SaveEditor, Some("Editor")),
             KeyBinding::new("ctrl-1", GoReview, Some("xemnas")),
             KeyBinding::new("ctrl-2", GoDecisions, Some("xemnas")),
@@ -1252,7 +1283,12 @@ mod tests {
 
     #[test]
     fn reconciler_shutdown_interrupts_cadence() {
-        let reconciler = ObservationReconciler::spawn(SqliteStore::open(":memory:").unwrap());
+        let profile =
+            std::env::temp_dir().join(format!("xemnas-reconciler-{}.json", std::process::id()));
+        let reconciler = ObservationReconciler::spawn(
+            SqliteStore::open(":memory:").unwrap(),
+            ai_settings(&profile),
+        );
         let started = std::time::Instant::now();
         reconciler.stop();
         reconciler.thread.join().unwrap();

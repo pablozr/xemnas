@@ -363,10 +363,10 @@ strings! {
     review_resume { en: "Resume", pt: "Retomar", es: "Reanudar", fr: "Reprendre",
         de: "Fortsetzen", it: "Riprendi", ja: "再開", zh: "恢复", ko: "다시 시작",
         ru: "Возобновить" }
-    /// Review action: postpone the candidate.
-    review_snooze { en: "Postpone", pt: "Adiar", es: "Aplazar", fr: "Reporter",
-        de: "Zurückstellen", it: "Rimanda", ja: "保留", zh: "推迟", ko: "미루기",
-        ru: "Отложить" }
+    /// Review action: leave the candidate for later.
+    review_snooze { en: "Later", pt: "Depois", es: "Después", fr: "Plus tard",
+        de: "Später", it: "Dopo", ja: "あとで", zh: "稍后", ko: "나중에",
+        ru: "Позже" }
     /// Review action: open the editor.
     review_adjust { en: "Adjust", pt: "Ajustar", es: "Ajustar", fr: "Ajuster",
         de: "Anpassen", it: "Modifica", ja: "調整", zh: "调整", ko: "조정",

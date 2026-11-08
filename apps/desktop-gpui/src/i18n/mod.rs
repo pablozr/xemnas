@@ -27,6 +27,7 @@ pub mod decisions;
 pub mod format;
 pub mod graph;
 pub mod inbox;
+pub mod inbox_ticket;
 pub mod knowledge_review;
 pub mod map;
 pub mod overview;

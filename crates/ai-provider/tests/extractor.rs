@@ -933,3 +933,34 @@ fn a_429_pauses_every_call_behind_the_shared_limiter() {
         "nobody calls the provider during the pause"
     );
 }
+
+#[test]
+fn triage_sends_the_prompt_and_only_the_turn_text() {
+    use ai_provider::{ChatGptSession, ProviderFactory};
+    use application::analysis::ExtractorFactory;
+    use application::extract::{TriageInput, TriageKind};
+
+    let server = start_server(
+        "HTTP/1.1 200 OK",
+        chat_body(r#"{"decision":true,"kind":"choice"}"#),
+    );
+    let profile = granted_profile(server.port, 8192);
+    let extractor = ProviderFactory::new(Arc::new(ChatGptSession::default()))
+        .external(&profile, "sk-synthetic".to_string())
+        .expect("extractor");
+    let input = TriageInput {
+        user: "vamos de sqlite em vez de postgres".to_string(),
+        assistant_tail: "feito".to_string(),
+    };
+    let verdict = extractor
+        .triage(&input)
+        .expect("triage")
+        .expect("this extractor triages");
+    assert_eq!(verdict.kind, TriageKind::Choice);
+    assert_eq!(verdict.signal(), Some(RelevanceSignal::UserPicksOption));
+    let payload = server.last_request.lock().unwrap();
+    assert!(payload.contains("durable"));
+    assert!(payload.contains("assistant_end"));
+    assert!(payload.contains("vamos de sqlite"));
+    assert!(!payload.contains("CREATE TABLE"));
+}

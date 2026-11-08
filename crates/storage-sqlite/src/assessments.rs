@@ -1,6 +1,6 @@
 //! SQLite implementation of the assessment provenance port.
 
-use application::extract::{AssessmentRecord, AssessmentStore, ExtractError};
+use application::extract::{AssessmentRecord, AssessmentStore, ExtractError, TriageRecord};
 use rusqlite::{params, OptionalExtension};
 
 use crate::store::SqliteStore;
@@ -54,6 +54,28 @@ impl AssessmentStore for SqliteStore {
                     row.components.map(|tally| tally.kept as i64),
                     row.components.map(|tally| tally.unknown as i64),
                     row.components.map(|tally| tally.unquoted as i64),
+                ],
+            )
+            .map(|_| ())
+            .map_err(storage_error)
+    }
+    fn record_triage(&self, row: &TriageRecord) -> Result<(), ExtractError> {
+        self.lock()
+            .execute(
+                "INSERT INTO turn_triages \
+                 (id, capture_id, job_id, model, called_at, kind, passed, input_chars, \
+                  error_code) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    row.id,
+                    row.capture_id,
+                    row.job_id,
+                    row.model,
+                    row.called_at,
+                    row.kind,
+                    row.passed,
+                    row.input_chars,
+                    row.error_code,
                 ],
             )
             .map(|_| ())

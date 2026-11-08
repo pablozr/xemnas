@@ -67,6 +67,14 @@ fn detail_has_no_retry_and_hidden_candidates_are_not_empty() {
 }
 
 fn prompt_capture(project: &str, n: usize, prompt: &str) -> application::captures::CaptureWrite {
+    prompts_capture(project, n, &[prompt])
+}
+
+fn prompts_capture(
+    project: &str,
+    n: usize,
+    prompts: &[&str],
+) -> application::captures::CaptureWrite {
     use application::captures::*;
     use application::jobs::{JobRecord, JobState, ANALYZE_CAPTURE_KIND};
     let capture = format!("title-{n}");
@@ -77,16 +85,20 @@ fn prompt_capture(project: &str, n: usize, prompt: &str) -> application::capture
             idempotency_key: format!("key-{capture}"),
             canonical_path: format!("C:/synthetic/{project}"),
             received_at: at.clone(),
-            artifact_count: 1,
+            artifact_count: prompts.len() as i64,
         },
-        artifacts: vec![CaptureArtifactRecord {
-            capture_id: capture.clone(),
-            artifact_id: "a1".into(),
-            kind: "user_text".into(),
-            content: prompt.into(),
-            metadata: "{}".into(),
-            fingerprint: format!("{n:0>64}"),
-        }],
+        artifacts: prompts
+            .iter()
+            .enumerate()
+            .map(|(index, prompt)| CaptureArtifactRecord {
+                capture_id: capture.clone(),
+                artifact_id: format!("a{index}"),
+                kind: "user_text".into(),
+                content: (*prompt).into(),
+                metadata: "{}".into(),
+                fingerprint: format!("{n:0>60}{index:04}"),
+            })
+            .collect(),
         job: JobRecord {
             id: format!("job-{capture}"),
             kind: ANALYZE_CAPTURE_KIND.into(),
@@ -158,4 +170,33 @@ fn title_is_first_prompt_line_ellipsized_and_recent_stays_fast() {
     assert_eq!(rows[0].title.as_deref(), Some("Ajustar o painel"));
     let seeded = reader.capture("p1", "capture-p1").unwrap().unwrap();
     assert_eq!((seeded.title, seeded.adapter), (None, None));
+}
+
+#[test]
+fn title_comes_from_the_users_words_not_the_harness() {
+    use application::capture_episode::CaptureProvenance;
+    use application::captures::CaptureRepository;
+    let test = support::open("capture-progress-title-speaker", &["p1"]);
+    let provenance = CaptureProvenance {
+        adapter: Some("claude-code".into()),
+        adapter_version: None,
+        session_id: None,
+        message_id: None,
+        observed_at: None,
+    };
+    let captures = [
+        prompts_capture("p1", 0, &["<bash-stdout>x</bash-stdout>", "pode"]),
+        prompts_capture("p1", 1, &["<system-reminder>r</system-reminder>"]),
+        prompts_capture("p1", 2, &["<div>\nconserta o layout"]),
+    ];
+    for capture in &captures {
+        test.store
+            .insert_capture_with_provenance(capture, &provenance)
+            .unwrap();
+    }
+    let reader = CaptureProgressReader(test.store.clone());
+    let title = |capture: &str| reader.capture("p1", capture).unwrap().unwrap().title;
+    assert_eq!(title("title-0").as_deref(), Some("pode"));
+    assert_eq!(title("title-1"), None);
+    assert_eq!(title("title-2").as_deref(), Some("<div>"));
 }

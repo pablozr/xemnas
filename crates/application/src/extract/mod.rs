@@ -4,7 +4,10 @@ mod assessment;
 mod connection_test;
 mod fake;
 mod relevance;
+mod triage;
 mod validation;
+
+use std::borrow::Cow;
 
 use integration_contracts::capture::artifact_fingerprint;
 
@@ -13,14 +16,22 @@ use crate::clock::now_rfc3339;
 pub use assessment::{
     fail_provider_setup, failure_detail, input_hash, policy_snapshot, record_skipped_assessment,
     AssessmentOutcome, AssessmentRecord, AssessmentStore, ComponentTally, ProviderSetupError,
-    RunContext, ERROR_CODE_CONSENT, ERROR_CODE_KEYSTORE, ERROR_CODE_PROFILE,
+    RunContext, TriageRecord, ERROR_CODE_CONSENT, ERROR_CODE_KEYSTORE, ERROR_CODE_PROFILE,
     ERROR_CODE_PROVIDER_CONFIG, ERROR_CODE_SECRET, FAILURE_DETAIL_MAX_CHARS,
 };
 pub use connection_test::{
     connection_test_evidence, run_connection_test, ConnectionTestReport, CONNECTION_TEST_CAPTURE_ID,
 };
 pub use fake::FakeCandidateExtractor;
-pub use relevance::{filter_relevant, RelevanceSignal};
+pub use relevance::{
+    assess_relevance, filter_relevant, has_adapter_source, triage_input, Relevance,
+    RelevanceSignal, ASK_USER_QUESTION_SOURCE, WAKE_SOURCE,
+};
+pub use triage::{
+    ask_triage, triage_input_chars, triage_schema, triage_user_content, TriageInput, TriageKind,
+    TriageVerdict, TRIAGE_ANSWER_MAX_BYTES, TRIAGE_ASSISTANT_CHARS, TRIAGE_PROMPT,
+    TRIAGE_SCHEMA_NAME, TRIAGE_USER_CHARS,
+};
 
 use assessment::{capture_not_found, record_assessment};
 use validation::validate_proposal;
@@ -354,6 +365,22 @@ pub trait CandidateExtractor {
         let _ = background;
         self.extract(input, signals)
     }
+    /// Asks the turn triage whether the user's words hold a decision, with live
+    /// authorization. `None` when this extractor has no triage.
+    fn triage_authorized(
+        &self,
+        input: &TriageInput,
+        authorization: &dyn crate::external::Authorization,
+    ) -> Result<Option<TriageVerdict>, ExtractError> {
+        authorization.check()?;
+        self.triage(input)
+    }
+    /// Asks the turn triage whether the user's words hold a decision. `None`
+    /// when this extractor has no triage (the offline one): the turn ends empty.
+    fn triage(&self, input: &TriageInput) -> Result<Option<TriageVerdict>, ExtractError> {
+        let _ = input;
+        Ok(None)
+    }
 }
 
 /// The persistence port extraction needs.
@@ -402,6 +429,51 @@ pub trait ExtractionStore {
         -> Result<usize, ExtractError>;
 }
 
+/// Records that the relevance step found nothing to extract.
+fn record_empty<S: AssessmentStore>(
+    store: &S,
+    context: &RunContext,
+    capture_id: &str,
+    hash: &str,
+    started_at: &str,
+) -> Result<(), ExtractError> {
+    record_assessment(
+        store,
+        context,
+        capture_id,
+        hash,
+        started_at,
+        AssessmentOutcome::Empty,
+        0,
+        0,
+        None,
+        None,
+        None,
+    )
+}
+
+/// The row of one turn triage call: the verdict or the error code, and the
+/// characters sent. Never the text.
+fn triage_record(
+    context: &RunContext,
+    capture_id: &str,
+    input: &TriageInput,
+    verdict: Option<&TriageVerdict>,
+    error_code: Option<&str>,
+) -> TriageRecord {
+    TriageRecord {
+        id: uuid::Uuid::now_v7().to_string(),
+        capture_id: capture_id.to_string(),
+        job_id: context.job_id.clone(),
+        model: context.model.clone(),
+        called_at: now_rfc3339(),
+        kind: verdict.map(|verdict| verdict.kind.as_str().to_string()),
+        passed: verdict.is_some_and(|verdict| verdict.signal().is_some()),
+        input_chars: triage_input_chars(input) as i64,
+        error_code: error_code.map(str::to_string),
+    }
+}
+
 /// Runs the two passes and persists any candidates as `pending`.
 pub fn run_extraction<S, E>(
     store: &S,
@@ -424,23 +496,59 @@ where
     };
     let evidence = normalize(evidence);
     let hash = input_hash(capture_id, &evidence);
-    let signals = filter_relevant(&evidence);
-    if signals.is_empty() {
-        record_assessment(
-            store,
-            context,
-            capture_id,
-            &hash,
-            &started_at,
-            AssessmentOutcome::Empty,
-            0,
-            0,
-            None,
-            None,
-            None,
-        )?;
-        return Ok(ExtractionReport::default());
-    }
+    let evidence = user_speech(evidence);
+    let signals = match assess_relevance(&evidence) {
+        Relevance::Pass(signals) => signals,
+        Relevance::Empty => {
+            record_empty(store, context, capture_id, &hash, &started_at)?;
+            return Ok(ExtractionReport::default());
+        }
+        Relevance::Triage(input) => match extractor.triage(&input) {
+            Ok(None) => {
+                record_empty(store, context, capture_id, &hash, &started_at)?;
+                return Ok(ExtractionReport::default());
+            }
+            Ok(Some(verdict)) => {
+                store.record_triage(&triage_record(
+                    context,
+                    capture_id,
+                    &input,
+                    Some(&verdict),
+                    None,
+                ))?;
+                let Some(signal) = verdict.signal() else {
+                    record_empty(store, context, capture_id, &hash, &started_at)?;
+                    return Ok(ExtractionReport::default());
+                };
+                vec![signal]
+            }
+            // A deferred call is retried by the job; it is not a lost analysis.
+            Err(error) if error.is_deferred() => return Err(error),
+            Err(error) => {
+                store.record_triage(&triage_record(
+                    context,
+                    capture_id,
+                    &input,
+                    None,
+                    Some(error.code()),
+                ))?;
+                record_assessment(
+                    store,
+                    context,
+                    capture_id,
+                    &hash,
+                    &started_at,
+                    AssessmentOutcome::Failed,
+                    0,
+                    0,
+                    Some(error.code()),
+                    Some(failure_detail(&error)),
+                    None,
+                )?;
+                return Err(error);
+            }
+        },
+    };
 
     // Background is a hint: a failure to read it never blocks extraction.
     let mut background = store
@@ -777,6 +885,43 @@ pub(crate) fn normalize(mut evidence: DecisionEvidence) -> DecisionEvidence {
     evidence
 }
 
+/// The one place that tells the user's words apart in a capture: drops the
+/// `user_text` artifacts the harness or another agent wrote and reduces the
+/// others to the user's words (see [`crate::speaker`]), so the provider is never
+/// sent text that is not the user's. An artifact the adapter or the hook marked
+/// with a `source` (a wake, the answer to a question) already holds the user's
+/// words and is kept as it is. Diffs and tool summaries stay.
+pub fn user_speech(mut evidence: DecisionEvidence) -> DecisionEvidence {
+    evidence.artifacts.retain_mut(|artifact| {
+        if artifact.kind != "user_text" {
+            return true;
+        }
+        let Some(words) = spoken_words(&artifact.content, &artifact.metadata) else {
+            return false;
+        };
+        // A borrowed answer is a suffix of the content (leading reminders
+        // cut), so a length check tells whether it changed.
+        if words.len() != artifact.content.len() {
+            let words = words.into_owned();
+            artifact.content = words;
+        }
+        true
+    });
+    evidence
+}
+
+/// The user's words in one `user_text` artifact, `None` when the harness or
+/// another agent wrote it: the rule [`user_speech`] applies to each artifact.
+pub fn spoken_words<'a>(content: &'a str, metadata: &str) -> Option<Cow<'a, str>> {
+    if has_adapter_source(metadata) {
+        return Some(Cow::Borrowed(content));
+    }
+    match crate::speaker::classify(content) {
+        crate::speaker::Speaker::User(words) => Some(words),
+        _ => None,
+    }
+}
+
 /// Truncates `value` to at most `max_bytes`, respecting char boundaries.
 pub fn truncate_content(value: &str, max_bytes: usize) -> String {
     if value.len() <= max_bytes {
@@ -808,9 +953,10 @@ fn dedup_hash(
 #[cfg(test)]
 mod tests {
     use super::{
-        filter_relevant, reconcile_with_evidence, resolve_components, truncate_content,
-        CandidateKind, CandidateProposal, ComponentTally, DecisionEvidence, EvidenceArtifact,
-        MapComponent, ProposedComponent, RelevanceSignal,
+        assess_relevance, filter_relevant, reconcile_with_evidence, resolve_components,
+        truncate_content, user_speech, CandidateKind, CandidateProposal, ComponentTally,
+        DecisionEvidence, EvidenceArtifact, MapComponent, ProposedComponent, Relevance,
+        RelevanceSignal,
     };
 
     fn proposal(refs: &[&str]) -> CandidateProposal {
@@ -959,6 +1105,47 @@ Applies to the Claude Code adapter only.",
         }
     }
 
+    fn with_source(content: &str, source: &str) -> EvidenceArtifact {
+        EvidenceArtifact {
+            metadata: format!("{{\"source\":\"{source}\"}}"),
+            ..artifact("a", "user_text", content)
+        }
+    }
+
+    fn contents(capture: DecisionEvidence) -> Vec<String> {
+        capture
+            .artifacts
+            .into_iter()
+            .map(|artifact| artifact.content)
+            .collect()
+    }
+
+    #[test]
+    fn user_speech_keeps_what_an_adapter_already_took_out() {
+        let kept = "<task-notification>x</task-notification>";
+        for source in ["wake", "ask_user_question"] {
+            let capture = user_speech(evidence(vec![with_source(kept, source)]));
+            assert_eq!(contents(capture), [kept], "{source}");
+        }
+    }
+
+    #[test]
+    fn user_speech_drops_the_harness_and_cuts_the_reminders() {
+        let capture = user_speech(evidence(vec![
+            artifact("a", "user_text", "<bash-stdout>x</bash-stdout>"),
+            artifact(
+                "b",
+                "user_text",
+                "<system-reminder>r</system-reminder>\n<div>x</div>",
+            ),
+            artifact("c", "diff_hunk", "diff --git a/x b/x\n+1\n"),
+            artifact("d", "tool_summary", ""),
+        ]));
+        let kinds: Vec<_> = capture.artifacts.iter().map(|a| a.kind.as_str()).collect();
+        assert_eq!(kinds, ["user_text", "diff_hunk", "tool_summary"]);
+        assert_eq!(capture.artifacts[0].content, "<div>x</div>");
+    }
+
     #[test]
     fn truncate_content_respects_char_boundaries() {
         assert_eq!(truncate_content("abc", 10), "abc");
@@ -987,23 +1174,17 @@ Applies to the Claude Code adapter only.",
     }
 
     #[test]
-    fn two_moderate_signals_filter_but_one_does_not() {
-        let one = filter_relevant(&evidence(vec![
-            neutral_diff(),
-            artifact("a1", "user_text", "We compared an option for the helper."),
-        ]));
-        assert!(one.is_empty(), "one moderate signal must not filter");
-
-        let two = filter_relevant(&evidence(vec![
+    fn language_alone_never_passes() {
+        let moderate = evidence(vec![
             neutral_diff(),
             artifact(
                 "a1",
                 "user_text",
                 "We compared an option and the trade-off is the extra cost.",
             ),
-        ]));
-        assert!(two.contains(&RelevanceSignal::AlternativesCompared));
-        assert!(two.contains(&RelevanceSignal::ExplicitTradeoff));
+        ]);
+        assert!(filter_relevant(&moderate).is_empty());
+        assert!(matches!(assess_relevance(&moderate), Relevance::Triage(_)));
     }
 
     #[test]

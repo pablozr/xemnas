@@ -49,6 +49,7 @@ pub mod relations;
 pub mod repo_identity;
 pub mod review_exception;
 pub mod search_terms;
+pub mod speaker;
 
 pub use agent_access::{AgentAccess, AgentAccessError, AgentApi, AgentStore};
 pub use analysis::{AnalysisOutcome, AnalyzeCapture, ExtractorFactory};
@@ -78,12 +79,13 @@ pub use export::{
     PackDocument,
 };
 pub use extract::{
-    connection_test_evidence, fail_provider_setup, filter_relevant, input_hash, policy_snapshot,
-    record_skipped_assessment, run_connection_test, run_extraction, truncate_content,
-    AssessmentOutcome, AssessmentRecord, AssessmentStore, CandidateExtractor, CandidateProposal,
-    ConnectionTestReport, DecisionCandidateRecord, DecisionEvidence, EvidenceArtifact,
-    ExtractError, ExtractionReport, ExtractionStore, FakeCandidateExtractor, ProviderSetupError,
-    RelevanceSignal, RunContext, ERROR_CODE_CONSENT, ERROR_CODE_KEYSTORE, ERROR_CODE_PROFILE,
+    assess_relevance, connection_test_evidence, fail_provider_setup, filter_relevant, input_hash,
+    policy_snapshot, record_skipped_assessment, run_connection_test, run_extraction,
+    truncate_content, AssessmentOutcome, AssessmentRecord, AssessmentStore, CandidateExtractor,
+    CandidateProposal, ConnectionTestReport, DecisionCandidateRecord, DecisionEvidence,
+    EvidenceArtifact, ExtractError, ExtractionReport, ExtractionStore, FakeCandidateExtractor,
+    ProviderSetupError, Relevance, RelevanceSignal, RunContext, TriageInput, TriageKind,
+    TriageRecord, TriageVerdict, ERROR_CODE_CONSENT, ERROR_CODE_KEYSTORE, ERROR_CODE_PROFILE,
     ERROR_CODE_PROVIDER_CONFIG, ERROR_CODE_SECRET, MAX_EVIDENCE_ARTIFACTS,
     MAX_EVIDENCE_CONTENT_BYTES,
 };

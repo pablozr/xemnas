@@ -13,6 +13,7 @@ pub mod icons;
 pub mod list;
 pub mod material;
 pub mod motion;
+pub mod night_field;
 pub mod patterns;
 pub mod perf;
 pub mod popup;

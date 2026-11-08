@@ -71,8 +71,12 @@ O:<ref> v<versão> <tipo> <nome> <versão declarada> (<manifest>); declarado, n�
   que os sustenta fica de fora da linha e se confere em `get_decision` e na exportação.
 - Observação de manifest só entra quando o pedido cita o pacote ou o manifest pelo
   nome (no gatilho `edit`, o manifest editado); arquivos do transcript não contam.
-- Prompts `<task-notification>` (fim de subagente em segundo plano) não recebem
-  contexto nem gravam `context_injections`. Bloco sem item útil, só com "Omitidos
+- Só a fala do usuário recebe contexto (`speaker::classify`, ver
+  `qualidade-do-nucleo.md`): prompts do harness (`<task-notification>`, comandos,
+  `<system-reminder>`, interrupção) e de outros agentes (OpenBot) não recebem contexto nem
+  gravam `context_injections`; texto colado que abre com tag comum (`<div>`, `<template>`,
+  `<br>`) é fala do usuário e recebe contexto. Um `<wake>` com mensagem humana casa pelo texto do humano,
+  não pelo envelope. Bloco sem item útil, só com "Omitidos
   pelo orçamento", não é enviado.
 - Orçamento por projeto de 50 a 2.000 tokens estimados (padrão 300; 4 caracteres por
   token). Itens já entregues na sessão não voltam, salvo versão nova.
@@ -91,7 +95,10 @@ O:<ref> v<versão> <tipo> <nome> <versão declarada> (<manifest>); declarado, n�
 `xemnas-mcp` (`apps/mcp-server`) é um servidor MCP sobre stdio (JSON-RPC por linha,
 protocolo próprio, sem SDK) que fala com o app aberto por `POST /v1/agent/*`
 (`application::agent_access`). Sem app aberto, responde "o app está fechado"; não há
-modo headless. O projeto é `--project <dir>` ou o diretório em que o agente o iniciou.
+modo headless. O projeto é, nesta ordem: o argumento `project` da ferramenta (caminho
+absoluto do repositório), a raiz git do `path` quando ele é absoluto, e `--project <dir>`
+ou o diretório em que o agente iniciou o servidor. Agentes que rodam fora do repositório
+(pasta própria de um launcher) passam `path` absoluto ou `project`.
 
 | Ferramenta | Devolve |
 | --- | --- |
@@ -122,12 +129,26 @@ imprimem nada em caso de erro (no máximo uma linha sanitizada no stderr).
     "vamos de X?" / "pode" ficar junto da proposta.
   - **Retenção do mais novo:** o grupo mais recente só sai quando existe um turno não
     trivial depois; uma captura enviada nunca é reenviada com mais conteúdo.
+  - **Resposta a `AskUserQuestion`:** o transcript guarda a escolha do usuário no `toolUseResult`
+    do `tool_result` (`answers` e as opções em `questions`). Cada resposta vira um `user_text` com
+    `metadata.source = "ask_user_question"` (pergunta, escolha com a descrição e as opções
+    deixadas de lado, até 2.000 caracteres), logo depois da fala do usuário; o filtro de
+    relevância a conta como `user_picks_option`.
   - **Ponto de retomada:** `<dados>/adapter/claude-code/<sessão>.json`.
 - **`hook session-end`** (`SessionEnd`): igual ao `stop`, mas envia tudo, inclusive o
   grupo retido.
 - **Worktrees do git:** um worktree de projeto registrado conta como o projeto; o app
   resolve `canonical_path` pelo `git rev-parse --git-common-dir`
   (`application::repo_identity`, cache de 5 min). Outro repositório continua recusado.
+- **Sessão fora de repositório:** se o `cwd` não está dentro de um work tree git (agentes
+  de launcher editam outros repositórios por caminho absoluto), a raiz da captura é o
+  repositório em que o turno trabalhou (`hook/root.rs`): cada arquivo editado vale 3
+  pontos e cada lido (`Read`) 1, só caminhos absolutos; vence a maior pontuação, o empate
+  fica com o primeiro encontrado (edições antes de leituras), e sem repositório vale o
+  `cwd`. Um turno em vários repositórios gera um único envelope, do dominante, sem os
+  diffs dos outros. O 403 vale por raiz: o repositório recusado é pulado, os demais
+  seguem. `hook prompt` usa a mesma regra com os arquivos recentes (até 4 consultas ao
+  git, por causa dos 300 ms). Um `cwd` dentro de um work tree continua sendo a raiz.
 
 ## Onde estão os testes
 

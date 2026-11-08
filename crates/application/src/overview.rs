@@ -18,7 +18,7 @@ use crate::captures::CaptureRepository;
 use crate::claims::ClaimStore;
 use crate::clock::now_rfc3339;
 use crate::decisions::{DecisionQuery, DecisionStatus, DecisionStore};
-use crate::documents::{document_ref, DocumentError, DocumentStore, Documents, PROPOSE_PER_RUN};
+use crate::documents::{document_ref, DocumentError, DocumentStore, Documents};
 use crate::extract::ExtractError;
 use crate::graph::{GraphStore, KnowledgeGraph};
 use crate::inbox::InboxStore;
@@ -231,7 +231,8 @@ pub struct OverviewView {
     pub overview: ProjectOverview,
     /// Decisions confirmed after it was generated.
     pub new_decisions: usize,
-    /// Documents sent for analysis by this generation (0 when only read).
+    /// Documents sent for analysis by this generation. Always 0: documents are
+    /// read for the overview, never proposed as decisions.
     pub queued_documents: usize,
 }
 
@@ -474,6 +475,14 @@ pub struct ProjectOverviews<S, P, K, F> {
     documents: Option<Documents<S>>,
 }
 
+/// Lowercase text with the whitespace collapsed, to compare titles and excerpts.
+fn same_text(text: &str) -> String {
+    text.split_whitespace()
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 impl<S, P, K, F> ProjectOverviews<S, P, K, F>
 where
     S: GraphStore
@@ -600,19 +609,10 @@ where
             flows,
         };
         self.store.save_overview(&overview)?;
-        // With the provider on, new or changed documents go to the same
-        // analysis as conversations: their decisions reach Revisão.
-        let queued_documents = self
-            .documents()
-            .propose(project_id, PROPOSE_PER_RUN)
-            .map_err(|error| match error {
-                DocumentError::Storage(detail) => OverviewError::Storage(detail),
-                other => OverviewError::Storage(other.to_string()),
-            })?;
         Ok(OverviewView {
             overview,
             new_decisions: 0,
-            queued_documents,
+            queued_documents: 0,
         })
     }
 
@@ -818,6 +818,19 @@ where
         if !documents.is_empty() {
             text.push_str("\n## Project documentation\n");
         }
+        // Agent instructions are not the project's documentation, and the same
+        // title and opening paragraph under two names (README, SPEC, AGENTS,
+        // SECURITY copies) is read once.
+        documents.retain(|document| !crate::documents::is_agent_instructions(&document.path));
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        documents.retain(|document| {
+            document.excerpt.is_empty()
+                || seen.insert(format!(
+                    "{}|{}",
+                    same_text(&document.title),
+                    same_text(&document.excerpt)
+                ))
+        });
         for document in documents.iter().take(MAX_DOCUMENTS) {
             let label = format!("F:{}", document_ref(&document.path));
             let mut entry = format!(

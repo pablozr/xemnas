@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "capture_id": "018f2d3c-4b5a-7c6d-8e9f-000000000301",
+  "idempotency_key": "notification-migration",
+  "source": {
+    "adapter": "claude-code",
+    "adapter_version": "0.0.0",
+    "session_id": "session-notification-migration",
+    "message_id": "msg-notification-migration"
+  },
+  "project": {
+    "canonical_path": "C:/synthetic/projects/extraction"
+  },
+  "observed_at": "2026-02-01T14:00:00Z",
+  "artifacts": [
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000003010",
+      "kind": "user_text",
+      "content": "<task-notification>\n<task-id>a1</task-id>\n<status>completed</status>\n<summary>Agent finished the schema work</summary>\n</task-notification>",
+      "metadata": {},
+      "fingerprint": "bde1c7c906f0348879c30111e819ea13046a94949cd098fea4711c7169ed0a65"
+    },
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000003011",
+      "kind": "assistant_text",
+      "content": "Added the accounts table.",
+      "metadata": {},
+      "fingerprint": "67711cc8e88465dfa1bf94af92ce2277b0a5eaf7c36306e0748e3f6cfb0834fa"
+    },
+    {
+      "artifact_id": "018f2d3c-4b5a-7c6d-8e9f-000000003012",
+      "kind": "diff_hunk",
+      "content": "diff --git a/src/db/migrations/0007_accounts.sql b/src/db/migrations/0007_accounts.sql\n@@ -0,0 +1,4 @@\n+CREATE TABLE accounts (\n+  id TEXT PRIMARY KEY,\n+  owner TEXT NOT NULL\n+);\n",
+      "metadata": {
+        "file": "src/db/migrations/0007_accounts.sql"
+      },
+      "fingerprint": "cb029a5385e25333ba6abcaff4cc1c297a57453be08daae3caea589598226ec7"
+    }
+  ]
+}

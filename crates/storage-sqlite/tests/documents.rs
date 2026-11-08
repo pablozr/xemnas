@@ -3,11 +3,7 @@
 
 mod support;
 
-use application::documents::{DocumentError, DocumentKind, Documents, DOCUMENT_ADAPTER};
-use application::extract::{
-    run_extraction, CandidateExtractor, CandidateKind, CandidateProposal, DecisionEvidence,
-    ExtractError, FakeCandidateExtractor, RelevanceSignal, RunContext,
-};
+use application::documents::{DocumentError, DocumentKind, Documents};
 use application::projects::{ProjectRecord, ProjectRepository, Projects};
 use rusqlite::Connection;
 
@@ -81,44 +77,23 @@ fn a_missing_folder_is_reported_not_indexed() {
     );
 }
 
-/// A model that proposes one decision citing whatever it was given.
-struct Scripted;
-
-impl CandidateExtractor for Scripted {
-    fn extract(
-        &self,
-        input: &DecisionEvidence,
-        signals: &[RelevanceSignal],
-    ) -> Result<Vec<CandidateProposal>, ExtractError> {
-        assert!(input
-            .artifacts
-            .iter()
-            .all(|artifact| artifact.kind == "document"));
-        Ok(vec![CandidateProposal {
-            nature: application::review_exception::CandidateNature::Unknown,
-            qualifiers: Vec::new(),
-            question: "Onde guardar os dados?".into(),
-            choice: "Em SQLite.".into(),
-            rationale: "Um arquivo local, sem servidor.".into(),
-            confidence: 0.9,
-            confidence_reason: "O ADR registra a escolha.".into(),
-            signals: signals.to_vec(),
-            evidence_refs: input
-                .artifacts
-                .iter()
-                .map(|artifact| artifact.artifact_id.clone())
-                .collect(),
-            diff_summary: String::new(),
-            kind: CandidateKind::Decision,
-            significance: 0.8,
-            criteria: vec!["data_or_contract".into()],
-            components: Vec::new(),
-        }])
-    }
+fn count(connection: &Connection, table: &str) -> i64 {
+    let filter = if table == "jobs" {
+        " WHERE kind = 'analyze_document'"
+    } else {
+        ""
+    };
+    connection
+        .query_row(
+            &format!("SELECT COUNT(*) FROM {table}{filter}"),
+            [],
+            |row| row.get(0),
+        )
+        .expect("count")
 }
 
 #[test]
-fn documents_go_to_review_once_per_version_tied_to_the_code_they_cite() {
+fn documents_are_indexed_and_never_become_captures_or_jobs() {
     let test = support::open("documents-propose", &[]);
     let repo = project_with_docs(&test);
     std::fs::write(
@@ -129,106 +104,27 @@ fn documents_go_to_review_once_per_version_tied_to_the_code_they_cite() {
     .expect("adr");
     let documents = Documents::new(test.store.clone());
     documents.index("docs-p").expect("index");
+    assert_eq!(documents.propose("docs-p", 10).expect("propose"), 0);
 
-    assert_eq!(
-        documents.propose("docs-p", 1).expect("limit"),
-        1,
-        "the limit holds"
-    );
-    assert_eq!(documents.propose("docs-p", 10).expect("rest"), 1);
-    assert_eq!(
-        documents.propose("docs-p", 10).expect("again"),
-        0,
-        "a version is queued once"
-    );
-
-    let connection = Connection::open(test.root.join("app.db")).expect("raw");
-    let captures: Vec<String> = connection
-        .prepare(
-            "SELECT capture_id FROM adapter_checkpoints WHERE adapter = ?1              ORDER BY message_id LIKE 'docs/%' DESC",
-        )
-        .expect("prepare")
-        .query_map([DOCUMENT_ADAPTER], |row| row.get(0))
-        .expect("query")
-        .collect::<Result<_, _>>()
-        .expect("rows");
-    assert_eq!(captures.len(), 2);
-    let queued: i64 = connection
-        .query_row(
-            "SELECT COUNT(*) FROM jobs WHERE state = ?1 AND kind = ?2",
-            [
-                application::jobs::JobState::Queued.as_str(),
-                application::jobs::ANALYZE_DOCUMENT_KIND,
-            ],
-            |row| row.get(0),
-        )
-        .expect("jobs");
-    assert!(queued >= 2, "each document waits for analysis");
-
-    // The ADR (listed first) goes through the same extraction as a
-    // conversation; its candidate cites the document and the code it names.
-    let report = run_extraction(
-        &test.store,
-        &Scripted,
-        &captures[0],
-        &RunContext::for_tests(),
-    )
-    .expect("extract");
-    assert_eq!(report.inserted, 1, "{report:?}");
-    let summary: String = connection
-        .query_row(
-            "SELECT diff_summary FROM decision_candidates WHERE capture_id = ?1",
-            [&captures[0]],
-            |row| row.get(0),
-        )
-        .expect("candidate");
-    assert!(summary.contains("docs/adr/0001-sqlite.md"), "{summary}");
-    assert!(
-        summary.contains("crates/storage-sqlite/src/store.rs"),
-        "{summary}"
-    );
-
-    // Without a model nothing is invented from a document.
-    let report = run_extraction(
-        &test.store,
-        &FakeCandidateExtractor,
-        &captures[1],
-        &RunContext::for_tests(),
-    )
-    .expect("offline");
-    let _ = report;
-    let offline: i64 = connection
-        .query_row(
-            "SELECT COUNT(*) FROM decision_candidates WHERE capture_id = ?1",
-            [&captures[1]],
-            |row| row.get(0),
-        )
-        .expect("count");
-    assert_eq!(offline, 0);
-
-    // A new version of the README is queued again.
+    // An edit refreshes the index, and still queues nothing.
     std::fs::write(
         repo.join("README.md"),
         "# Xemnas\n\n## Arquitetura\n\nDecidimos guardar tudo localmente em vez de na nuvem.\n",
     )
     .expect("edit");
-    documents.index("docs-p").expect("reindex");
-    assert_eq!(documents.propose("docs-p", 10).expect("changed"), 1);
+    assert_eq!(documents.refresh_changed("docs-p", 10).expect("refresh"), 0);
+    let readme = documents
+        .list("docs-p")
+        .expect("list")
+        .into_iter()
+        .find(|document| document.path == "README.md")
+        .expect("readme");
+    assert!(readme.headings.contains(&"Arquitetura".to_string()));
 
-    // A README with only install steps has no central part, and a changelog
-    // is not a source of decisions: neither is queued.
-    std::fs::write(
-        repo.join("README.md"),
-        "# Xemnas\n\n## Instalação\n\nBaixe o app.\n\n## Uso\n\nAbra.\n",
-    )
-    .expect("plain readme");
-    std::fs::write(
-        repo.join("docs/CHANGELOG.md"),
-        "# Mudanças\n\nDecidimos tudo.\n",
-    )
-    .expect("changelog");
-    documents.index("docs-p").expect("reindex plain");
-    assert_eq!(documents.propose("docs-p", 10).expect("noise"), 0);
+    let connection = Connection::open(test.root.join("app.db")).expect("raw");
+    assert_eq!(count(&connection, "capture_receipts"), 0);
+    assert_eq!(count(&connection, "capture_artifacts"), 0);
+    assert_eq!(count(&connection, "jobs"), 0);
 }
 
 fn git(directory: &std::path::Path, args: &[&str]) -> bool {
@@ -252,7 +148,7 @@ const WORKTREE_ADR: &str = "# Perfil de turno\n\n## Decisão\nGuardar o perfil e
                             crates/storage-sqlite/src/store.rs.\n";
 
 #[test]
-fn a_document_of_a_sibling_worktree_is_imported_and_proposed() {
+fn a_document_of_a_sibling_worktree_is_imported_and_indexed() {
     if !git(std::path::Path::new("."), &["--version"]) {
         eprintln!("skipped: git is unavailable");
         return;
@@ -283,37 +179,31 @@ fn a_document_of_a_sibling_worktree_is_imported_and_proposed() {
         .expect("import");
     assert_eq!(first.document.path, "docs/adr/0014-turn-profile.md");
     assert_eq!(first.document.kind, DocumentKind::Adr);
-    assert!(first.queued, "the normal extraction runs");
+    assert!(!first.queued, "a document is indexed, not queued");
 
     let again = documents
         .import_file(&identity, "wt-p", &file)
         .expect("same content");
-    assert!(!again.queued, "a version is queued once");
+    assert!(!again.queued);
     assert_eq!(documents.list("wt-p").expect("list").len(), 1);
 
     // Reading the folder again keeps what was imported.
     documents.index("wt-p").expect("index");
     assert_eq!(documents.list("wt-p").expect("kept").len(), 1);
 
-    // Changed content replaces the stored version and queues the new one.
+    // Changed content replaces the stored version.
     std::fs::write(&file, format!("{WORKTREE_ADR}\nAtualizado.\n")).expect("edit");
     let changed = documents
         .import_file(&identity, "wt-p", &file)
         .expect("changed");
-    assert!(changed.queued);
+    assert!(!changed.queued);
     let listed = documents.list("wt-p").expect("list");
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].fingerprint, changed.document.fingerprint);
 
     let connection = Connection::open(test.root.join("app.db")).expect("raw");
-    let captures: i64 = connection
-        .query_row(
-            "SELECT COUNT(*) FROM capture_receipts WHERE idempotency_key LIKE ?1",
-            ["document:wt-p:docs/adr/0014-turn-profile.md:%"],
-            |row| row.get(0),
-        )
-        .expect("count");
-    assert_eq!(captures, 2, "one capture per version");
+    assert_eq!(count(&connection, "capture_receipts"), 0);
+    assert_eq!(count(&connection, "jobs"), 0);
 }
 
 #[test]
@@ -368,24 +258,21 @@ fn imports_outside_the_repository_or_not_documents_are_refused_without_a_trace()
 }
 
 #[test]
-fn documents_are_queued_for_analysis_adrs_and_specs_before_guides() {
-    use application::jobs::ANALYZE_DOCUMENT_KIND;
-
-    let test = support::open("documents-order", &[]);
+fn archived_and_history_documents_are_still_indexed() {
+    let test = support::open("documents-archived", &[]);
     let repo = test.root.join("repo");
-    for dir in ["docs/adr", "docs/specs", "docs/guias"] {
+    for dir in ["docs/adr", "docs/archive-x", "docs/historico", "docs/spike"] {
         std::fs::create_dir_all(repo.join(dir)).expect("docs");
     }
-    let body = "Decidimos guardar tudo em SQLite em vez de um servidor. Nunca gravamos \
-                segredos no banco, em crates/storage-sqlite/src/store.rs.\n";
-    // Written in the opposite order of the analysis order.
+    let body = "# Titulo\n\n## Decisão\nDecidimos guardar tudo em SQLite em vez de um servidor, \
+                em crates/storage-sqlite/src/store.rs.\n";
     for path in [
-        "docs/guias/operacao.md",
-        "README.md",
-        "docs/specs/armazenamento.md",
         "docs/adr/0001-sqlite.md",
+        "docs/archive-x/0002-antigo.md",
+        "docs/historico/0003-antigo.md",
+        "docs/spike/0004-teste.md",
     ] {
-        std::fs::write(repo.join(path), format!("# Titulo\n\n## Decisão\n{body}")).expect("doc");
+        std::fs::write(repo.join(path), body).expect("doc");
     }
     test.store
         .insert(&ProjectRecord::new(
@@ -395,31 +282,7 @@ fn documents_are_queued_for_analysis_adrs_and_specs_before_guides() {
         ))
         .expect("project");
     let documents = Documents::new(test.store.clone());
-    documents.index("docs-p").expect("index");
-    assert_eq!(documents.propose("docs-p", 10).expect("propose"), 4);
-
-    let kinds = vec![ANALYZE_DOCUMENT_KIND.to_string()];
-    let connection = Connection::open(test.root.join("app.db")).expect("raw");
-    let mut order = Vec::new();
-    while let Some(job) =
-        application::jobs::JobRepository::claim_next(&test.store, &kinds).expect("claim")
-    {
-        let file: String = connection
-            .query_row(
-                "SELECT message_id FROM adapter_checkpoints WHERE capture_id = ?1",
-                [&job.payload],
-                |row| row.get(0),
-            )
-            .expect("checkpoint");
-        order.push(file.split('@').next().unwrap_or_default().to_string());
-    }
-    assert_eq!(
-        order,
-        [
-            "docs/adr/0001-sqlite.md",
-            "docs/specs/armazenamento.md",
-            "README.md",
-            "docs/guias/operacao.md"
-        ]
-    );
+    assert_eq!(documents.index("docs-p").expect("index").total, 4);
+    assert_eq!(documents.list("docs-p").expect("list").len(), 4);
+    assert_eq!(documents.propose("docs-p", 10).expect("propose"), 0);
 }

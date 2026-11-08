@@ -19,6 +19,8 @@
 
 - **Só as partes centrais seguem (2026-10-02).** Mandar o documento inteiro ao extrator gerava ruído na Revisão: documentação é longa e quase toda descritiva (instalação, uso, planos, changelog). `documents::digest` escolhe, sem modelo e sem custo, o que vale ler: de um ADR, contexto, decisão, consequências e alternativas (e só se o status for aceito); de um README, guia ou especificação, as seções cujo título anuncia uma escolha (arquitetura, decisões, convenções, restrições, princípios, consequências, alternativas, stack) ou cujo texto tem frases que afirmam uma regra ("decidimos", "em vez de", "nunca", "must not"). Instalação, uso, licença, exemplos e roteiro ficam de fora, e código é trocado por uma nota. Um documento sem parte central (ou de caminho `changelog`, `roadmap`, `pesquisa`, tradução) não é enfileirado. O digest tem até 6.000 caracteres (antes 40.000), e dentro de cada tipo os documentos que mais falam em decisões vêm primeiro.
 
+- **Documentos deixam de virar candidatos (2026-11-08).** Os dois itens acima foram revertidos: 88 de 94 decisões aceitas e 289 de 309 afirmações do dogfood vinham de capturas de documento, e o que um documento diz já está no documento. Documento só é indexado (esboço, mapa e Visão); não gera captura, job nem candidato, e `documents::digest`, `analyze_document` novo e as novas tentativas automáticas foram removidos. Capturas antigas com artefato `document` continuam sendo lidas pelo extrator. Pastas `historico`, `history`, `legacy`, `spike`, `deprecated` e `obsolete` contam como arquivo.
+
 ## Alternativas rejeitadas
 
 - **Mandar os arquivos inteiros ao provedor:** caro e arriscado; o esboço basta para resumir, e o digest basta para extrair.

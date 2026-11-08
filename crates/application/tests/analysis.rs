@@ -188,7 +188,8 @@ fn offline_profile_runs_the_fake_extractor() {
 
 #[test]
 fn offline_profile_extracts_a_choice_recorded_only_in_the_conversation() {
-    // A turn without any diff (MVP-SPEC AD-08) must still reach the extractor.
+    // A turn without any diff (MVP-SPEC AD-08) must still reach the extractor:
+    // the answer to a question put to the user is structure, no triage needed.
     let store = Store::with_evidence(DecisionEvidence {
         capture_id: "capture-1".to_string(),
         project_id: "project-1".to_string(),
@@ -198,9 +199,8 @@ fn offline_profile_extracts_a_choice_recorded_only_in_the_conversation() {
         artifacts: vec![EvidenceArtifact {
             artifact_id: "artifact-1".to_string(),
             kind: "user_text".to_string(),
-            content: "Decidimos guardar as capturas em SQLite em vez de arquivos soltos;                       o schema fica versionado por migrations."
-                .to_string(),
-            metadata: "{}".to_string(),
+            content: "question: onde guardar as capturas?\nanswer: SQLite".to_string(),
+            metadata: "{\"source\":\"ask_user_question\"}".to_string(),
         }],
     });
     let analysis = AnalyzeCapture::new(

@@ -20,6 +20,7 @@
 //! file. When the file is shorter than the offset it restarts at 0 and relies on
 //! the uuid and the idempotency key to avoid duplicates.
 
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use application::AppPaths;
@@ -28,6 +29,7 @@ use serde_json::Value;
 
 use super::deliver::{Outcome, Sender};
 use super::envelope::{build_envelope, now_rfc3339};
+use super::root::Roots;
 use super::transcript::{scan, Turn};
 use super::worktree::Worktrees;
 
@@ -39,6 +41,9 @@ pub const MAX_FOLDED_TURNS: usize = 10;
 
 /// Turns read per run: enough for [`MAX_TURNS_PER_STOP`] full groups plus the held one.
 const SCAN_LIMIT: usize = MAX_TURNS_PER_STOP * (1 + MAX_FOLDED_TURNS) + 1;
+
+/// Folders resolved for the root per capture; beyond it the best repository found wins.
+const MAX_ROOT_LOOKUPS: usize = 64;
 
 /// Runs a `SessionEnd` flush may take to drain a long backlog.
 const MAX_FLUSH_RUNS: usize = 100;
@@ -184,22 +189,37 @@ pub fn capture(
 
     let mut sender = Sender::new(&paths.runtime_dir, &paths.outbox_dir);
     let mut done = 0;
-    let mut worktrees = Worktrees::new(cwd);
-    // A 403 means the directory is not a registered project; it will not become
-    // one mid-run, so the remaining turns are passed over without a POST.
-    let mut unregistered = false;
+    let mut roots = Roots::new(cwd, MAX_ROOT_LOOKUPS);
+    let mut worktrees: HashMap<String, Worktrees> = HashMap::new();
+    // A 403 means the root is not a registered project; it will not become one
+    // mid-run, so its remaining turns are parked in the outbox without a POST.
+    let mut unregistered: HashSet<String> = HashSet::new();
     for group in &groups[..limit] {
         let turn = &group.turn;
-        if unregistered {
-            report.skipped += 1;
-        } else if let Some(envelope) =
-            build_envelope(session_id, cwd, &mut worktrees, turn, now_rfc3339())
-        {
+        let edited: Vec<String> = turn.edits.iter().map(|edit| edit.path.clone()).collect();
+        let root = roots.root_for(&edited, &turn.touched);
+        if let Some(envelope) = build_envelope(
+            session_id,
+            &root,
+            worktrees
+                .entry(root.clone())
+                .or_insert_with(|| Worktrees::new(&root)),
+            turn,
+            now_rfc3339(),
+        ) {
+            if unregistered.contains(&root) {
+                if sender.park(&envelope).is_err() {
+                    return Err("capture could not be stored");
+                }
+                report.skipped += 1;
+                done += 1;
+                continue;
+            }
             match sender.send(&envelope) {
                 Outcome::Sent => report.sent += 1,
                 Outcome::Queued => report.queued += 1,
                 Outcome::Rejected(403) => {
-                    unregistered = true;
+                    unregistered.insert(root);
                     report.skipped += 1;
                 }
                 Outcome::Rejected(status) => {
@@ -368,7 +388,7 @@ mod tests {
         assert_eq!(first.edits.len(), 2);
         assert_eq!(first.edits[0].hunks, "@@ -1,1 +1,1 @@\n-a\n+b\n");
         assert_eq!(first.edits[1].hunks, "@@ -0,0 +1,2 @@\n+um\n+dois\n");
-        assert_eq!(scanned.turns[1].user_text, "segundo");
+        assert_eq!(scanned.turns[1].prompts[0].text, "segundo");
         assert_eq!(scan(&transcript, 0, 1).expect("scan").turns.len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -395,12 +415,14 @@ mod tests {
             let text = std::fs::read_to_string(entry.expect("entry").path()).expect("read");
             let envelope: Value = serde_json::from_str(&text).expect("json");
             let artifact = |kind: &str| {
-                envelope["artifacts"]
+                let contents: Vec<&str> = envelope["artifacts"]
                     .as_array()
-                    .and_then(|all| all.iter().find(|a| a["kind"] == kind))
-                    .and_then(|a| a["content"].as_str())
-                    .unwrap_or_default()
-                    .to_string()
+                    .into_iter()
+                    .flatten()
+                    .filter(|a| a["kind"] == kind)
+                    .filter_map(|a| a["content"].as_str())
+                    .collect();
+                contents.join("\n\n")
             };
             let message_id = envelope["source"]["message_id"].as_str();
             found.push((

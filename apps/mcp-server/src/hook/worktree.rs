@@ -5,20 +5,22 @@
 //! a path relative to the worktree they live in, which keeps diffs mapping to the
 //! same component patterns whichever worktree they were edited in.
 
-use std::collections::HashMap;
-use std::path::Path;
-
-use application::repo_identity::{git_output, normalize_dir};
-
 use super::envelope::relative_inside;
+use super::root::{locate_directory, Commons, Located, Resolver};
 
 /// Resolves edited paths against the session's cwd and its sibling worktrees.
 ///
-/// Git runs once per distinct directory, and once for the cwd, per instance.
+/// A path is accepted by what the disk says it is, not by its prefix or by being
+/// relative: it must really lie in the cwd's work tree, or in another work tree
+/// of the same repository (same git common dir). A nested repository or a
+/// junction to another repository inside the cwd is a different project. Git runs
+/// once per distinct work tree, per instance.
 pub struct Worktrees {
     cwd: String,
-    common_dir: Option<Option<String>>,
-    toplevels: HashMap<String, Option<String>>,
+    /// Where the cwd lies; `None` when it is in no repository.
+    ours: Option<Option<Located>>,
+    commons: Commons,
+    resolver: Resolver,
 }
 
 impl Worktrees {
@@ -26,63 +28,39 @@ impl Worktrees {
     pub fn new(cwd: &str) -> Self {
         Self {
             cwd: cwd.to_string(),
-            common_dir: None,
-            toplevels: HashMap::new(),
+            ours: None,
+            commons: Commons::default(),
+            resolver: Resolver::new(cwd),
         }
     }
 
     /// Path of `path` relative to the cwd, or to the root of another worktree
     /// of the cwd's repository; `None` when it lies elsewhere.
     pub fn relative(&mut self, path: &str) -> Option<String> {
-        if let Some(file) = relative_inside(path, &self.cwd) {
-            return Some(file);
-        }
-        let normalized = path.replace('\\', "/");
-        let absolute = normalized.starts_with('/') || normalized.as_bytes().get(1) == Some(&b':');
-        if !absolute {
+        let cwd = &self.cwd;
+        let Some(ours) = self
+            .ours
+            .get_or_insert_with(|| locate_directory(cwd))
+            .clone()
+        else {
+            // The cwd is in no repository: there is no identity to compare.
+            return relative_inside(path, &self.cwd);
+        };
+        let placed = self.resolver.place(path)?;
+        if !self.commons.same(&ours.top, &placed.top) {
             return None;
         }
-        let directory = normalized.rsplit_once('/')?.0.to_string();
-        let toplevel = self.toplevel_of(&directory)?;
-        relative_inside(&normalized, &toplevel)
-    }
-
-    /// Root of the sibling worktree holding `directory`, if it is one.
-    fn toplevel_of(&mut self, directory: &str) -> Option<String> {
-        if let Some(known) = self.toplevels.get(directory) {
-            return known.clone();
+        if placed.top == ours.top && !ours.relative.is_empty() {
+            // Both are rooted at `top`: strip the cwd's own folder as a root.
+            if let Some(file) = relative_inside(
+                &format!("/{}", placed.relative),
+                &format!("/{}", ours.relative),
+            ) {
+                return Some(file);
+            }
         }
-        let resolved = self.resolve(directory);
-        self.toplevels
-            .insert(directory.to_string(), resolved.clone());
-        resolved
+        Some(placed.relative)
     }
-
-    fn resolve(&mut self, directory: &str) -> Option<String> {
-        let cwd = &self.cwd;
-        let ours = self
-            .common_dir
-            .get_or_insert_with(|| common_dir_and_toplevel(cwd).map(|(common, _)| common))
-            .clone()?;
-        // The edited file or its folder may not exist yet; ask from the
-        // nearest folder that does.
-        let existing = Path::new(directory)
-            .ancestors()
-            .find(|candidate| candidate.is_dir())?
-            .to_string_lossy()
-            .into_owned();
-        let (theirs, toplevel) = common_dir_and_toplevel(&existing)?;
-        (theirs == ours).then_some(toplevel)
-    }
-}
-
-/// Normalized common git dir and the worktree root of `directory`.
-fn common_dir_and_toplevel(directory: &str) -> Option<(String, String)> {
-    let output = git_output(directory, &["--git-common-dir", "--show-toplevel"])?;
-    let mut lines = output.lines();
-    let common = normalize_dir(lines.next()?.trim())?;
-    let toplevel = lines.next()?.trim().replace('\\', "/");
-    (!toplevel.is_empty()).then_some((common, toplevel))
 }
 
 #[cfg(test)]
@@ -90,7 +68,8 @@ mod tests {
     use super::*;
     use crate::hook::envelope::build_envelope;
     use crate::hook::transcript::{FileEdit, Turn};
-    use std::path::PathBuf;
+    use application::repo_identity::normalize_dir;
+    use std::path::{Path, PathBuf};
     use std::process::Command;
 
     fn git(directory: &Path, args: &[&str]) -> bool {
@@ -171,5 +150,88 @@ mod tests {
             .collect();
         assert_eq!(files, ["a.rs", "docs/adr/0001.md"]);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_nested_repository_or_a_link_to_another_one_is_not_the_cwds_project() {
+        if !git(Path::new("."), &["--version"]) {
+            eprintln!("skipped: git is unavailable");
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("xemnas-wt-nest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let a = repo(&root, "a");
+        let b = repo(&root, "b");
+        let nested = repo(&a, "nested");
+        let a_text = a.to_string_lossy().into_owned();
+        let mut worktrees = Worktrees::new(&a_text);
+        assert_eq!(
+            worktrees
+                .relative(&format!("{a_text}/src/one.rs"))
+                .as_deref(),
+            Some("src/one.rs")
+        );
+        assert_eq!(
+            worktrees.relative(&nested.join("two.rs").to_string_lossy()),
+            None
+        );
+        if crate::hook::root::tests::link(&a.join("link"), &b) {
+            assert_eq!(
+                worktrees.relative(&format!("{a_text}/link/foreign.rs")),
+                None
+            );
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn relative_paths_get_the_same_identity_check_as_absolute_ones() {
+        if !git(Path::new("."), &["--version"]) {
+            eprintln!("skipped: git is unavailable");
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("xemnas-wt-rel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let a = repo(&root, "a");
+        let b = repo(&root, "b");
+        repo(&a, "nested");
+        let a_text = a.to_string_lossy().into_owned();
+        let mut worktrees = Worktrees::new(&a_text);
+        assert_eq!(
+            worktrees.relative("src/one.rs").as_deref(),
+            Some("src/one.rs")
+        );
+        assert_eq!(worktrees.relative("nested/two.rs"), None);
+        assert_eq!(worktrees.relative("../b/x.rs"), None);
+        if crate::hook::root::tests::link(&a.join("link"), &b) {
+            assert_eq!(worktrees.relative("link/foreign.rs"), None);
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_subst_drive_to_the_repository_keeps_its_root_and_diff() {
+        #[cfg(windows)]
+        {
+            if !git(Path::new("."), &["--version"]) {
+                return;
+            }
+            let root = std::env::temp_dir().join(format!("xemnas-wt-drive-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            let a = repo(&root, "a");
+            let Some(drive) = crate::hook::root::tests::Drive::mount(&a) else {
+                eprintln!("skipped: subst is unavailable");
+                return;
+            };
+            let a_text = a.to_string_lossy().into_owned();
+            let mut worktrees = Worktrees::new(&a_text);
+            assert_eq!(
+                worktrees
+                    .relative(&format!("{}/one.rs", drive.0))
+                    .as_deref(),
+                Some("one.rs")
+            );
+            let _ = std::fs::remove_dir_all(&root);
+        }
     }
 }

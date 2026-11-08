@@ -9,6 +9,7 @@
 pub mod deliver;
 pub mod envelope;
 pub mod prompt;
+pub mod root;
 pub mod stop;
 pub mod transcript;
 pub mod worktree;
