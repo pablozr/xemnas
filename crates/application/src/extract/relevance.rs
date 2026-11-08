@@ -7,10 +7,11 @@ use serde_json::json;
 
 use super::triage::{TriageInput, MIN_SPEECH_ALNUM, TRIAGE_ASSISTANT_CHARS, TRIAGE_USER_CHARS};
 use super::{DecisionEvidence, EvidenceArtifact};
-use crate::speaker::{classify, Speaker};
 
 /// Metadata source the adapter gives to the answer of an `AskUserQuestion`.
 pub const ASK_USER_QUESTION_SOURCE: &str = "ask_user_question";
+/// Metadata source the hook gives to the human words it took out of a wake.
+pub const WAKE_SOURCE: &str = "wake";
 
 /// A durable engineering choice worth proposing for human confirmation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -247,7 +248,8 @@ pub enum Relevance {
 }
 
 /// Decides how a capture goes on: straight to the extractor, to the turn
-/// triage, or nowhere.
+/// triage, or nowhere. The evidence must already have gone through
+/// [`super::user_speech`], the one place that tells the user's words apart.
 pub fn assess_relevance(evidence: &DecisionEvidence) -> Relevance {
     let signals = filter_relevant(evidence);
     if !signals.is_empty() {
@@ -263,6 +265,7 @@ pub fn assess_relevance(evidence: &DecisionEvidence) -> Relevance {
 /// What the turn triage reads, or `None` when the user said nothing worth a
 /// call: the speech of the turn (without the harness's reminders and the
 /// project context delivered to the user) and the end of the assistant's text.
+/// The evidence must already have gone through [`super::user_speech`].
 pub fn triage_input(evidence: &DecisionEvidence) -> Option<TriageInput> {
     let speech: Vec<Cow<'_, str>> = evidence.artifacts.iter().filter_map(user_words).collect();
     let speech: Vec<String> = speech
@@ -298,7 +301,7 @@ pub fn triage_input(evidence: &DecisionEvidence) -> Option<TriageInput> {
 /// empty list. Structure decides (see [`structural_signals`]); the label lists
 /// below only add the signals the extractor and the validation work with. A
 /// document is the exception: it passes with one strong label or two moderate
-/// ones.
+/// ones. The evidence must already have gone through [`super::user_speech`].
 pub fn filter_relevant(evidence: &DecisionEvidence) -> Vec<RelevanceSignal> {
     let mut detected = structural_signals(evidence);
     let documents = documents(evidence);
@@ -378,6 +381,21 @@ fn answers_a_question(artifact: &EvidenceArtifact) -> bool {
             .is_ok_and(|value| value["source"] == ASK_USER_QUESTION_SOURCE)
 }
 
+/// Whether the adapter or the hook already took the user's words out of what
+/// the harness wrote: the answer to a question or the human text of a wake.
+/// Such an artifact is not classified again, whatever it opens with.
+pub(super) fn from_adapter_source(artifact: &EvidenceArtifact) -> bool {
+    if artifact.metadata == "{}" {
+        return false;
+    }
+    [ASK_USER_QUESTION_SOURCE, WAKE_SOURCE]
+        .into_iter()
+        .any(|source| artifact.metadata.contains(source))
+        && serde_json::from_str::<serde_json::Value>(&artifact.metadata).is_ok_and(|value| {
+            value["source"] == ASK_USER_QUESTION_SOURCE || value["source"] == WAKE_SOURCE
+        })
+}
+
 /// Whether the diff adds a line to a normative document: an ADR, a
 /// specification, `AGENTS.md` or `CLAUDE.md`, outside an archive folder.
 fn normative_document_edited(evidence: &DecisionEvidence) -> bool {
@@ -410,17 +428,12 @@ fn is_normative_path(path: &str) -> bool {
     is_agent_instructions(path) || matches!(classify(path), DocumentKind::Adr | DocumentKind::Spec)
 }
 
-/// What the user said in the artifact: nothing when it is not a user message,
-/// when the harness or another agent wrote it (see [`crate::speaker`]) or when
-/// it is a bare `/command`, which names an action and states no choice.
+/// What the user said in the artifact: nothing when it is not a user message
+/// or when it is a bare `/command`, which names an action and states no choice.
+/// The evidence is already the user's speech (see [`super::user_speech`]).
 fn user_words(artifact: &EvidenceArtifact) -> Option<Cow<'_, str>> {
-    if artifact.kind != "user_text" {
-        return None;
-    }
-    match classify(&artifact.content) {
-        Speaker::User(words) if !is_bare_command(&words) => Some(words),
-        _ => None,
-    }
+    (artifact.kind == "user_text" && !is_bare_command(&artifact.content))
+        .then_some(Cow::Borrowed(artifact.content.as_str()))
 }
 
 /// `/compact`, `/clear`: a slash and one word, nothing else.
@@ -769,7 +782,8 @@ mod tests {
     }
 
     fn said(text: &str) -> Relevance {
-        assess_relevance(&evidence(vec![artifact("a0", "user_text", text)]))
+        let capture = evidence(vec![artifact("a0", "user_text", text)]);
+        assess_relevance(&crate::extract::user_speech(capture))
     }
 
     fn test_diff() -> EvidenceArtifact {

@@ -8,7 +8,7 @@ mod cases;
 use std::path::Path;
 use std::time::Instant;
 
-use application::extract::{assess_relevance, DecisionEvidence, Relevance};
+use application::extract::{assess_relevance, user_speech, DecisionEvidence, Relevance};
 use cases::{artifact, corpus};
 
 /// Floor for the share of decisions that reach the extractor or the triage.
@@ -54,7 +54,7 @@ fn relevance_quality_gate() {
     let (mut positives, mut negatives, mut reached, mut false_passes) = (0, 0, 0, 0);
     let (mut triage_calls, mut chars_max, mut chars_sum, mut harness_triaged) = (0, 0, 0, 0);
     for (name, evidence, relevant) in corpus(&fixtures_dir()) {
-        let relevance = assess_relevance(&evidence);
+        let relevance = assess_relevance(&user_speech(evidence));
         let (passes, triaged) = match &relevance {
             Relevance::Pass(_) => (true, false),
             Relevance::Triage(_) => (false, true),
@@ -162,7 +162,8 @@ fn relevance_filter_latency() {
 
     let start = Instant::now();
     let passed = captures
-        .iter()
+        .into_iter()
+        .map(user_speech)
         .filter(|evidence| !matches!(assess_relevance(evidence), Relevance::Empty))
         .count();
     let elapsed_ms = start.elapsed().as_millis();
