@@ -1,7 +1,8 @@
-//! Gate for the document watch of the reconciler: a parked project costs no
-//! job, an edited document costs exactly one (after one pass of settling),
-//! bursts of edits cost one, archived and never indexed projects cost none,
-//! and the pass itself is cheap for many projects.
+//! Gate for the document watch of the reconciler: documents are indexed and
+//! never queued, so a parked, edited, new or archived document costs no job
+//! and no capture, the index follows the files (after one pass of settling),
+//! never indexed projects stay untouched, and the pass itself is cheap for
+//! many projects.
 
 mod support;
 
@@ -40,6 +41,17 @@ fn analysis_jobs(test: &support::TestStore) -> i64 {
     )
 }
 
+/// Fingerprint the index holds for `path` of the project `idle`.
+fn indexed_hash(test: &support::TestStore, path: &str) -> Option<String> {
+    raw(test)
+        .query_row(
+            "SELECT fingerprint FROM project_documents WHERE project_id = 'idle' AND path = ?1",
+            [path],
+            |row| row.get(0),
+        )
+        .ok()
+}
+
 fn receipts(test: &support::TestStore) -> i64 {
     count(test, "SELECT COUNT(*) FROM capture_receipts")
 }
@@ -74,7 +86,6 @@ fn parked(
 ) -> PathBuf {
     let repo = register(test, project, &[(ADR, adr_text("v1"))]);
     documents.index(project).expect("index");
-    documents.propose(project, 10).expect("propose");
     repo
 }
 
@@ -84,28 +95,6 @@ fn tick(
     project: &str,
 ) -> WatchOutcome {
     watch.tick(documents, project).expect("tick")
-}
-
-/// File named by the artifact of the newest analysis job.
-fn newest_job_file(test: &support::TestStore) -> String {
-    let connection = raw(test);
-    let capture: String = connection
-        .query_row(
-            "SELECT payload FROM jobs WHERE kind = 'analyze_document'
-             ORDER BY created_at DESC, rowid DESC LIMIT 1",
-            [],
-            |row| row.get(0),
-        )
-        .expect("job");
-    let metadata: String = connection
-        .query_row(
-            "SELECT metadata FROM capture_artifacts WHERE capture_id = ?1",
-            [&capture],
-            |row| row.get(0),
-        )
-        .expect("artifact");
-    let metadata: serde_json::Value = serde_json::from_str(&metadata).expect("json");
-    metadata["file"].as_str().expect("file").to_string()
 }
 
 #[test]
@@ -131,24 +120,28 @@ fn document_watch_gate() {
     assert_eq!(analysis_jobs(&test) - jobs, 0, "idle jobs");
     assert_eq!(receipts(&test) - receipts_before, 0, "idle receipts");
 
-    // 2. An edited ADR: one pass of settling, then exactly one job for it,
-    // and no overview in the way.
+    // 2. An edited ADR: one pass of settling, then the index follows the file
+    // and nothing is queued.
+    let hash_v1 = indexed_hash(&test, ADR).expect("indexed");
     write(&repo, ADR, &adr_text("v2 com mais uma frase"));
     assert_eq!(tick(&mut watch, &documents, "idle"), WatchOutcome::Settling);
     assert_eq!(
         tick(&mut watch, &documents, "idle"),
-        WatchOutcome::Refreshed { queued: 1 }
+        WatchOutcome::Refreshed { queued: 0 }
     );
     let edited_jobs = analysis_jobs(&test) - jobs;
-    assert_eq!(edited_jobs, 1);
-    assert_eq!(newest_job_file(&test), ADR);
+    assert_eq!(edited_jobs, 0);
+    let hash_v2 = indexed_hash(&test, ADR).expect("indexed");
+    assert_ne!(hash_v1, hash_v2, "the index follows the edit");
+    assert_eq!(receipts(&test) - receipts_before, 0);
     assert_eq!(count(&test, "SELECT COUNT(*) FROM project_overviews"), 0);
     assert_eq!(
         tick(&mut watch, &documents, "idle"),
         WatchOutcome::Unchanged
     );
 
-    // 3. Three edits in three passes in a row, then one parked pass: one job.
+    // 3. Three edits in three passes in a row, then one parked pass: one
+    // refresh, no job.
     let before_burst = analysis_jobs(&test);
     for note in ["a", "bb", "ccc"] {
         write(&repo, ADR, &adr_text(note));
@@ -156,36 +149,44 @@ fn document_watch_gate() {
     }
     assert_eq!(
         tick(&mut watch, &documents, "idle"),
-        WatchOutcome::Refreshed { queued: 1 }
+        WatchOutcome::Refreshed { queued: 0 }
     );
     let burst_jobs = analysis_jobs(&test) - before_burst;
-    assert_eq!(burst_jobs, 1);
+    assert_eq!(burst_jobs, 0);
+    assert_ne!(indexed_hash(&test, ADR), Some(hash_v2));
 
-    // 4. A new ADR: one job.
+    // 4. A new ADR is indexed, with no job.
     let before_new = analysis_jobs(&test);
     write(&repo, "docs/adr/0002-novo.md", &adr_text("outro"));
     assert_eq!(tick(&mut watch, &documents, "idle"), WatchOutcome::Settling);
     assert_eq!(
         tick(&mut watch, &documents, "idle"),
-        WatchOutcome::Refreshed { queued: 1 }
-    );
-    let new_jobs = analysis_jobs(&test) - before_new;
-    assert_eq!(new_jobs, 1);
-    assert_eq!(newest_job_file(&test), "docs/adr/0002-novo.md");
-
-    // 5. A document in an archive folder is indexed but never queued.
-    let before_archived = analysis_jobs(&test);
-    write(&repo, "docs/archive-x/0002.md", &adr_text("velho"));
-    assert_eq!(tick(&mut watch, &documents, "idle"), WatchOutcome::Settling);
-    assert_eq!(
-        tick(&mut watch, &documents, "idle"),
         WatchOutcome::Refreshed { queued: 0 }
     );
-    write(&repo, "docs/archive-x/0002.md", &adr_text("velho editado"));
-    tick(&mut watch, &documents, "idle");
-    tick(&mut watch, &documents, "idle");
+    let new_jobs = analysis_jobs(&test) - before_new;
+    assert_eq!(new_jobs, 0);
+    assert!(indexed_hash(&test, "docs/adr/0002-novo.md").is_some());
+
+    // 5. Archive and history folders are still indexed, and still cost nothing.
+    let before_archived = analysis_jobs(&test);
+    for folder in ["archive-x", "historico", "spike", "legacy"] {
+        write(&repo, &format!("docs/{folder}/0002.md"), &adr_text("velho"));
+        assert_eq!(tick(&mut watch, &documents, "idle"), WatchOutcome::Settling);
+        assert_eq!(
+            tick(&mut watch, &documents, "idle"),
+            WatchOutcome::Refreshed { queued: 0 }
+        );
+        write(
+            &repo,
+            &format!("docs/{folder}/0002.md"),
+            &adr_text("velho editado"),
+        );
+        tick(&mut watch, &documents, "idle");
+        tick(&mut watch, &documents, "idle");
+    }
     let archived_jobs = analysis_jobs(&test) - before_archived;
     assert_eq!(archived_jobs, 0);
+    assert!(indexed_hash(&test, "docs/historico/0002.md").is_some());
 
     // 6. A project nobody indexed: the watch indexes and proposes nothing.
     register(&test, "unindexed", &[(ADR, adr_text("v1"))]);

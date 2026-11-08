@@ -4,7 +4,7 @@
 
 **Blocked by:** nada; usa o índice de arquivos do ADR-0016.
 
-**Status: open**
+**Status: open** (nota de 08/11/2026: documentos deixaram de ser propostos como decisões; este ticket só volta se isso for revisto)
 
 - [ ] `PROPOSE_PER_RUN = 12` em `crates/application/src/documents.rs`, chamado por `overview.rs` e, para os documentos alterados, pelo vigia (`DocumentWatch`, a cada 60 s): um ADR com decisões numeradas sai com zero candidatos. Medir quantas decisões numeradas ficam de fora e subir o teto com o custo medido.
 - [ ] Seções "Refinements", "Later decision" e "superseded by" viram relação e não enunciado solto.

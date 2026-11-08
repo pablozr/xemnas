@@ -4,20 +4,15 @@
 //!
 //! Documents are read, never trusted as decisions: they feed the Visão
 //! (titles, sections and a short excerpt, cited like any record) and are
-//! listed in Contexto. Indexing reads only the project folder, keeps a
-//! fingerprint per file and never leaves the machine.
+//! listed in Contexto. They never become a capture, a job or a candidate:
+//! what a document says is already in the document. Indexing reads only the
+//! project folder, keeps a fingerprint per file and never leaves the machine.
 
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::captures::{
-    CaptureArtifactRecord, CaptureCheckpointRecord, CaptureError, CaptureReceiptRecord,
-    CaptureRepository, CaptureWrite,
-};
-use crate::jobs::{JobRecord, JobState, ANALYZE_DOCUMENT_KIND};
 use crate::projects::ProjectRepository;
-use crate::redact::redact_secrets;
 use crate::repo_identity::{normalize_dir, RepoIdentity};
 
 /// Folders (at the project root) whose files are documentation.
@@ -60,23 +55,13 @@ const MAX_HEADINGS: usize = 12;
 /// Characters of the opening paragraph kept.
 const EXCERPT_CHARS: usize = 600;
 
-mod digest;
 pub mod watch;
 
-pub use digest::{digest as digest_document, Digest, Verdict, DIGEST_CHARS};
-
-/// Artifact kind of a document sent to extraction.
+/// Artifact kind of a document capture. Documents are no longer captured, but
+/// captures made by older versions keep this kind.
 pub const DOCUMENT_ARTIFACT: &str = "document";
-/// Adapter recorded on document captures.
-pub const DOCUMENT_ADAPTER: &str = "xemnas-documents";
-/// Runs a failed document analysis gets again on its own (an indexing run
-/// that meets it); importing the file again retries it regardless, and so does
-/// "Reprocessar" in Diagnostics.
-pub const MAX_AUTOMATIC_ATTEMPTS: u32 = 3;
-/// Documents queued for review per run, ADRs and specs first.
+/// Documents handed to [`Documents::refresh_changed`] per run.
 pub const PROPOSE_PER_RUN: usize = 12;
-/// Characters of a document sent to extraction.
-const DOCUMENT_CHARS: usize = 40_000;
 
 /// What a document is, from its place and name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -142,8 +127,8 @@ pub struct ProjectDocument {
 pub struct ImportedDocument {
     /// The document as stored.
     pub document: ProjectDocument,
-    /// Whether this version was queued for extraction now. `false` when it
-    /// was already queued or has nothing central to extract.
+    /// Whether this version was queued for extraction. Always `false`: a
+    /// document is indexed, never proposed as a decision.
     pub queued: bool,
 }
 
@@ -208,15 +193,6 @@ pub trait DocumentStore {
         project_id: &str,
         documents: &[ProjectDocument],
     ) -> Result<(), DocumentError>;
-
-    /// Requeues the analysis job of the document version queued under
-    /// `idempotency_key` when it failed, and only then (fewer than
-    /// `max_attempts` runs so far, when given). Whether it was requeued.
-    fn requeue_failed_analysis(
-        &self,
-        idempotency_key: &str,
-        max_attempts: Option<u32>,
-    ) -> Result<bool, DocumentError>;
 }
 
 /// The documentation use case.
@@ -350,58 +326,46 @@ where
         };
         Ok((index, changed))
     }
-}
 
-impl<S> Documents<S>
-where
-    S: DocumentStore + ProjectRepository + CaptureRepository,
-{
-    /// Queues new or changed documents for the same analysis as captured
-    /// conversations: each version of a document becomes one capture with a
-    /// `document` artifact and an analysis job, so its decisions and rules
-    /// reach Revisão and, once confirmed, the map's suggestions. A version
-    /// already queued is not queued again, unless its analysis failed: then it
-    /// is requeued, up to [`MAX_AUTOMATIC_ATTEMPTS`] runs in all. Returns how
-    /// many were queued.
+    /// Keeps the project's map current after documents are indexed. Documents
+    /// are no longer proposed as decisions or rules: nothing is queued, and the
+    /// result is always 0 (the signature stays for the callers that count).
     ///
     /// # Errors
     ///
     /// `project_not_found` or `storage`.
-    pub fn propose(&self, project_id: &str, limit: usize) -> Result<usize, DocumentError> {
-        self.propose_matching(project_id, limit, None, true)
+    pub fn propose(&self, project_id: &str, _limit: usize) -> Result<usize, DocumentError> {
+        self.location(project_id)?;
+        self.prepare_map(project_id);
+        Ok(0)
     }
 
-    /// Reads the folder of an already indexed project again and queues, like
-    /// [`Self::propose`], only the documents whose content changed since the
-    /// last read (new files included), never the backlog. A project that was
-    /// never indexed is left alone. Returns how many were queued.
+    /// Reads the folder of an already indexed project again and keeps the index
+    /// and the map current. A project that was never indexed is left alone.
+    /// Nothing is queued: the result is always 0.
     ///
     /// # Errors
     ///
     /// `project_not_found`, `folder_unavailable` or `storage`.
-    pub fn refresh_changed(&self, project_id: &str, limit: usize) -> Result<usize, DocumentError> {
+    pub fn refresh_changed(&self, project_id: &str, _limit: usize) -> Result<usize, DocumentError> {
         let previous = self.store.project_documents(project_id)?;
         if previous.is_empty() {
             return Ok(0);
         }
         let (index, changed) = self.reindex(project_id, previous)?;
-        if changed.is_empty() {
-            if index.removed > 0 {
-                self.prepare_map(project_id);
-            }
-            return Ok(0);
+        if !changed.is_empty() || index.removed > 0 {
+            self.prepare_map(project_id);
         }
-        self.propose_matching(project_id, limit, Some(&changed), true)
+        Ok(0)
     }
 
     /// Imports one documentation file from the project folder or from a git
-    /// worktree of the same repository, then queues it like any document.
+    /// worktree of the same repository, and indexes it.
     ///
     /// The stored path is relative to the file's own worktree root, so a
     /// document of a sibling worktree gets the path it will have once merged.
     /// Importing the same content again changes nothing; changed content
-    /// replaces the stored version and queues the new one. A version whose
-    /// analysis failed is requeued, so a fix takes effect without editing it.
+    /// replaces the stored version. Nothing is queued for analysis.
     ///
     /// # Errors
     ///
@@ -446,94 +410,11 @@ where
             documents.push(document.clone());
             self.store.replace_documents(project_id, &documents)?;
         }
-        let queued =
-            self.propose_matching(project_id, 1, Some(std::slice::from_ref(&relative)), false)? > 0;
-        Ok(ImportedDocument { document, queued })
-    }
-
-    fn propose_matching(
-        &self,
-        project_id: &str,
-        limit: usize,
-        only: Option<&[String]>,
-        automatic: bool,
-    ) -> Result<usize, DocumentError> {
-        let root = self.location(project_id)?;
         self.prepare_map(project_id);
-        // What would be queued: new or changed documents that have central
-        // parts, with only those parts. The rest never reaches Revisão.
-        let mut candidates: Vec<(ProjectDocument, digest::Digest)> = Vec::new();
-        let mut requeued = 0;
-        for document in self.list(project_id)? {
-            if only.is_some_and(|paths| !paths.contains(&document.path)) {
-                continue;
-            }
-            // Archived material is history, not the project's current rules.
-            // A file the person imported by hand is still taken.
-            if automatic && is_archived_path(&document.path) {
-                continue;
-            }
-            let key = document_capture_key(project_id, &document);
-            if self
-                .store
-                .find_receipt_by_idempotency_key(&key)
-                .map_err(capture_error)?
-                .is_some()
-            {
-                // Queued before. Only a failed analysis runs again: always
-                // when the person asked for this very file, else a few times.
-                let cap = automatic.then_some(MAX_AUTOMATIC_ATTEMPTS);
-                if requeued < limit && self.store.requeue_failed_analysis(&key, cap)? {
-                    requeued += 1;
-                }
-                continue;
-            }
-            let file = document
-                .source
-                .as_deref()
-                .map_or_else(|| root.join(&document.path), PathBuf::from);
-            let Ok(raw) = std::fs::read(file) else {
-                continue;
-            };
-            let content: String = redact_secrets(&String::from_utf8_lossy(&raw))
-                .chars()
-                .take(DOCUMENT_CHARS)
-                .collect();
-            if content.trim().is_empty() {
-                continue;
-            }
-            let digest = digest::digest(document.kind, &document.path, &content);
-            if digest.verdict == digest::Verdict::Central {
-                candidates.push((document, digest));
-            }
-        }
-        // ADRs and specifications first, and within a kind the ones that
-        // speak most in decisions.
-        candidates.sort_by(|left, right| {
-            (left.0.kind, std::cmp::Reverse(left.1.score), &left.0.path).cmp(&(
-                right.0.kind,
-                std::cmp::Reverse(right.1.score),
-                &right.0.path,
-            ))
-        });
-        let mut queued = requeued;
-        for (document, digest) in candidates {
-            if queued >= limit {
-                break;
-            }
-            let key = document_capture_key(project_id, &document);
-            match self.store.insert_capture(&document_capture(
-                &root.to_string_lossy(),
-                &key,
-                &document,
-                digest,
-            )) {
-                Ok(()) => queued += 1,
-                Err(CaptureError::DuplicateIdempotencyKey) => {}
-                Err(error) => return Err(capture_error(error)),
-            }
-        }
-        Ok(queued)
+        Ok(ImportedDocument {
+            document,
+            queued: false,
+        })
     }
 }
 
@@ -552,6 +433,14 @@ pub fn is_archived_path(path: &str) -> bool {
             "arquivo",
             "arquivados",
             "arquivadas",
+            "historico",
+            "histórico",
+            "history",
+            "legacy",
+            "spike",
+            "spikes",
+            "deprecated",
+            "obsolete",
         ]
         .iter()
         .any(|name| segment.eq_ignore_ascii_case(name))
@@ -563,73 +452,6 @@ pub fn is_archived_path(path: &str) -> bool {
                         .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
                 })
     })
-}
-
-/// One version of a document: project, path and content fingerprint.
-fn document_capture_key(project_id: &str, document: &ProjectDocument) -> String {
-    format!(
-        "document:{project_id}:{}:{}",
-        document.path, document.fingerprint
-    )
-}
-
-fn document_capture(
-    location: &str,
-    key: &str,
-    document: &ProjectDocument,
-    digest: digest::Digest,
-) -> CaptureWrite {
-    let content = digest.text;
-    let now = crate::clock::now_rfc3339();
-    let capture_id = uuid::Uuid::now_v7().to_string();
-    let metadata = serde_json::json!({
-        "file": document.path,
-        "doc_kind": document.kind.as_str(),
-        "title": document.title,
-        "sections": digest.sections,
-    })
-    .to_string();
-    CaptureWrite {
-        receipt: CaptureReceiptRecord {
-            capture_id: capture_id.clone(),
-            idempotency_key: key.to_string(),
-            canonical_path: location.to_string(),
-            received_at: now.clone(),
-            artifact_count: 1,
-        },
-        artifacts: vec![CaptureArtifactRecord {
-            capture_id: capture_id.clone(),
-            artifact_id: uuid::Uuid::now_v7().to_string(),
-            kind: DOCUMENT_ARTIFACT.to_string(),
-            fingerprint: integration_contracts::capture::artifact_fingerprint(&content),
-            content,
-            metadata,
-        }],
-        job: JobRecord {
-            id: uuid::Uuid::now_v7().to_string(),
-            kind: ANALYZE_DOCUMENT_KIND.to_string(),
-            payload: capture_id.clone(),
-            state: JobState::Queued,
-            idempotent: true,
-            attempts: 0,
-            last_error: None,
-            created_at: now.clone(),
-            updated_at: now.clone(),
-        },
-        checkpoint: CaptureCheckpointRecord {
-            adapter: DOCUMENT_ADAPTER.to_string(),
-            adapter_version: "1".to_string(),
-            session_id: format!("documents:{}", document.kind.as_str()),
-            message_id: format!("{}@{}", document.path, document.fingerprint),
-            capture_id,
-            observed_at: now.clone(),
-            updated_at: now,
-        },
-    }
-}
-
-fn capture_error(error: CaptureError) -> DocumentError {
-    DocumentError::Storage(error.to_string())
 }
 
 /// Documentation files under `root`: root files first, then documentation
